@@ -386,6 +386,55 @@ def test_directx_interpolation_builtins_lower_to_hlsl_intrinsics():
     assert "interpolateAtCentroid(" not in generated_code
 
 
+def test_directx_interpolation_modifiers_are_preserved_on_stage_interfaces():
+    shader = """
+    shader InterpolationModifierRoundTrip {
+        vertex {
+            struct VertexOutput {
+                vec4 position @SV_Position;
+                int materialId @TEXCOORD0 @nointerpolation;
+                vec2 centerUv @TEXCOORD1 @centroid;
+                vec4 sampleColor @TEXCOORD2 @sample;
+                vec2 affineUv @TEXCOORD3 @noperspective;
+            }
+
+            VertexOutput main() {
+                VertexOutput output;
+                output.position = vec4(0.0, 0.0, 0.0, 1.0);
+                output.materialId = 7;
+                output.centerUv = vec2(0.25, 0.5);
+                output.sampleColor = vec4(1.0);
+                output.affineUv = vec2(0.75, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                int materialId @TEXCOORD0 @nointerpolation,
+                vec2 centerUv @TEXCOORD1 @centroid,
+                vec4 sampleColor @TEXCOORD2 @sample,
+                vec2 affineUv @TEXCOORD3 @noperspective
+            ) @SV_Target {
+                return sampleColor
+                    + vec4(centerUv + affineUv, float(materialId), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "nointerpolation int materialId: TEXCOORD0;" in generated_code
+    assert "centroid float2 centerUv: TEXCOORD1;" in generated_code
+    assert "sample float4 sampleColor: TEXCOORD2;" in generated_code
+    assert "noperspective float2 affineUv: TEXCOORD3;" in generated_code
+    assert "nointerpolation int materialId : TEXCOORD0" in generated_code
+    assert "centroid float2 centerUv : TEXCOORD1" in generated_code
+    assert "sample float4 sampleColor : TEXCOORD2" in generated_code
+    assert "noperspective float2 affineUv : TEXCOORD3" in generated_code
+
+
 def test_directx_user_defined_interpolation_names_are_not_lowered():
     shader = """
     shader InterpolationShadowing {
@@ -426,6 +475,85 @@ def test_directx_interpolation_builtins_reject_wrong_arity():
         ),
     ):
         generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_derivative_builtins_lower_to_hlsl_intrinsics():
+    shader = """
+    shader DerivativeBuiltins {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                let dx = dFdx(input.uv.x);
+                let dy = dFdy(input.uv.y);
+                return vec4(dx, dy, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float dx = ddx(input.uv.x);" in generated_code
+    assert "float dy = ddy(input.uv.y);" in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+
+
+def test_directx_fine_and_coarse_derivative_builtins_lower_to_hlsl_intrinsics():
+    shader = """
+    shader FineCoarseDerivativeBuiltins {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float fineX = dFdxFine(input.uv.x);
+                float coarseX = dFdxCoarse(input.uv.x);
+                float fineY = dFdyFine(input.uv.y);
+                float coarseY = dFdyCoarse(input.uv.y);
+                return vec4(fineX, coarseX, fineY, coarseY);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float fineX = ddx_fine(input.uv.x);" in generated_code
+    assert "float coarseX = ddx_coarse(input.uv.x);" in generated_code
+    assert "float fineY = ddy_fine(input.uv.y);" in generated_code
+    assert "float coarseY = ddy_coarse(input.uv.y);" in generated_code
+    assert "dFdxFine(" not in generated_code
+    assert "dFdxCoarse(" not in generated_code
+    assert "dFdyFine(" not in generated_code
+    assert "dFdyCoarse(" not in generated_code
+
+
+def test_directx_user_defined_fine_derivative_name_is_not_lowered():
+    shader = """
+    shader FineDerivativeShadowing {
+        float dFdxFine(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float fine = dFdxFine(value);
+                return vec4(fine, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float dFdxFine(float value)" in generated_code
+    assert "float fine = dFdxFine(value);" in generated_code
+    assert "ddx_fine(" not in generated_code
 
 
 def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
@@ -3848,6 +3976,21 @@ def test_hlsl_output_return_semantics_still_emit():
     assert "uint PSMain(): SV_TARGET3" in integer_target_output
     assert "gl_FragData" not in integer_target_output
 
+    coverage_code = """
+    shader ValidCoverageReturnSemantic {
+        fragment {
+            uint main() @ gl_SampleMask {
+                return 1u;
+            }
+        }
+    }
+    """
+    coverage_output = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(coverage_code), "fragment"
+    )
+    assert "uint PSMain(): SV_Coverage" in coverage_output
+    assert "gl_SampleMask" not in coverage_output
+
     location_code = """
     shader ValidLocationReturnSemantic {
         fragment {
@@ -3870,6 +4013,7 @@ def test_hlsl_output_return_semantics_still_emit():
         ("vertex", "float", "gl_Position", "0.0", "SV_POSITION", "float4"),
         ("fragment", "vec3", "gl_FragColor", "vec3(0.0)", "SV_TARGET", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "vec4(0.0)", "SV_DEPTH", "float"),
+        ("fragment", "int", "gl_SampleMask", "1", "SV_Coverage", "uint"),
         ("fragment", "float", "SV_TARGET1", "0.0", "SV_TARGET1", "float4"),
     ],
 )
@@ -3893,9 +4037,11 @@ def test_hlsl_function_return_output_builtin_types_are_validated(
     ("stage", "return_type", "semantic", "value", "hlsl_semantic"),
     [
         ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "SV_TARGET"),
+        ("vertex", "uint", "gl_SampleMask", "1u", "SV_Coverage"),
         ("vertex", "float", "gl_FragDepth", "0.5", "SV_DEPTH"),
         ("fragment", "vec4", "gl_Position", "vec4(0.0)", "SV_POSITION"),
         ("compute", "vec4", "gl_Position", "vec4(0.0)", "SV_POSITION"),
+        ("compute", "uint", "gl_SampleMask", "1u", "SV_Coverage"),
     ],
 )
 def test_hlsl_function_return_output_builtin_stages_are_validated(
@@ -3946,6 +4092,7 @@ def test_hlsl_struct_output_builtin_semantics_still_emit():
             vec4 color @ gl_FragColor1;
             uvec4 integerColor @ gl_FragData[2];
             float depth @ gl_FragDepth;
+            uint mask @ gl_SampleMask;
         };
 
         vertex {
@@ -3973,6 +4120,7 @@ def test_hlsl_struct_output_builtin_semantics_still_emit():
     assert "float4 color: SV_TARGET1;" in generated
     assert "uint4 integerColor: SV_TARGET2;" in generated
     assert "float depth: SV_DEPTH;" in generated
+    assert "uint mask: SV_Coverage;" in generated
 
 
 def test_hlsl_struct_array_member_semantics_are_preserved():
@@ -4081,6 +4229,9 @@ def test_hlsl_fragment_plain_float4_return_defaults_to_sv_target():
 
 
 def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
+    # Microsoft documents SV_Coverage as the HLSL pixel-shader coverage mask
+    # input/output semantic.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics
     code = """
     shader CanonicalHLSLBuiltinInputs {
         fragment {
@@ -4088,9 +4239,10 @@ def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
                 vec4 coord @ gl_FragCoord,
                 bool front @ gl_FrontFacing,
                 bool frontAlias @ gl_IsFrontFace,
-                int primitive @ gl_PrimitiveID
+                int primitive @ gl_PrimitiveID,
+                uint coverage @ gl_SampleMaskIn
             ) @ gl_FragColor {
-                return vec4(coord.xy, (front || frontAlias) ? 1.0 : 0.0, float(primitive));
+                return vec4(coord.xy, (front || frontAlias) ? 1.0 : 0.0, float(primitive + int(coverage)));
             }
         }
     }
@@ -4102,8 +4254,10 @@ def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
     assert "bool front : SV_IsFrontFace" in generated
     assert "bool frontAlias : SV_IsFrontFace" in generated
     assert "int primitive : SV_PrimitiveID" in generated
+    assert "uint coverage : SV_Coverage" in generated
     assert "FRONT_FACE" not in generated
     assert "PRIMITIVE_ID" not in generated
+    assert "gl_SampleMaskIn" not in generated
 
 
 def test_hlsl_point_size_uses_legacy_psize_semantic():
@@ -4195,6 +4349,7 @@ def test_hlsl_struct_return_output_builtin_stages_are_validated(
         ("float position @ gl_Position", "SV_POSITION", "float4"),
         ("vec3 color @ gl_FragColor", "SV_TARGET", "float4"),
         ("vec4 depth @ gl_FragDepth", "SV_DEPTH", "float"),
+        ("int mask @ gl_SampleMask", "SV_Coverage", "uint"),
         ("float rawColor @ SV_TARGET1", "SV_TARGET1", "float4"),
     ],
 )
@@ -4227,6 +4382,7 @@ def test_hlsl_struct_output_builtin_types_are_validated(
         ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
         ("fragment", "bool", "gl_FrontFacing", "true"),
         ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("fragment", "uint", "gl_SampleMaskIn", "1u"),
         ("compute", "uvec3", "gl_GlobalInvocationID", "uvec3(0u)"),
     ],
 )
@@ -4244,6 +4400,43 @@ def test_hlsl_function_return_input_only_builtin_semantics_are_rejected(
     """
     with pytest.raises(ValueError, match=f"{semantic}.*return semantic"):
         HLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_hlsl_fragment_coverage_rejects_wrong_crossgl_direction_and_type():
+    input_code = """
+    shader BadCoverageInputDirection {
+        fragment {
+            vec4 main(uint mask @ gl_SampleMask) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    type_code = """
+    shader BadCoverageType {
+        fragment {
+            vec4 main(int mask @ SV_Coverage) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    output_code = """
+    shader BadCoverageOutputDirection {
+        fragment {
+            uint main() @ gl_SampleMaskIn {
+                return 1u;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_SampleMask.*output-only"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(input_code), "fragment")
+    with pytest.raises(ValueError, match="SV_Coverage.*scalar uint"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(type_code), "fragment")
+    with pytest.raises(ValueError, match="gl_SampleMaskIn.*return semantic"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(output_code), "fragment")
 
 
 def test_hlsl_cbuffer_binding_attributes_drive_registers():
@@ -5669,6 +5862,378 @@ def test_hlsl_lowers_glsl_fractional_mix_and_simple_atomic_names():
     assert "fract(" not in generated_code
     assert "mix(" not in generated_code
     assert "atomicAdd(" not in generated_code
+
+
+def test_hlsl_aliases_avoid_shadowed_frac_and_lerp_targets():
+    shader = """
+    shader HlslAliasTargetShadowing {
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float frac = value;
+                float lerp = value;
+                let wrapped = fract(value) + frac(value) + frac;
+                let mixed = mix(0.0, 1.0, value) + lerp(1.0, 2.0, value) + lerp;
+                return vec4(wrapped + mixed, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float frac = value;" in generated_code
+    assert "float lerp = value;" in generated_code
+    assert (
+        "float wrapped = ((((value) - floor(value)) + "
+        "((value) - floor(value))) + frac);"
+    ) in generated_code
+    assert (
+        "float mixed = (((0.0 + ((1.0 - 0.0) * value)) + "
+        "(1.0 + ((2.0 - 1.0) * value))) + lerp);"
+    ) in generated_code
+    assert "frac(value)" not in generated_code
+    assert "lerp(1.0, 2.0, value)" not in generated_code
+
+
+def test_hlsl_lowers_glsl_mod_to_floor_semantics_expression():
+    shader = """
+    shader HlslModBuiltinLowering {
+        compute {
+            void main() {
+                vec2 uv = vec2(-1.25, 2.75);
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                let wrapped = mod(tile, vec2(0.25, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # GLSL mod is x - y * floor(x/y); HLSL fmod is a remainder operation and
+    # differs for negative tiled coordinates.
+    assert (
+        "float2 tile = ((((uv * 4.0) - float2(2.0, 2.0))) - "
+        "((1.0) * floor((((uv * 4.0) - float2(2.0, 2.0))) / (1.0))));"
+    ) in generated_code
+    assert (
+        "float2 wrapped = ((tile) - "
+        "((float2(0.25, 0.5)) * floor((tile) / (float2(0.25, 0.5)))));"
+    ) in generated_code
+    assert "mod(" not in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_hlsl_user_defined_mod_is_not_lowered():
+    shader = """
+    shader HlslUserMod {
+        float mod(float value, float period) {
+            return value + period;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float wrapped = mod(float(tid.x), 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float mod(float value, float period)" in generated_code
+    assert "float wrapped = mod(float(tid.x), 2.0);" in generated_code
+    assert "floor(" not in generated_code
+
+
+def test_hlsl_two_argument_atan_lowers_to_atan2_intrinsic():
+    shader = """
+    shader HlslAtanBuiltinLowering {
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float angle = atan(direction.y, direction.x);
+                float slope = atan(direction.y / direction.x);
+                return vec4(angle, slope, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL docs list atan as ret atan(x) and the two-value form as
+    # ret atan2(y, x):
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-atan
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-atan2
+    assert "float angle = atan2(direction.y, direction.x);" in generated_code
+    assert "float slope = atan((direction.y / direction.x));" in generated_code
+    assert "atan(direction.y, direction.x)" not in generated_code
+
+
+def test_hlsl_two_argument_atan_renames_shadowed_atan2_locals():
+    shader = """
+    shader HlslAtan2TargetShadowing {
+        float helper(float atan2, float y, float x) {
+            return atan(y, x) + atan2;
+        }
+
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float atan2 = direction.x;
+                float angle = atan(direction.y, direction.x) + atan2;
+                return vec4(angle + helper(atan2, direction.y, direction.x), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float helper(float atan2_, float y, float x)" in generated_code
+    assert "return (atan2(y, x) + atan2_);" in generated_code
+    assert "float atan2_ = direction.x;" in generated_code
+    assert "float angle = (atan2(direction.y, direction.x) + atan2_);" in generated_code
+    assert "helper(atan2_, direction.y, direction.x)" in generated_code
+    assert "float atan2 = direction.x;" not in generated_code
+
+
+def test_hlsl_inversesqrt_lowers_to_rsqrt_intrinsic():
+    shader = """
+    shader HlslInverseSqrtBuiltinLowering {
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0) @ gl_FragColor {
+                float invLength = inversesqrt(dot(normal, normal));
+                vec3 renormalized = normal * invLength;
+                return vec4(renormalized, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL docs list reciprocal square root as rsqrt(x).
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-rsqrt
+    assert "float invLength = rsqrt(dot(normal, normal));" in generated_code
+    assert "inversesqrt(" not in generated_code
+
+
+def test_hlsl_inverse_sqrt_alias_lowers_to_rsqrt_intrinsic():
+    shader = """
+    shader HlslInverseSqrtAliasLowering {
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0) @ gl_FragColor {
+                vec3 invScale = inverseSqrt((normal * normal) + vec3(1.0));
+                float invLength = inverseSqrt(dot(normal, normal));
+                return vec4(invScale * invLength, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # WGSL spells this builtin inverseSqrt; HLSL uses rsqrt for reciprocal
+    # square root and preserves scalar/vector result shape.
+    assert (
+        "float3 invScale = rsqrt(((normal * normal) + " "float3(1.0, 1.0, 1.0)));"
+    ) in generated_code
+    assert "float invLength = rsqrt(dot(normal, normal));" in generated_code
+    assert "inverseSqrt(" not in generated_code
+
+
+def test_hlsl_inverse_sqrt_alias_avoids_shadowed_rsqrt_target():
+    shader = """
+    shader HlslInverseSqrtTargetShadowing {
+        fragment {
+            vec4 main(float lengthSquared @ TEXCOORD0) @ gl_FragColor {
+                float rsqrt = lengthSquared;
+                float invLength = inverseSqrt(lengthSquared) + rsqrt;
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float rsqrt = lengthSquared;" in generated_code
+    assert "float invLength = ((1.0 / sqrt(lengthSquared)) + rsqrt);" in generated_code
+    assert "float invLength = (rsqrt(lengthSquared) + rsqrt);" not in generated_code
+
+
+def test_hlsl_direct_rsqrt_infers_result_type_and_avoids_shadowed_target():
+    shader = """
+    shader HlslDirectRsqrtRobustness {
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0, float lengthSquared @ TEXCOORD1) @ gl_FragColor {
+                let invScale = rsqrt((normal * normal) + vec3(1.0));
+                float rsqrt = lengthSquared;
+                float invLength = rsqrt(lengthSquared) + rsqrt;
+                return vec4(invScale * invLength, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "float3 invScale = rsqrt(((normal * normal) + " "float3(1.0, 1.0, 1.0)));"
+    ) in generated_code
+    assert "float rsqrt = lengthSquared;" in generated_code
+    assert "float invLength = ((1.0 / sqrt(lengthSquared)) + rsqrt);" in generated_code
+    assert "float invLength = (rsqrt(lengthSquared) + rsqrt);" not in generated_code
+
+
+def test_hlsl_user_defined_rsqrt_result_type_is_not_builtin_inferred():
+    shader = """
+    shader HlslUserRsqrtInference {
+        float rsqrt(vec3 value) {
+            return value.x;
+        }
+
+        fragment {
+            vec4 main(vec3 normal @ TEXCOORD0) @ gl_FragColor {
+                let invLength = rsqrt(normal);
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float rsqrt(float3 value)" in generated_code
+    assert "float invLength = rsqrt(normal);" in generated_code
+    assert "float3 invLength = rsqrt(normal);" not in generated_code
+
+
+def test_hlsl_user_defined_inversesqrt_is_not_lowered():
+    shader = """
+    shader HlslInverseSqrtShadowing {
+        float inversesqrt(float value) {
+            return value;
+        }
+
+        fragment {
+            vec4 main(float lengthSquared @ TEXCOORD0) @ gl_FragColor {
+                float invLength = inversesqrt(lengthSquared);
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float inversesqrt(float value)" in generated_code
+    assert "float invLength = inversesqrt(lengthSquared);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_hlsl_user_defined_inverse_sqrt_alias_is_not_lowered():
+    shader = """
+    shader HlslInverseSqrtAliasShadowing {
+        float inverseSqrt(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float lengthSquared @ TEXCOORD0) @ gl_FragColor {
+                float invLength = inverseSqrt(lengthSquared);
+                return vec4(invLength, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float inverseSqrt(float value)" in generated_code
+    assert "float invLength = inverseSqrt(lengthSquared);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_hlsl_bitcast_builtins_lower_to_native_as_intrinsics():
+    shader = """
+    shader HlslBitcastBuiltinLowering {
+        fragment {
+            vec4 main(vec3 value @ TEXCOORD0, ivec3 bits @ TEXCOORD1, uvec3 ubits @ TEXCOORD2) @ gl_FragColor {
+                let signedBits = floatBitsToInt(value);
+                let unsignedBits = floatBitsToUint(value);
+                let fromSigned = intBitsToFloat(bits);
+                let fromUnsigned = uintBitsToFloat(ubits);
+                float scalar = asfloat(asuint(1.0));
+                return vec4(fromSigned + fromUnsigned + asfloat(unsignedBits), scalar);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int3 signedBits = asint(value);" in generated_code
+    assert "uint3 unsignedBits = asuint(value);" in generated_code
+    assert "float3 fromSigned = asfloat(bits);" in generated_code
+    assert "float3 fromUnsigned = asfloat(ubits);" in generated_code
+    assert "float scalar = asfloat(asuint(1.0));" in generated_code
+    assert "floatBitsTo" not in generated_code
+    assert "intBitsToFloat" not in generated_code
+    assert "uintBitsToFloat" not in generated_code
+
+
+def test_hlsl_user_defined_bitcast_names_are_not_lowered_or_inferred():
+    shader = """
+    shader HlslUserBitcastNames {
+        float floatBitsToInt(vec3 value) {
+            return value.x;
+        }
+
+        float asfloat(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(vec3 value @ TEXCOORD0) @ gl_FragColor {
+                let adjusted = floatBitsToInt(value);
+                let nativeName = asfloat(1.0);
+                return vec4(adjusted + nativeName, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float floatBitsToInt(float3 value)" in generated_code
+    assert "float asfloat(float value)" in generated_code
+    assert "float adjusted = floatBitsToInt(value);" in generated_code
+    assert "float nativeName = asfloat(1.0);" in generated_code
+    assert "int3 adjusted = asint(value);" not in generated_code
+
+
+def test_hlsl_user_defined_two_argument_atan_is_not_lowered():
+    shader = """
+    shader HlslAtanShadowing {
+        float atan(float y, float x) {
+            return y + x;
+        }
+
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float angle = atan(direction.y, direction.x);
+                return vec4(angle, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float atan(float y, float x)" in generated_code
+    assert "float angle = atan(direction.y, direction.x);" in generated_code
+    assert "atan2(" not in generated_code
 
 
 def test_directx_buffer_struct_qualifier_lowers_to_rwstructuredbuffer():
@@ -30876,6 +31441,60 @@ def test_directx_gather_red_green_blue_alpha_from_component_literals():
     assert "colorMap.GatherBlue(linearSampler, input.uv)" in generated_code
     assert "colorMap.GatherAlpha(linearSampler, input.uv)" in generated_code
     assert "textureGather(" not in generated_code
+
+
+def test_directx_component_gathers_and_uav_store_in_one_pass():
+    shader = """
+    shader GatherAndStore {
+        sampler2D colorMap;
+        sampler linearSampler;
+        image2D outImage;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            ivec2 pixel @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 red = textureGather(colorMap, linearSampler, input.uv, 0);
+                vec4 green = textureGather(colorMap, linearSampler, input.uv, 1);
+                vec4 blue = textureGather(colorMap, linearSampler, input.uv, 2);
+                vec4 alpha = textureGather(colorMap, linearSampler, input.uv, 3);
+                vec4 offsetGreen = textureGatherOffset(
+                    colorMap,
+                    linearSampler,
+                    input.uv,
+                    input.offset,
+                    1
+                );
+                vec4 color = red + green + blue + alpha + offsetGreen;
+                imageStore(outImage, input.pixel, color);
+                return color;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture2D colorMap : register(t0);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "RWTexture2D<float4> outImage : register(u0);" in generated_code
+    assert "colorMap.GatherRed(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherGreen(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherBlue(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherAlpha(linearSampler, input.uv)" in generated_code
+    assert (
+        "colorMap.GatherGreen(linearSampler, input.uv, input.offset)" in generated_code
+    )
+    assert "outImage[input.pixel] = color;" in generated_code
+    assert "textureGather(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "imageStore(" not in generated_code
 
 
 def test_directx_gather_offset_emits_gather_with_offset_parameter():

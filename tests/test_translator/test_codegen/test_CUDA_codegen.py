@@ -771,6 +771,107 @@ class TestCudaCodeGen:
         assert "float adjusted = mix(0.0, 1.0, 0.25);" in cuda_code
         assert "float adjusted = lerp(0.0, 1.0, 0.25);" not in cuda_code
 
+    def test_user_defined_lerp_function_is_not_lowered_to_cuda_builtin(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float lerp(float x, float y, float t) {
+                    return x + y + t;
+                }
+
+                void main() {
+                    float adjusted = lerp(0.0, 1.0, 0.25);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float lerp(float x, float y, float t)" in cuda_code
+        assert "float adjusted = lerp(0.0, 1.0, 0.25);" in cuda_code
+        assert "float adjusted = (0.0 + ((1.0 - 0.0) * 0.25));" not in cuda_code
+
+    def test_user_defined_builtin_name_result_type_is_not_reinferred_as_cuda_builtin(
+        self,
+    ):
+        source_code = """
+        shader TestShader {
+            compute {
+                float mix(vec3 x, vec3 y, float t) {
+                    return x.x + y.x + t;
+                }
+
+                float fma(vec3 x, vec3 y, vec3 z) {
+                    return x.x + y.x + z.x;
+                }
+
+                void main() {
+                    vec3 a = vec3(1.0, 2.0, 3.0);
+                    vec3 b = vec3(4.0, 5.0, 6.0);
+                    vec3 c = vec3(7.0, 8.0, 9.0);
+                    float wrappedMix = fract(mix(a, b, 0.25));
+                    float wrappedFma = fract(fma(a, b, c));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float mix(float3 x, float3 y, float t)" in cuda_code
+        assert "__device__ float fma(float3 x, float3 y, float3 z)" in cuda_code
+        assert "float wrappedMix = cgl_fract_float(mix(a, b, 0.25));" in cuda_code
+        assert "float wrappedFma = cgl_fract_float(fma(a, b, c));" in cuda_code
+        assert "float wrappedMix = cgl_float3_fract(mix(a, b, 0.25));" not in cuda_code
+        assert "float wrappedFma = cgl_float3_fract(fma(a, b, c));" not in cuda_code
+        assert (
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(a, b, c)" not in cuda_code
+        )
+
+    def test_user_defined_fma_and_mad_functions_are_not_lowered_to_cuda_builtins(
+        self,
+    ):
+        source_code = """
+        shader TestShader {
+            compute {
+                float fma(float x, float y, float z) {
+                    return x + y + z;
+                }
+
+                float mad(float x, float y, float z) {
+                    return x - y + z;
+                }
+
+                void main() {
+                    float fused = fma(1.0, 2.0, 3.0);
+                    float multiplyAdd = mad(1.0, 2.0, 3.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float fma(float x, float y, float z)" in cuda_code
+        assert "__device__ float mad(float x, float y, float z)" in cuda_code
+        assert "float fused = fma(1.0, 2.0, 3.0);" in cuda_code
+        assert "float multiplyAdd = mad(1.0, 2.0, 3.0);" in cuda_code
+        assert "float fused = fmaf(1.0, 2.0, 3.0);" not in cuda_code
+        assert "float multiplyAdd = fmaf(1.0, 2.0, 3.0);" not in cuda_code
+
     def test_type_conversion(self):
         codegen = CudaCodeGen()
 
@@ -841,6 +942,10 @@ class TestCudaCodeGen:
         assert codegen.convert_builtin_function("exp2") == "exp2f"
         assert codegen.convert_builtin_function("log2") == "log2f"
         assert codegen.convert_builtin_function("inversesqrt") == "rsqrtf"
+        assert codegen.convert_builtin_function("inverseSqrt") == "rsqrtf"
+        assert codegen.convert_builtin_function("rsqrt") == "rsqrtf"
+        assert codegen.convert_builtin_function("fma") == "fmaf"
+        assert codegen.convert_builtin_function("mad") == "fmaf"
         assert codegen.convert_builtin_function("round") == "roundf"
         assert codegen.convert_builtin_function("trunc") == "truncf"
         assert codegen.convert_builtin_function("mod") == "fmodf"
@@ -1334,6 +1439,54 @@ class TestCudaCodeGen:
         assert "gl_NumWorkGroups" not in cuda_code
         assert ".xy" not in cuda_code
 
+    def test_compute_builtin_names_shadowed_by_user_symbols_are_not_lowered(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                uint readX(uvec3 gl_GlobalInvocationID) {
+                    return gl_GlobalInvocationID.x;
+                }
+
+                void main() {
+                    vec3 gl_GlobalInvocationID = vec3(1.25, 2.5, 3.75);
+                    float x = gl_GlobalInvocationID.x;
+                    vec2 xy = gl_GlobalInvocationID.xy;
+                    vec3 wrapped = fract(gl_GlobalInvocationID);
+
+                    uvec3 SV_DispatchThreadID = uvec3(4u, 5u, 6u);
+                    uvec2 dispatchXY = uvec2(SV_DispatchThreadID.xy);
+                    uint paramX = readX(SV_DispatchThreadID);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ uint readX(uint3 gl_GlobalInvocationID)" in cuda_code
+        assert "return gl_GlobalInvocationID.x;" in cuda_code
+        assert (
+            "float3 gl_GlobalInvocationID = make_float3(1.25, 2.5, 3.75);" in cuda_code
+        )
+        assert "float x = gl_GlobalInvocationID.x;" in cuda_code
+        assert (
+            "float2 xy = make_float2(gl_GlobalInvocationID.x, "
+            "gl_GlobalInvocationID.y);" in cuda_code
+        )
+        assert "float3 wrapped = cgl_float3_fract(gl_GlobalInvocationID);" in cuda_code
+        assert "uint3 SV_DispatchThreadID = make_uint3(4u, 5u, 6u);" in cuda_code
+        assert (
+            "uint2 dispatchXY = make_uint2(SV_DispatchThreadID.x, "
+            "SV_DispatchThreadID.y);" in cuda_code
+        )
+        assert "uint paramX = readX(SV_DispatchThreadID);" in cuda_code
+        assert "threadIdx" not in cuda_code
+        assert "blockIdx" not in cuda_code
+
     def test_hlsl_compute_builtin_parameters_lower_to_cuda_expressions(self):
         source_code = """
         shader TestShader {
@@ -1650,6 +1803,35 @@ class TestCudaCodeGen:
         assert "struct Vertex {" in cuda_code
         assert "float3 position;" in cuda_code
         assert "float3 normal;" in cuda_code
+
+    def test_struct_brace_constructors_emit_cuda_aggregates(self):
+        source_code = """
+        shader TestShader {
+            struct Light {
+                vec3 color;
+                float intensity;
+            };
+
+            compute {
+                void main() {
+                    Light positional = Light{vec3(1.0, 0.5, 0.25), 2.0};
+                    Light named = Light{intensity: 4.0, color: vec3(0.25, 0.5, 1.0)};
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "Light positional = Light{make_float3(1.0, 0.5, 0.25), 2.0};" in cuda_code
+        )
+        assert "Light named = Light{make_float3(0.25, 0.5, 1.0), 4.0};" in cuda_code
+        assert "ConstructorNode(" not in cuda_code
 
     def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
         valid_code = """
@@ -2093,6 +2275,68 @@ class TestCudaCodeGen:
         assert " = ivec3(" not in cuda_code
         assert " = uvec4(" not in cuda_code
 
+    def test_fp16_aliases_emit_cuda_half_types_and_intrinsics(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16 tone(f16 input) {
+                    f16 bias = f16(0.5);
+                    return bias;
+                }
+
+                vec2<f16> pair(vec2<f16> input) {
+                    vec2<f16> scale = vec2<f16>(1.0, 2.0);
+                    vec2<f16> same = vec2<f16>(input);
+                    return same;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "#include <cuda_fp16.h>" in cuda_code
+        assert "__device__ half tone(half input)" in cuda_code
+        assert "half bias = __float2half(0.5);" in cuda_code
+        assert "__device__ half2 pair(half2 input)" in cuda_code
+        assert "half2 scale = __floats2half2_rn(1.0, 2.0);" in cuda_code
+        assert "half2 same = input;" in cuda_code
+        assert "vec2<f16>" not in cuda_code
+        assert "f162" not in cuda_code
+        assert "f16(" not in cuda_code
+
+    @pytest.mark.parametrize("vector_type", ["vec3<f16>", "vec4<f16>"])
+    def test_fp16_vec3_vec4_aliases_raise_cuda_diagnostic(self, vector_type):
+        source_code = f"""
+        shader TestShader {{
+            compute {{
+                {vector_type} unsupported() {{
+                    return {vector_type}(1.0, 2.0, 3.0, 4.0);
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=f"CUDA does not support FP16 vector type {vector_type}",
+        ):
+            CudaCodeGen().generate(ast)
+
+    @pytest.mark.parametrize(
+        "vector_type",
+        ["f16vec3", "f16vec4", "float16vec3", "float16vec4", "half3", "half4"],
+    )
+    def test_fp16_wide_vector_alias_maps_raise_cuda_diagnostic(self, vector_type):
+        with pytest.raises(
+            ValueError,
+            match=f"CUDA does not support FP16 vector type {vector_type}",
+        ):
+            CudaCodeGen().convert_crossgl_type_to_cuda(vector_type)
+
     def test_composite_vector_constructors_flatten_cuda_lanes(self):
         source_code = """
         shader TestShader {
@@ -2124,6 +2368,43 @@ class TestCudaCodeGen:
         assert "make_float4(uv, 0.75, 1.0)" not in cuda_code
         assert "make_float4(normal, 1.0)" not in cuda_code
         assert "make_float3(make_float3(color.x, color.y, color.z))" not in cuda_code
+
+    def test_typed_brace_vector_constructors_emit_cuda_make_functions(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                vec2 makeUv() {
+                    return vec2(0.25, 0.5);
+                }
+
+                void main() {
+                    vec4 color = vec4{1.0, 0.5, 0.25, 1.0};
+                    vec2 uv = vec2{0.25, 0.5};
+                    vec4 packed = vec4{uv, 0.0, 1.0};
+                    vec4 fromCall = vec4{makeUv(), 0.0, 1.0};
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float4 color = make_float4(1.0, 0.5, 0.25, 1.0);" in cuda_code
+        assert "float2 uv = make_float2(0.25, 0.5);" in cuda_code
+        assert "float4 packed = make_float4(uv.x, uv.y, 0.0, 1.0);" in cuda_code
+        assert (
+            "float4 fromCall = "
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            in cuda_code
+        )
+        assert "float4 color = float4(" not in cuda_code
+        assert "float4 color = float4{" not in cuda_code
+        assert "float4 packed = make_float4(uv, 0.0, 1.0)" not in cuda_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in cuda_code
 
     def test_complex_scalar_vector_constructor_splats_use_cuda_helpers(self):
         source_code = """
@@ -2603,19 +2884,29 @@ class TestCudaCodeGen:
 
         assert "int scalar = (5 % 2);" in cuda_code
         assert (
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+        )
+        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
+        assert (
+            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            in cuda_code
+        )
+        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
+        assert (
             "__device__ inline float3 cgl_float3_mod(float3 lhs, float3 rhs)"
             in cuda_code
         )
         assert (
-            "return make_float3(fmodf(lhs.x, rhs.x), fmodf(lhs.y, rhs.y), fmodf(lhs.z, rhs.z));"
-            in cuda_code
+            "return make_float3(cgl_mod_float(lhs.x, rhs.x), "
+            "cgl_mod_float(lhs.y, rhs.y), cgl_mod_float(lhs.z, rhs.z));" in cuda_code
         )
         assert (
             "__device__ inline double2 cgl_double2_mod(double2 lhs, double2 rhs)"
             in cuda_code
         )
         assert (
-            "return make_double2(fmod(lhs.x, rhs.x), fmod(lhs.y, rhs.y));" in cuda_code
+            "return make_double2(cgl_mod_double(lhs.x, rhs.x), "
+            "cgl_mod_double(lhs.y, rhs.y));" in cuda_code
         )
         assert "__device__ inline int3 cgl_int3_mod(int3 lhs, int3 rhs)" in cuda_code
         assert (
@@ -2637,12 +2928,14 @@ class TestCudaCodeGen:
         assert "float3 builtin = fmodf(a, b);" not in cuda_code
         assert "a %= b;" not in cuda_code
         assert "da %= db;" not in cuda_code
+        assert "fmodf(" not in cuda_code
+        assert "fmod(" not in cuda_code
         assert "int3 im = (ia % ib);" not in cuda_code
         assert "ia %= ib;" not in cuda_code
         assert "uint4 um = (ua % ub);" not in cuda_code
         assert "ua %= ub;" not in cuda_code
 
-    def test_scalar_float_modulo_uses_cuda_fmod(self):
+    def test_scalar_float_modulo_uses_cuda_floor_semantics(self, tmp_path):
         source_code = """
         shader TestShader {
             compute {
@@ -2675,11 +2968,20 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(ast)
 
-        assert "float fm = fmodf(fa, fb);" in cuda_code
-        assert "float flit = fmodf(5.5, 2.0);" in cuda_code
-        assert "fa = fmodf(fa, fb);" in cuda_code
-        assert "double dm = fmod(da, db);" in cuda_code
-        assert "da = fmod(da, db);" in cuda_code
+        assert (
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+        )
+        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
+        assert (
+            "__device__ inline double cgl_mod_double(double lhs, double rhs)"
+            in cuda_code
+        )
+        assert "return lhs - rhs * floor(lhs / rhs);" in cuda_code
+        assert "float fm = cgl_mod_float(fa, fb);" in cuda_code
+        assert "float flit = cgl_mod_float(5.5, 2.0);" in cuda_code
+        assert "fa = cgl_mod_float(fa, fb);" in cuda_code
+        assert "double dm = cgl_mod_double(da, db);" in cuda_code
+        assert "da = cgl_mod_double(da, db);" in cuda_code
         assert "int im = (ia % ib);" in cuda_code
         assert "ia %= ib;" in cuda_code
         assert "uint um = (ua % ub);" in cuda_code
@@ -2688,6 +2990,35 @@ class TestCudaCodeGen:
         assert "double dm = (da % db);" not in cuda_code
         assert "fa %= fb;" not in cuda_code
         assert "da %= db;" not in cuda_code
+        assert "fmodf(" not in cuda_code
+        assert "fmod(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_user_defined_mod_function_is_not_lowered_to_cuda_builtin(self):
+        source_code = """
+        shader TestShader {
+            float mod(float x, float y) {
+                return x + y;
+            }
+
+            compute {
+                void main() {
+                    float value = mod(1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float mod(float x, float y)" in cuda_code
+        assert "return (x + y);" in cuda_code
+        assert "float value = mod(1.0, 2.0);" in cuda_code
+        assert "cgl_mod_float" not in cuda_code
 
     def test_vector_comparisons_emit_cuda_bool_vector_constructors(self):
         source_code = """
@@ -3094,7 +3425,11 @@ class TestCudaCodeGen:
         assert "float a = rsqrtf(x);" in cuda_code
         assert "float b = roundf(x);" in cuda_code
         assert "float c = truncf(x);" in cuda_code
-        assert "float d = fmodf(x, 2.0);" in cuda_code
+        assert (
+            "__device__ inline float cgl_mod_float(float lhs, float rhs)" in cuda_code
+        )
+        assert "return lhs - rhs * floorf(lhs / rhs);" in cuda_code
+        assert "float d = cgl_mod_float(x, 2.0);" in cuda_code
         assert "float e = asinf(x);" in cuda_code
         assert "float f = atan2f(x, 1.0);" in cuda_code
         assert "float g = exp2f(x);" in cuda_code
@@ -3103,8 +3438,354 @@ class TestCudaCodeGen:
         assert "float i = lerp(0.0, 1.0, 0.25);" not in cuda_code
         assert "inversesqrt(" not in cuda_code
         assert "mod(" not in cuda_code
+        assert "fmodf(" not in cuda_code
         assert "mix(" not in cuda_code
         assert "atan2(" not in cuda_code
+
+    def test_inverse_sqrt_aliases_lower_to_cuda_inverse_sqrt_math(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 4.0;
+                    float a = inverseSqrt(x);
+                    float h = rsqrt(x);
+
+                    double dx = 4.0;
+                    double da = inverseSqrt(dx);
+                    double dh = rsqrt(dx);
+
+                    vec3 v = vec3(4.0, 9.0, 16.0);
+                    vec3 va = inverseSqrt(v);
+                    vec3 vh = rsqrt(v);
+
+                    dvec2 dv = dvec2(4.0, 9.0);
+                    dvec2 dva = inverseSqrt(dv);
+                    dvec2 dvh = rsqrt(dv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float a = rsqrtf(x);" in cuda_code
+        assert "float h = rsqrtf(x);" in cuda_code
+        assert "double da = (1.0 / sqrt(dx));" in cuda_code
+        assert "double dh = (1.0 / sqrt(dx));" in cuda_code
+        assert (
+            "__device__ inline float3 cgl_float3_inversesqrt(float3 value)" in cuda_code
+        )
+        assert (
+            "return make_float3(rsqrtf(value.x), rsqrtf(value.y), "
+            "rsqrtf(value.z));" in cuda_code
+        )
+        assert (
+            "__device__ inline double2 cgl_double2_inversesqrt(double2 value)"
+            in cuda_code
+        )
+        assert (
+            "return make_double2((1.0 / sqrt(value.x)), "
+            "(1.0 / sqrt(value.y)));" in cuda_code
+        )
+        assert "float3 va = cgl_float3_inversesqrt(v);" in cuda_code
+        assert "float3 vh = cgl_float3_inversesqrt(v);" in cuda_code
+        assert "double2 dva = cgl_double2_inversesqrt(dv);" in cuda_code
+        assert "double2 dvh = cgl_double2_inversesqrt(dv);" in cuda_code
+        assert "inverseSqrt(" not in cuda_code
+        assert " rsqrt(" not in cuda_code
+
+    def test_user_defined_inverse_sqrt_aliases_are_not_lowered_to_cuda_builtins(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float inverseSqrt(float x) {
+                    return x + 1.0;
+                }
+
+                float rsqrt(float x) {
+                    return x - 1.0;
+                }
+
+                void main() {
+                    float value = inverseSqrt(4.0);
+                    float hlslValue = rsqrt(4.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float inverseSqrt(float x)" in cuda_code
+        assert "__device__ float rsqrt(float x)" in cuda_code
+        assert "float value = inverseSqrt(4.0);" in cuda_code
+        assert "float hlslValue = rsqrt(4.0);" in cuda_code
+        assert "float value = rsqrtf(4.0);" not in cuda_code
+        assert "float hlslValue = rsqrtf(4.0);" not in cuda_code
+
+    def test_inverse_sqrt_aliases_feed_cuda_bitcasts(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 4.0;
+                    vec3 v = vec3(4.0, 9.0, 16.0);
+
+                    uint scalarR = asuint(rsqrt(x));
+                    uint scalarI = floatBitsToUint(inverseSqrt(x));
+                    uvec3 vectorR = asuint(rsqrt(v));
+                    uvec3 vectorI = floatBitsToUint(inverseSqrt(v));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint scalarR = __float_as_uint(rsqrtf(x));" in cuda_code
+        assert "uint scalarI = __float_as_uint(rsqrtf(x));" in cuda_code
+        assert (
+            "uint3 vectorR = "
+            "cgl_float3_to_uint3_bitcast(cgl_float3_inversesqrt(v));" in cuda_code
+        )
+        assert (
+            "uint3 vectorI = "
+            "cgl_float3_to_uint3_bitcast(cgl_float3_inversesqrt(v));" in cuda_code
+        )
+        assert "asuint(" not in cuda_code
+        assert "floatBitsToUint(" not in cuda_code
+        assert "inverseSqrt(" not in cuda_code
+        assert " rsqrt(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_glsl_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 1.0;
+                    int i = 1;
+                    uint u = 1u;
+                    vec3 v = vec3(1.0, 2.0, 3.0);
+                    ivec3 iv = ivec3(1, 2, 3);
+                    uvec3 uv = uvec3(1u, 2u, 3u);
+
+                    int signedBits = floatBitsToInt(f);
+                    uint unsignedBits = floatBitsToUint(f);
+                    float fromInt = intBitsToFloat(i);
+                    float fromUint = uintBitsToFloat(u);
+                    ivec3 vectorBits = floatBitsToInt(v);
+                    uvec3 unsignedVectorBits = floatBitsToUint(v);
+                    vec3 fromSignedVector = intBitsToFloat(iv);
+                    vec3 fromUnsignedVector = uintBitsToFloat(uv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int signedBits = __float_as_int(f);" in cuda_code
+        assert "uint unsignedBits = __float_as_uint(f);" in cuda_code
+        assert "float fromInt = __int_as_float(i);" in cuda_code
+        assert "float fromUint = __uint_as_float(u);" in cuda_code
+        assert (
+            "__device__ inline int3 cgl_float3_to_int3_bitcast(float3 value)"
+            in cuda_code
+        )
+        assert (
+            "return make_int3(__float_as_int(value.x), __float_as_int(value.y), "
+            "__float_as_int(value.z));" in cuda_code
+        )
+        assert (
+            "__device__ inline uint3 cgl_float3_to_uint3_bitcast(float3 value)"
+            in cuda_code
+        )
+        assert (
+            "__device__ inline float3 cgl_int3_to_float3_bitcast(int3 value)"
+            in cuda_code
+        )
+        assert (
+            "__device__ inline float3 cgl_uint3_to_float3_bitcast(uint3 value)"
+            in cuda_code
+        )
+        assert "int3 vectorBits = cgl_float3_to_int3_bitcast(v);" in cuda_code
+        assert "uint3 unsignedVectorBits = cgl_float3_to_uint3_bitcast(v);" in cuda_code
+        assert "float3 fromSignedVector = cgl_int3_to_float3_bitcast(iv);" in cuda_code
+        assert (
+            "float3 fromUnsignedVector = cgl_uint3_to_float3_bitcast(uv);" in cuda_code
+        )
+        assert "floatBitsToInt(" not in cuda_code
+        assert "floatBitsToUint(" not in cuda_code
+        assert "intBitsToFloat(" not in cuda_code
+        assert "uintBitsToFloat(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_hlsl_as_bitcast_aliases_lower_to_cuda_intrinsics(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float f = 1.0;
+                    int i = 1;
+                    uint u = 1u;
+                    vec3 v = vec3(1.0, 2.0, 3.0);
+                    ivec3 iv = ivec3(1, 2, 3);
+                    uvec3 uv = uvec3(1u, 2u, 3u);
+
+                    uint unsignedFromFloat = asuint(f);
+                    int signedFromFloat = asint(f);
+                    float floatFromInt = asfloat(i);
+                    float floatFromUint = asfloat(u);
+                    uint unsignedFromInt = asuint(i);
+                    int signedFromUint = asint(u);
+                    uvec3 unsignedVector = asuint(v);
+                    ivec3 signedVector = asint(v);
+                    vec3 floatFromSignedVector = asfloat(iv);
+                    vec3 floatFromUnsignedVector = asfloat(uv);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint unsignedFromFloat = __float_as_uint(f);" in cuda_code
+        assert "int signedFromFloat = __float_as_int(f);" in cuda_code
+        assert "float floatFromInt = __int_as_float(i);" in cuda_code
+        assert "float floatFromUint = __uint_as_float(u);" in cuda_code
+        assert "uint unsignedFromInt = static_cast<unsigned int>(i);" in cuda_code
+        assert "int signedFromUint = static_cast<int>(u);" in cuda_code
+        assert "uint3 unsignedVector = cgl_float3_to_uint3_bitcast(v);" in cuda_code
+        assert "int3 signedVector = cgl_float3_to_int3_bitcast(v);" in cuda_code
+        assert (
+            "float3 floatFromSignedVector = cgl_int3_to_float3_bitcast(iv);"
+            in cuda_code
+        )
+        assert (
+            "float3 floatFromUnsignedVector = cgl_uint3_to_float3_bitcast(uv);"
+            in cuda_code
+        )
+        assert "asuint(" not in cuda_code
+        assert "asint(" not in cuda_code
+        assert "asfloat(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_user_defined_bitcast_function_names_are_preserved(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                int floatBitsToInt(float value) {
+                    return 7;
+                }
+
+                float asfloat(uint value) {
+                    return 1.0;
+                }
+
+                void main() {
+                    int signedBits = floatBitsToInt(1.0);
+                    float fromUint = asfloat(1u);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ int floatBitsToInt(float value)" in cuda_code
+        assert "__device__ float asfloat(uint value)" in cuda_code
+        assert "int signedBits = floatBitsToInt(1.0);" in cuda_code
+        assert "float fromUint = asfloat(1u);" in cuda_code
+        assert "__float_as_int(1.0)" not in cuda_code
+        assert "__uint_as_float(1u)" not in cuda_code
+
+    def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 2.0;
+                    float y = 3.0;
+                    float z = 4.0;
+                    float fused = fma(x, y, z);
+                    float multiplyAdd = mad(x, y, z);
+
+                    double dx = 2.0;
+                    double dy = 3.0;
+                    double dz = 4.0;
+                    double preciseFused = fma(dx, dy, dz);
+                    double preciseMad = mad(dx, dy, dz);
+
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 vz = vec3(7.0, 8.0, 9.0);
+                    vec3 vectorFused = fma(vx, vy, vz);
+                    vec3 scalarMiddle = mad(vx, 2.0, vz);
+                    vec3 nested = fract(fma(vx, vy, vz));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float fused = fmaf(x, y, z);" in cuda_code
+        assert "float multiplyAdd = fmaf(x, y, z);" in cuda_code
+        assert "double preciseFused = fma(dx, dy, dz);" in cuda_code
+        assert "double preciseMad = fma(dx, dy, dz);" in cuda_code
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz" in cuda_code
+        )
+        assert (
+            "return make_float3(fmaf(arg0.x, arg1.x, arg2.x), "
+            "fmaf(arg0.y, arg1.y, arg2.y), "
+            "fmaf(arg0.z, arg1.z, arg2.z));" in cuda_code
+        )
+        assert (
+            "float3 vectorFused = "
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(vx, vy, vz);" in cuda_code
+        )
+        assert (
+            "float3 scalarMiddle = "
+            "cgl_float3_fma_float3_xyz_float_float3_xyz(vx, 2.0, vz);" in cuda_code
+        )
+        assert (
+            "float3 nested = cgl_float3_fract("
+            "cgl_float3_fma_float3_xyz_float3_xyz_float3_xyz(vx, vy, vz));" in cuda_code
+        )
+        assert "float fused = fma(x, y, z);" not in cuda_code
+        assert "mad(" not in cuda_code
 
     def test_double_math_builtins_emit_cuda_double_functions(self):
         source_code = """
@@ -3383,6 +4064,40 @@ class TestCudaCodeGen:
         assert "float3 v = lerp(" not in cuda_code
         assert "double2 p = lerp(" not in cuda_code
         assert " = mix(" not in cuda_code
+
+    def test_lerp_builtin_lowers_like_mix_for_cuda(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float scalar = lerp(0.0, 1.0, 0.25);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(4.0, 5.0, 6.0);
+                    vec3 v = lerp(vx, vy, 0.5);
+                    vec3 wrapped = fract(lerp(vx, vy, 0.5));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float scalar = (0.0 + ((1.0 - 0.0) * 0.25));" in cuda_code
+        assert (
+            "__device__ inline float3 cgl_float3_mix_scalar"
+            "(float3 x, float3 y, float a)" in cuda_code
+        )
+        assert "float3 v = cgl_float3_mix_scalar(vx, vy, 0.5);" in cuda_code
+        assert (
+            "float3 wrapped = cgl_float3_fract("
+            "cgl_float3_mix_scalar(vx, vy, 0.5));" in cuda_code
+        )
+        assert "lerp(" not in cuda_code
+        assert "float3 wrapped = cgl_fract_float(" not in cuda_code
 
     def test_bool_vector_mix_lowers_to_cuda_select(self):
         source_code = """
@@ -3753,6 +4468,88 @@ class TestCudaCodeGen:
         assert "double y = saturate(" not in cuda_code
         assert "float3 v = saturate(" not in cuda_code
 
+    def test_step_builtin_lowers_to_cuda_scalar_and_vector_helpers(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                float edgeValue() {
+                    return 0.4;
+                }
+
+                vec3 edgeVector() {
+                    return vec3(0.1, 0.2, 0.3);
+                }
+
+                vec3 valueVector() {
+                    return vec3(0.2, 0.1, 0.4);
+                }
+
+                void main() {
+                    float scalar = 0.75;
+                    float scalarGate = step(0.5, scalar);
+                    double precise = 0.75;
+                    double preciseGate = step(0.5, precise);
+                    vec3 value = vec3(0.2, 0.1, 0.4);
+                    vec3 vectorGate = step(0.25, value);
+                    vec3 vectorEdgeGate = step(edgeVector(), edgeValue());
+                    vec3 vectorBoth = step(edgeVector(), valueVector());
+                    vec3 nested = fract(step(0.25, value));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float scalarGate = ((scalar) < (0.5) ? 0.0f : 1.0f);" in cuda_code
+        assert "double preciseGate = ((precise) < (0.5) ? 0.0 : 1.0);" in cuda_code
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_step_scalar_edge_vector_value"
+            "(float edge, float3 value)" in cuda_code
+        )
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_step_vector_edge_scalar_value"
+            "(float3 edge, float value)" in cuda_code
+        )
+        assert (
+            "__device__ inline float3 "
+            "cgl_float3_step_vector_edge_vector_value"
+            "(float3 edge, float3 value)" in cuda_code
+        )
+        assert (
+            "return make_float3(((value.x) < (edge) ? 0.0f : 1.0f), "
+            "((value.y) < (edge) ? 0.0f : 1.0f), "
+            "((value.z) < (edge) ? 0.0f : 1.0f));" in cuda_code
+        )
+        assert (
+            "float3 vectorGate = "
+            "cgl_float3_step_scalar_edge_vector_value(0.25, value);" in cuda_code
+        )
+        assert (
+            "float3 vectorEdgeGate = "
+            "cgl_float3_step_vector_edge_scalar_value(edgeVector(), edgeValue());"
+            in cuda_code
+        )
+        assert (
+            "float3 vectorBoth = "
+            "cgl_float3_step_vector_edge_vector_value(edgeVector(), valueVector());"
+            in cuda_code
+        )
+        assert (
+            "float3 nested = cgl_float3_fract("
+            "cgl_float3_step_scalar_edge_vector_value(0.25, value));" in cuda_code
+        )
+        assert " = step(" not in cuda_code
+
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_texture_calls_emit_cuda_texture_functions(self, tmp_path):
         source_code = """
         shader TestShader {
@@ -3852,6 +4649,41 @@ class TestCudaCodeGen:
         assert "linearSampler.x" not in cuda_code
         assert "texture(tex, sampleState" not in cuda_code
         assert "texture(colorMap, linearSampler" not in cuda_code
+
+    def test_texture_bias_emits_cuda_diagnostic_instead_of_dropping_argument(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TextureBiasCUDA {
+            sampler2D colorMap;
+            sampler linearSampler;
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.25);
+                    vec4 biased = texture(colorMap, uv, 0.75);
+                    vec4 biasedWithSampler = texture(colorMap, linearSampler, uv, 0.25);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "float4 biased = /* unsupported CUDA sampled resource call: "
+            "texture bias on sampler2D */ make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            in cuda_code
+        )
+        assert (
+            "float4 biasedWithSampler = /* unsupported CUDA sampled resource call: "
+            "texture bias on sampler2D */ make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            in cuda_code
+        )
+        assert "tex2D<float4>(colorMap, uv.x, uv.y, 0.75)" not in cuda_code
+        assert "tex2D<float4>(colorMap, uv.x, uv.y, 0.25)" not in cuda_code
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_hlsl_style_texture_resource_types_emit_cuda_sampler_types(self):
         source_code = """

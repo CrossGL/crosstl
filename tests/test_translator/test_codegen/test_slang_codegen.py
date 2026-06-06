@@ -172,6 +172,39 @@ def test_basic_shader():
         pytest.fail("Slang basic shader codegen not implemented.")
 
 
+def test_float16_aliases_emit_slang_half_types():
+    code = """
+    shader main {
+        f16 tone(f16 input) {
+            f16 bias = f16(0.5);
+            return bias;
+        }
+
+        vec2<f16> pair(vec2<f16> input) {
+            vec2<f16> scale = vec2<f16>(1.0, 2.0);
+            return scale;
+        }
+
+        vec3<f16> tint(vec3<f16> input) {
+            vec3<f16> offset = vec3<f16>(1.0, 2.0, 3.0);
+            return offset;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "half tone(half input)" in generated_code
+    assert "half bias = half(0.5);" in generated_code
+    assert "half2 pair(half2 input)" in generated_code
+    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "half3 tint(half3 input)" in generated_code
+    assert "half3 offset = half3(1.0, 2.0, 3.0);" in generated_code
+    assert "vec2<f16>" not in generated_code
+    assert "f162" not in generated_code
+    assert "f16(" not in generated_code
+
+
 def test_stage_only_shader_emits_slang_entry_point():
     code = """
     shader main {
@@ -664,6 +697,55 @@ def test_fragment_system_value_builtin_combines_with_color_return_rewrite():
     assert "return (front ? float4(1.0) : float4(0.0));" in generated_code
 
 
+def test_fragment_point_coord_builtin_emits_implicit_slang_parameter():
+    # Source: Khronos lists gl_PointCoord as a fragment in vec2 builtin;
+    # Slang's SPIR-V system-value table maps SV_PointCoord to BuiltIn PointCoord.
+    # https://www.khronos.org/opengl/wiki/Built-in_Variable_(GLSL)
+    # https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/a2-01-spirv-target-specific.html
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                vec2 pointUv = gl_PointCoord;
+                gl_FragColor = vec4(pointUv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(float2 gl_PointCoord : SV_PointCoord) : SV_Target" in (
+        generated_code
+    )
+    assert "float2 pointUv = gl_PointCoord;" in generated_code
+    assert "return float4(pointUv, 0.0, 1.0);" in generated_code
+
+
+def test_fragment_point_coord_uses_existing_semantic_parameter_alias():
+    # Source: Khronos defines gl_PointCoord as a fragment input, and Slang maps
+    # SV_PointCoord to the same PointCoord builtin, so reuse explicit params.
+    # https://www.khronos.org/opengl/wiki/Built-in_Variable_(GLSL)
+    # https://docs.shader-slang.org/en/stable/external/slang/docs/user-guide/a2-01-spirv-target-specific.html
+    code = """
+    shader main {
+        fragment {
+            void main(vec2 pointCoord @ gl_PointCoord) {
+                vec2 pointUv = gl_PointCoord;
+                gl_FragColor = vec4(pointUv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(float2 pointCoord : SV_PointCoord) : SV_Target" in (
+        generated_code
+    )
+    assert "float2 gl_PointCoord : SV_PointCoord" not in generated_code
+    assert "float2 pointUv = pointCoord;" in generated_code
+    assert "gl_PointCoord" not in generated_code
+
+
 def test_fragment_sample_layer_and_viewport_builtins_emit_implicit_slang_parameters():
     code = """
     shader main {
@@ -709,6 +791,133 @@ def test_sample_system_value_builtin_uses_existing_semantic_parameter_alias():
     assert "uint gl_SampleID : SV_SampleIndex" not in generated_code
     assert "uint sampleId = sampleIndex;" in generated_code
     assert "gl_SampleID" not in generated_code
+
+
+def test_fragment_sample_mask_builtin_maps_to_slang_coverage_parameter():
+    # Microsoft documents SV_Coverage as the pixel-shader coverage mask input.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                uint mask = gl_SampleMaskIn;
+                gl_FragColor = vec4(float(mask));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(uint gl_SampleMaskIn : SV_Coverage) : SV_Target" in (
+        generated_code
+    )
+    assert "uint mask = gl_SampleMaskIn;" in generated_code
+    assert "gl_SampleMaskIn :" not in generated_code.replace(
+        "uint gl_SampleMaskIn : SV_Coverage", ""
+    )
+
+
+def test_fragment_sample_mask_uses_existing_coverage_parameter_alias():
+    code = """
+    shader main {
+        fragment {
+            void main(uint coverage @ SV_Coverage) {
+                uint mask = gl_SampleMaskIn;
+                gl_FragColor = vec4(float(mask));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 main(uint coverage : SV_Coverage) : SV_Target" in generated_code
+    assert "uint gl_SampleMaskIn : SV_Coverage" not in generated_code
+    assert "uint mask = coverage;" in generated_code
+    assert "gl_SampleMaskIn" not in generated_code
+
+
+def test_fragment_sample_mask_output_rewrites_to_slang_coverage_return():
+    # Microsoft documents SV_Coverage as the pixel-shader coverage mask output.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics
+    code = """
+    shader main {
+        fragment {
+            void main() {
+                gl_SampleMask[0] = 1u;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint main() : SV_Coverage" in generated_code
+    assert "return 1u;" in generated_code
+    assert "gl_SampleMask" not in generated_code
+
+
+def test_fragment_sample_mask_struct_output_maps_to_slang_coverage():
+    code = """
+    shader main {
+        struct FragmentOutput {
+            vec4 color @ gl_FragColor;
+            uint mask @ gl_SampleMask;
+        };
+
+        fragment {
+            FragmentOutput main() {
+                FragmentOutput output;
+                output.color = vec4(1.0);
+                output.mask = 1u;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint mask : SV_Coverage;" in generated_code
+    assert "gl_SampleMask" not in generated_code
+
+
+def test_fragment_sample_mask_rejects_non_uint_slang_type():
+    code = """
+    shader main {
+        fragment {
+            vec4 main(vec2 coverage @ SV_Coverage) @ gl_FragColor {
+                return vec4(coverage, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="SV_Coverage.*expected uint type"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_fragment_sample_mask_rejects_wrong_crossgl_direction():
+    input_code = """
+    shader main {
+        fragment {
+            vec4 main(uint mask @ gl_SampleMask) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    output_code = """
+    shader main {
+        fragment {
+            uint main() @ gl_SampleMaskIn {
+                return 1u;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="gl_SampleMask.*output-only"):
+        generate_code(parse_code(tokenize_code(input_code)))
+    with pytest.raises(ValueError, match="gl_SampleMaskIn.*input-only"):
+        generate_code(parse_code(tokenize_code(output_code)))
 
 
 def test_geometry_stage_builtins_emit_stage_specific_slang_parameters():
@@ -2550,6 +2759,277 @@ def test_inversesqrt_builtin_lowers_to_slang_rsqrt():
     assert "inversesqrt(" not in generated_code
 
 
+def test_inverse_sqrt_alias_lowers_to_slang_rsqrt():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                float inv = inverseSqrt(x);
+                vec2 invVec = inverseSqrt(vec2(4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inv = rsqrt(x);" in generated_code
+    assert "float2 invVec = rsqrt(float2(4.0, 9.0));" in generated_code
+    assert "inverseSqrt(" not in generated_code
+
+
+def test_user_defined_inverse_sqrt_alias_is_not_lowered():
+    code = """
+    shader BuiltinGap {
+        float inverseSqrt(float value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                float inv = inverseSqrt(4.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inverseSqrt(float value)" in generated_code
+    assert "float inv = inverseSqrt(4.0);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_glsl_bitcast_builtins_lower_to_slang_as_intrinsics():
+    code = """
+    shader BuiltinGap {
+        sampler2DMS msTex;
+
+        compute {
+            void main() {
+                float f = 1.0;
+                uint u = 1u;
+                int i = 1;
+                int signedBits = floatBitsToInt(f);
+                uint unsignedBits = floatBitsToUint(f);
+                float fromInt = intBitsToFloat(i);
+                float fromUint = uintBitsToFloat(u);
+                float samplesAsFloat = uintBitsToFloat(textureSamples(msTex));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int signedBits = asint(f);" in generated_code
+    assert "uint unsignedBits = asuint(f);" in generated_code
+    assert "float fromInt = asfloat(i);" in generated_code
+    assert "float fromUint = asfloat(u);" in generated_code
+    assert (
+        "float samplesAsFloat = asfloat(cgl_textureSamples_sampler2DMS(msTex));"
+        in generated_code
+    )
+    assert "floatBitsToInt(" not in generated_code
+    assert "floatBitsToUint(" not in generated_code
+    assert "intBitsToFloat(" not in generated_code
+    assert "uintBitsToFloat(" not in generated_code
+    assert "unsupported Slang resource query" not in generated_code
+
+
+def test_user_defined_glsl_bitcast_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        compute {
+            int floatBitsToInt(float value) {
+                return 7;
+            }
+
+            float uintBitsToFloat(uint value) {
+                return 1.0;
+            }
+
+            void main() {
+                int signedBits = floatBitsToInt(1.0);
+                let inferredSignedBits = floatBitsToInt(2.0);
+                float fromUint = uintBitsToFloat(1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int floatBitsToInt(float value)" in generated_code
+    assert "float uintBitsToFloat(uint value)" in generated_code
+    assert "int signedBits = floatBitsToInt(1.0);" in generated_code
+    assert "int inferredSignedBits = floatBitsToInt(2.0);" in generated_code
+    assert "float fromUint = uintBitsToFloat(1u);" in generated_code
+    assert "asint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
+def test_builtin_alias_calls_infer_let_result_types():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                let dx = dFdx(uv);
+                let nested = dFdy(dFdx(uv));
+                let inv = inverseSqrt(4.0);
+                let edge = fwidth(uv.x);
+                let bits = floatBitsToUint(inv);
+                let unpacked = uintBitsToFloat(bits);
+                let packed = floatBitsToUint(vec2(1.0, 2.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 dx = ddx(uv);" in generated_code
+    assert "float2 nested = ddy(ddx(uv));" in generated_code
+    assert "float inv = rsqrt(4.0);" in generated_code
+    assert "float edge = fwidth(uv.x);" in generated_code
+    assert "uint bits = asuint(inv);" in generated_code
+    assert "float unpacked = asfloat(bits);" in generated_code
+    assert "uint2 packed = asuint(float2(1.0, 2.0));" in generated_code
+    assert "auto dx" not in generated_code
+    assert "auto nested" not in generated_code
+    assert "auto inv" not in generated_code
+    assert "auto bits" not in generated_code
+
+
+def test_glsl_derivative_builtins_lower_to_slang_ddx_ddy():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                vec2 dx = dFdx(uv);
+                vec2 dy = dFdy(uv);
+                float edge = fwidth(uv.x);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 dx = ddx(uv);" in generated_code
+    assert "float2 dy = ddy(uv);" in generated_code
+    assert "float edge = fwidth(uv.x);" in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+
+
+def test_glsl_fine_coarse_derivative_builtins_lower_to_slang_aliases():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.25);
+                vec2 dxFine = dFdxFine(uv);
+                vec2 dxCoarse = dFdxCoarse(uv);
+                vec2 dyFine = dFdyFine(uv);
+                vec2 dyCoarse = dFdyCoarse(uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float2 dxFine = ddx_fine(uv);" in generated_code
+    assert "float2 dxCoarse = ddx_coarse(uv);" in generated_code
+    assert "float2 dyFine = ddy_fine(uv);" in generated_code
+    assert "float2 dyCoarse = ddy_coarse(uv);" in generated_code
+    assert "dFdxFine(" not in generated_code
+    assert "dFdxCoarse(" not in generated_code
+    assert "dFdyFine(" not in generated_code
+    assert "dFdyCoarse(" not in generated_code
+
+
+def test_user_defined_derivative_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            float dFdx(float x) {
+                return x + 1.0;
+            }
+
+            float dFdy(float x) {
+                return x - 1.0;
+            }
+
+            void main() {
+                float dx = dFdx(0.5);
+                float dy = dFdy(0.5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float dFdx(float x)" in generated_code
+    assert "float dFdy(float x)" in generated_code
+    assert "float dx = dFdx(0.5);" in generated_code
+    assert "float dy = dFdy(0.5);" in generated_code
+    assert "float dx = ddx(0.5);" not in generated_code
+    assert "float dy = ddy(0.5);" not in generated_code
+
+
+def test_user_defined_fine_coarse_derivative_function_names_are_not_lowered():
+    code = """
+    shader BuiltinGap {
+        fragment {
+            float dFdxFine(float x) {
+                return x + 1.0;
+            }
+
+            float dFdyCoarse(float x) {
+                return x - 1.0;
+            }
+
+            void main() {
+                float dx = dFdxFine(0.5);
+                float dy = dFdyCoarse(0.5);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float dFdxFine(float x)" in generated_code
+    assert "float dFdyCoarse(float x)" in generated_code
+    assert "float dx = dFdxFine(0.5);" in generated_code
+    assert "float dy = dFdyCoarse(0.5);" in generated_code
+    assert "ddx_fine(" not in generated_code
+    assert "ddy_coarse(" not in generated_code
+
+
 def test_saturate_builtin_lowers_to_slang_clamp():
     code = """
     shader BuiltinGap {
@@ -2593,6 +3073,57 @@ def test_user_defined_saturate_function_is_not_lowered_to_clamp():
     assert "float saturate(float x)" in generated_code
     assert "float adjusted = saturate(0.5);" in generated_code
     assert "float adjusted = clamp(0.5, 0.0, 1.0);" not in generated_code
+
+
+def test_glsl_two_argument_atan_lowers_to_slang_atan2():
+    code = """
+    shader BuiltinGap {
+        compute {
+            void main() {
+                vec2 direction = vec2(1.0, 2.0);
+                vec2 y = vec2(1.0, 2.0);
+                vec2 x = vec2(3.0, 4.0);
+                float angle = atan(direction.y, direction.x);
+                float slope = atan(direction.y / direction.x);
+                vec2 vectorAngle = atan(y, x);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float angle = atan2(direction.y, direction.x);" in generated_code
+    assert "float slope = atan(direction.y / direction.x);" in generated_code
+    assert "float2 vectorAngle = atan2(y, x);" in generated_code
+    assert "atan(direction.y, direction.x)" not in generated_code
+    assert "atan(y, x)" not in generated_code
+
+
+def test_user_defined_two_argument_atan_function_is_not_lowered_to_atan2():
+    code = """
+    shader BuiltinGap {
+        compute {
+            float atan(float y, float x) {
+                return y + x;
+            }
+
+            void main() {
+                float angle = atan(1.0, 2.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float atan(float y, float x)" in generated_code
+    assert "float angle = atan(1.0, 2.0);" in generated_code
+    assert "atan2(" not in generated_code
 
 
 def test_user_defined_mix_function_is_not_lowered_to_lerp():

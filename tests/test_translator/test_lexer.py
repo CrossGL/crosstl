@@ -111,6 +111,28 @@ def test_scientific_float_literal_tokenization():
     assert ("IDENTIFIER", "e") not in tokens
 
 
+def test_line_continuations_spliced_before_tokenization():
+    # HLSL and GLSL preprocessors splice backslash-newline before tokenization.
+    code = "\n".join(
+        [
+            "#define SCALE(x) \\",
+            "    ((x) * 2)",
+            "float f\\",
+            "oo = .\\",
+            "1\\",
+            "25;",
+        ]
+    )
+
+    tokens = tokenize_code(code)
+    values = [token[1] for token in tokens]
+
+    assert tokens[0] == ("PREPROCESSOR", "#define SCALE(x)     ((x) * 2)")
+    assert "foo" in values
+    assert ".125" in values
+    assert "\\" not in values
+
+
 def test_unsigned_integer_literal_tokenization():
     code = """
     uint a = 7u;

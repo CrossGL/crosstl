@@ -1,3 +1,4 @@
+import re
 from typing import List
 
 import pytest
@@ -6,6 +7,7 @@ from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
+from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
 
 def generate_code(ast_node):
@@ -118,6 +120,39 @@ OpDecorate %model Location 0
 %model = OpVariable %ptr_input_mat4 Input
 %main = OpFunction %void None %fn
 %label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for GLSL module-scope globals:
+; vec4 privateColor; float privateWeight = 1.0;
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %private_color "privateColor"
+OpName %private_weight "privateWeight"
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_private_v4float = OpTypePointer Private %v4float
+%ptr_private_float = OpTypePointer Private %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%zero = OpConstant %float 0.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%private_color = OpVariable %ptr_private_v4float Private
+%private_weight = OpVariable %ptr_private_float Private %one
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpStore %private_color %red
+%loaded = OpLoad %v4float %private_color
+OpStore %out_color %loaded
 OpReturn
 OpFunctionEnd
 """
@@ -256,6 +291,111 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_FLOAT16_INTERFACE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from fragment shader code using
+; GL_EXT_shader_explicit_arithmetic_types_float16 / Float16 storage.
+OpCapability Shader
+OpCapability Float16
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_half %input_matrix %half_out %matrix_out %float_out
+OpExecutionMode %main OriginUpperLeft
+OpName %input_half "inputHalf"
+OpName %input_matrix "inputMatrix"
+OpName %half_out "halfOut"
+OpName %matrix_out "matrixOut"
+OpName %float_out "floatOut"
+OpDecorate %input_half Location 0
+OpDecorate %input_matrix Location 1
+OpDecorate %half_out Location 0
+OpDecorate %float_out Location 1
+OpDecorate %matrix_out Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%half = OpTypeFloat 16
+%float = OpTypeFloat 32
+%v2half = OpTypeVector %half 2
+%v4half = OpTypeVector %half 4
+%mat2half = OpTypeMatrix %v2half 2
+%ptr_input_v4half = OpTypePointer Input %v4half
+%ptr_input_mat2half = OpTypePointer Input %mat2half
+%ptr_output_v4half = OpTypePointer Output %v4half
+%ptr_output_mat2half = OpTypePointer Output %mat2half
+%ptr_output_float = OpTypePointer Output %float
+%input_half = OpVariable %ptr_input_v4half Input
+%input_matrix = OpVariable %ptr_input_mat2half Input
+%half_out = OpVariable %ptr_output_v4half Output
+%matrix_out = OpVariable %ptr_output_mat2half Output
+%float_out = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4half %input_half
+%loaded_matrix = OpLoad %mat2half %input_matrix
+%component = OpCompositeExtract %half %loaded 0
+%wide = OpFConvert %float %component
+OpStore %half_out %loaded
+OpStore %matrix_out %loaded_matrix
+OpStore %float_out %wide
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_INT16_INT64_INTERFACE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from fragment shader code using
+; GL_EXT_shader_explicit_arithmetic_types_int16/int64 and integer conversions.
+OpCapability Shader
+OpCapability Int16
+OpCapability Int64
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %signed16_in %unsigned16_in %signed16_out %unsigned16_out %signed64_out %unsigned64_out
+OpExecutionMode %main OriginUpperLeft
+OpName %signed16_in "signed16In"
+OpName %unsigned16_in "unsigned16In"
+OpName %signed16_out "signed16Out"
+OpName %unsigned16_out "unsigned16Out"
+OpName %signed64_out "signed64Out"
+OpName %unsigned64_out "unsigned64Out"
+OpDecorate %signed16_in Location 0
+OpDecorate %unsigned16_in Location 1
+OpDecorate %signed16_out Location 0
+OpDecorate %unsigned16_out Location 1
+OpDecorate %signed64_out Location 2
+OpDecorate %unsigned64_out Location 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%short = OpTypeInt 16 1
+%ushort = OpTypeInt 16 0
+%long = OpTypeInt 64 1
+%ulong = OpTypeInt 64 0
+%v4short = OpTypeVector %short 4
+%v3ushort = OpTypeVector %ushort 3
+%ptr_input_v4short = OpTypePointer Input %v4short
+%ptr_input_v3ushort = OpTypePointer Input %v3ushort
+%ptr_output_v4short = OpTypePointer Output %v4short
+%ptr_output_v3ushort = OpTypePointer Output %v3ushort
+%ptr_output_long = OpTypePointer Output %long
+%ptr_output_ulong = OpTypePointer Output %ulong
+%signed16_in = OpVariable %ptr_input_v4short Input
+%unsigned16_in = OpVariable %ptr_input_v3ushort Input
+%signed16_out = OpVariable %ptr_output_v4short Output
+%unsigned16_out = OpVariable %ptr_output_v3ushort Output
+%signed64_out = OpVariable %ptr_output_long Output
+%unsigned64_out = OpVariable %ptr_output_ulong Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_signed16 = OpLoad %v4short %signed16_in
+%loaded_unsigned16 = OpLoad %v3ushort %unsigned16_in
+%signed_component = OpCompositeExtract %short %loaded_signed16 0
+%unsigned_component = OpCompositeExtract %ushort %loaded_unsigned16 1
+%wide_signed = OpSConvert %long %signed_component
+%wide_unsigned = OpUConvert %ulong %unsigned_component
+OpStore %signed16_out %loaded_signed16
+OpStore %unsigned16_out %loaded_unsigned16
+OpStore %signed64_out %wide_signed
+OpStore %unsigned64_out %wide_unsigned
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -317,6 +457,70 @@ OpDecorate %out_value Location 0
 %loaded_index = OpLoad %uint %index
 %component = OpVectorExtractDynamic %float %loaded_vec %loaded_index
 OpStore %out_value %component
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_VECTOR_NEGATE_EXTRACT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/fold_test.cpp
+; Reduced from vector OpFNegate and OpCompositeExtract folding patterns.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_vec %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_vec "inputVec"
+OpName %out_value "outValue"
+OpDecorate %input_vec Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_float = OpTypePointer Output %float
+%input_vec = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %input_vec
+%negated = OpFNegate %v4float %loaded
+%component = OpCompositeExtract %float %negated 0
+OpStore %out_value %component
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpCompositeExtract instruction definition where Composite
+; is an OpTypeStruct value and Indexes select a structure member.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %Pair "Pair"
+OpMemberName %Pair 0 "weight"
+OpMemberName %Pair 1 "index"
+OpName %pair "pair"
+OpName %out_value "outValue"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%Pair = OpTypeStruct %float %uint
+%ptr_function_pair = OpTypePointer Function %Pair
+%ptr_output_float = OpTypePointer Output %float
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%pair = OpVariable %ptr_function_pair Function
+%loaded_pair = OpLoad %Pair %pair
+%weight = OpCompositeExtract %float %loaded_pair 0
+OpStore %out_value %weight
 OpReturn
 OpFunctionEnd
 """
@@ -470,6 +674,92 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a fragment shader
+; containing if (value > 0.0) { outColor = red; } else { outColor = blue; }.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %value %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %value "value"
+OpName %out_color "outColor"
+OpDecorate %value Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%blue = OpConstantComposite %v4float %zero %zero %one %one
+%value = OpVariable %ptr_input_float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %value
+%gt = OpFOrdGreaterThan %bool %loaded %zero
+OpSelectionMerge %merge None
+OpBranchConditional %gt %then %else
+%then = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%else = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_SWITCH_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a fragment shader
+; containing switch(mode) with two cases and a default color store.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %mode %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %mode "mode"
+OpName %out_color "outColor"
+OpDecorate %mode Flat
+OpDecorate %mode Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v4float = OpTypeVector %float 4
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero_f = OpConstant %float 0.0
+%one_f = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one_f %zero_f %zero_f %one_f
+%green = OpConstantComposite %v4float %zero_f %one_f %zero_f %one_f
+%blue = OpConstantComposite %v4float %zero_f %zero_f %one_f %one_f
+%mode = OpVariable %ptr_input_int Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_mode = OpLoad %int %mode
+OpSelectionMerge %merge None
+OpSwitch %loaded_mode %default 0 %case_zero 1 %case_one
+%case_zero = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%case_one = OpLabel
+OpStore %out_color %green
+OpBranch %merge
+%default = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -615,6 +905,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_LOCAL_ARRAY_VARIABLE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/web.operations.frag.out
+; Reduced from function-local OpTypeArray variables in the fragment main body.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %main "main"
+OpName %out_value "outValue"
+OpName %arr "arr"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%uint = OpTypeInt 32 0
+%uint_2 = OpConstant %uint 2
+%arr_int_2 = OpTypeArray %int %uint_2
+%ptr_function_arr_int_2 = OpTypePointer Function %arr_int_2
+%ptr_output_float = OpTypePointer Output %float
+%fn = OpTypeFunction %void
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%arr = OpVariable %ptr_function_arr_int_2 Function
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -742,6 +1062,57 @@ OpMemberDecorate %StorageBuffer 1 Offset 4
 %storage = OpVariable %ptr_storage Uniform
 %main = OpFunction %void None %fn
 %label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_ANONYMOUS_RESOURCE_BLOCK_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d
+; Source path: test/diff/diff_files/small_functions_small_diffs_src.spvasm
+; Reduced from descriptor block variables named with empty OpName strings:
+; OpName %19 "" and OpName %24 "".
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %4 "main" %30
+OpExecutionMode %4 LocalSize 1 1 1
+OpName %17 "BufferOut"
+OpMemberName %17 0 "o"
+OpName %19 ""
+OpName %22 "BufferIn"
+OpMemberName %22 0 "i"
+OpName %24 ""
+OpName %30 "result"
+OpMemberDecorate %17 0 Offset 0
+OpDecorate %17 BufferBlock
+OpDecorate %19 DescriptorSet 0
+OpDecorate %19 Binding 1
+OpMemberDecorate %22 0 Offset 0
+OpDecorate %22 Block
+OpDecorate %24 DescriptorSet 0
+OpDecorate %24 Binding 0
+OpDecorate %30 Location 0
+%2 = OpTypeVoid
+%3 = OpTypeFunction %2
+%16 = OpTypeInt 32 0
+%17 = OpTypeStruct %16
+%18 = OpTypePointer Uniform %17
+%19 = OpVariable %18 Uniform
+%20 = OpTypeInt 32 1
+%21 = OpConstant %20 0
+%22 = OpTypeStruct %16
+%23 = OpTypePointer Uniform %22
+%24 = OpVariable %23 Uniform
+%25 = OpTypePointer Uniform %16
+%29 = OpTypePointer Output %16
+%30 = OpVariable %29 Output
+%4 = OpFunction %2 None %3
+%5 = OpLabel
+%26 = OpAccessChain %25 %24 %21
+%27 = OpLoad %16 %26
+%28 = OpAccessChain %25 %19 %21
+OpStore %28 %27
+OpStore %30 %27
 OpReturn
 OpFunctionEnd
 """
@@ -885,6 +1256,42 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source pattern: reduced from Vulkan subgroupBroadcastFirst/subgroupAdd style
+; compute shader assembly emitted by glslang for subgroup arithmetic builtins.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformArithmetic
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %value %broadcast_out %sum_out
+OpExecutionMode %main LocalSize 32 1 1
+OpName %value "value"
+OpName %broadcast_out "broadcastOut"
+OpName %sum_out "sumOut"
+OpDecorate %value Location 0
+OpDecorate %broadcast_out Location 0
+OpDecorate %sum_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_output_uint = OpTypePointer Output %uint
+%value = OpVariable %ptr_input_uint Input
+%broadcast_out = OpVariable %ptr_output_uint Output
+%sum_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %uint %value
+%broadcast = OpGroupNonUniformBroadcastFirst %uint %uint_3 %loaded
+%sum = OpGroupNonUniformIAdd %uint %uint_3 Reduce %loaded
+OpStore %broadcast_out %broadcast
+OpStore %sum_out %sum
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_ATOMIC_LOAD_STORE_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -964,6 +1371,43 @@ OpMemberDecorate %CounterBlock 0 Offset 0
 %counter_ptr = OpAccessChain %ptr_storage_int %counter_block %int_0
 %old = OpAtomicIAdd %int %counter_ptr %uint_1 %uint_0 %int_2
 OpStore %old_value %old
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_IMAGE_TEXEL_POINTER_ATOMIC_IADD_ASSEMBLY = """
+; Reduced from glslangValidator 16.3.0 -V -H output for:
+; layout(r32ui, set = 0, binding = 0) uniform uimage2D img;
+; imageAtomicAdd(img, ivec2(0, 1), 3u);
+; SPIRV-Headers unified1 grammar declares OpImageTexelPointer as
+; Result Type, Result, Image, Coordinate, Sample.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %img "img"
+OpName %old "old"
+OpDecorate %img Binding 0
+OpDecorate %img DescriptorSet 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%ptr_image_uniform = OpTypePointer UniformConstant %image
+%ptr_image_uint = OpTypePointer Image %uint
+%int_0 = OpConstant %int 0
+%int_1 = OpConstant %int 1
+%uint_0 = OpConstant %uint 0
+%uint_1 = OpConstant %uint 1
+%uint_3 = OpConstant %uint 3
+%coord = OpConstantComposite %v2int %int_0 %int_1
+%img = OpVariable %ptr_image_uniform UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%texel_ptr = OpImageTexelPointer %ptr_image_uint %img %coord %uint_0
+%old = OpAtomicIAdd %uint %texel_ptr %uint_1 %uint_0 %uint_3
 OpReturn
 OpFunctionEnd
 """
@@ -1159,6 +1603,66 @@ OpStore %sample_color %sample
 %pixel = OpLoad %v2int %fetch_coord
 %fetch = OpImageFetch %v4float %image_only %pixel Lod %zero
 OpStore %fetch_color %fetch
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_DESCRIPTOR_INDEXING_NONUNIFORM_ASSEMBLY = """
+; Reduced from descriptor-indexed sampled texture SPIR-V emitted by Vulkan
+; toolchains for GL_EXT_nonuniform_qualifier/nonuniformEXT material indexing.
+OpCapability Shader
+OpCapability ShaderNonUniform
+OpExtension "SPV_EXT_descriptor_indexing"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %material_index %uv %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %textures "textures"
+OpName %linear_sampler "linearSampler"
+OpName %material_index "materialIndex"
+OpName %uv "uv"
+OpName %out_color "outColor"
+OpDecorate %textures DescriptorSet 0
+OpDecorate %textures Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+OpDecorate %material_index Location 0
+OpDecorate %uv Location 1
+OpDecorate %out_color Location 0
+OpDecorate %idx NonUniform
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%sampler = OpTypeSampler
+%array_count = OpConstant %int 4
+%zero = OpConstant %float 0.0
+%texture_array = OpTypeArray %image %array_count
+%ptr_textures = OpTypePointer UniformConstant %texture_array
+%ptr_texture = OpTypePointer UniformConstant %image
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%ptr_input_int = OpTypePointer Input %int
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%textures = OpVariable %ptr_textures UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%material_index = OpVariable %ptr_input_int Input
+%uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_index = OpLoad %int %material_index
+%idx = OpCopyObject %int %loaded_index
+%texture_ptr = OpAccessChain %ptr_texture %textures %idx
+%loaded_texture = OpLoad %image %texture_ptr
+%loaded_sampler = OpLoad %sampler %linear_sampler
+%combined = OpSampledImage %sampled %loaded_texture %loaded_sampler
+%loaded_uv = OpLoad %v2float %uv
+%sample = OpImageSampleExplicitLod %v4float %combined %loaded_uv Lod %zero
+OpStore %out_color %sample
 OpReturn
 OpFunctionEnd
 """
@@ -2354,6 +2858,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_GEOMETRY_EXECUTION_MODES_ASSEMBLY = """
+; Reduced from glslangValidator-style SPIR-V assembly for:
+; layout(triangles, invocations = 2) in;
+; layout(triangle_strip, max_vertices = 3) out;
+OpCapability Shader
+OpCapability Geometry
+OpMemoryModel Logical GLSL450
+OpEntryPoint Geometry %main "main" %in_color %out_color
+OpExecutionMode %main Triangles
+OpExecutionMode %main Invocations 2
+OpExecutionMode %main OutputTriangleStrip
+OpExecutionMode %main OutputVertices 3
+OpName %in_color "inColor"
+OpName %out_color "outColor"
+OpDecorate %in_color Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v3float = OpTypeVector %float 3
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%arr_v3float_3 = OpTypeArray %v3float %uint_3
+%ptr_input_arr_v3float_3 = OpTypePointer Input %arr_v3float_3
+%ptr_output_v3float = OpTypePointer Output %v3float
+%in_color = OpVariable %ptr_input_arr_v3float_3 Input
+%out_color = OpVariable %ptr_output_v3float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_ISNAN_ISINF_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -2425,6 +2962,56 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_NOPERSPECTIVE_INTERFACE_ASSEMBLY = """
+; Reduced from the Khronos SPIR-V spec section 1.10 example.
+; The source declares: noperspective in vec4 color2;
+; The corresponding assembly decorates the input with NoPerspective and no Location.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color2
+OpExecutionMode %main OriginLowerLeft
+OpName %color2 "color2"
+OpDecorate %color2 NoPerspective
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%color2 = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for ESSL 310 mediump fragment IO.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color %in_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpName %in_color "color"
+OpDecorate %out_color RelaxedPrecision
+OpDecorate %out_color Location 0
+OpDecorate %in_color RelaxedPrecision
+OpDecorate %in_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_input_v4float = OpTypePointer Input %v4float
+%out_color = OpVariable %ptr_output_v4float Output
+%in_color = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %in_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_FRAGMENT_SAMPLE_AND_VIEW_BUILTINS_ASSEMBLY = """
 ; Reduced from Vulkan fragment interface built-ins found in SwiftShader/glslang output.
 OpCapability Shader
@@ -2453,6 +3040,46 @@ OpDecorate %viewport BuiltIn ViewportIndex
 %viewport = OpVariable %ptr_input_int Input
 %main = OpFunction %void None %fn
 %label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_FRAGMENT_BARYCENTRIC_ASSEMBLY = """
+; Source repo: https://chromium.googlesource.com/external/github.com/KhronosGroup/glslang.git
+; Source ref: refs/heads/vulkan-sdk-1.3.275
+; Source path: Test/baseResults/spv.fragmentShaderBarycentric4.frag.out
+; Reduced from gl_BaryCoordNoPerspEXT and PerVertexKHR fragment inputs.
+OpCapability Shader
+OpCapability FragmentBarycentricKHR
+OpExtension "SPV_KHR_fragment_shader_barycentric"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value %bary_coord %vertex_ids
+OpExecutionMode %main OriginUpperLeft
+OpName %out_value "outValue"
+OpName %bary_coord "gl_BaryCoordNoPerspEXT"
+OpName %vertex_ids "vertexIDs"
+OpDecorate %out_value Location 0
+OpDecorate %bary_coord BuiltIn BaryCoordNoPerspKHR
+OpDecorate %vertex_ids Location 1
+OpDecorate %vertex_ids PerVertexKHR
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%v3float = OpTypeVector %float 3
+%arr_v3float_3 = OpTypeArray %v3float %uint_3
+%ptr_output_float = OpTypePointer Output %float
+%ptr_input_v3float = OpTypePointer Input %v3float
+%ptr_input_arr_v3float_3 = OpTypePointer Input %arr_v3float_3
+%out_value = OpVariable %ptr_output_float Output
+%bary_coord = OpVariable %ptr_input_v3float Input
+%vertex_ids = OpVariable %ptr_input_arr_v3float_3 Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_bary = OpLoad %v3float %bary_coord
+%x = OpCompositeExtract %float %loaded_bary 0
+OpStore %out_value %x
 OpReturn
 OpFunctionEnd
 """
@@ -2600,6 +3227,81 @@ OpStore %out_carry %carry
 %high = OpCompositeExtract %int %mul 1
 OpStore %out_low %low
 OpStore %out_high %high
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_SAME_VALUE_PHI_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/dead_insert_elim_test.cpp
+; Reduced from the same-value OpPhi pattern: %41 = OpPhi %S %4 %if_true %4 %if_merge.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%true = OpConstantTrue %bool
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %if_true %if_merge
+%if_true = OpLabel
+OpBranch %merge
+%if_merge = OpLabel
+OpBranch %merge
+%merge = OpLabel
+%phi = OpPhi %v4float %red %if_true %red %if_merge
+OpStore %out_color %phi
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_TOOLS_DIRECT_SELECTION_PHI_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
+; Source path: test/opt/block_merge_test.cpp
+; Reduced from PhiInSuccessorOfMergedBlock's direct OpPhi merge pattern.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%blue = OpConstantComposite %v4float %zero %zero %one %one
+%true = OpConstantTrue %bool
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %then %else
+%then = OpLabel
+OpBranch %merge
+%else = OpLabel
+OpBranch %merge
+%merge = OpLabel
+%phi = OpPhi %v4float %red %then %blue %else
+OpStore %out_color %phi
 OpReturn
 OpFunctionEnd
 """
@@ -2833,7 +3535,17 @@ def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
     shader_path = tmp_path / "fragment.spv"
     shader_path.write_bytes(b"\x03\x02\x23\x07")
 
-    with pytest.raises(ValueError, match="Unsupported shader file type"):
+    with pytest.raises(ValueError, match=re.escape(BINARY_SPIRV_UNSUPPORTED_MESSAGE)):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
+
+
+def test_translate_api_rejects_binary_spv_mislabeled_as_spvasm(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "fragment.spvasm"
+    shader_path.write_bytes(b"\x03\x02\x23\x07")
+
+    with pytest.raises(ValueError, match=re.escape(BINARY_SPIRV_UNSUPPORTED_MESSAGE)):
         crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
@@ -2856,6 +3568,21 @@ def test_spirv_assembly_matrix_interface_codegen():
 
     assert "float4x4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_private_global_variables_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "float4 privateColor;" in generated_code
+    assert "float privateWeight = 1.0;" in generated_code
+    assert "privateColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "outColor = privateColor;" in generated_code
+    assert "outColor = loaded;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -2914,6 +3641,52 @@ def test_glslang_fconvert_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_glslang_float16_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_FLOAT16_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "half4 inputHalf @input @location(0);" in generated_code
+    assert "half2x2 inputMatrix @input @location(1);" in generated_code
+    assert "half4 halfOut @output @location(0);" in generated_code
+    assert "float floatOut @output @location(1);" in generated_code
+    assert "half2x2 matrixOut @output @location(2);" in generated_code
+    assert "halfOut = inputHalf;" in generated_code
+    assert "matrixOut = inputMatrix;" in generated_code
+    assert "floatOut = float(inputHalf[0]);" in generated_code
+    assert "float4 inputHalf" not in generated_code
+    assert "float4 halfOut" not in generated_code
+    assert "half2 inputMatrix" not in generated_code
+    assert "floatOut = wide;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_int16_int64_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_INT16_INT64_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "vec4<i16> signed16In @input @location(0);" in generated_code
+    assert "vec3<u16> unsigned16In @input @location(1);" in generated_code
+    assert "vec4<i16> signed16Out @output @location(0);" in generated_code
+    assert "vec3<u16> unsigned16Out @output @location(1);" in generated_code
+    assert "i64 signed64Out @output @location(2);" in generated_code
+    assert "u64 unsigned64Out @output @location(3);" in generated_code
+    assert "signed16Out = signed16In;" in generated_code
+    assert "unsigned16Out = unsigned16In;" in generated_code
+    assert "signed64Out = i64(signed16In[0]);" in generated_code
+    assert "unsigned64Out = u64(unsigned16In[1]);" in generated_code
+    assert "ivec4 signed16In" not in generated_code
+    assert "uvec3 unsigned16In" not in generated_code
+    assert "int signed64Out" not in generated_code
+    assert "uint unsigned64Out" not in generated_code
+    assert "signed64Out = wide_signed;" not in generated_code
+    assert "unsigned64Out = wide_unsigned;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_glslang_precise_dot_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY)
     ast = parse_code(tokens)
@@ -2939,6 +3712,37 @@ def test_spirv_spec_vector_extract_dynamic_codegen_reparse():
     assert "outValue = inputVec[index];" in generated_code
     assert "outValue = component;" not in generated_code
     assert "OpVectorExtractDynamic" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_vector_negate_then_extract_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_VECTOR_NEGATE_EXTRACT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inputVec @input @location(0);" in generated_code
+    assert "float outValue @output @location(0);" in generated_code
+    assert "outValue = (-inputVec)[0];" in generated_code
+    assert "outValue = -inputVec[0];" not in generated_code
+    assert "outValue = component;" not in generated_code
+    assert "OpFNegate" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_spec_struct_composite_extract_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "struct Pair" in generated_code
+    assert "float weight;" in generated_code
+    assert "uint index;" in generated_code
+    assert "Pair pair;" in generated_code
+    assert "outValue = pair.weight;" in generated_code
+    assert "outValue = pair[0];" not in generated_code
+    assert "OpCompositeExtract" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -3017,6 +3821,44 @@ def test_spirv_glslang_void_function_call_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_glslang_selection_merge_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float value @input @location(0);" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "if ((value > 0.0)) {" in generated_code
+    assert "outColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "} else {" in generated_code
+    assert "outColor = float4(0.0, 0.0, 1.0, 1.0);" in generated_code
+    assert "OpSelectionMerge" not in generated_code
+    assert "OpBranchConditional" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_switch_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SWITCH_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int mode @input @location(0) @flat;" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "switch (mode) {" in generated_code
+    assert "case 0:" in generated_code
+    assert "outColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "case 1:" in generated_code
+    assert "outColor = float4(0.0, 1.0, 0.0, 1.0);" in generated_code
+    assert "default:" in generated_code
+    assert "outColor = float4(0.0, 0.0, 1.0, 1.0);" in generated_code
+    assert generated_code.count("break;") == 3
+    assert "OpSwitch" not in generated_code
+    assert "OpSelectionMerge" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_glslang_opselect_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_OPSELECT_ASSEMBLY)
     ast = parse_code(tokens)
@@ -3048,6 +3890,17 @@ def test_glslang_any_all_codegen_reparse():
     assert "allOut = all((value == value));" in generated_code
     assert "anyOut = hasAny;" not in generated_code
     assert "allOut = hasAll;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_function_local_array_variable_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_LOCAL_ARRAY_VARIABLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int arr[2];" in generated_code
+    assert "%arr_int_2 arr;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -3108,6 +3961,25 @@ def test_spirv_assembly_runtime_array_buffer_block_codegen():
         in generated_code
     )
     assert "%storage" not in generated_code
+
+
+def test_spirv_tools_anonymous_resource_block_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_ANONYMOUS_RESOURCE_BLOCK_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert (
+        "RWStructuredBuffer<BufferOut> value_19 @set(0) @binding(1);" in generated_code
+    )
+    assert "cbuffer BufferIn @set(0) @binding(0) {" in generated_code
+    assert "uint i;" in generated_code
+    assert "uint result @output @location(0);" in generated_code
+    assert "value_19[0] = i;" in generated_code
+    assert "result = i;" in generated_code
+    assert "RWStructuredBuffer<BufferOut> 19" not in generated_code
+    assert "value_24" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_tools_array_length_codegen_reparse():
@@ -3187,6 +4059,28 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_subgroup_broadcast_and_reduce_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "compute {" in generated_code
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "uint value @input @location(0);" in generated_code
+    assert "uint broadcastOut @output @location(0);" in generated_code
+    assert "uint sumOut @output @location(1);" in generated_code
+    assert "broadcastOut = subgroupBroadcastFirst(value);" in generated_code
+    assert "sumOut = subgroupAdd(value);" in generated_code
+    assert "broadcastOut = broadcast;" not in generated_code
+    assert "sumOut = sum;" not in generated_code
+    assert "OpGroupNonUniform" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_glslang_atomic_load_store_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_ATOMIC_LOAD_STORE_ASSEMBLY)
     ast = parse_code(tokens)
@@ -3219,6 +4113,20 @@ def test_glslang_web_comp_atomic_iadd_codegen_reparse():
     assert "int oldValue @output @location(0);" in generated_code
     assert "oldValue = atomicAdd(counterBlock[0], 2);" in generated_code
     assert "oldValue = old;" not in generated_code
+    assert "OpAtomicIAdd" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_image_texel_pointer_atomic_iadd_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_IMAGE_TEXEL_POINTER_ATOMIC_IADD_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "RWTexture2D<uint> img @set(0) @binding(0) @r32ui;" in generated_code
+    assert "atomicAdd(spirvImageTexelPointer(img, int2(0, 1), 0), 3);" in generated_code
+    assert "texelPtr" not in generated_code
+    assert "OpImageTexelPointer" not in generated_code
     assert "OpAtomicIAdd" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -3281,6 +4189,26 @@ def test_spirv_assembly_storage_image_format_codegen():
         in generated_code
     )
     assert "%storage_image" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_descriptor_indexing_nonuniform_codegen_reparse():
+    tokens = tokenize_code(SPIRV_DESCRIPTOR_INDEXING_NONUNIFORM_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2D textures[4] @set(0) @binding(0);" in generated_code
+    assert "sampler linearSampler @set(0) @binding(1);" in generated_code
+    assert "int materialIndex @input @location(0);" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = textureLod("
+        "Texture2D(textures[nonuniformEXT(materialIndex)], linearSampler), "
+        "uv, 0.0);"
+    ) in generated_code
+    assert "textures[materialIndex]" not in generated_code
+    assert "OpDecorate" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -3742,6 +4670,21 @@ def test_glslang_derivative_ops_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_glslang_geometry_execution_modes_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_GEOMETRY_EXECUTION_MODES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "geometry {" in generated_code
+    assert "layout(triangles, invocations = 2) in;" in generated_code
+    assert "layout(triangle_strip, max_vertices = 3) out;" in generated_code
+    assert "float3 inColor[3] @input @location(0);" in generated_code
+    assert "float3 outColor @output @location(0);" in generated_code
+    assert "fragment {" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_spirv_cross_isnan_isinf_codegen_reparse():
     tokens = tokenize_code(SPIRV_CROSS_ISNAN_ISINF_ASSEMBLY)
     ast = parse_code(tokens)
@@ -3780,6 +4723,31 @@ def test_spirv_assembly_flat_location_interface_codegen():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_spec_noperspective_only_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_NOPERSPECTIVE_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 color2 @input @noperspective;" in generated_code
+    assert "NoPerspective" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_relaxed_precision_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 color @input @location(0) @mediump;" in generated_code
+    assert "float4 outColor @output @location(0) @mediump;" in generated_code
+    assert "outColor = color;" in generated_code
+    assert "RelaxedPrecision" not in generated_code
+    assert "outColor = loaded;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
 def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
     tokens = tokenize_code(SPIRV_FRAGMENT_SAMPLE_AND_VIEW_BUILTINS_ASSEMBLY)
     ast = parse_code(tokens)
@@ -3793,6 +4761,24 @@ def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
     assert "@builtin(sampleid)" not in generated_code
     assert "@builtin(samplemask)" not in generated_code
     assert "@builtin(layer)" not in generated_code
+
+
+def test_glslang_fragment_barycentric_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_FRAGMENT_BARYCENTRIC_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float outValue @output @location(0);" in generated_code
+    assert (
+        "float3 gl_BaryCoordNoPerspEXT @input @gl_BaryCoordNoPerspEXT;"
+        in generated_code
+    )
+    assert "float3 vertexIDs[3] @input @location(1) @pervertexEXT;" in generated_code
+    assert "outValue = gl_BaryCoordNoPerspEXT[0];" in generated_code
+    assert "@builtin(barycoordnoperspkhr)" not in generated_code
+    assert "PerVertexKHR" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_tools_gl_pervertex_access_chain_codegen():
@@ -3841,6 +4827,37 @@ def test_spirv_tools_extended_arithmetic_codegen_reparse():
     assert "outHigh = spirvSMulExtended(2, 3)[1];" in generated_code
     assert "OpIAddCarry" not in generated_code
     assert "OpSMulExtended" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_same_value_phi_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_SAME_VALUE_PHI_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "outColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "outColor = phi;" not in generated_code
+    assert "spirvPhi" not in generated_code
+    assert "OpPhi" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_direct_selection_phi_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_DIRECT_SELECTION_PHI_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = (true ? float4(1.0, 0.0, 0.0, 1.0) : "
+        "float4(0.0, 0.0, 1.0, 1.0));" in generated_code
+    )
+    assert "outColor = phi;" not in generated_code
+    assert "spirvPhi" not in generated_code
+    assert "OpPhi" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -4855,7 +5872,7 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
 
     assert "pub struct Particles" in generated_code
     assert (
-        "static VIEW_PROJ: std::sync::LazyLock<float4x4> = "
+        "static VIEW_PROJ: std::sync::LazyLock<Mat4<f32>> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_code
     )
     assert (
@@ -4901,7 +5918,7 @@ def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
     assert "pc.model" not in generated_cgl
     assert "pub struct PushConstants" in generated_rust
     assert (
-        "static MODEL: std::sync::LazyLock<float4x4> = "
+        "static MODEL: std::sync::LazyLock<Mat4<f32>> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_rust
     )
     assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_rust

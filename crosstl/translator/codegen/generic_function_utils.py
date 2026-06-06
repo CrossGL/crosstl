@@ -19,6 +19,47 @@ from .enum_utils import (
     sanitize_type_name,
     substitute_generic_type_name,
 )
+from .image_access_contracts import (
+    IMAGE_ATOMIC_INTRINSIC_NAMES,
+    RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES,
+    RESOURCE_QUERY_SIZE_INTRINSIC_NAMES,
+    TEXTURE_RESOURCE_INTRINSIC_NAMES,
+)
+
+BUFFER_RESOURCE_INTRINSIC_NAMES = frozenset(
+    {
+        "buffer_load",
+        "buffer_load2",
+        "buffer_load3",
+        "buffer_load4",
+        "buffer_store",
+        "buffer_store2",
+        "buffer_store3",
+        "buffer_store4",
+        "buffer_append",
+        "buffer_consume",
+        "buffer_dimensions",
+        "buffer_increment_counter",
+        "buffer_decrement_counter",
+    }
+)
+
+IMAGE_RESOURCE_INTRINSIC_NAMES = frozenset(
+    {
+        "imageLoad",
+        "imageStore",
+        "imageSize",
+        "imageSamples",
+    }
+) | frozenset(IMAGE_ATOMIC_INTRINSIC_NAMES)
+
+RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES = (
+    BUFFER_RESOURCE_INTRINSIC_NAMES
+    | IMAGE_RESOURCE_INTRINSIC_NAMES
+    | frozenset(RESOURCE_QUERY_SAMPLES_INTRINSIC_NAMES)
+    | frozenset(RESOURCE_QUERY_SIZE_INTRINSIC_NAMES)
+    | frozenset(TEXTURE_RESOURCE_INTRINSIC_NAMES)
+)
 
 
 def prepare_generic_function_specializations(generator, functions):
@@ -26,7 +67,9 @@ def prepare_generic_function_specializations(generator, functions):
     definitions = {
         func.name: func
         for func in functions or []
-        if getattr(func, "name", None) and generic_function_parameters(func)
+        if getattr(func, "name", None)
+        and generic_function_parameters(func)
+        and not is_reserved_generic_function_builtin_name(func.name)
     }
     generator.generic_function_definitions = definitions
     generator.generic_function_specializations = {}
@@ -84,6 +127,9 @@ def generic_function_call_name(generator, func_name, args):
 
 
 def generic_function_call_key(generator, func_name, args):
+    if is_reserved_generic_function_builtin_name(func_name):
+        return None
+
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
     func = definitions.get(func_name)
     if func is None:
@@ -328,6 +374,10 @@ def _ensure_generic_function_specialization(generator, func, key, substitutions)
 def generic_function_specialization_name(func_name, concrete_args):
     suffix = "_".join(sanitize_type_name(arg) for arg in concrete_args)
     return f"{sanitize_type_name(func_name)}_{suffix}" if suffix else func_name
+
+
+def is_reserved_generic_function_builtin_name(func_name):
+    return str(func_name) in RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES
 
 
 def _collect_type_parameter_bindings(

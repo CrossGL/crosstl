@@ -208,6 +208,34 @@ class TestCudaParser:
         assert block_assignment.left.object == "params"
         assert block_assignment.left.member == "blockDim"
 
+    def test_public_cuda_samples_const_dim3_constructor_global_parses(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        window_size = ast.global_variables[0]
+
+        assert isinstance(window_size, VariableNode)
+        assert window_size.vtype == "const dim3"
+        assert window_size.name == "windowSize"
+        assert isinstance(window_size.value, FunctionCallNode)
+        assert window_size.value.name == "dim3"
+        assert window_size.value.args == ["512", "512"]
+
+        window_grid_size = ast.global_variables[2]
+        assert isinstance(window_grid_size, VariableNode)
+        assert window_grid_size.name == "windowGridSize"
+        assert isinstance(window_grid_size.value, FunctionCallNode)
+        assert window_grid_size.value.name == "dim3"
+        assert len(window_grid_size.value.args) == 2
+
     def test_public_cuda_samples_unnamed_parameters_and_keyword_names(self):
         code = """
         struct Ray { float x; };
@@ -451,6 +479,31 @@ class TestCudaParser:
             ("char * *", "argv"),
         ]
         assert main.body[0].vtype == "stackable_ctx"
+
+    def test_public_cuda_template_disambiguator_calls_parse(self):
+        # Inspired by LiterateLB CUDA template kernels using
+        # OPERATOR::template apply<T>(...) inside __global__ wrappers.
+        code = """
+        template <typename OPERATOR, typename F>
+        __global__ void call_operator(F f) {
+            OPERATOR::template apply<float>(threadIdx.x);
+            f.template operator()<float>(threadIdx.x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        scope_call = ast.kernels[0].body[0]
+        member_call = ast.kernels[0].body[1]
+
+        assert isinstance(scope_call, FunctionCallNode)
+        assert scope_call.name == "OPERATOR::apply<float>"
+        assert isinstance(member_call, FunctionCallNode)
+        assert isinstance(member_call.name, MemberAccessNode)
+        assert member_call.name.object == "f"
+        assert member_call.name.member == "operator()<float>"
 
     def test_public_cub_macro_test_blocks_are_skipped_before_kernels(self):
         code = """
@@ -2930,6 +2983,31 @@ class TestCudaParser:
         assert isinstance(body[0].value, CastNode)
         assert body[0].value.target_type == "LaneMask"
         assert body[0].value.expression == "x"
+
+    def test_cuda_samples_const_unknown_pointer_pointer_c_style_cast_parsing(self):
+        code = """
+        void compile_shader(char* data, int size) {
+            glShaderSource(shader, 1, (const GLchar **)&data, &size);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        call = ast.functions[0].body[0]
+        shader_source = call.args[2]
+        size_arg = call.args[3]
+
+        assert isinstance(call, FunctionCallNode)
+        assert isinstance(shader_source, CastNode)
+        assert shader_source.target_type == "const GLchar * *"
+        assert isinstance(shader_source.expression, UnaryOpNode)
+        assert shader_source.expression.op == "&"
+        assert shader_source.expression.operand == "data"
+        assert isinstance(size_arg, UnaryOpNode)
+        assert size_arg.op == "&"
+        assert size_arg.operand == "size"
 
     def test_auto_pointer_reference_local_declarations_parsing(self):
         code = """

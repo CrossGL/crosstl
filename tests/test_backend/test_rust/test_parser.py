@@ -113,6 +113,33 @@ def test_raw_identifier_parsing_normalizes_keyword_names():
     assert function.body[0] == "match"
 
 
+def test_primitive_named_impl_methods_parse_from_rust_gpu_metadata():
+    code = """
+    pub struct TestMetadata {
+        output_type: OutputType,
+        epsilon: Option<f32>,
+    }
+
+    enum OutputType { Raw, F32, F64, U32, I32 }
+
+    impl TestMetadata {
+        pub fn f32(epsilon: f32) -> Self {
+            Self { output_type: OutputType::F32, epsilon: Some(epsilon) }
+        }
+
+        pub fn u32() -> Self {
+            Self { output_type: OutputType::U32, ..Default::default() }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    impl_block = ast.impl_blocks[0]
+
+    assert [method.name for method in impl_block.methods] == ["f32", "u32"]
+    assert impl_block.methods[0].params[0].vtype == "f32"
+
+
 def test_enum_parsing():
     code = """
     #[repr(u32)]
@@ -1338,6 +1365,29 @@ def test_rust_gpu_vector_associated_constants_parse_from_upstream_compiletests()
     assert isinstance(body[4].value, MemberAccessNode)
     assert body[4].value.object == "Vec2::ZERO"
     assert body[4].value.member == "x"
+
+
+def test_rust_gpu_mouse_shader_perp_dot_method_parse_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs main_fs background expression.
+    code = """
+    fn determinant_magnitude(to_frag: Vec2, start_to_end: Vec2) -> f32 {
+        to_frag.perp_dot(start_to_end).abs()
+    }
+    """
+
+    ast = parse_code(code)
+    final_call = ast.functions[0].body[0]
+    perp_dot_call = final_call.name.object
+
+    assert isinstance(final_call, FunctionCallNode)
+    assert isinstance(final_call.name, MemberAccessNode)
+    assert final_call.name.member == "abs"
+    assert isinstance(perp_dot_call, FunctionCallNode)
+    assert isinstance(perp_dot_call.name, MemberAccessNode)
+    assert perp_dot_call.name.member == "perp_dot"
+    assert perp_dot_call.args == ["start_to_end"]
 
 
 def test_rust_gpu_compute_collatz_option_chain_parse_from_upstream_example():

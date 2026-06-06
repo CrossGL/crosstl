@@ -1207,6 +1207,7 @@ class MojoParser:
                 "MINUS_EQUALS",
                 "MULTIPLY_EQUALS",
                 "DIVIDE_EQUALS",
+                "FLOOR_DIVIDE_EQUALS",
                 "ASSIGN_XOR",
                 "ASSIGN_OR",
                 "ASSIGN_AND",
@@ -1305,7 +1306,7 @@ class MojoParser:
         return self.parse_comptime_declaration(after_keyword=True)
 
     def is_comptime_declaration_start(self):
-        if self.current_token[0] != "IDENTIFIER":
+        if not self.is_identifier_name_token():
             return False
         next_token = self.peek_token()[0]
         if next_token in {"COLON", "EQUALS"}:
@@ -1366,8 +1367,7 @@ class MojoParser:
         if not after_keyword:
             self.eat("COMPTIME")
 
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_identifier_name("comptime declaration name")
         if self.current_token[0] == "LBRACKET":
             name += self.parse_generic_type_suffix()
 
@@ -1638,6 +1638,7 @@ class MojoParser:
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
             "DIVIDE_EQUALS",
+            "FLOOR_DIVIDE_EQUALS",
             "ASSIGN_XOR",
             "ASSIGN_OR",
             "ASSIGN_AND",
@@ -1666,6 +1667,7 @@ class MojoParser:
         return left
 
     def is_inline_if_expression(self):
+        layout_tokens = {"NEWLINE", "INDENT", "DEDENT"}
         depth = 0
         idx = self.pos
         while idx < len(self.tokens):
@@ -1679,7 +1681,10 @@ class MojoParser:
             elif depth == 0:
                 if token_type == "ELSE":
                     return True
-                if token_type in {"NEWLINE", "DEDENT", "EOF", "COMMA", "SEMICOLON"}:
+                if token_type in layout_tokens and self.expression_layout_depth:
+                    idx += 1
+                    continue
+                if token_type in layout_tokens | {"EOF", "COMMA", "SEMICOLON"}:
                     return False
             idx += 1
         return False
@@ -1763,9 +1768,12 @@ class MojoParser:
                 "GREATER_EQUAL",
                 "IN",
             ]
+            or self.is_negated_membership_operator()
             or self.is_identity_operator()
         ):
-            if self.is_identity_operator():
+            if self.is_negated_membership_operator():
+                op = self.parse_negated_membership_operator()
+            elif self.is_identity_operator():
                 op = self.parse_identity_operator()
             else:
                 op = self.current_token[1]
@@ -1786,6 +1794,14 @@ class MojoParser:
                 BinaryOpNode(left, op, right),
             )
         return expression
+
+    def is_negated_membership_operator(self):
+        return self.current_token[0] == "NOT" and self.peek_token()[0] == "IN"
+
+    def parse_negated_membership_operator(self):
+        self.eat("NOT")
+        self.eat("IN")
+        return "not in"
 
     def is_identity_operator(self):
         return self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "is"
@@ -1822,7 +1838,13 @@ class MojoParser:
     def parse_multiplicative(self):
         left = self.parse_unary()
         self.skip_expression_layout()
-        while self.current_token[0] in ["MULTIPLY", "DIVIDE", "FLOOR_DIVIDE", "MOD"]:
+        while self.current_token[0] in [
+            "MULTIPLY",
+            "AT",
+            "DIVIDE",
+            "FLOOR_DIVIDE",
+            "MOD",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()

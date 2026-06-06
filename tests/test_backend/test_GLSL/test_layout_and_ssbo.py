@@ -89,6 +89,33 @@ def test_parse_layout_integer_constant_expression_values():
     assert position.layout["component"].op == "-"
 
 
+def test_codegen_preserves_explicit_block_member_layout_from_khronos_docs():
+    # Reduced from the Khronos OpenGL Wiki Interface Block documentation
+    # examples for matrix storage order and explicit variable layout.
+    code = """
+    #version 450 core
+    layout(std140, binding = 0) uniform MatrixBlock
+    {
+        layout(row_major) mat4 projection;
+        layout(column_major) mat4 modelview;
+        layout(offset = 128, align = 16) vec4 tint;
+    } matrices;
+
+    void main() {
+        gl_Position = matrices.projection * matrices.modelview * vec4(1.0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "vertex")
+
+    assert "mat4 projection @row_major;" in crossgl
+    assert "mat4 modelview @column_major;" in crossgl
+    assert "vec4 tint @offset(128) @align(16);" in crossgl
+
+    shader_ast = crosstl.translator.parse(crossgl)
+    assert shader_ast is not None
+
+
 def test_codegen_layout_integer_constant_expression_values():
     code = """
     #version 450 core
@@ -152,6 +179,31 @@ def test_codegen_stage_layout_integer_constant_expression_values():
         "layout(local_size_x = (GROUP_SIZE << 1), local_size_y = GROUP_SIZE, "
         "local_size_z = ((GROUP_SIZE > 4) ? 2 : 1)) in;"
     ) in crossgl
+
+
+def test_parse_multiline_layout_qualifiers_with_comments_from_godot_betsy():
+    # Reduced from godot/modules/betsy/alpha_stitch.glsl.
+    code = """
+    #version 450
+    layout(local_size_x = 8, //
+           local_size_y = 8, //
+           local_size_z = 1) in;
+
+    void main() {
+    }
+    """
+
+    ast = parse_glsl(code, "compute")
+
+    assert ast.layouts[0]["layout"] == {
+        "local_size_x": "8",
+        "local_size_y": "8",
+        "local_size_z": "1",
+    }
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;" in crossgl
 
 
 @pytest.mark.parametrize(

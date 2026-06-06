@@ -73,16 +73,38 @@ class CudaParser:
     }
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
+        "atomicAdd_block",
+        "atomicAdd_system",
         "atomicSub",
+        "atomicSub_block",
+        "atomicSub_system",
         "atomicMax",
+        "atomicMax_block",
+        "atomicMax_system",
         "atomicMin",
+        "atomicMin_block",
+        "atomicMin_system",
         "atomicExch",
+        "atomicExch_block",
+        "atomicExch_system",
         "atomicCAS",
+        "atomicCAS_block",
+        "atomicCAS_system",
         "atomicAnd",
+        "atomicAnd_block",
+        "atomicAnd_system",
         "atomicOr",
+        "atomicOr_block",
+        "atomicOr_system",
         "atomicXor",
+        "atomicXor_block",
+        "atomicXor_system",
         "atomicInc",
+        "atomicInc_block",
+        "atomicInc_system",
         "atomicDec",
+        "atomicDec_block",
+        "atomicDec_system",
     }
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     OVERLOADABLE_OPERATOR_TOKENS = {
@@ -137,6 +159,14 @@ class CudaParser:
         "consteval",
         "noexcept",
         "__noexcept",
+    }
+    STATEMENT_DIRECTIVE_FOLLOW_TOKENS = {
+        "FOR",
+        "IF",
+        "WHILE",
+        "DO",
+        "SWITCH",
+        "LBRACE",
     }
     FUNCTION_IDENTIFIER_SPECIFIERS = {
         "APIENTRY",
@@ -824,10 +854,44 @@ class CudaParser:
         if self.is_function_pointer_parameter_start_at_index(index):
             return True
 
-        return (
-            self.skip_type_at_index(index, allow_unknown_identifier_declarator=True)
-            is not None
+        return self.is_plausible_function_parameter_at_index(index)
+
+    def is_plausible_function_parameter_at_index(self, index):
+        type_end = self.skip_type_at_index(
+            index, allow_unknown_identifier_declarator=True
         )
+        if type_end is None:
+            return False
+
+        index = self.skip_cpp_attribute_specifiers_at_index(type_end)
+        while index < len(self.tokens) and self.tokens[index][0] in {
+            "MULTIPLY",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+            index = self.skip_postfix_type_qualifiers_at_index(index)
+
+        if self.is_ellipsis_at_index(index):
+            index += 3
+
+        if index >= len(self.tokens):
+            return False
+
+        if self.tokens[index][0] in {"COMMA", "RPAREN", "ASSIGN"}:
+            return True
+
+        if self.tokens[index][0] in self.NAME_COMPONENT_TOKENS:
+            index += 1
+            index = self.skip_array_suffix_at_index(index)
+            index = self.skip_cpp_attribute_specifiers_at_index(index)
+            return index < len(self.tokens) and self.tokens[index][0] in {
+                "COMMA",
+                "RPAREN",
+                "ASSIGN",
+            }
+
+        return False
 
     def is_function_pointer_parameter_start_at_index(self, index):
         type_end = self.skip_type_at_index(
@@ -1794,6 +1858,40 @@ class CudaParser:
             for character in name
         )
 
+    def is_statement_directive_marker_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+
+        marker_end = self.statement_directive_marker_end_index(self.current_index)
+        return (
+            marker_end is not None
+            and marker_end < len(self.tokens)
+            and self.tokens[marker_end][0] in self.STATEMENT_DIRECTIVE_FOLLOW_TOKENS
+        )
+
+    def statement_directive_marker_end_index(self, index):
+        if index >= len(self.tokens) or self.tokens[index][0] != "IDENTIFIER":
+            return None
+
+        name = self.tokens[index][1]
+        if name == "_Pragma":
+            if index + 1 >= len(self.tokens) or self.tokens[index + 1][0] != "LPAREN":
+                return None
+            return self.skip_balanced_tokens_at_index(index + 1, "LPAREN", "RPAREN")
+
+        if not self.is_macro_like_identifier(name):
+            return None
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LPAREN":
+            index = self.skip_balanced_tokens_at_index(index, "LPAREN", "RPAREN")
+        return index
+
+    def skip_statement_directive_marker(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+
     def skip_macro_block_invocation(self):
         if self.is_bare_macro_before_block_invocation():
             self.eat("IDENTIFIER")
@@ -2357,7 +2455,7 @@ class CudaParser:
             value = self.parse_expression()
         elif self.current_token[0] == "LPAREN":
             args = self.parse_argument_list()
-            value = FunctionCallNode(vtype, args)
+            value = FunctionCallNode(self.constructor_initializer_name(vtype), args)
         elif self.current_token[0] == "LBRACE":
             value = self.parse_initializer_list()
 
@@ -2473,10 +2571,26 @@ class CudaParser:
             return self.parse_expression()
         if self.current_token[0] == "LPAREN":
             args = self.parse_argument_list()
-            return FunctionCallNode(vtype, args)
+            return FunctionCallNode(self.constructor_initializer_name(vtype), args)
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         return None
+
+    def constructor_initializer_name(self, vtype):
+        return " ".join(
+            part
+            for part in str(vtype).split()
+            if part
+            not in {
+                "const",
+                "volatile",
+                "__restrict__",
+                "__restrict",
+                "restrict",
+                "&",
+                "&&",
+            }
+        )
 
     def parse_function_pointer_variable_declaration(self):
         qualifiers = self.parse_declaration_prefixes()
@@ -2625,6 +2739,9 @@ class CudaParser:
         elif self.is_macro_block_invocation_start():
             self.skip_macro_block_invocation()
             return None
+        elif self.is_statement_directive_marker_start():
+            self.skip_statement_directive_marker()
+            return self.parse_statement()
         elif self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
             self.eat("SEMICOLON")
@@ -2897,7 +3014,27 @@ class CudaParser:
             is_constexpr = True
             self.eat("CONSTEXPR")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+
+        condition_or_init = None
+        if self.current_token[0] != "SEMICOLON":
+            if self.is_variable_declaration():
+                init_declarations = self.parse_variable_declaration_list()
+                condition_or_init = (
+                    init_declarations
+                    if len(init_declarations) > 1
+                    else init_declarations[0]
+                )
+            else:
+                condition_or_init = self.parse_expression()
+
+        init = None
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            init = condition_or_init
+            condition = self.parse_expression()
+        else:
+            condition = condition_or_init
+
         self.eat("RPAREN")
 
         if_body = self.parse_statement()
@@ -2909,6 +3046,8 @@ class CudaParser:
 
         node = IfNode(condition, if_body, else_body)
         node.is_constexpr = is_constexpr
+        if init is not None:
+            return [*init, node] if isinstance(init, list) else [init, node]
         return node
 
     def parse_for_statement(self):
@@ -3350,7 +3489,7 @@ class CudaParser:
                 left = MemberAccessNode(left, member, False)
             elif self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                member = self.parse_name_component()
+                member = self.parse_qualified_name_member()
                 left = self.append_qualified_name(left, "::", member)
             elif self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
                 left = self.append_template_suffix(left)
@@ -3408,9 +3547,24 @@ class CudaParser:
         )
 
     def parse_member_name(self):
+        if self.current_token[0] == "TEMPLATE":
+            self.eat("TEMPLATE")
+            member = self.consume_function_name()
+            if self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
+                member += self.parse_template_suffix()
+            return member
         if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
             return self.parse_name_component()
         raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+
+    def parse_qualified_name_member(self):
+        if self.current_token[0] == "TEMPLATE":
+            self.eat("TEMPLATE")
+            member = self.consume_function_name()
+            if self.current_token[0] == "LESS_THAN" and self.is_template_suffix():
+                member += self.parse_template_suffix()
+            return member
+        return self.parse_name_component()
 
     def parse_name_component(self):
         if self.current_token[0] not in self.NAME_COMPONENT_TOKENS:
@@ -4224,11 +4378,17 @@ class CudaParser:
 
         identifier_name = self.current_token[1]
         close_index = self.current_index + 1
+        saw_declarator_marker = False
         while close_index < len(self.tokens) and self.tokens[close_index][0] in {
             "MULTIPLY",
             *self.TYPE_REFERENCE_TOKENS,
             *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
         }:
+            if self.tokens[close_index][0] in {
+                "MULTIPLY",
+                *self.TYPE_REFERENCE_TOKENS,
+            }:
+                saw_declarator_marker = True
             close_index += 1
 
         if close_index >= len(self.tokens) or self.tokens[close_index][0] != "RPAREN":
@@ -4245,6 +4405,7 @@ class CudaParser:
 
         if (
             not self.is_identifier_type_name(identifier_name)
+            and not saw_declarator_marker
             and operand_index < len(self.tokens)
             and self.tokens[operand_index][0] in {"MULTIPLY", "BITWISE_AND"}
         ):

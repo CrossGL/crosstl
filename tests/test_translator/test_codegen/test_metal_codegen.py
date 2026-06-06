@@ -1,4 +1,8 @@
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -54,6 +58,34 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+def compile_with_metal_if_available(source: str):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not available")
+
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        pytest.skip("Metal compiler is not available")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        source_path = Path(temp_dir) / "shader.metal"
+        output_path = Path(temp_dir) / "shader.air"
+        source_path.write_text(source)
+        result = subprocess.run(
+            [xcrun, "metal", str(source_path), "-o", str(output_path)],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
     shader = """
     shader MetalBlendOverloadShape {
@@ -70,6 +102,655 @@ def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
 
     assert "float4 blendedColor = blend(backdrop, source);" in generated_code
     assert "return mix(backdrop, blendedColor, intensity);" in generated_code
+
+
+def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
+    # Apple MSL exposes fmod(), not GLSL/CrossGL mod(); real tiled shaders with
+    # negative coordinates need floor-based mod semantics instead of fmod().
+    shader = """
+    shader MetalModuloPattern {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec2 uv = vec2(float(tid.x), float(tid.y));
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                vec2 wrapped = mod(tile, vec2(0.25, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "float2 tile = ((uv * float2(4.0) - float2(2.0)) - "
+        "((1.0) * floor((uv * float2(4.0) - float2(2.0)) / (1.0))));"
+    ) in generated_code
+    assert (
+        "float2 wrapped = ((tile) - "
+        "((float2(0.25, 0.5)) * floor((tile) / (float2(0.25, 0.5)))));"
+    ) in generated_code
+    assert "mod(" not in generated_code
+
+
+def test_metal_user_defined_mod_function_is_preserved():
+    shader = """
+    shader MetalUserMod {
+        compute {
+            float mod(float value, float period) {
+                return value + period;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float wrapped = mod(float(tid.x), 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float mod(float value, float period)" in generated_code
+    assert "float wrapped = mod(float(tid.x), 2.0);" in generated_code
+    assert "floor(" not in generated_code
+
+
+def test_metal_mod_builtin_lowers_to_compilable_msl_when_toolchain_is_available():
+    shader = """
+    shader MetalModuloCompile {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec2 uv = vec2(float(tid.x), float(tid.y));
+                vec2 tile = mod((uv * 4.0) - vec2(2.0), 1.0);
+                vec2 wrapped = mod(tile, vec2(0.25, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "mod(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_hlsl_frac_and_lerp_aliases_lower_to_msl_stdlib_names():
+    shader = """
+    shader MetalHlslMathAliases {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = frac(float(tid.x) * 0.25);
+                vec3 cool = vec3(0.1, 0.2, 0.8);
+                vec3 warm = vec3(1.0, 0.4, 0.1);
+                vec3 color = lerp(cool, warm, phase);
+                float scalar = lerp(0.0, 1.0, phase) + color.x;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float phase = fract(float(tid.x) * 0.25);" in generated_code
+    assert "float3 color = mix(cool, warm, phase);" in generated_code
+    assert "float scalar = mix(0.0, 1.0, phase) + color.x;" in generated_code
+    assert "frac(" not in generated_code
+    assert "lerp(" not in generated_code
+
+
+def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
+    shader = """
+    shader MetalLerpAliasLocalMixShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = float(tid.x) * 0.25;
+                vec3 cool = vec3(0.1, 0.2, 0.8);
+                vec3 warm = vec3(1.0, 0.4, 0.1);
+                float mix = phase;
+                vec3 color = lerp(cool, warm, phase);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float mix = phase;" in generated_code
+    assert "float3 color = metal::mix(cool, warm, phase);" in generated_code
+    assert "float3 color = mix(cool, warm, phase);" not in generated_code
+
+
+def test_metal_hlsl_frac_alias_qualifies_fract_when_local_name_shadows_it():
+    shader = """
+    shader MetalFracAliasLocalFractShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float fract = float(tid.x);
+                float phase = frac(fract * 0.25);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float fract = float(tid.x);" in generated_code
+    assert (
+        "__attribute__((unused)) float phase = metal::fract(fract * 0.25);"
+        in generated_code
+    )
+    assert "__attribute__((unused)) float phase = fract(fract * 0.25);" not in (
+        generated_code
+    )
+
+
+def test_metal_direct_stdlib_builtins_qualify_when_local_names_shadow_them():
+    shader = """
+    shader MetalDirectStdlibTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec3 base = vec3(float(tid.x), 0.5, 1.0);
+                float clamp = 1.0;
+                float dot = 0.0;
+                float step = 0.25;
+                float smoothstep = step;
+                float mix = smoothstep;
+                float cross = mix;
+                float scalar = clamp(dot(base, base), 0.0, 1.0);
+                float gate = step(0.25, scalar);
+                float smooth = smoothstep(0.0, 1.0, scalar);
+                vec3 blended = mix(base, vec3(scalar), smooth);
+                vec3 normal = cross(base, vec3(0.0, 1.0, 0.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float clamp = 1.0;" in generated_code
+    assert "float dot = 0.0;" in generated_code
+    assert "float step = 0.25;" in generated_code
+    assert "float smoothstep = step;" in generated_code
+    assert "float mix = smoothstep;" in generated_code
+    assert "float cross = mix;" in generated_code
+    assert (
+        "float scalar = metal::clamp(metal::dot(base, base), 0.0, 1.0);"
+        in generated_code
+    )
+    assert "float gate = metal::step(0.25, scalar);" in generated_code
+    assert "float smooth = metal::smoothstep(0.0, 1.0, scalar);" in generated_code
+    assert (
+        "float3 blended = metal::mix(base, float3(scalar), smooth);" in generated_code
+    )
+    assert (
+        "float3 normal = metal::cross(base, float3(0.0, 1.0, 0.0));" in generated_code
+    )
+    assert "float scalar = clamp(dot(base, base), 0.0, 1.0);" not in generated_code
+    assert "float gate = step(0.25, scalar);" not in generated_code
+    assert "float smooth = smoothstep(0.0, 1.0, scalar);" not in generated_code
+
+
+def test_metal_user_defined_frac_and_lerp_functions_are_preserved():
+    shader = """
+    shader MetalUserHlslMathNames {
+        compute {
+            float frac(float value) {
+                return value + 1.0;
+            }
+
+            float lerp(float left, float right, float weight) {
+                return left + right + weight;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = frac(float(tid.x) * 0.25);
+                float scalar = lerp(0.0, 1.0, phase);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float frac(float value)" in generated_code
+    assert "float lerp(float left, float right, float weight)" in generated_code
+    assert "float phase = frac(float(tid.x) * 0.25);" in generated_code
+    assert "float scalar = lerp(0.0, 1.0, phase);" in generated_code
+    assert "fract(" not in generated_code
+    assert "mix(" not in generated_code
+
+
+def test_metal_glsl_bitcast_builtins_lower_to_as_type():
+    shader = """
+    shader MetalBitcasts {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float f = 1.0;
+                uint u = 1u;
+                int i = 1;
+                vec3 v = vec3(1.0, 2.0, 3.0);
+                int signedBits = floatBitsToInt(f);
+                uint unsignedBits = floatBitsToUint(f);
+                float fromInt = intBitsToFloat(i);
+                float fromUint = uintBitsToFloat(u);
+                ivec3 vectorBits = floatBitsToInt(v);
+                vec3 fromVectorBits = intBitsToFloat(vectorBits);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "__attribute__((unused)) int signedBits = as_type<int>(f);" in generated_code
+    assert (
+        "__attribute__((unused)) uint unsignedBits = as_type<uint>(f);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromInt = as_type<float>(i);" in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromUint = as_type<float>(u);" in generated_code
+    )
+    assert "int3 vectorBits = as_type<int3>(v);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 fromVectorBits = as_type<float3>(vectorBits);"
+        in generated_code
+    )
+    assert "floatBitsToInt(" not in generated_code
+    assert "floatBitsToUint(" not in generated_code
+    assert "intBitsToFloat(" not in generated_code
+    assert "uintBitsToFloat(" not in generated_code
+
+
+def test_metal_hlsl_as_bitcast_aliases_lower_to_as_type():
+    shader = """
+    shader MetalHlslAsBitcasts {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float f = 1.0;
+                uint u = 1u;
+                int i = 1;
+                vec3 v = vec3(1.0, 2.0, 3.0);
+                ivec3 iv = ivec3(1, 2, 3);
+                uvec3 uv = uvec3(1u, 2u, 3u);
+
+                int signedBits = asint(f);
+                uint unsignedBits = asuint(f);
+                float fromInt = asfloat(i);
+                float fromUint = asfloat(u);
+                ivec3 vectorBits = asint(v);
+                uvec3 unsignedVectorBits = asuint(v);
+                vec3 fromSignedVector = asfloat(iv);
+                vec3 fromUnsignedVector = asfloat(uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "__attribute__((unused)) int signedBits = as_type<int>(f);" in generated_code
+    assert (
+        "__attribute__((unused)) uint unsignedBits = as_type<uint>(f);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromInt = as_type<float>(i);" in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromUint = as_type<float>(u);" in generated_code
+    )
+    assert "int3 vectorBits = as_type<int3>(v);" in generated_code
+    assert "uint3 unsignedVectorBits = as_type<uint3>(v);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 fromSignedVector = as_type<float3>(iv);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float3 fromUnsignedVector = as_type<float3>(uv);"
+        in generated_code
+    )
+    assert "asint(" not in generated_code
+    assert "asuint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
+def test_metal_user_defined_bitcast_function_names_are_preserved():
+    shader = """
+    shader MetalUserBitcastNames {
+        compute {
+            int floatBitsToInt(float value) {
+                return 7;
+            }
+
+            float uintBitsToFloat(uint value) {
+                return 1.0;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int signedBits = floatBitsToInt(1.0);
+                float fromUint = uintBitsToFloat(1u);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "int floatBitsToInt(float value)" in generated_code
+    assert "float uintBitsToFloat(uint value)" in generated_code
+    assert (
+        "__attribute__((unused)) int signedBits = floatBitsToInt(1.0);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromUint = uintBitsToFloat(1u);"
+        in generated_code
+    )
+    assert "as_type<int>(" not in generated_code
+    assert "as_type<float>(" not in generated_code
+
+
+def test_metal_user_defined_hlsl_as_bitcast_function_names_are_preserved():
+    shader = """
+    shader MetalUserHlslAsBitcastNames {
+        compute {
+            int asint(float value) {
+                return 7;
+            }
+
+            float asfloat(uint value) {
+                return 1.0;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int signedBits = asint(1.0);
+                float fromUint = asfloat(1u);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "int asint(float value)" in generated_code
+    assert "float asfloat(uint value)" in generated_code
+    assert "__attribute__((unused)) int signedBits = asint(1.0);" in generated_code
+    assert "__attribute__((unused)) float fromUint = asfloat(1u);" in generated_code
+    assert "as_type<int>(" not in generated_code
+    assert "as_type<float>(" not in generated_code
+
+
+def test_metal_hlsl_frac_and_lerp_aliases_compile_when_toolchain_is_available():
+    shader = """
+    shader MetalHlslMathAliasCompile {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float phase = frac(float(tid.x) * 0.25);
+                vec2 cool = vec2(0.1, 0.8);
+                vec2 warm = vec2(1.0, 0.1);
+                vec2 color = lerp(cool, warm, vec2(phase));
+                float scalar = lerp(0.0, 1.0, phase) + color.x;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "frac(" not in generated_code
+    assert "lerp(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_inverse_sqrt_aliases_lower_to_msl_rsqrt():
+    shader = """
+    shader MetalInverseSqrtAliases {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float scalar = inverseSqrt(float(tid.x) + 1.0);
+                vec3 vectorValue = inversesqrt(vec3(1.0, 4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float scalar = rsqrt(float(tid.x) + 1.0);" in generated_code
+    assert "float3 vectorValue = rsqrt(float3(1.0, 4.0, 9.0));" in generated_code
+    assert "inverseSqrt(" not in generated_code
+    assert "inversesqrt(" not in generated_code
+
+
+def test_metal_inverse_sqrt_alias_qualifies_rsqrt_when_local_name_shadows_it():
+    shader = """
+    shader MetalInverseSqrtTargetShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float rsqrt = float(tid.x) + 1.0;
+                float scalar = inverseSqrt(rsqrt);
+                vec3 vectorValue = inversesqrt(vec3(rsqrt));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float rsqrt = float(tid.x) + 1.0;" in generated_code
+    assert "float scalar = metal::rsqrt(rsqrt);" in generated_code
+    assert "float3 vectorValue = metal::rsqrt(float3(rsqrt));" in generated_code
+    assert "float scalar = rsqrt(rsqrt);" not in generated_code
+
+
+def test_metal_user_defined_inverse_sqrt_aliases_are_preserved():
+    shader = """
+    shader MetalUserInverseSqrtAliases {
+        compute {
+            float inverseSqrt(float value) {
+                return value + 1.0;
+            }
+
+            float inversesqrt(float value) {
+                return value + 2.0;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float scalar = inverseSqrt(float(tid.x) + 1.0);
+                float lower = inversesqrt(float(tid.y) + 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float inverseSqrt(float value)" in generated_code
+    assert "float inversesqrt(float value)" in generated_code
+    assert "float scalar = inverseSqrt(float(tid.x) + 1.0);" in generated_code
+    assert "float lower = inversesqrt(float(tid.y) + 1.0);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_metal_inverse_sqrt_aliases_compile_when_toolchain_is_available():
+    shader = """
+    shader MetalInverseSqrtAliasCompile {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float scalar = inverseSqrt(float(tid.x) + 1.0);
+                vec3 vectorValue = inversesqrt(vec3(1.0, 4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "inverseSqrt(" not in generated_code
+    assert "inversesqrt(" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_derivative_aliases_lower_to_msl_dfdx_dfdy():
+    shader = """
+    shader MetalFragmentDerivativeAliases {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 dx = ddx(uv);
+                vec2 dy = ddy(uv);
+                float gx = dFdx(uv.x);
+                float gy = dFdy(uv.y);
+                return vec4(dx.x + dy.x, dx.y + dy.y, gx, gy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float2 dx = dfdx(uv);" in generated_code
+    assert "float2 dy = dfdy(uv);" in generated_code
+    assert "float gx = dfdx(uv.x);" in generated_code
+    assert "float gy = dfdy(uv.y);" in generated_code
+    assert "ddx(" not in generated_code
+    assert "ddy(" not in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+
+
+def test_metal_derivative_aliases_qualify_targets_when_local_names_shadow_them():
+    shader = """
+    shader MetalDerivativeAliasTargetShadow {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                float dfdx = uv.x;
+                float dfdy = uv.y;
+                vec2 dx = ddx(uv);
+                vec2 dy = ddy(uv);
+                float gx = dFdx(uv.x);
+                float gy = dFdy(uv.y);
+                return vec4(dx.x + dy.x, dx.y + dy.y, gx + dfdx, gy + dfdy);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float dfdx = uv.x;" in generated_code
+    assert "float dfdy = uv.y;" in generated_code
+    assert "float2 dx = metal::dfdx(uv);" in generated_code
+    assert "float2 dy = metal::dfdy(uv);" in generated_code
+    assert "float gx = metal::dfdx(uv.x);" in generated_code
+    assert "float gy = metal::dfdy(uv.y);" in generated_code
+    assert "float2 dx = dfdx(uv);" not in generated_code
+    assert "float2 dy = dfdy(uv);" not in generated_code
+
+
+def test_metal_user_defined_derivative_alias_functions_are_preserved():
+    shader = """
+    shader MetalUserDerivativeAliases {
+        fragment {
+            float ddx(float value) {
+                return value + 1.0;
+            }
+
+            float ddy(float value) {
+                return value + 2.0;
+            }
+
+            float dFdx(float value) {
+                return value + 3.0;
+            }
+
+            float dFdy(float value) {
+                return value + 4.0;
+            }
+
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                return vec4(ddx(uv.x), ddy(uv.y), dFdx(uv.x), dFdy(uv.y));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float ddx(float value)" in generated_code
+    assert "float ddy(float value)" in generated_code
+    assert "float dFdx(float value)" in generated_code
+    assert "float dFdy(float value)" in generated_code
+    assert (
+        "return float4(ddx(uv.x), ddy(uv.y), dFdx(uv.x), dFdy(uv.y));" in generated_code
+    )
+    assert "dfdx(" not in generated_code
+    assert "dfdy(" not in generated_code
+
+
+def test_metal_derivative_aliases_compile_when_toolchain_is_available():
+    shader = """
+    shader MetalFragmentDerivativeAliasCompile {
+        fragment {
+            vec4 main(vec2 uv @location(0)) @gl_FragColor {
+                vec2 gradient = ddx(uv) + ddy(uv);
+                return vec4(gradient, dFdx(uv.x), dFdy(uv.y));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "ddx(" not in generated_code
+    assert "ddy(" not in generated_code
+    assert "dFdx(" not in generated_code
+    assert "dFdy(" not in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
@@ -187,6 +868,32 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
     assert "memoryBarrierImage();" in generated_code
     assert "allMemoryBarrier();" in generated_code
     assert "threadgroup_barrier(" not in generated_code
+
+
+def test_metal_fragment_discard_and_clip_lower_to_discard_fragment():
+    shader = """
+    shader FragmentDiscardAndClip {
+        fragment {
+            void main(float alpha, vec3 mask) {
+                if (alpha < 0.5) {
+                    discard;
+                }
+                discard();
+                clip(alpha - 0.5);
+                clip(mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("discard_fragment();") == 4
+    assert "discard;" not in generated_code
+    assert "discard();" not in generated_code
+    assert "clip(" not in generated_code
+    assert "if ((alpha - 0.5) < 0.0) {" in generated_code
+    assert "if (any((mask) < float3(0.0))) {" in generated_code
 
 
 def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
@@ -2444,8 +3151,18 @@ def test_metal_simd_aliases_map_to_standard_metal_types():
             return input + inc;
         }
 
+        simd_half3 halfTint(simd_half3 input) {
+            simd_half3 bias = simd_half3(1.0, 2.0, 3.0);
+            return input + bias;
+        }
+
         simd_float4x4 passSquare(simd_float4x4 input) {
             simd_float4x4 m = simd_float4x4(1.0);
+            return input * m;
+        }
+
+        simd_half2x2 passHalfSquare(simd_half2x2 input) {
+            simd_half2x2 m = simd_half2x2(1.0);
             return input * m;
         }
 
@@ -2464,8 +3181,12 @@ def test_metal_simd_aliases_map_to_standard_metal_types():
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint2 unsignedPair(uint2 input)" in generated_code
     assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "half3 halfTint(half3 input)" in generated_code
+    assert "half3 bias = half3(1.0, 2.0, 3.0);" in generated_code
     assert "float4x4 passSquare(float4x4 input)" in generated_code
     assert "float4x4 m = float4x4(1.0);" in generated_code
+    assert "half2x2 passHalfSquare(half2x2 input)" in generated_code
+    assert "half2x2 m = half2x2(1.0);" in generated_code
     assert "float3x2 passMatrix(float3x2 input)" in generated_code
     assert "float3x2 m = float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "simd_" not in generated_code
@@ -2638,8 +3359,8 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     assert "uint words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
     assert "uint64_t offsets[2];" in generated_code
-    assert "int globalBytes[2];" in generated_code
-    assert "uint64_t globalCounters[2];" in generated_code
+    assert "constant int globalBytes[2] = {};" in generated_code
+    assert "constant uint64_t globalCounters[2] = {};" in generated_code
     assert "int smalls[2];" in generated_code
     assert "uint count;" in generated_code
     assert "int64_t delta;" in generated_code
@@ -2657,6 +3378,44 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
         "ptrdiff_t",
     ):
         assert invalid_token not in generated_code
+
+
+def test_metal_program_scope_value_globals_use_constant_address_space_and_initializers():
+    shader = """
+    shader MetalProgramScopeGlobals {
+        float initializedScale = 2.0;
+        vec2 missingBias;
+        int counters[2];
+
+        compute {
+            void main() {
+                initializedScale = 3.0;
+                float value = initializedScale + missingBias.x + float(counters[0]);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "constant float initializedScale = 2.0;" in generated_code
+    assert (
+        "/* unsupported Metal program-scope global initializer: 'missingBias' "
+        "needs an initializer in the constant address space; using zero initializer */"
+        in generated_code
+    )
+    assert "constant float2 missingBias = float2(0);" in generated_code
+    assert (
+        "/* unsupported Metal program-scope global initializer: 'counters' needs "
+        "an initializer in the constant address space; using zero initializer */"
+        in generated_code
+    )
+    assert "constant int counters[2] = {};" in generated_code
+    assert (
+        "/* unsupported Metal program-scope global store: global 'initializedScale' "
+        "is emitted in the constant address space */" in generated_code
+    )
+    assert "initializedScale = 3.0;" not in generated_code
 
 
 def test_metal_fixed_width_nested_array_aliases_map_to_valid_metal_types():
@@ -3741,6 +4500,67 @@ def test_metal_global_function_constants_validate_declarations(
 
         fragment {{
             vec4 main() @gl_FragColor {{
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_metal_argument_buffer_resource_members_preserve_id_attributes():
+    code = """
+    shader ArgumentBufferMemberABI {
+        struct MaterialResources {
+            sampler2D color [[id(0)]];
+            sampler state [[id(1)]];
+            image2D output @rgba32f [[id(2)]];
+            sampler2D layers[4] [[id(3)]];
+        };
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                MaterialResources resources;
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "texture2d<float> color [[id(0)]];" in generated_code
+    assert "sampler state [[id(1)]];" in generated_code
+    assert "texture2d<float, access::read_write> output [[id(2)]];" in generated_code
+    assert "array<texture2d<float>, 4> layers [[id(3)]];" in generated_code
+    assert "texture2d<float> color [[id]];" not in generated_code
+    assert "sampler state [[id]];" not in generated_code
+    assert "texture2d<float> color;" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("attribute", "expected_error"),
+    [
+        ("[[id]]", "requires an integer id"),
+        ("[[id(slot)]]", "requires an integer id"),
+    ],
+)
+def test_metal_argument_buffer_resource_member_ids_validate_attributes(
+    attribute, expected_error
+):
+    code = f"""
+    shader InvalidArgumentBufferMemberABI {{
+        struct MaterialResources {{
+            sampler2D color {attribute};
+        }};
+
+        fragment {{
+            vec4 main() @gl_FragColor {{
+                MaterialResources resources;
                 return vec4(1.0);
             }}
         }}
@@ -5098,6 +5918,53 @@ def test_vertex_entry_structs_infer_metal_stage_io_attributes():
     assert "float3 position [[attribute(0)]];" in generated_code
     assert "float2 texCoord [[attribute(1)]];" in generated_code
     assert "float4 position [[position]];" in generated_code
+
+
+def test_metal_stage_io_lowered_matrix_and_array_members_preserve_attributes():
+    shader = """
+    shader ExpandedVertexAttributes {
+        struct VertexInput {
+            mat4 explicitTransform @ TEXCOORD0;
+            mat2 inferredTransform;
+            vec4 weights[2] @ TEXCOORD4;
+            vec2 uv;
+        };
+
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                mat2 localTransform = input.inferredTransform;
+                output.position =
+                    input.explicitTransform *
+                    vec4(input.uv, localTransform[0].x + input.weights[1].x, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "vertex"
+    )
+
+    assert "float4 explicitTransform_0 [[attribute(5)]];" in generated_code
+    assert "float4 explicitTransform_1 [[attribute(6)]];" in generated_code
+    assert "float4 explicitTransform_2 [[attribute(7)]];" in generated_code
+    assert "float4 explicitTransform_3 [[attribute(8)]];" in generated_code
+    assert "float2 inferredTransform_0 [[attribute(0)]];" in generated_code
+    assert "float2 inferredTransform_1 [[attribute(1)]];" in generated_code
+    assert "float4 weights_0 [[attribute(9)]];" in generated_code
+    assert "float4 weights_1 [[attribute(10)]];" in generated_code
+    assert "float2 uv [[attribute(2)]];" in generated_code
+    assert (
+        "float2x2 localTransform = "
+        "float2x2(input.inferredTransform_0, input.inferredTransform_1);"
+    ) in generated_code
+    assert "input.weights_1.x" in generated_code
 
 
 def test_trait_self_return_does_not_emit_generic_enum_specialization():
@@ -11777,6 +12644,60 @@ def test_compute_builtin_semantics_roundtrip():
         assert expected in generated
 
 
+def test_compute_hlsl_system_value_semantic_aliases_lower_to_metal_builtins():
+    code = """
+    shader HlslComputeAliasesForMetal {
+        compute {
+            void main(uvec3 dispatchID @ SV_DispatchThreadID,
+                      uvec3 groupID @ SV_GroupID,
+                      uvec3 groupThreadID @ SV_GroupThreadID,
+                      uint groupIndex @ SV_GroupIndex) { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    for expected in [
+        "uint3 dispatchID [[thread_position_in_grid]]",
+        "uint3 groupID [[threadgroup_position_in_grid]]",
+        "uint3 groupThreadID [[thread_position_in_threadgroup]]",
+        "uint groupIndex [[thread_index_in_threadgroup]]",
+    ]:
+        assert expected in generated
+    for hlsl_semantic in [
+        "SV_DispatchThreadID",
+        "SV_GroupID",
+        "SV_GroupThreadID",
+        "SV_GroupIndex",
+    ]:
+        assert hlsl_semantic not in generated
+
+
+def test_compute_hlsl_system_value_semantic_alias_variants_lower_to_metal_builtins():
+    code = """
+    shader HlslComputeAliasVariantsForMetal {
+        compute {
+            void main(uvec3 dispatchID @ SV_DispatchThreadId,
+                      uvec3 groupID @ sv_group_id,
+                      uvec3 groupThreadID @ sv_group_thread_id,
+                      uint groupIndex @ sv_groupindex) { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "uint3 dispatchID [[thread_position_in_grid]]" in generated
+    assert "uint3 groupID [[threadgroup_position_in_grid]]" in generated
+    assert "uint3 groupThreadID [[thread_position_in_threadgroup]]" in generated
+    assert "uint groupIndex [[thread_index_in_threadgroup]]" in generated
+    assert "SV_DispatchThreadId" not in generated
+    assert "sv_group_id" not in generated
+    assert "sv_group_thread_id" not in generated
+    assert "sv_groupindex" not in generated
+
+
 @pytest.mark.parametrize(
     ("param_type", "semantic", "metal_semantic", "expected_type"),
     [
@@ -11862,12 +12783,17 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
                 uint primitiveID @ gl_PrimitiveID,
                 bool frontFacing @ gl_FrontFacing,
                 vec4 coord @ gl_FragCoord,
-                vec2 point @ gl_PointCoord
+                vec2 point @ gl_PointCoord,
+                uint sampleID @ gl_SampleID,
+                uint sampleMask @ gl_SampleMaskIn
             ) {
                 FSOutput output;
-                output.color = coord + vec4(point, float(primitiveID), 1.0);
+                output.color = coord + vec4(point, float(primitiveID + sampleID), 1.0);
                 if (frontFacing) {
                     output.color.x = output.color.x + 1.0;
+                }
+                if (sampleMask == 0u) {
+                    output.color.y = 0.0;
                 }
                 return output;
             }
@@ -11885,6 +12811,129 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
     assert "bool frontFacing [[is_front_facing]]" in fragment_code
     assert "float4 coord [[position]]" in fragment_code
     assert "float2 point [[point_coord]]" in fragment_code
+    assert "uint sampleID [[sample_id]]" in fragment_code
+    assert "uint sampleMask [[sample_mask]]" in fragment_code
+
+
+def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
+    code = """
+    shader HlslVertexAliasesForMetal {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VSOutput main(
+                uint vertexID @ SV_VertexID,
+                uint instanceID @ SV_InstanceID
+            ) {
+                VSOutput output;
+                output.position = vec4(float(vertexID + instanceID));
+                return output;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "vertex")
+
+    assert "uint vertexID [[vertex_id]]" in generated
+    assert "uint instanceID [[instance_id]]" in generated
+    assert "SV_VertexID" not in generated
+    assert "SV_InstanceID" not in generated
+
+
+def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_builtins():
+    code = """
+    shader HlslGraphicsAliasVariantsForMetal {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VSOutput main(
+                uint vertexID @ sv_vertex_id,
+                uint instanceID @ SV_InstanceId
+            ) {
+                VSOutput output;
+                output.position = vec4(float(vertexID + instanceID));
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                uint primitiveID @ SV_PrimitiveId,
+                bool frontFacing @ sv_isfrontface
+            ) @ SV_Target0 {
+                return vec4(float(primitiveID), frontFacing ? 1.0 : 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
+    assert "uint vertexID [[vertex_id]]" in vertex_code
+    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "sv_vertex_id" not in vertex_code
+    assert "SV_InstanceId" not in vertex_code
+
+    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
+    assert "uint primitiveID [[primitive_id]]" in fragment_code
+    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "SV_PrimitiveId" not in fragment_code
+    assert "sv_isfrontface" not in fragment_code
+
+
+def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
+    # Microsoft Learn documents SV_Position/SV_Target/SV_Depth as HLSL
+    # system-value semantics:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-semantics#system-value-semantics
+    # Apple MSL Spec 5.2.3.3 and 5.2.3.5 spell the corresponding Metal
+    # attributes as [[position]], [[color(m)]], and [[depth(depth_argument)]].
+    code = """
+    shader HlslSystemValuesForMetal {
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct VSOutput {
+            vec4 position @ SV_POSITION;
+        };
+
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ SV_Depth;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            FSOutput main(VSOutput input) {
+                FSOutput output;
+                output.color = vec4(input.position.xyz, 1.0);
+                output.depth = input.position.z;
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float4 position [[position]];" in generated
+    assert "float4 color [[color(1)]];" in generated
+    assert "float depth [[depth(any)]];" in generated
+    assert "[[SV_POSITION]]" not in generated
+    assert "[[SV_Target1]]" not in generated
+    assert "[[SV_Depth]]" not in generated
 
 
 @pytest.mark.parametrize(
@@ -11896,6 +12945,8 @@ def test_graphics_builtin_parameter_semantics_roundtrip():
         ("fragment", "int", "gl_FrontFacing", "is_front_facing", "bool"),
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
+        ("fragment", "int", "gl_SampleID", "sample_id", "uint"),
+        ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
 def test_graphics_builtin_parameter_types_are_validated(
@@ -11927,6 +12978,24 @@ def test_graphics_builtin_parameter_types_are_validated(
         MetalCodeGen().generate_stage(ast, stage)
 
 
+def test_fragment_sample_mask_parameter_rejects_output_only_crossgl_builtin():
+    # Apple MSL exposes fragment coverage through [[sample_mask]]. CrossGL keeps
+    # GLSL's input/output split: gl_SampleMaskIn is input, gl_SampleMask is output.
+    code = """
+    shader BadSampleMaskInput {
+        fragment {
+            vec4 main(uint mask @ gl_SampleMask) @ gl_FragColor {
+                return vec4(float(mask));
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    with pytest.raises(ValueError, match="gl_SampleMask.*output-only"):
+        MetalCodeGen().generate_stage(ast, "fragment")
+
+
 def test_struct_builtin_member_semantics_are_validated():
     valid_code = """
     shader ValidStructBuiltins {
@@ -11940,11 +13009,14 @@ def test_struct_builtin_member_semantics_are_validated():
             vec2 point @ gl_PointCoord;
             bool frontFacing @ gl_FrontFacing;
             uint primitiveID @ gl_PrimitiveID;
+            uint sampleID @ gl_SampleID;
+            uint sampleMaskIn @ gl_SampleMaskIn;
         };
 
         struct FSOutput {
             vec4 color @ gl_FragColor;
             float depth @ gl_FragDepth;
+            uint sampleMask @ gl_SampleMask;
         };
 
         vertex {
@@ -11973,8 +13045,42 @@ def test_struct_builtin_member_semantics_are_validated():
     assert "float2 point [[point_coord]];" in generated
     assert "bool frontFacing [[is_front_facing]];" in generated
     assert "uint primitiveID [[primitive_id]];" in generated
+    assert "uint sampleID [[sample_id]];" in generated
+    assert "uint sampleMaskIn [[sample_mask]];" in generated
     assert "float4 color [[color(0)]];" in generated
     assert "float depth [[depth(any)]];" in generated
+    assert "uint sampleMask [[sample_mask]];" in generated
+
+
+def test_metal_clip_distance_array_keeps_native_vertex_attribute_order():
+    # Reduced from the Metal-by-Tutorials reflection/refraction clip-plane
+    # pattern, where MSL requires `[[clip_distance]]` before the array extent:
+    # `float clip_distance [[clip_distance]][1];`.
+    code = """
+    shader MetalClipDistanceArray {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            float clipDistance[1] @ gl_ClipDistance;
+        };
+
+        vertex {
+            VSOutput main(vec3 position @ POSITION) {
+                VSOutput output;
+                output.position = vec4(position, 1.0);
+                output.clipDistance[0] = dot(vec4(position, 1.0), vec4(0.0, 1.0, 0.0, 0.0));
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = MetalCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "float clipDistance [[clip_distance]][1];" in generated
+    assert "output.clipDistance[0] = dot(" in generated
+    assert "clipDistance[1] [[clip_distance]]" not in generated
+    assert "clipDistance_0" not in generated
+    assert "__crossgl_stage_io_get_VSOutput_clipDistance" not in generated
 
 
 @pytest.mark.parametrize(
@@ -11987,6 +13093,8 @@ def test_struct_builtin_member_semantics_are_validated():
         ("vec3 point @ gl_PointCoord", "point_coord", "float2"),
         ("int primitiveID @ gl_PrimitiveID", "primitive_id", "uint"),
         ("vec2 pointSize @ gl_PointSize", "point_size", "float"),
+        ("int sampleID @ gl_SampleID", "sample_id", "uint"),
+        ("int sampleMask @ gl_SampleMask", "sample_mask", "uint"),
     ],
 )
 def test_struct_builtin_member_types_are_validated(
@@ -12033,6 +13141,23 @@ def test_function_return_builtin_semantics_are_validated():
     assert "float4 color [[color(1)]];" in fragment_code
     assert "fragment fragment_main_Return fragment_main()" in fragment_code
     assert "return fragment_main_Return{float4(1.0)};" in fragment_code
+
+    sample_mask_code = """
+    shader SampleMaskReturnBuiltin {
+        fragment {
+            uint main() @ gl_SampleMask {
+                return 1u;
+            }
+        }
+    }
+    """
+    sample_mask_output = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(sample_mask_code), "fragment"
+    )
+    assert "struct fragment_main_Return" in sample_mask_output
+    assert "uint sampleMask [[sample_mask]];" in sample_mask_output
+    assert "fragment fragment_main_Return fragment_main()" in sample_mask_output
+    assert "return fragment_main_Return{1u};" in sample_mask_output
 
 
 def test_function_return_semantics_lower_to_output_structs_when_required():
@@ -12109,6 +13234,7 @@ def test_void_function_return_semantics_are_rejected(stage, semantic):
         ("vertex", "int", "gl_Position", "position", "float4"),
         ("fragment", "vec3", "gl_FragColor", "color\\(0\\)", "float4"),
         ("fragment", "vec4", "gl_FragDepth", "depth\\(any\\)", "float"),
+        ("fragment", "int", "gl_SampleMask", "sample_mask", "uint"),
     ],
 )
 def test_function_return_builtin_types_are_validated(
@@ -12142,6 +13268,8 @@ def test_function_return_builtin_types_are_validated(
         ("fragment", "vec4", "gl_FragCoord", "vec4(0.0)"),
         ("fragment", "bool", "gl_FrontFacing", "true"),
         ("fragment", "vec2", "gl_PointCoord", "vec2(0.0)"),
+        ("fragment", "uint", "gl_SampleID", "0u"),
+        ("fragment", "uint", "gl_SampleMaskIn", "1u"),
     ],
 )
 def test_input_only_builtin_semantics_are_rejected_on_function_returns(
@@ -12166,6 +13294,7 @@ def test_input_only_builtin_semantics_are_rejected_on_function_returns(
     [
         ("vertex", "vec4", "gl_FragColor", "vec4(0.0)", "fragment output"),
         ("vertex", "float", "gl_FragDepth", "0.5", "fragment output"),
+        ("vertex", "uint", "gl_SampleMask", "1u", "fragment output"),
         ("fragment", "vec4", "gl_Position", "vec4(0.0)", "vertex output"),
     ],
 )

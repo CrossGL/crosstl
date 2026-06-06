@@ -271,6 +271,7 @@ from crosstl.translator.codegen.image_access_contracts import (
     unsupported_texture_samples_query_expression,
     validate_texture_operation_arity,
 )
+from crosstl.translator.codegen.resource_query import ResourceQueryMixin
 
 
 def attribute_value_to_string(value):
@@ -1647,6 +1648,37 @@ def test_resource_query_method_size_descriptor_normalizes_method_metadata():
             ("get_height", True),
             ("get_array_size", False),
         ),
+    }
+
+
+@pytest.mark.parametrize(
+    ("resource_type", "expected_dimensions", "mip", "samples"),
+    [
+        ("image1D", ("width",), False, False),
+        ("iimage1D", ("width",), False, False),
+        ("uimage1D", ("width",), False, False),
+        ("image1DArray", ("width", "elements"), False, False),
+        ("iimage1DArray", ("width", "elements"), False, False),
+        ("uimage1DArray", ("width", "elements"), False, False),
+        ("imageCube", ("width", "height"), False, False),
+        ("iimageCube", ("width", "height"), False, False),
+        ("uimageCube", ("width", "height"), False, False),
+        ("imageCubeArray", ("width", "height", "elements"), False, False),
+        ("iimageCubeArray", ("width", "height", "elements"), False, False),
+        ("uimageCubeArray", ("width", "height", "elements"), False, False),
+        ("image2DMSArray", ("width", "height", "elements"), False, True),
+        ("samplerCubeArrayShadow", ("width", "height", "elements"), True, False),
+    ],
+)
+def test_shared_resource_query_specs_cover_array_ms_and_cube_resources(
+    resource_type, expected_dimensions, mip, samples
+):
+    spec = ResourceQueryMixin().dimension_query_spec(resource_type)
+
+    assert spec == {
+        "dimensions": expected_dimensions,
+        "mip": mip,
+        "samples": samples,
     }
 
 

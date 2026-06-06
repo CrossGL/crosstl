@@ -40,6 +40,7 @@ from .DirectxAst import (
 TYPE_TOKENS = {
     "FLOAT",
     "HALF",
+    "FIXED",
     "DOUBLE",
     "INT",
     "UINT",
@@ -51,6 +52,9 @@ TYPE_TOKENS = {
     "MIN16INT",
     "MIN12INT",
     "MIN16UINT",
+    "FLOAT16_T",
+    "INT16_T",
+    "UINT16_T",
     "INT64_T",
     "UINT64_T",
     "FVECTOR",
@@ -191,9 +195,20 @@ OPERATOR_OVERLOAD_TOKENS = {
     "GREATER_THAN",
 }
 
+EFFECT_BLOCK_KEYWORDS = {
+    "fxgroup",
+    "pass",
+    "program",
+    "state",
+    "technique",
+    "technique10",
+    "technique11",
+}
+
 SCALAR_CONSTRUCTOR_TOKENS = {
     "FLOAT",
     "HALF",
+    "FIXED",
     "DOUBLE",
     "INT",
     "UINT",
@@ -204,6 +219,9 @@ SCALAR_CONSTRUCTOR_TOKENS = {
     "MIN16INT",
     "MIN12INT",
     "MIN16UINT",
+    "FLOAT16_T",
+    "INT16_T",
+    "UINT16_T",
     "INT64_T",
     "UINT64_T",
 }
@@ -255,6 +273,9 @@ class HLSLParser:
                 self.current_token[0] == "STRUCT"
                 and not self.looks_like_external_declaration()
             ):
+                if self.is_struct_forward_declaration():
+                    structs.append(self.parse_struct_forward_declaration())
+                    continue
                 synthetic_start = len(self.synthetic_structs)
                 struct = self.parse_struct()
                 structs.extend(self.synthetic_structs[synthetic_start:])
@@ -279,8 +300,8 @@ class HLSLParser:
                 self.parse_template_declaration_prefix()
                 continue
 
-            if self.is_effect_technique_block():
-                self.parse_effect_technique_block()
+            if self.is_effect_metadata_block():
+                self.parse_effect_metadata_block()
                 continue
 
             attributes = self.parse_attribute_list()
@@ -337,12 +358,29 @@ class HLSLParser:
             typedefs=typedefs,
         )
 
-    def is_effect_technique_block(self):
-        return self.current_token[0] == "IDENTIFIER" and str(
-            self.current_token[1]
-        ).lower() in {"technique", "technique10", "technique11"}
+    def is_effect_metadata_block(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        if str(self.current_token[1]).lower() not in EFFECT_BLOCK_KEYWORDS:
+            return False
 
-    def parse_effect_technique_block(self):
+        idx = self.current_index + 1
+        while idx < len(self.tokens) and self.tokens[idx][0] not in {
+            "LBRACE",
+            "LESS_THAN",
+            "SEMICOLON",
+            "EOF",
+        }:
+            idx += 1
+
+        while idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
+                return False
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+
+    def parse_effect_metadata_block(self):
         self.eat("IDENTIFIER")
         while self.current_token[0] not in {
             "LBRACE",
@@ -874,6 +912,48 @@ class HLSLParser:
             self.eat("COMMA")
         return base_classes
 
+    def is_struct_forward_declaration(self):
+        if self.current_token[0] != "STRUCT":
+            return False
+
+        idx = self.current_index + 1
+        if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
+            return False
+        idx += 1
+
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
+                return False
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "SEMICOLON"
+
+    def skip_angle_list_at(self, idx):
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return idx + 1
+            elif token_type == "EOF":
+                return None
+            idx += 1
+        return None
+
+    def parse_struct_forward_declaration(self):
+        self.eat("STRUCT")
+        name = self.parse_identifier()
+        if self.current_token[0] == "LESS_THAN":
+            self.skip_template_argument_list()
+        self.eat("SEMICOLON")
+
+        struct_node = StructNode(name, [])
+        struct_node.is_forward_declaration = True
+        return struct_node
+
     def parse_struct(self):
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
@@ -896,6 +976,13 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             qualifiers = self.parse_qualifiers()
+            if self.is_constructor_or_destructor_member(name):
+                methods.append(
+                    self.parse_constructor_or_destructor_member(
+                        name, qualifiers=qualifiers, attributes=attributes
+                    )
+                )
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,
@@ -987,6 +1074,15 @@ class HLSLParser:
             member_attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.is_constructor_or_destructor_member(nested_name):
+                nested_methods.append(
+                    self.parse_constructor_or_destructor_member(
+                        nested_name,
+                        qualifiers=member_qualifiers,
+                        attributes=member_attributes,
+                    )
+                )
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     nested_name or parent_name,
@@ -1182,6 +1278,15 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.is_constructor_or_destructor_member(explicit_name):
+                methods.append(
+                    self.parse_constructor_or_destructor_member(
+                        explicit_name,
+                        qualifiers=member_qualifiers,
+                        attributes=attributes,
+                    )
+                )
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     explicit_name or "AnonymousStruct",
@@ -1236,6 +1341,102 @@ class HLSLParser:
         alias.array_sizes = array_sizes
         return alias
 
+    def is_constructor_or_destructor_member(self, struct_name):
+        if not struct_name:
+            return False
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == struct_name
+            and self.peek()[0] == "LPAREN"
+        ):
+            return True
+        return (
+            self.current_token[0] == "BITWISE_NOT"
+            and self.peek()[0] == "IDENTIFIER"
+            and self.peek()[1] == struct_name
+            and self.peek(2)[0] == "LPAREN"
+        )
+
+    def parse_constructor_or_destructor_member(
+        self, struct_name, qualifiers=None, attributes=None
+    ):
+        qualifiers = qualifiers or []
+        attributes = attributes or []
+        is_destructor = self.current_token[0] == "BITWISE_NOT"
+
+        if is_destructor:
+            self.eat("BITWISE_NOT")
+            name = f"~{self.parse_identifier()}"
+        else:
+            name = self.parse_identifier()
+
+        params = self.parse_parameters()
+        qualifiers = qualifiers + self.parse_trailing_function_qualifiers()
+        if self.current_token[0] == "COLON":
+            self.skip_constructor_initializer_list()
+
+        is_prototype = False
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            body = []
+            is_prototype = True
+        else:
+            body = self.parse_block()
+
+        function = FunctionNode(
+            return_type="",
+            name=name,
+            params=params,
+            body=body,
+            qualifiers=qualifiers,
+            attributes=attributes,
+        )
+        function.is_constructor = not is_destructor
+        function.is_destructor = is_destructor
+        function.is_prototype = is_prototype
+        return function
+
+    def skip_constructor_initializer_list(self):
+        self.eat("COLON")
+        while self.current_token[0] not in {"LBRACE", "SEMICOLON", "EOF"}:
+            self.skip_constructor_initializer_entry()
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+
+    def skip_constructor_initializer_entry(self):
+        while self.current_token[0] not in {
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+            "SEMICOLON",
+            "EOF",
+        }:
+            if self.current_token[0] == "LESS_THAN":
+                self.skip_template_argument_list()
+                continue
+            self.eat(self.current_token[0])
+
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
+        elif self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+
+    def skip_balanced_delimiter_block(self, open_token, close_token):
+        self.eat(open_token)
+        depth = 1
+        while depth > 0 and self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == open_token:
+                depth += 1
+            elif token_type == close_token:
+                depth -= 1
+            self.eat(token_type)
+
+        if depth != 0:
+            raise SyntaxError(f"Unterminated {open_token} block")
+
     def parse_cbuffer(self, attributes=None):
         buffer_kind = self.current_token[1]
         self.eat(self.current_token[0])
@@ -1255,23 +1456,48 @@ class HLSLParser:
 
         self.eat("LBRACE")
         members = []
+        methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 members.append(self.parse_cbuffer(attributes=[]))
                 continue
+            member_attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,
                     qualifiers=qualifiers,
-                    attributes=[],
+                    attributes=member_attributes,
                     allow_semantic=True,
                 )
                 members.extend(self.ensure_statement_list(declarations))
                 continue
-            declarations = self.parse_variable_declaration(
+
+            if not self.is_type_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected type in cbuffer member, got {self.current_token[0]}"
+                )
+
+            member_type = self.parse_type()
+            qualifiers.extend(self.parse_post_type_qualifiers())
+            member_attributes.extend(self.parse_attribute_list())
+            member_name = self.parse_member_declarator_name()
+            if self.current_token[0] == "LPAREN":
+                methods.append(
+                    self.parse_function(
+                        member_type,
+                        member_name,
+                        qualifiers=qualifiers,
+                        attributes=member_attributes,
+                    )
+                )
+                continue
+
+            declarations = self.parse_variable_declaration_list_rest(
+                member_type,
+                member_name,
                 qualifiers=qualifiers,
-                attributes=[],
+                attributes=member_attributes,
                 allow_semantic=True,
                 consume_semicolon=True,
             )
@@ -1288,6 +1514,7 @@ class HLSLParser:
         cbuffer_node.register = cbuffer_register
         cbuffer_node.packoffset = cbuffer_packoffset
         cbuffer_node.attributes = attributes or []
+        cbuffer_node.methods = methods
         return cbuffer_node
 
     def synthetic_cbuffer_name(self, cbuffer_register):
@@ -1655,6 +1882,10 @@ class HLSLParser:
 
         if self.current_token[0] == "TYPEDEF":
             self.parse_typedef()
+            return None
+
+        if self.is_class_declaration_prefix():
+            self.parse_class_declaration()
             return None
 
         if self.looks_like_declaration():
@@ -2028,11 +2259,17 @@ class HLSLParser:
             )
         return self.parse_expression()
 
-    def parse_if_statement(self):
-        self.eat("IF")
+    def parse_hlsl_condition_header(self, keyword):
+        self.eat(keyword)
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
         self.eat("LPAREN")
         condition = self.parse_condition_expression()
         self.eat("RPAREN")
+        return condition
+
+    def parse_if_statement(self):
+        condition = self.parse_hlsl_condition_header("IF")
 
         if_body = self.parse_statement_or_block()
 
@@ -2052,10 +2289,7 @@ class HLSLParser:
         return IfNode(condition, if_body, else_body)
 
     def parse_else_if_statement(self):
-        self.eat("ELSE_IF")
-        self.eat("LPAREN")
-        condition = self.parse_condition_expression()
-        self.eat("RPAREN")
+        condition = self.parse_hlsl_condition_header("ELSE_IF")
         if_body = self.parse_statement_or_block()
 
         else_body = None
@@ -2480,6 +2714,8 @@ class HLSLParser:
             return False
         if self.current_token[1] not in {"vector", "matrix"}:
             return False
+        if self.peek()[0] == "LPAREN":
+            return True
         if self.peek()[0] != "LESS_THAN":
             return False
 

@@ -172,6 +172,27 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Function: add" in result
 
+    def test_public_cuda_template_disambiguator_call_conversion(self):
+        code = """
+        template <typename OPERATOR, typename F>
+        __global__ void call_operator(F f) {
+            OPERATOR::template apply<float>(threadIdx.x);
+            f.template operator()<float>(threadIdx.x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "OPERATOR::apply<float>(gl_LocalInvocationID.x);" in result
+        assert "f.operator()<float>(gl_LocalInvocationID.x);" in result
+        assert "::template" not in result
+        assert ".template" not in result
+
     def test_public_cuda_samples_device_global_variables_conversion(self):
         code = """
         __device__ int g_uids = 0;
@@ -388,11 +409,12 @@ class TestCudaCodeGen:
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {
             half2 scalar = __float2half2_rn(x);
+            half2 lanes = __floats2half2_rn(x, x + 1.0f);
             half2 prod = __hmul2(a, b);
             half2 sum = __hadd2(prod, scalar);
             half2 fused = __hfma2(a, b, sum);
             float low = __low2float(fused);
-            return fused;
+            return __hadd2(fused, lanes);
         }
         """
         lexer = CudaLexer(code)
@@ -404,13 +426,16 @@ class TestCudaCodeGen:
 
         assert "vec2<f16> fp16_ops(vec2<f16> a, vec2<f16> b, f32 x)" in result
         assert "var scalar: vec2<f16> = vec2<f16>(x, x);" in result
+        assert "var lanes: vec2<f16> = vec2<f16>(x, (x + 1.0f));" in result
         assert "var prod: vec2<f16> = (a * b);" in result
         assert "var sum: vec2<f16> = (prod + scalar);" in result
         assert "var fused: vec2<f16> = fma(a, b, sum);" in result
         assert "var low: f32 = f32(fused.x);" in result
+        assert "return (fused + lanes);" in result
         for raw_name in (
             "half2",
             "__float2half2_rn",
+            "__floats2half2_rn",
             "__hmul2",
             "__hadd2",
             "__hfma2",
@@ -461,6 +486,30 @@ class TestCudaCodeGen:
         assert "var d: vec2<f64> = vec2<f64>(1.0, 2.0);" in result
         assert "var ids: vec4<u32> = vec4<u32>(1u, 2u, 3u, 4u);" in result
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
+
+    def test_public_cuda_samples_const_dim3_constructor_global_conversion(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512);" in result
+        assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert (
+            "var windowGridSize: vec3<u32> = "
+            "vec3<u32>((windowSize.x / windowBlockSize.x), "
+            "(windowSize.y / windowBlockSize.y));"
+        ) in result
+        assert "const dim3(" not in result
 
     def test_fmod_builtins_convert_to_crossgl_mod(self):
         code = """
@@ -1273,6 +1322,32 @@ class TestCudaCodeGen:
         assert "truncf" not in result
         assert "exp2f" not in result
         assert "log2f" not in result
+
+    def test_public_cuda_samples_sincosf_output_parameters_convert(self):
+        """Covers cuda-samples convolutionFFT2D getTwiddle __sincosf usage."""
+        code = """
+        struct fComplex {
+            float x;
+            float y;
+        };
+
+        inline __device__ void getTwiddle(fComplex &twiddle, float phase) {
+            __sincosf(phase, &twiddle.y, &twiddle.x);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "twiddle.y = sin(phase);" in result
+        assert "twiddle.x = cos(phase);" in result
+        assert "__sincosf" not in result
+        assert "(&twiddle.y)" not in result
+        assert "(&twiddle.x)" not in result
 
     def test_kernel_launch_conversion(self):
         code = """
@@ -7381,6 +7456,30 @@ class TestCudaCodeGen:
         assert "for (var i: i32 = 0; (i < n); (++i)) {" in result
         assert "h[i] = f32(i);" in result
 
+    def test_public_ggml_fixed_width_function_style_cast_conversion(self):
+        code = """
+        __global__ void set_rows(const float* src0, float* dst) {
+            const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
+            uint32_t tmp = uint32_t(i);
+            dst[i] = src0[tmp];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var i: i64 = ((i64(gl_WorkGroupSize.x) * gl_WorkGroupID.x) "
+            "+ gl_LocalInvocationID.x);"
+        ) in result
+        assert "var tmp: u32 = u32(i);" in result
+        assert "int64_t(" not in result
+        assert "uint32_t(" not in result
+
     def test_reference_host_helper_parameters_conversion(self):
         code = """
         void prepare(std::vector<float>& h) {
@@ -9070,6 +9169,25 @@ class TestCudaCodeGen:
         assert "return LaneMask(x);" in result
         assert "return LaneMask;" not in result
         assert "x;" not in result
+
+    def test_cuda_samples_const_unknown_pointer_pointer_c_style_cast_conversion(self):
+        code = """
+        void compile_shader(char* data, int size) {
+            glShaderSource(shader, 1, (const GLchar **)&data, &size);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "glShaderSource(shader, 1, ptr<ptr<GLchar>>((&data)), (&size));" in result
+        )
+        assert "const GLchar" not in result
 
     def test_range_based_for_loop_conversion(self):
         code = """

@@ -1605,6 +1605,33 @@ def test_constants_emit_mojo_aliases_and_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_keyword_like_crossgl_bindings_are_escaped_for_mojo():
+    code = """
+    shader KeywordBindingMojo {
+        const int alias = 2;
+
+        struct Payload {
+            return: int;
+            int fn;
+        };
+
+        int fn(int var, int loop) {
+            int struct = var + loop + alias;
+            return struct;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "alias alias_ = 2" in generated_code
+    assert "    var return_: Int32" in generated_code
+    assert "    var fn_: Int32" in generated_code
+    assert "fn fn_(var_: Int32, loop: Int32) -> Int32:" in generated_code
+    assert "var struct_: Int32 = ((var_ + loop) + alias_)" in generated_code
+    assert "return struct_" in generated_code
+
+
 def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
     code = """
     shader StageLocalResourceMojo {
@@ -15359,6 +15386,98 @@ def test_byte_address_vector_methods_and_reinterpret_compile_with_mojo(tmp_path)
     assert result.returncode == 0, result.stderr
 
 
+def test_reinterpret_helpers_use_mojo_bitcast_for_scalar_and_simd_values():
+    # Inspired by Modular's Mojo bitcast docs: shader bit reinterpret intrinsics
+    # need a bitcopy, not a numeric SIMD cast.
+    code = """
+    RWByteAddressBuffer rawVectors;
+
+    float readFloat(uint offset) {
+        return asfloat(rawVectors.Load(offset));
+    }
+
+    uint readUint(float value) {
+        return asuint(value);
+    }
+
+    vec2 readPair(uint offset) {
+        return asfloat(rawVectors.Load2(offset));
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "from memory import bitcast" in generated_code
+    assert "fn asfloat(value: UInt32) -> Float32:" in generated_code
+    assert "return bitcast[DType.float32](value)" in generated_code
+    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert "return bitcast[DType.uint32](value)" in generated_code
+    assert (
+        "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:"
+        in generated_code
+    )
+    assert "return bitcast[DType.float32, 2](value)" in generated_code
+    assert ".cast[DType.float32]()" not in generated_code
+
+
+def test_glsl_bitcast_aliases_lower_to_mojo_reinterpret_helpers():
+    code = """
+    ivec2 signedBits(vec2 value) {
+        return floatBitsToInt(value);
+    }
+
+    uvec2 unsignedBits(vec2 value) {
+        return floatBitsToUint(value);
+    }
+
+    vec2 fromSigned(ivec2 bits) {
+        return intBitsToFloat(bits);
+    }
+
+    vec2 fromUnsigned(uvec2 bits) {
+        return uintBitsToFloat(bits);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "from memory import bitcast" in generated_code
+    assert "return asint(value)" in generated_code
+    assert "return asuint(value)" in generated_code
+    assert "return asfloat(bits)" in generated_code
+    assert "fn asint(value: SIMD[DType.float32, 2]) -> SIMD[DType.int32, 2]:" in (
+        generated_code
+    )
+    assert "fn asuint(value: SIMD[DType.float32, 2]) -> SIMD[DType.uint32, 2]:" in (
+        generated_code
+    )
+    assert "fn asfloat(value: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 2]:" in (
+        generated_code
+    )
+    assert "fn asfloat(value: SIMD[DType.uint32, 2]) -> SIMD[DType.float32, 2]:" in (
+        generated_code
+    )
+    assert "floatBitsToInt(" not in generated_code
+    assert "uintBitsToFloat(" not in generated_code
+
+
+def test_user_defined_glsl_bitcast_alias_names_are_not_lowered_for_mojo():
+    code = """
+    float floatBitsToInt(vec2 value) {
+        return value.x;
+    }
+
+    float adjusted(vec2 value) {
+        return floatBitsToInt(value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn floatBitsToInt(value: SIMD[DType.float32, 2]) -> Float32:" in (
+        generated_code
+    )
+    assert "return floatBitsToInt(value)" in generated_code
+    assert "return asint(value)" not in generated_code
+
+
 def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
     code = """
     ByteAddressBuffer rawBytes;
@@ -17534,15 +17653,20 @@ def test_direct_builtin_variable_nodes_emit_mojo_names_without_ast_repr():
     codegen = MojoCodeGen()
 
     position = BuiltinVariableNode("gl_Position")
+    dispatch = BuiltinVariableNode("SV_DispatchThreadID")
     dispatch_x = BuiltinVariableNode("SV_DispatchThreadID", "x")
 
     assert codegen.generate_expression(position) == "position"
     assert codegen.expression_result_type(position) == "vec4"
-    assert codegen.generate_expression(dispatch_x) == "global_invocation_id[0]"
+    assert (
+        codegen.generate_expression(dispatch) == "SIMD[DType.uint32, 4]("
+        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
+    )
+    assert codegen.generate_expression(dispatch_x) == "global_idx_uint.x"
     assert codegen.expression_result_type(dispatch_x) == "uint"
 
 
-def test_compute_builtin_identifiers_lower_to_mojo_placeholders():
+def test_compute_builtin_identifiers_lower_to_mojo_gpu_index_aliases():
     code = """
     shader BuiltinGlobals {
         compute {
@@ -17552,32 +17676,41 @@ def test_compute_builtin_identifiers_lower_to_mojo_placeholders():
                 int local_x = int(gl_LocalInvocationID.x);
                 int global_x = int(gl_GlobalInvocationID.x);
                 int group_count = int(gl_NumWorkGroups.x);
-                int total = matrix_size + local_x + global_x + group_count;
+                int group_size = int(gl_WorkGroupSize.x);
+                uvec3 global_id = gl_GlobalInvocationID;
+                uvec2 workgroup_xy = gl_WorkGroupID.xy;
+                int total = (
+                    matrix_size + local_x + global_x + group_count + group_size
+                );
             }
         }
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
+    # Mojo GPU docs expose kernel coordinates through x/y/z UInt aliases such as
+    # global_idx_uint, thread_idx_uint, block_idx_uint, block_dim_uint, and
+    # grid_dim_uint:
+    # https://mojolang.org/docs/std/gpu/primitives/id/
     assert "var matrix_size: Int32 = 0" in generated_code
+    assert "var local_x: Int32 = Int32(thread_idx_uint.x)" in generated_code
+    assert "var global_x: Int32 = Int32(global_idx_uint.x)" in generated_code
+    assert "var group_count: Int32 = Int32(grid_dim_uint.x)" in generated_code
+    assert "var group_size: Int32 = Int32(block_dim_uint.x)" in generated_code
     assert (
-        "var local_invocation_id: SIMD[DType.uint32, 4] = "
-        "SIMD[DType.uint32, 4](0, 0, 0, 0)" in generated_code
-    )
+        "var global_id: SIMD[DType.uint32, 4] = "
+        "SIMD[DType.uint32, 4]("
+        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
+    ) in generated_code
     assert (
-        "var global_invocation_id: SIMD[DType.uint32, 4] = "
-        "SIMD[DType.uint32, 4](0, 0, 0, 0)" in generated_code
-    )
-    assert (
-        "var num_workgroups: SIMD[DType.uint32, 4] = "
-        "SIMD[DType.uint32, 4](0, 0, 0, 0)" in generated_code
-    )
-    assert "Int32(local_invocation_id[0])" in generated_code
-    assert "Int32(global_invocation_id[0])" in generated_code
-    assert "Int32(num_workgroups[0])" in generated_code
+        "var workgroup_xy: SIMD[DType.uint32, 2] = "
+        "SIMD[DType.uint32, 2](block_idx_uint.x, block_idx_uint.y)"
+    ) in generated_code
+    assert "# CrossGL builtin placeholders" not in generated_code
     assert "gl_LocalInvocationID" not in generated_code
     assert "gl_GlobalInvocationID" not in generated_code
     assert "gl_NumWorkGroups" not in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
     assert "var matrix_size: Int32\n" not in generated_code
 
 
@@ -17607,6 +17740,42 @@ def test_pointer_type_nodes_emit_mojo_pointer_types_without_ast_repr():
     assert "return (source[int(index)] + values[int(index)])" in generated_code
     assert "PointerType(" not in generated_code
     assert "PrimitiveType(" not in generated_code
+
+
+def test_mojo_gpu_pointer_generics_restore_square_bracket_signatures():
+    # Reduced from Modular GPU kernels such as
+    # max/examples/custom_ops/kernels/histogram.mojo kernel UnsafePointer params.
+    codegen = MojoCodeGen()
+
+    assert (
+        codegen.map_type("UnsafePointer[Int64, MutAnyOrigin]")
+        == "UnsafePointer[Int64, MutAnyOrigin]"
+    )
+    assert (
+        codegen.map_type("UnsafePointer<Scalar<dtype>, MutAnyOrigin>")
+        == "UnsafePointer[Scalar[dtype], MutAnyOrigin]"
+    )
+    assert codegen.map_type("SIMD[DType.float32, 4]") == "SIMD[DType.float32, 4]"
+    assert (
+        codegen.map_type("TileTensor[mut=True, dtype, OutLayout, MutAnyOrigin]")
+        == "TileTensor[mut=True, dtype, OutLayout, MutAnyOrigin]"
+    )
+
+    code = """
+    UnsafePointer<Int64, MutAnyOrigin> passthrough(
+        UnsafePointer<Int64, MutAnyOrigin> output
+    ) {
+        return output;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn passthrough(output: UnsafePointer[Int64, MutAnyOrigin]) "
+        "-> UnsafePointer[Int64, MutAnyOrigin]:" in generated_code
+    )
+    assert "UnsafePointer<" not in generated_code
+    assert "List[UnsafePointer]" not in generated_code
 
 
 def test_direct_texture_nodes_emit_mojo_sample_helpers_without_ast_repr():
@@ -18326,10 +18495,10 @@ def test_builtin_function_call_names_are_mapped():
     assert "lerp(0.0, 1.0, 0.25)" in generated_code
     assert "dot_product(" in generated_code
     assert "power(2.0, 3.0)" in generated_code
-    assert "var sat: Float32 = clamp(1.25, 0.0, 1.0)" in generated_code
+    assert "var sat: Float32 = _crossgl_saturate_f32(1.25)" in generated_code
     assert (
         "var satNested: Float32 = "
-        "clamp(_crossgl_fract_f32(1.75), 0.0, 1.0)" in generated_code
+        "_crossgl_saturate_f32(_crossgl_fract_f32(1.75))" in generated_code
     )
     assert (
         "var satVec: SIMD[DType.float32, 2] = "
@@ -18341,10 +18510,11 @@ def test_builtin_function_call_names_are_mapped():
         "var invVec: SIMD[DType.float32, 2] = "
         "rsqrt(SIMD[DType.float32, 2](4.0, 9.0))" in generated_code
     )
-    assert "var w: Float32 = fmod(5.0, 2.0)" in generated_code
+    assert "var w: Float32 = _crossgl_mod_f32(5.0, 2.0)" in generated_code
     assert (
         "var wrappedVec: SIMD[DType.float32, 4] = "
-        "fmod(v, SIMD[DType.float32, 4](2.0, 2.0, 2.0, 0.0))" in generated_code
+        "_crossgl_mod_f32_3_4_vv("
+        "v, SIMD[DType.float32, 4](2.0, 2.0, 2.0, 0.0))" in generated_code
     )
     assert "var i: Int32 = (n % 2)" in generated_code
     assert "mix(0.0, 1.0, 0.25)" not in generated_code
@@ -18354,7 +18524,407 @@ def test_builtin_function_call_names_are_mapped():
     assert "frac(" not in generated_code
     assert "inversesqrt(" not in generated_code
     assert "var w: Float32 = mod(" not in generated_code
-    assert "var i: Int32 = fmod(" not in generated_code
+    assert "var i: Int32 = _crossgl_mod_" not in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_lerp_alias_result_type_feeds_nested_vector_builtin_lowering():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                vec3 a = vec3(-1.0, 0.5, 2.0);
+                vec3 b = vec3(0.0, 1.0, 3.0);
+                vec3 blended = saturate(lerp(a, b, 0.5));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn lerp(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4], "
+        "t: Float32) -> SIMD[DType.float32, 4]:"
+    ) in generated_code
+    assert (
+        "fn _crossgl_saturate_f32_3_4(v: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:"
+    ) in generated_code
+    assert (
+        "var blended: SIMD[DType.float32, 4] = "
+        "_crossgl_saturate_f32_3_4(lerp(a, b, 0.5))"
+    ) in generated_code
+    assert "saturate(lerp(" not in generated_code
+
+
+def test_user_defined_lerp_return_type_is_not_treated_as_builtin_alias():
+    code = """
+    shader NumericAliases {
+        compute {
+            bool lerp(float value, float threshold, float unused) {
+                return value > threshold;
+            }
+
+            void main() {
+                float selected = mix(0.0, 1.0, lerp(2.0, 1.0, 0.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn lerp(value: Float32, threshold: Float32, unused: Float32) -> Bool:"
+        in generated_code
+    )
+    assert (
+        "var selected: Float32 = (1.0 if lerp(2.0, 1.0, 0.0) else 0.0)"
+        in generated_code
+    )
+    assert "var selected: Float32 = lerp(0.0, 1.0, lerp(" not in generated_code
+
+
+def test_mod_builtin_lowers_to_crossgl_floor_semantics_helpers():
+    code = """
+    shader NumericWrap {
+        compute {
+            void main() {
+                float scalar = mod(-5.0, 2.0);
+                vec3 uv = vec3(-5.0, 7.0, -9.0);
+                vec3 vectorScalar = mod(uv, 2.0);
+                vec3 scalarVector = mod(2.0, uv);
+                dvec2 precise = mod(dvec2(-5.0, 7.0), dvec2(2.0, 2.0));
+                int count = 5;
+                int wrappedCount = mod(count, 2);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn _crossgl_mod_f32(a: Float32, b: Float32) -> Float32:" in generated_code
+    assert "fn _crossgl_mod_f64(a: Float64, b: Float64) -> Float64:" in generated_code
+    assert "return a - floor(a / b) * b" in generated_code
+    assert (
+        "fn _crossgl_mod_f32_3_4_vs(a: SIMD[DType.float32, 4], b: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn _crossgl_mod_f32_3_4_sv(a: Float32, b: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn _crossgl_mod_f64_2_2_vv("
+        "a: SIMD[DType.float64, 2], b: SIMD[DType.float64, 2]) "
+        "-> SIMD[DType.float64, 2]:" in generated_code
+    )
+    assert "var scalar: Float32 = _crossgl_mod_f32((-5.0), 2.0)" in generated_code
+    assert (
+        "var vectorScalar: SIMD[DType.float32, 4] = "
+        "_crossgl_mod_f32_3_4_vs(uv, 2.0)" in generated_code
+    )
+    assert (
+        "var scalarVector: SIMD[DType.float32, 4] = "
+        "_crossgl_mod_f32_3_4_sv(2.0, uv)" in generated_code
+    )
+    assert (
+        "var precise: SIMD[DType.float64, 2] = "
+        "_crossgl_mod_f64_2_2_vv(" in generated_code
+    )
+    assert "var wrappedCount: Int32 = (count % 2)" in generated_code
+    assert "fmod(" not in generated_code
+
+
+def test_user_defined_mod_function_is_not_lowered_to_crossgl_mod_helper():
+    code = """
+    shader NumericWrap {
+        compute {
+            float mod(float value, float period) {
+                return value + period;
+            }
+
+            void main() {
+                float scalar = mod(-5.0, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn mod(value: Float32, period: Float32) -> Float32:" in generated_code
+    assert "var scalar: Float32 = mod((-5.0), 2.0)" in generated_code
+    assert "_crossgl_mod_" not in generated_code
+
+
+def test_mod_builtin_floor_semantics_helpers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    float wrapScalar(float value, float period) {
+        return mod(value, period);
+    }
+
+    vec3 wrapVectorScalar(vec3 value, float period) {
+        return mod(value, period);
+    }
+
+    vec3 wrapScalarVector(float value, vec3 period) {
+        return mod(value, period);
+    }
+
+    dvec2 wrapPrecise(dvec2 value, dvec2 period) {
+        return mod(value, period);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(wrapScalar(Float32(-5.0), Float32(2.0)))
+    print(wrapVectorScalar(SIMD[DType.float32, 4](-5.0, 7.0, -9.0, 0.0), Float32(2.0)))
+    print(wrapScalarVector(Float32(2.0), SIMD[DType.float32, 4](-5.0, 7.0, -9.0, 0.0)))
+    print(wrapPrecise(SIMD[DType.float64, 2](-5.0, 7.0), SIMD[DType.float64, 2](2.0, 2.0)))
+"""
+
+    source_path = tmp_path / "mod_floor_semantics_helpers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+
+
+def _vector_min_max_builtin_source():
+    return """
+    vec3 fresnelCap(vec3 albedo, float roughness) {
+        vec3 f0 = vec3(0.04);
+        vec3 ceiling = max(vec3(1.0 - roughness), f0);
+        vec3 bright = max(albedo, 0.0);
+        vec3 dim = min(1.0, albedo);
+        return min(max(ceiling, bright), dim);
+    }
+    """
+
+
+def test_vector_min_max_builtins_emit_mojo_simd_overloads():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_vector_min_max_builtin_source()))
+    )
+
+    assert (
+        "fn max(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn max(a: SIMD[DType.float32, 4], b: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn min(a: Float32, b: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert "var ceiling: SIMD[DType.float32, 4] = max(" in generated_code
+    assert (
+        "var bright: SIMD[DType.float32, 4] = max(albedo, Float32(0.0))"
+        in generated_code
+    )
+    assert (
+        "var dim: SIMD[DType.float32, 4] = min(Float32(1.0), albedo)" in generated_code
+    )
+    assert "return min(max(ceiling, bright), dim)" in generated_code
+
+
+def test_vector_min_max_builtins_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_vector_min_max_builtin_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "vector_min_max_builtins.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+
+
+def test_round_even_builtin_lowers_to_mojo_helper():
+    code = """
+    shader NumericGuards {
+        compute {
+            void main() {
+                float value = -2.5;
+                float scalarEven = roundEven(value);
+                vec3 vectorEven = roundEven(vec3(1.5, 2.5, 3.5));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn round_even(x: Float32) -> Float32:" in generated_code
+    assert (
+        "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert "var scalarEven: Float32 = round_even(value)" in generated_code
+    assert (
+        "var vectorEven: SIMD[DType.float32, 4] = "
+        "round_even(SIMD[DType.float32, 4](1.5, 2.5, 3.5, 0.0))" in generated_code
+    )
+    assert "roundEven(" not in generated_code
+
+
+def test_inverse_sqrt_alias_lowers_to_mojo_rsqrt():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float scalarValue = inverseSqrt(4.0);
+                vec2 vectorValue = inverseSqrt(vec2(4.0, 9.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var scalarValue: Float32 = rsqrt(4.0)" in generated_code
+    assert (
+        "var vectorValue: SIMD[DType.float32, 2] = "
+        "rsqrt(SIMD[DType.float32, 2](4.0, 9.0))" in generated_code
+    )
+    assert "inverseSqrt(" not in generated_code
+
+
+def test_inverse_sqrt_aliases_feed_mojo_reinterpret_helpers():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float x = 4.0;
+                vec3 v = vec3(4.0, 9.0, 16.0);
+
+                uint scalarR = asuint(rsqrt(x));
+                uint scalarI = floatBitsToUint(inverseSqrt(x));
+                uvec3 vectorR = asuint(rsqrt(v));
+                uvec3 vectorI = floatBitsToUint(inverseSqrt(v));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn asuint(value: Float32) -> UInt32:" in generated_code
+    assert (
+        "fn asuint(value: SIMD[DType.float32, 4]) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert "var scalarR: UInt32 = asuint(rsqrt(x))" in generated_code
+    assert "var scalarI: UInt32 = asuint(rsqrt(x))" in generated_code
+    assert "var vectorR: SIMD[DType.uint32, 4] = asuint(rsqrt(v))" in generated_code
+    assert "var vectorI: SIMD[DType.uint32, 4] = asuint(rsqrt(v))" in generated_code
+    assert "floatBitsToUint(" not in generated_code
+    assert "inverseSqrt(" not in generated_code
+
+
+def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
+    code = """
+    shader NumericAliases {
+        compute {
+            float inverseSqrt(float value) {
+                return value + 1.0;
+            }
+
+            void main() {
+                float scalarValue = inverseSqrt(4.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn inverseSqrt(value: Float32) -> Float32:" in generated_code
+    assert "var scalarValue: Float32 = inverseSqrt(4.0)" in generated_code
+    assert "var scalarValue: Float32 = rsqrt(4.0)" not in generated_code
+
+
+def test_angle_conversion_builtins_lower_to_mojo_arithmetic():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float scalarRadians = radians(180.0);
+                float scalarDegrees = degrees(3.14159265);
+                vec3 vectorRadians = radians(vec3(0.0, 90.0, 180.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var scalarRadians: Float32 = (180.0 * 0.017453292519943295)" in generated_code
+    )
+    assert (
+        "var scalarDegrees: Float32 = (3.14159265 * 57.29577951308232)"
+        in generated_code
+    )
+    assert (
+        "var vectorRadians: SIMD[DType.float32, 4] = "
+        "(SIMD[DType.float32, 4](0.0, 90.0, 180.0, 0.0) "
+        "* 0.017453292519943295)" in generated_code
+    )
+    assert "radians(" not in generated_code
+    assert "degrees(" not in generated_code
+
+
+def test_user_defined_angle_conversion_functions_are_not_lowered():
+    code = """
+    shader NumericAliases {
+        compute {
+            float radians(float value) {
+                return value + 1.0;
+            }
+
+            float degrees(float value) {
+                return value - 1.0;
+            }
+
+            void main() {
+                float scalarRadians = radians(180.0);
+                float scalarDegrees = degrees(3.14159265);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn radians(value: Float32) -> Float32:" in generated_code
+    assert "fn degrees(value: Float32) -> Float32:" in generated_code
+    assert "var scalarRadians: Float32 = radians(180.0)" in generated_code
+    assert "var scalarDegrees: Float32 = degrees(3.14159265)" in generated_code
+    assert "0.017453292519943295" not in generated_code
+    assert "57.29577951308232" not in generated_code
 
 
 def test_user_defined_mix_function_is_not_lowered_to_lerp():
@@ -18559,8 +19129,9 @@ def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
     ) in generated_code
     assert (
         "return SIMD[DType.float32, 4]("
-        "clamp(v[0], 0.0, 1.0), clamp(v[1], 0.0, 1.0), "
-        "clamp(v[2], 0.0, 1.0), 0.0)"
+        "0.0 if v[0] < 0.0 else (1.0 if v[0] > 1.0 else v[0]), "
+        "0.0 if v[1] < 0.0 else (1.0 if v[1] > 1.0 else v[1]), "
+        "0.0 if v[2] < 0.0 else (1.0 if v[2] > 1.0 else v[2]), 0.0)"
     ) in generated_code
     assert (
         "var v: SIMD[DType.float32, 4] = "
@@ -18568,6 +19139,159 @@ def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
         "SIMD[DType.float32, 4]((-1.0), 0.5, 2.0, 0.0))"
     ) in generated_code
     assert "saturate(" not in generated_code
+
+
+def test_saturate_half3_builtin_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                half3 h = half3(-1.0, 0.5, 2.0);
+                half3 s = saturate(h);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_saturate_f16_3_4(v: SIMD[DType.float16, 4]) "
+        "-> SIMD[DType.float16, 4]:"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float16, 4]("
+        "0.0 if v[0] < 0.0 else (1.0 if v[0] > 1.0 else v[0]), "
+        "0.0 if v[1] < 0.0 else (1.0 if v[1] > 1.0 else v[1]), "
+        "0.0 if v[2] < 0.0 else (1.0 if v[2] > 1.0 else v[2]), 0.0)"
+    ) in generated_code
+    assert (
+        "var s: SIMD[DType.float16, 4] = _crossgl_saturate_f16_3_4(h)" in generated_code
+    )
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_hlsl_float_matrix_builtin_lowers_componentwise():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                float2x3 m = float2x3(-1.0, 0.5, 2.0, 0.0, 1.5, -0.25);
+                float2x3 x = saturate(m);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_saturate_f32_c3_r2(m: CrossGLMatrixF32C3R2) "
+        "-> CrossGLMatrixF32C3R2:"
+    ) in generated_code
+    assert (
+        "return CrossGLMatrixF32C3R2("
+        "SIMD[DType.float32, 2]("
+        "0.0 if m.c0[0] < 0.0 else (1.0 if m.c0[0] > 1.0 else m.c0[0]), "
+        "0.0 if m.c0[1] < 0.0 else (1.0 if m.c0[1] > 1.0 else m.c0[1])), "
+        "SIMD[DType.float32, 2]("
+        "0.0 if m.c1[0] < 0.0 else (1.0 if m.c1[0] > 1.0 else m.c1[0]), "
+        "0.0 if m.c1[1] < 0.0 else (1.0 if m.c1[1] > 1.0 else m.c1[1])), "
+        "SIMD[DType.float32, 2]("
+        "0.0 if m.c2[0] < 0.0 else (1.0 if m.c2[0] > 1.0 else m.c2[0]), "
+        "0.0 if m.c2[1] < 0.0 else (1.0 if m.c2[1] > 1.0 else m.c2[1])))"
+    ) in generated_code
+    assert (
+        "var x: CrossGLMatrixF32C3R2 = _crossgl_saturate_f32_c3_r2(m)" in generated_code
+    )
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_half_matrix_builtin_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                half3x2 h = half3x2(-1.0, 0.5, 2.0, 0.0, 1.5, -0.25);
+                half3x2 s = saturate(h);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_saturate_f16_c2_r3(m: CrossGLMatrixF16C2R3) "
+        "-> CrossGLMatrixF16C2R3:"
+    ) in generated_code
+    assert (
+        "return CrossGLMatrixF16C2R3("
+        "SIMD[DType.float16, 4]("
+        "0.0 if m.c0[0] < 0.0 else (1.0 if m.c0[0] > 1.0 else m.c0[0]), "
+        "0.0 if m.c0[1] < 0.0 else (1.0 if m.c0[1] > 1.0 else m.c0[1]), "
+        "0.0 if m.c0[2] < 0.0 else (1.0 if m.c0[2] > 1.0 else m.c0[2]), 0.0), "
+        "SIMD[DType.float16, 4]("
+        "0.0 if m.c1[0] < 0.0 else (1.0 if m.c1[0] > 1.0 else m.c1[0]), "
+        "0.0 if m.c1[1] < 0.0 else (1.0 if m.c1[1] > 1.0 else m.c1[1]), "
+        "0.0 if m.c1[2] < 0.0 else (1.0 if m.c1[2] > 1.0 else m.c1[2]), 0.0))"
+    ) in generated_code
+    assert (
+        "var s: CrossGLMatrixF16C2R3 = _crossgl_saturate_f16_c2_r3(h)" in generated_code
+    )
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_integer_matrix_input_is_left_unmapped():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                int2x2 n = int2x2(1, 2, 3, 4);
+                int2x2 x = saturate(n);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var x: CrossGLMatrixI32C2R2 = saturate(n)" in generated_code
+    assert "_crossgl_saturate" not in generated_code
+    assert "clamp(n, 0.0, 1.0)" not in generated_code
+
+
+def test_saturate_matrix_builtin_compiles_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    float2x3 clampMatrix() {
+        float2x3 m = float2x3(-1.0, 0.5, 2.0, 0.0, 1.5, -0.25);
+        return saturate(m);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    var value = clampMatrix()
+    print(value.c0)
+    print(value.c1)
+    print(value.c2)
+"""
+
+    source_path = tmp_path / "saturate_matrix.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0.0, 0.5]" in result.stdout
+    assert "[1.0, 0.0]" in result.stdout
 
 
 def test_saturate_integer_vector_input_is_left_unmapped():
@@ -18621,6 +19345,88 @@ def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
         "SIMD[DType.float32, 4](1.25, 2.5, 3.75, 0.0))"
     ) in generated_code
     assert "fract(" not in generated_code
+
+
+def test_frac_half3_builtin_alias_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                half3 h = half3(1.25, 2.5, 3.75);
+                half3 f = frac(h);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_fract_f16_3_4(v: SIMD[DType.float16, 4]) "
+        "-> SIMD[DType.float16, 4]:"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float16, 4]("
+        "v[0] - floor(v[0]), v[1] - floor(v[1]), "
+        "v[2] - floor(v[2]), 0.0)"
+    ) in generated_code
+    assert "var f: SIMD[DType.float16, 4] = _crossgl_fract_f16_3_4(h)" in generated_code
+    assert "_crossgl_fract_f32(h)" not in generated_code
+    assert "frac(" not in generated_code
+
+
+def test_step_and_smoothstep_vector_helpers_cover_shader_threshold_patterns():
+    code = """
+    shader Thresholds {
+        compute {
+            void main() {
+                vec3 low = vec3(0.1, 0.2, 0.3);
+                vec3 high = vec3(0.7, 0.8, 0.9);
+                vec3 value = vec3(0.4, 0.5, 0.6);
+                float scalar = 0.5;
+                vec3 vectorGate = step(0.25, value);
+                vec3 vectorEdgeGate = step(low, scalar);
+                vec3 softValue = smoothstep(0.0, 1.0, value);
+                vec3 softEdges = smoothstep(low, high, scalar);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn step(edge: Float32, x: SIMD[DType.float32, 4]) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn step(edge: SIMD[DType.float32, 4], x: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn smoothstep(edge0: Float32, edge1: Float32, "
+        "x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn smoothstep(edge0: SIMD[DType.float32, 4], "
+        "edge1: SIMD[DType.float32, 4], x: Float32) "
+        "-> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "var vectorGate: SIMD[DType.float32, 4] = step(0.25, value)" in generated_code
+    )
+    assert (
+        "var vectorEdgeGate: SIMD[DType.float32, 4] = step(low, scalar)"
+        in generated_code
+    )
+    assert (
+        "var softValue: SIMD[DType.float32, 4] = "
+        "smoothstep(0.0, 1.0, value)" in generated_code
+    )
+    assert (
+        "var softEdges: SIMD[DType.float32, 4] = "
+        "smoothstep(low, high, scalar)" in generated_code
+    )
 
 
 @pytest.mark.parametrize(
@@ -23585,6 +24391,30 @@ def test_fixed_size_arrays_emit_inlinearray_and_cast_dynamic_indices():
     assert "DynamicVector" not in generated_code
 
 
+def test_symbolic_fixed_size_arrays_emit_inlinearray_without_ast_repr():
+    code = """
+    const int TILE_SIZE = 16;
+
+    float tileValue(int x, int y) {
+        float tile[TILE_SIZE][TILE_SIZE];
+        tile[y][x] = 1.0;
+        return tile[y][x];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "var tile = InlineArray[InlineArray[Float32, TILE_SIZE], TILE_SIZE]"
+        "(unsafe_uninitialized=True)"
+    ) in generated_code
+    assert "tile[int(y)][int(x)] = 1.0" in generated_code
+    assert "IdentifierNode(" not in generated_code
+    assert "var tile = List" not in generated_code
+
+
 def test_fixed_size_arrays_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -25501,6 +26331,42 @@ def test_buffer_block_with_structured_buffer_resource():
     assert ("StructuredBuffer", "float") in codegen.required_buffer_load_helpers
     assert ("StructuredBuffer", "float") in codegen.required_buffer_dimensions_helpers
     assert codegen.expression_result_type(BufferOpNode("Load", buf, [idx])) == "float"
+
+
+def test_mojo_keyword_like_bindings_escape_in_declarations_calls_and_members():
+    code = """
+    struct KeywordFields {
+        type: float;
+        match: vec4;
+    };
+
+    fn match(type: float, match: vec3) -> float {
+        float while = type + match.x;
+        return while;
+    }
+
+    fn read(input: KeywordFields) -> float {
+        return match(input.type, vec3(1.0, 2.0, 3.0)) + input.match.x;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var type_: Float32" in generated_code
+    assert "var match_: SIMD[DType.float32, 4]" in generated_code
+    assert (
+        "fn match_(type_: Float32, match_: SIMD[DType.float32, 4]) -> Float32:"
+        in generated_code
+    )
+    assert "var while_: Float32 = (type_ + match_[0])" in generated_code
+    assert "return while_" in generated_code
+    assert (
+        "return (match_(input.type_, SIMD[DType.float32, 4](1.0, 2.0, 3.0, 0.0)) "
+        "+ input.match_[0])"
+    ) in generated_code
+    assert "fn match(" not in generated_code
+    assert "var while:" not in generated_code
+    assert "input.match.x" not in generated_code
 
 
 if __name__ == "__main__":

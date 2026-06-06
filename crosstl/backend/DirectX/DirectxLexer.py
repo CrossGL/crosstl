@@ -10,6 +10,10 @@ from .preprocessor import HLSLPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 DEFAULT_PREPROCESSOR_DEFINES = {"HLSL": "1"}
+SHADERLAB_PROGRAM_OPEN_MARKERS = frozenset(
+    {"CGINCLUDE", "CGPROGRAM", "HLSLINCLUDE", "HLSLPROGRAM"}
+)
+SHADERLAB_PROGRAM_CLOSE_MARKERS = frozenset({"ENDCG", "ENDHLSL"})
 
 # Token definitions - order matters! More specific patterns should come first
 TOKENS = tuple(
@@ -104,17 +108,18 @@ TOKENS = tuple(
         # Matrix types (must come before vector and scalar types)
         (
             "MATRIX",
-            r"\b(float|half|double|int|uint|bool|min16float|min10float|"
+            r"\b(float|half|fixed|double|int|uint|bool|min16float|min10float|"
             r"min16int|min12int|min16uint)[1-4]x[1-4]\b",
         ),
         # Vector types (must come before scalar types)
-        ("FVECTOR", r"\b(float|half|double|min16float|min10float)[1-4]\b"),
+        ("FVECTOR", r"\b(float|half|fixed|double|min16float|min10float)[1-4]\b"),
         ("IVECTOR", r"\b(int|min16int|min12int)[1-4]\b"),
         ("UVECTOR", r"\b(uint|min16uint)[1-4]\b"),
         ("BVECTOR", r"\bbool[1-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
         ("HALF", r"\bhalf\b"),
+        ("FIXED", r"\bfixed\b"),
         ("DOUBLE", r"\bdouble\b"),
         ("INT", r"\bint\b"),
         ("UINT", r"\buint\b"),
@@ -126,6 +131,9 @@ TOKENS = tuple(
         ("MIN16INT", r"\bmin16int\b"),
         ("MIN12INT", r"\bmin12int\b"),
         ("MIN16UINT", r"\bmin16uint\b"),
+        ("FLOAT16_T", r"\bfloat16_t\b"),
+        ("INT16_T", r"\bint16_t\b"),
+        ("UINT16_T", r"\buint16_t\b"),
         ("INT64_T", r"\bint64_t\b"),
         ("UINT64_T", r"\buint64_t\b"),
         # Control flow keywords
@@ -312,6 +320,7 @@ KEYWORDS = {
     "TriangleStream": "TRIANGLESTREAM",
     "float": "FLOAT",
     "half": "HALF",
+    "fixed": "FIXED",
     "double": "DOUBLE",
     "int": "INT",
     "uint": "UINT",
@@ -323,6 +332,9 @@ KEYWORDS = {
     "min16int": "MIN16INT",
     "min12int": "MIN12INT",
     "min16uint": "MIN16UINT",
+    "float16_t": "FLOAT16_T",
+    "int16_t": "INT16_T",
+    "uint16_t": "UINT16_T",
     "int64_t": "INT64_T",
     "uint64_t": "UINT64_T",
     "return": "RETURN",
@@ -430,6 +442,7 @@ class TokenType(Enum):
     BVECTOR = auto()
     FLOAT = auto()
     HALF = auto()
+    FIXED = auto()
     DOUBLE = auto()
     INT = auto()
     UINT = auto()
@@ -441,6 +454,9 @@ class TokenType(Enum):
     MIN16INT = auto()
     MIN12INT = auto()
     MIN16UINT = auto()
+    FLOAT16_T = auto()
+    INT16_T = auto()
+    UINT16_T = auto()
     INT64_T = auto()
     UINT64_T = auto()
     RETURN = auto()
@@ -546,6 +562,7 @@ class HLSLLexer:
         strict_preprocessor: bool = False,
     ):
         code = code.lstrip("\ufeff")
+        code = self._extract_shaderlab_program_blocks(code)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.file_path = file_path
         self.include_paths = include_paths or []
@@ -561,6 +578,66 @@ class HLSLLexer:
             code = preprocessor.preprocess(code, file_path=file_path)
         self.code = code
         self._length = len(code)
+
+    def _extract_shaderlab_program_blocks(self, code: str) -> str:
+        """Return embedded HLSL/CG blocks from Unity ShaderLab source."""
+        lines = code.splitlines()
+        extracted_lines = []
+        found_program_block = False
+        in_program_block = False
+
+        for line in lines:
+            if in_program_block and not line:
+                extracted_lines.append(line)
+                continue
+
+            cursor = 0
+            while cursor < len(line):
+                segment = line[cursor:]
+
+                if not in_program_block:
+                    match = self._find_shaderlab_program_marker(
+                        segment, SHADERLAB_PROGRAM_OPEN_MARKERS
+                    )
+                    if match is None:
+                        break
+                    found_program_block = True
+                    in_program_block = True
+                    cursor += match.end()
+                    continue
+
+                match = self._find_shaderlab_program_marker(
+                    segment, SHADERLAB_PROGRAM_CLOSE_MARKERS
+                )
+                if match is None:
+                    extracted_lines.append(segment)
+                    break
+
+                before_marker = segment[: match.start()]
+                extracted_lines.append(
+                    before_marker.rstrip() if before_marker.strip() else ""
+                )
+                in_program_block = False
+                cursor += match.end()
+
+        if not found_program_block:
+            return code
+        return "\n".join(extracted_lines)
+
+    def _find_shaderlab_program_marker(self, text: str, markers):
+        for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
+            if match.group(0).upper() not in markers:
+                continue
+
+            before = text[: match.start()].rstrip()
+            after = text[match.end() : match.end() + 1]
+            if before and before[-1] not in "{;}":
+                continue
+            if after and not (after.isspace() or after in "{};"):
+                continue
+            return match
+
+        return None
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""

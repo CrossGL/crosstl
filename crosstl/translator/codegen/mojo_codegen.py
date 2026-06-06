@@ -50,7 +50,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
-from .array_utils import get_array_size_from_node, parse_array_type
+from .array_utils import get_array_size_from_node
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -712,6 +712,13 @@ MOJO_REINTERPRET_BUILTINS = {
     "asuint": "UInt32",
 }
 
+MOJO_REINTERPRET_ALIAS_MAP = {
+    "floatBitsToInt": "asint",
+    "floatBitsToUint": "asuint",
+    "intBitsToFloat": "asfloat",
+    "uintBitsToFloat": "asfloat",
+}
+
 MOJO_REINTERPRET_TARGET_TYPES = {
     "asfloat": ("float", "vec"),
     "asint": ("int", "ivec"),
@@ -804,6 +811,11 @@ MOJO_INTEGER_DTYPES = {
     "DType.int32",
     "DType.uint16",
     "DType.uint32",
+}
+
+MOJO_FLOAT_DTYPES = {
+    "DType.float32",
+    "DType.float64",
 }
 
 MOJO_INTEGER_INDEX_TYPES = {
@@ -1067,6 +1079,17 @@ MOJO_BUILTIN_PLACEHOLDERS = {
     "gl_PointCoord": ("point_coord", "vec2"),
 }
 
+MOJO_GPU_BUILTIN_ALIASES = {
+    "gl_GlobalInvocationID": ("global_idx_uint", "uvec3"),
+    "SV_DispatchThreadID": ("global_idx_uint", "uvec3"),
+    "gl_LocalInvocationID": ("thread_idx_uint", "uvec3"),
+    "SV_GroupThreadID": ("thread_idx_uint", "uvec3"),
+    "gl_WorkGroupID": ("block_idx_uint", "uvec3"),
+    "SV_GroupID": ("block_idx_uint", "uvec3"),
+    "gl_NumWorkGroups": ("grid_dim_uint", "uvec3"),
+    "gl_WorkGroupSize": ("block_dim_uint", "uvec3"),
+}
+
 MOJO_VECTOR_ARITHMETIC_OPS = {
     "+": "add",
     "-": "sub",
@@ -1087,6 +1110,7 @@ MOJO_MATH_HELPERS = {
     "power",
     "reflect",
     "refract",
+    "round_even",
     "smoothstep",
     "step",
 }
@@ -1167,6 +1191,7 @@ class MojoCodeGen:
         self.required_matrix_diagonal_helpers = set()
         self.required_math_helpers = set()
         self.required_fract_helpers = set()
+        self.required_mod_helpers = set()
         self.required_saturate_helpers = set()
         self.required_builtin_placeholders = set()
         self.current_return_type = None
@@ -1328,7 +1353,9 @@ class MojoCodeGen:
             "tan": "tan",
             "sqrt": "sqrt",
             "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
             "pow": "power",
+            "roundEven": "round_even",
             "abs": "abs",
             "min": "min",
             "max": "max",
@@ -1414,6 +1441,7 @@ class MojoCodeGen:
         self.required_matrix_diagonal_helpers = set()
         self.required_math_helpers = set()
         self.required_fract_helpers = set()
+        self.required_mod_helpers = set()
         self.required_saturate_helpers = set()
         self.required_builtin_placeholders = set()
         self.current_return_type = None
@@ -1435,7 +1463,7 @@ class MojoCodeGen:
 
         header = "# Generated Mojo Shader Code\n"
         header += "from math import *\n"
-        header += "from gpu import *\n\n"
+        header += "from gpu import *\n"
         code = ""
 
         structs = getattr(ast, "structs", [])
@@ -1481,35 +1509,37 @@ class MojoCodeGen:
                             node.initial_value, vtype, f"global declaration {node.name}"
                         )
                         init_expr = self.generate_expression(node.initial_value)
+                    var_name = self.mojo_identifier(node.name)
                     if vtype is None:
-                        code += f"var {node.name} = {init_expr}\n"
+                        code += f"var {var_name} = {init_expr}\n"
                         continue
-                    code += f"var {node.name}: {self.map_type(vtype)} = {init_expr}\n"
+                    code += f"var {var_name}: {self.map_type(vtype)} = {init_expr}\n"
                     continue
 
                 # Handle both old and new AST variable structures
                 vtype = self.variable_declared_type(node) or "float"
                 self.register_variable_type(node.name, vtype)
                 resource_comment = self.generate_resource_metadata_comment(node, vtype)
+                var_name = self.mojo_identifier(node.name)
                 if self.is_array_type_name(vtype):
                     code += resource_comment
                     code += (
-                        f"var {node.name} = "
+                        f"var {var_name} = "
                         f"{self.array_initial_value_for_type(vtype)}\n"
                     )
                 elif self.is_struct_type_name(vtype):
                     code += resource_comment
-                    code += f"var {node.name} = {self.zero_value_for_type(vtype)}\n"
+                    code += f"var {var_name} = {self.zero_value_for_type(vtype)}\n"
                 elif self.is_resource_type_name(vtype):
                     code += resource_comment
                     mapped_type = self.map_type(vtype)
                     code += (
-                        f"var {node.name}: {mapped_type} = "
+                        f"var {var_name}: {mapped_type} = "
                         f"{self.zero_value_for_type(vtype)}\n"
                     )
                 else:
                     code += (
-                        f"var {node.name}: {self.map_type(vtype)} = "
+                        f"var {var_name}: {self.map_type(vtype)} = "
                         f"{self.zero_value_for_type(vtype)}\n"
                     )
 
@@ -1581,6 +1611,9 @@ class MojoCodeGen:
                         stage.entry_point, shader_type=stage_name, stage_node=stage
                     )
                     self.stage_local_function_extra_params = previous_extra_params
+        if self.required_reinterpret_helpers:
+            header += "from memory import bitcast\n"
+        header += "\n"
 
         return header + self.generate_required_helpers() + code
 
@@ -2465,27 +2498,29 @@ class MojoCodeGen:
             init_expr = self.generate_expression(
                 node.initial_value, variable_type, f"stage declaration {node.name}"
             )
+            var_name = self.mojo_identifier(node.name)
             return (
                 f"{self.generate_resource_metadata_comment(node, variable_type)}"
-                f"var {node.name}: {self.map_type(variable_type)} = {init_expr}\n"
+                f"var {var_name}: {self.map_type(variable_type)} = {init_expr}\n"
             )
 
         resource_comment = self.generate_resource_metadata_comment(node, variable_type)
+        var_name = self.mojo_identifier(node.name)
         if self.is_array_type_name(variable_type):
             return (
-                f"{resource_comment}var {node.name} = "
+                f"{resource_comment}var {var_name} = "
                 f"{self.array_initial_value_for_type(variable_type)}\n"
             )
         if self.is_struct_type_name(variable_type):
-            return f"{resource_comment}var {node.name} = {self.zero_value_for_type(variable_type)}\n"
+            return f"{resource_comment}var {var_name} = {self.zero_value_for_type(variable_type)}\n"
         if self.is_resource_type_name(variable_type):
             mapped_type = self.map_type(variable_type)
             return (
-                f"{resource_comment}var {node.name}: {mapped_type} = "
+                f"{resource_comment}var {var_name}: {mapped_type} = "
                 f"{self.zero_value_for_type(variable_type)}\n"
             )
         return (
-            f"var {node.name}: {self.map_type(variable_type)} = "
+            f"var {var_name}: {self.map_type(variable_type)} = "
             f"{self.zero_value_for_type(variable_type)}\n"
         )
 
@@ -2614,7 +2649,7 @@ class MojoCodeGen:
             value = getattr(node, "value", None)
             self.register_variable_type(name, const_type)
             value_code = self.generate_expression(value, const_type, f"constant {name}")
-            code += f"alias {name} = {value_code}\n"
+            code += f"alias {self.mojo_identifier(name)} = {value_code}\n"
         return f"{code}\n" if code else ""
 
     def collect_function_return_types(self, ast):
@@ -3565,7 +3600,10 @@ class MojoCodeGen:
             for field_name, field_type in generic_enum_specialized_fields(
                 self, specialization
             ):
-                code += f"    var {field_name}: {self.map_type(field_type)}\n"
+                code += (
+                    f"    var {self.mojo_identifier(field_name)}: "
+                    f"{self.map_type(field_type)}\n"
+                )
             code += "\n"
         return code
 
@@ -3608,7 +3646,7 @@ class MojoCodeGen:
                     if field_name in all_field_names:
                         rendered_fields[field_name] = f"payload{index}"
                 field_args = [
-                    f"{field_name}={rendered_fields[field_name]}"
+                    f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
                     for field_name in self.struct_types[specialization["struct_name"]]
                 ]
                 code += (
@@ -3691,6 +3729,8 @@ class MojoCodeGen:
             return None
         if hasattr(size, "value"):
             return size.value
+        if hasattr(size, "name"):
+            return size.name
         return size
 
     def parse_generic_type_name(self, type_name):
@@ -5197,7 +5237,10 @@ class MojoCodeGen:
         code = f"@value\nstruct {node.name}:\n"
         code += "    var variant: Int32\n"
         for field_name, field_type in fields:
-            code += f"    var {field_name}: {self.map_type(field_type)}\n"
+            code += (
+                f"    var {self.mojo_identifier(field_name)}: "
+                f"{self.map_type(field_type)}\n"
+            )
         code += "\n"
 
         code += self.generate_payload_enum_constants(node)
@@ -5280,7 +5323,7 @@ class MojoCodeGen:
                     continue
                 rendered_fields[field_name] = f"payload{index}"
             field_args = [
-                f"{field_name}={rendered_fields[field_name]}"
+                f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
                 for field_name in self.struct_types[node.name]
             ]
             code += f"    return {node.name}({', '.join(field_args)})\n\n"
@@ -5508,13 +5551,13 @@ class MojoCodeGen:
             if self.is_array_type_name(member_type):
                 element_type, size = self.parse_array_type_name(member_type)
                 code += (
-                    f"    var {member_name}: "
+                    f"    var {self.mojo_identifier(member_name)}: "
                     f"{self.array_storage_type(element_type, size)}"
                     f"{semantic_comment}\n"
                 )
             else:
                 code += (
-                    f"    var {member_name}: "
+                    f"    var {self.mojo_identifier(member_name)}: "
                     f"{self.map_type(member_type)}{semantic_comment}\n"
                 )
 
@@ -5572,12 +5615,19 @@ class MojoCodeGen:
         return code
 
     def generate_zero_initialized_variable(self, name, type_name):
+        emitted_name = self.mojo_identifier(name)
         if self.is_array_type_name(type_name):
-            return f"var {name} = {self.array_initial_value_for_type(type_name)}\n"
+            return (
+                f"var {emitted_name} = "
+                f"{self.array_initial_value_for_type(type_name)}\n"
+            )
         if self.is_struct_type_name(type_name):
-            return f"var {name} = {self.zero_value_for_type(type_name)}\n"
+            return f"var {emitted_name} = {self.zero_value_for_type(type_name)}\n"
         mapped_type = self.map_type(type_name)
-        return f"var {name}: {mapped_type} = {self.zero_value_for_type(type_name)}\n"
+        return (
+            f"var {emitted_name}: {mapped_type} = "
+            f"{self.zero_value_for_type(type_name)}\n"
+        )
 
     def generate_function(self, func, indent=0, shader_type=None, stage_node=None):
         """Render one CrossGL function or shader entry point as Mojo code."""
@@ -5653,10 +5703,14 @@ class MojoCodeGen:
                     )
                 )
             ownership = "owned " if p.name in mutated_params else ""
-            params.append(f"{ownership}{p.name}: {self.map_type(param_type)}")
+            params.append(
+                f"{ownership}{self.mojo_identifier(p.name)}: {self.map_type(param_type)}"
+            )
         for name, param_type in extra_param_infos:
             ownership = "owned " if name in mutated_params else ""
-            params.append(f"{ownership}{name}: {self.map_type(param_type)}")
+            params.append(
+                f"{ownership}{self.mojo_identifier(name)}: {self.map_type(param_type)}"
+            )
 
         params_str = ", ".join(params) if params else ""
 
@@ -5693,7 +5747,10 @@ class MojoCodeGen:
         if return_semantic:
             code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
-        code += f"fn {function_name}({params_str}) -> {self.map_type(return_type)}:\n"
+        code += (
+            f"fn {self.mojo_identifier(function_name)}({params_str}) -> "
+            f"{self.map_type(return_type)}:\n"
+        )
         if stage_node is not None:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
@@ -6294,7 +6351,7 @@ class MojoCodeGen:
                         size = array_match.group(2)
                         base_type = "Float32"  # Default, could be improved
                         return (
-                            f"{indent_str}var {stmt.name} = "
+                            f"{indent_str}var {self.mojo_identifier(stmt.name)} = "
                             f"InlineArray[{base_type}, {size}]"
                             "(unsafe_uninitialized=True)\n"
                         )
@@ -6328,28 +6385,30 @@ class MojoCodeGen:
                     var_type,
                     f"declaration {stmt.name}",
                 )
+                var_name = self.mojo_identifier(stmt.name)
                 if var_type is None:
-                    return f"{prelude}{indent_str}var {stmt.name} = {init_expr}\n"
+                    return f"{prelude}{indent_str}var {var_name} = {init_expr}\n"
                 return (
-                    f"{prelude}{indent_str}var {stmt.name}: "
+                    f"{prelude}{indent_str}var {var_name}: "
                     f"{self.map_type(var_type)} = {init_expr}\n"
                 )
 
             var_type = var_type or "float"
             self.register_variable_type(stmt.name, var_type)
             self.register_resource_access_metadata(stmt, var_type)
+            var_name = self.mojo_identifier(stmt.name)
             if self.is_array_type_name(var_type):
                 return (
-                    f"{indent_str}var {stmt.name} = "
+                    f"{indent_str}var {var_name} = "
                     f"{self.array_initial_value_for_type(var_type)}\n"
                 )
             elif self.is_struct_type_name(var_type):
                 return (
-                    f"{indent_str}var {stmt.name} = "
+                    f"{indent_str}var {var_name} = "
                     f"{self.zero_value_for_type(var_type)}\n"
                 )
             else:
-                return f"{indent_str}var {stmt.name}: {self.map_type(var_type)}\n"
+                return f"{indent_str}var {var_name}: {self.map_type(var_type)}\n"
         elif isinstance(stmt, ArrayNode):
             return self.generate_array_declaration(stmt, indent)
         elif isinstance(stmt, AssignmentNode):
@@ -6444,11 +6503,12 @@ class MojoCodeGen:
         assignment_op = "+=" if op == "++" else "-="
         indent_str = "    " * indent
         update = f"{indent_str}{operand} {assignment_op} 1\n"
+        var_name = self.mojo_identifier(stmt.name)
         if var_type is None:
-            declaration = f"{indent_str}var {stmt.name} = {operand}\n"
+            declaration = f"{indent_str}var {var_name} = {operand}\n"
         else:
             declaration = (
-                f"{indent_str}var {stmt.name}: {self.map_type(var_type)} = {operand}\n"
+                f"{indent_str}var {var_name}: {self.map_type(var_type)} = {operand}\n"
             )
         is_postfix = getattr(
             initial_value,
@@ -7586,7 +7646,7 @@ class MojoCodeGen:
             node.name, self.array_type_name(node.element_type, size)
         )
         return (
-            f"{indent_str}var {node.name} = "
+            f"{indent_str}var {self.mojo_identifier(node.name)} = "
             f"{self.array_initial_value(node.element_type, size)}\n"
         )
 
@@ -7705,7 +7765,7 @@ class MojoCodeGen:
         iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
         entry_alias_state = self.resource_access_alias_state()
 
-        code = f"{indent_str}for {pattern} in {iterable}:\n"
+        code = f"{indent_str}for {self.mojo_identifier(pattern)} in {iterable}:\n"
 
         self.loop_depth += 1
         self.push_loop_exit_alias_state_scope()
@@ -8066,10 +8126,16 @@ class MojoCodeGen:
             ray_builtin = self.mojo_ray_builtin_expression(expr)
             if ray_builtin is not None and expr not in self.variable_types:
                 return ray_builtin
+            gpu_builtin = self.mojo_gpu_builtin_expression(expr)
+            if gpu_builtin is not None:
+                return gpu_builtin
             builtin = self.mojo_builtin_placeholder_expression(expr)
             if builtin is not None:
                 return builtin
-            return self.map_enum_variant_reference(expr, target_type)
+            mapped_reference = self.map_enum_variant_reference(expr, target_type)
+            if mapped_reference != expr:
+                return mapped_reference
+            return self.mojo_identifier(expr)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
@@ -8079,20 +8145,26 @@ class MojoCodeGen:
                 ray_builtin = self.mojo_ray_builtin_expression(expr.name)
                 if ray_builtin is not None and expr.name not in self.variable_types:
                     return ray_builtin
+                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
+                if gpu_builtin is not None:
+                    return gpu_builtin
                 builtin = self.mojo_builtin_placeholder_expression(expr.name)
                 if builtin is not None:
                     return builtin
-                return f"{expr.name}"
+                return self.mojo_identifier(expr.name)
             elif hasattr(expr, "name"):
                 if expr.name in self.expression_identifier_replacements:
                     return self.expression_identifier_replacements[expr.name]
                 ray_builtin = self.mojo_ray_builtin_expression(expr.name)
                 if ray_builtin is not None and expr.name not in self.variable_types:
                     return ray_builtin
+                gpu_builtin = self.mojo_gpu_builtin_expression(expr.name)
+                if gpu_builtin is not None:
+                    return gpu_builtin
                 builtin = self.mojo_builtin_placeholder_expression(expr.name)
                 if builtin is not None:
                     return builtin
-                return expr.name
+                return self.mojo_identifier(expr.name)
             else:
                 return str(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -8187,7 +8259,10 @@ class MojoCodeGen:
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)
-                return f"{callee}({args})"
+                call_name = (
+                    self.mojo_identifier(func_name) if func_name is not None else callee
+                )
+                return f"{call_name}({args})"
 
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name, expr.args
@@ -8203,10 +8278,16 @@ class MojoCodeGen:
                 saturate_call = self.generate_saturate_call(expr.args)
                 if saturate_call is not None:
                     return saturate_call
+            if func_name in {"degrees", "radians"}:
+                return self.generate_angle_conversion_call(func_name, expr.args)
             if func_name == "mix":
                 bool_mix_call = self.generate_bool_mix_call(expr.args)
                 if bool_mix_call is not None:
                     return bool_mix_call
+            if func_name in {"min", "max"}:
+                min_max_call = self.generate_min_max_call(func_name, expr.args)
+                if min_max_call is not None:
+                    return min_max_call
             if func_name == "texture":
                 return self.generate_texture_call(expr.args, "sample")
             if func_name == "textureLod":
@@ -8245,8 +8326,9 @@ class MojoCodeGen:
                 return self.generate_buffer_consume_call(expr.args)
             if func_name == "buffer_dimensions":
                 return self.generate_buffer_dimensions_call(expr.args)
-            if func_name in MOJO_REINTERPRET_BUILTINS:
-                return self.generate_reinterpret_call(func_name, expr.args)
+            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+            if reinterpret_name is not None:
+                return self.generate_reinterpret_call(reinterpret_name, expr.args)
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 helper_base, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
                 return self.generate_resource_builtin_call(
@@ -8308,7 +8390,13 @@ class MojoCodeGen:
                 )
 
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-            call_name = func_name if func_name is not None else callee
+            call_name = (
+                "lambda"
+                if func_name == "lambda"
+                else (
+                    self.mojo_identifier(func_name) if func_name is not None else callee
+                )
+            )
             return f"{call_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             builtin_member = self.generate_builtin_member_access(expr)
@@ -8321,13 +8409,13 @@ class MojoCodeGen:
             obj_type = self.expression_result_type(expr.object)
             obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
             if obj_struct_type is not None and expr.member in obj_fields:
-                return f"{obj}.{expr.member}"
+                return f"{obj}.{self.mojo_identifier(expr.member)}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
                 return self.generate_swizzle(
                     expr.object, obj, obj_type, expr.member, swizzle_indices
                 )
-            return f"{obj}.{expr.member}"
+            return f"{obj}.{self.mojo_identifier(expr.member)}"
         elif isinstance(expr, TernaryOpNode):
             bool_vector_select = self.generate_bool_vector_select_expression(
                 expr.condition, expr.true_expr, expr.false_expr
@@ -8357,10 +8445,16 @@ class MojoCodeGen:
             ray_builtin = self.mojo_ray_builtin_expression(name)
             if ray_builtin is not None and name not in self.variable_types:
                 return ray_builtin
+            gpu_builtin = self.mojo_gpu_builtin_expression(name)
+            if gpu_builtin is not None:
+                return gpu_builtin
             builtin = self.mojo_builtin_placeholder_expression(name)
             if builtin is not None:
                 return builtin
-            return self.map_enum_variant_reference(name, target_type)
+            mapped_reference = self.map_enum_variant_reference(name, target_type)
+            if mapped_reference != name:
+                return mapped_reference
+            return self.mojo_identifier(name)
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
@@ -8499,7 +8593,7 @@ class MojoCodeGen:
             )
             self.validate_expression_target_shape(value, field_type, field_context)
             rendered_value = self.generate_expression(value, field_type, field_context)
-            named_args.append(f"{name}={rendered_value}")
+            named_args.append(f"{self.mojo_identifier(name)}={rendered_value}")
             if field_type is not None:
                 rendered_fields[name] = rendered_value
 
@@ -8513,7 +8607,7 @@ class MojoCodeGen:
                 for field_name, field_type in missing_fields:
                     rendered_fields[field_name] = self.zero_value_for_type(field_type)
                 field_args = [
-                    f"{field_name}={rendered_fields[field_name]}"
+                    f"{self.mojo_identifier(field_name)}={rendered_fields[field_name]}"
                     for field_name, _ in field_items
                 ]
                 return f"{mapped_type}({', '.join(field_args)})"
@@ -8656,6 +8750,11 @@ class MojoCodeGen:
         ray_builtin = self.mojo_ray_builtin_expression(expr.builtin_name)
         if ray_builtin is not None:
             return ray_builtin
+        gpu_builtin = self.mojo_gpu_builtin_expression(
+            expr.builtin_name, getattr(expr, "component", None)
+        )
+        if gpu_builtin is not None:
+            return gpu_builtin
         name = self.mojo_builtin_placeholder_expression(expr.builtin_name)
         if name is None:
             name = self.map_semantic(expr.builtin_name)
@@ -8677,10 +8776,69 @@ class MojoCodeGen:
         self.required_builtin_placeholders.add((placeholder_name, placeholder_type))
         return placeholder_name
 
+    def mojo_gpu_builtin_expression(self, name, component=None):
+        builtin = MOJO_GPU_BUILTIN_ALIASES.get(name)
+        if builtin is None or name in self.variable_types:
+            return None
+        alias_name, type_name = builtin
+        if component:
+            swizzle_indices = self.get_swizzle_indices(component)
+            if swizzle_indices is None:
+                return f"{alias_name}.{component}"
+            return self.generate_gpu_builtin_swizzle(
+                alias_name, type_name, swizzle_indices
+            )
+        return self.generate_gpu_builtin_vector(alias_name, type_name)
+
+    def generate_gpu_builtin_vector(self, alias_name, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is None:
+            return alias_name
+        dtype, width, storage_width, pad_literal = vector_info
+        components = [
+            self.gpu_builtin_component_expression(alias_name, index, dtype)
+            for index in range(width)
+        ]
+        while len(components) < storage_width:
+            components.append(pad_literal)
+        return f"SIMD[{dtype}, {storage_width}]({', '.join(components)})"
+
+    def generate_gpu_builtin_swizzle(self, alias_name, type_name, swizzle_indices):
+        vector_info = self.vector_type_info(type_name)
+        dtype = vector_info[0] if vector_info is not None else "DType.uint32"
+        if len(swizzle_indices) == 1:
+            return self.gpu_builtin_component_expression(
+                alias_name, swizzle_indices[0], dtype
+            )
+
+        result_type = self.swizzle_result_type(type_name, len(swizzle_indices))
+        result_info = self.vector_type_info(result_type)
+        if result_info is None:
+            return alias_name
+        result_dtype, _, storage_width, pad_literal = result_info
+        components = [
+            self.gpu_builtin_component_expression(alias_name, index, result_dtype)
+            for index in swizzle_indices
+        ]
+        while len(components) < storage_width:
+            components.append(pad_literal)
+        return f"SIMD[{result_dtype}, {storage_width}]({', '.join(components)})"
+
+    def gpu_builtin_component_expression(self, alias_name, index, dtype):
+        component_names = ("x", "y", "z")
+        if 0 <= index < len(component_names):
+            return f"{alias_name}.{component_names[index]}"
+        return MOJO_DTYPE_INFO.get(dtype, MOJO_DTYPE_INFO["DType.uint32"])[2]
+
     def generate_builtin_member_access(self, expr):
         obj_name = self.identifier_expression_name(getattr(expr, "object", None))
         if obj_name is None:
             return None
+        gpu_builtin = self.mojo_gpu_builtin_expression(
+            obj_name, getattr(expr, "member", None)
+        )
+        if gpu_builtin is not None:
+            return gpu_builtin
         obj = self.mojo_builtin_placeholder_expression(obj_name)
         if obj is None:
             return None
@@ -9355,10 +9513,11 @@ class MojoCodeGen:
         arg = args[0]
         arg_expr = self.generate_expression(arg)
         arg_type = self.expression_result_type(arg)
+        supported_float_dtypes = MOJO_FLOAT_DTYPES | {"DType.float16"}
         vector_info = self.vector_type_info(arg_type)
         if vector_info is not None:
             dtype, source_width, storage_width, _ = vector_info
-            if dtype in {"DType.float32", "DType.float64"}:
+            if dtype in supported_float_dtypes:
                 self.required_fract_helpers.add(
                     ("vector", dtype, source_width, storage_width)
                 )
@@ -9368,7 +9527,7 @@ class MojoCodeGen:
                 return f"{helper_name}({arg_expr})"
 
         dtype = self.expression_mojo_dtype(arg) or "DType.float32"
-        if dtype not in {"DType.float32", "DType.float64"}:
+        if dtype not in supported_float_dtypes:
             dtype = "DType.float32"
         self.required_fract_helpers.add(("scalar", dtype, 1, 1))
         return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"
@@ -9386,33 +9545,97 @@ class MojoCodeGen:
         ):
             return f"({generated_args[0]} % {generated_args[1]})"
 
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is not None or right_info is not None:
+            mod_call = self.generate_vector_mod_call(
+                generated_args, left_info, right_info
+            )
+            if mod_call is not None:
+                return mod_call
+
+        left_dtype = self.expression_mojo_dtype(args[0])
+        right_dtype = self.expression_mojo_dtype(args[1])
+        dtype = left_dtype if left_dtype in MOJO_FLOAT_DTYPES else right_dtype
+        if dtype in MOJO_FLOAT_DTYPES:
+            self.required_mod_helpers.add((dtype, "ss", 1, 1))
+            helper_name = self.mod_helper_name(dtype, "ss", 1, 1)
+            return f"{helper_name}({generated_args[0]}, {generated_args[1]})"
+
         self.required_math_helpers.add("fmod")
         return f"fmod({generated_args[0]}, {generated_args[1]})"
+
+    def generate_vector_mod_call(self, generated_args, left_info, right_info):
+        if left_info is not None and right_info is not None:
+            if left_info[:3] != right_info[:3]:
+                return None
+            dtype, source_width, storage_width, _ = left_info
+            kind = "vv"
+        elif left_info is not None:
+            dtype, source_width, storage_width, _ = left_info
+            kind = "vs"
+        else:
+            dtype, source_width, storage_width, _ = right_info
+            kind = "sv"
+
+        if dtype not in MOJO_FLOAT_DTYPES:
+            return None
+
+        self.required_mod_helpers.add((dtype, "ss", 1, 1))
+        self.required_mod_helpers.add((dtype, kind, source_width, storage_width))
+        helper_name = self.mod_helper_name(dtype, kind, source_width, storage_width)
+        return f"{helper_name}({generated_args[0]}, {generated_args[1]})"
 
     def generate_saturate_call(self, args):
         if len(args) != 1:
             return None
 
+        supported_float_dtypes = MOJO_FLOAT_DTYPES | {"DType.float16"}
         arg_type = self.expression_result_type(args[0])
         vector_info = self.vector_type_info(arg_type)
         if vector_info is not None:
             dtype, source_width, storage_width, _ = vector_info
-            if dtype not in {"DType.float32", "DType.float64"}:
+            if dtype not in supported_float_dtypes:
                 return None
             arg_expr = self.generate_expression(args[0])
-            self.required_saturate_helpers.add((dtype, source_width, storage_width))
+            self.required_saturate_helpers.add(
+                ("vector", dtype, source_width, storage_width)
+            )
             helper_name = self.saturate_vector_helper_name(
                 dtype, source_width, storage_width
             )
             return f"{helper_name}({arg_expr})"
 
+        matrix_info = self.matrix_type_info(arg_type)
+        if matrix_info is not None:
+            dtype, columns, rows = matrix_info
+            if dtype not in supported_float_dtypes:
+                return None
+            arg_expr = self.generate_expression(args[0])
+            self.required_matrix_types.add((dtype, columns, rows))
+            self.required_saturate_helpers.add(("matrix", dtype, columns, rows))
+            helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
+            return f"{helper_name}({arg_expr})"
+
         arg_dtype = self.expression_mojo_dtype(args[0])
-        if arg_dtype not in {"DType.float32", "DType.float64"}:
+        if arg_dtype not in supported_float_dtypes:
             return None
 
         arg_expr = self.generate_expression(args[0])
-        self.required_math_helpers.add("clamp")
-        return f"clamp({arg_expr}, 0.0, 1.0)"
+        self.required_saturate_helpers.add(("scalar", arg_dtype, 1, 1))
+        return f"{self.saturate_scalar_helper_name(arg_dtype)}({arg_expr})"
+
+    def generate_angle_conversion_call(self, func_name, args):
+        if len(args) != 1:
+            generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+            return f"{func_name}({generated_args})"
+
+        factor = {
+            "degrees": "57.29577951308232",
+            "radians": "0.017453292519943295",
+        }[func_name]
+        arg_expr = self.generate_expression(args[0])
+        return f"({arg_expr} * {factor})"
 
     def generate_bool_mix_call(self, args):
         if len(args) != 3:
@@ -9434,6 +9657,30 @@ class MojoCodeGen:
         true_value = self.generate_expression(args[1])
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
+
+    def generate_min_max_call(self, func_name, args):
+        if len(args) != 2:
+            return None
+
+        left_type = self.expression_result_type(args[0])
+        right_type = self.expression_result_type(args[1])
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None and right_info is None:
+            return None
+        if left_info is not None and left_info[0] != "DType.float32":
+            return None
+        if right_info is not None and right_info[0] != "DType.float32":
+            return None
+
+        self.required_math_helpers.add(func_name)
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        if left_info is not None and right_info is None:
+            right = f"Float32({right})"
+        elif left_info is None and right_info is not None:
+            left = f"Float32({left})"
+        return f"{func_name}({left}, {right})"
 
     def generate_texture_call(self, args, helper_name):
         if not args:
@@ -10092,11 +10339,15 @@ class MojoCodeGen:
             return None
 
         func_name = self.function_call_name(expr)
-        if func_name not in MOJO_REINTERPRET_BUILTINS:
+        reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+        if reinterpret_name is None:
             return None
 
         source_type = self.expression_result_type(expr.args[0]) if expr.args else None
-        return func_name, self.reinterpret_return_type_name(func_name, source_type)
+        return (
+            reinterpret_name,
+            self.reinterpret_return_type_name(reinterpret_name, source_type),
+        )
 
     def image_result_expression_info_for_resource(self, resource_expr, helper_name):
         resource_type = self.map_type(self.expression_result_type(resource_expr))
@@ -10785,6 +11036,13 @@ class MojoCodeGen:
         self.required_reinterpret_helpers.add((func_name, arg_type, return_type))
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{func_name}({generated_args})"
+
+    def mojo_reinterpret_builtin_name(self, func_name):
+        if not func_name or self.is_user_defined_function(func_name):
+            return None
+        if func_name in MOJO_REINTERPRET_BUILTINS:
+            return func_name
+        return MOJO_REINTERPRET_ALIAS_MAP.get(func_name)
 
     def reinterpret_argument_type(self, source_type):
         if source_type is None:
@@ -11513,6 +11771,7 @@ class MojoCodeGen:
             and not self.required_matrix_diagonal_helpers
             and not self.required_math_helpers
             and not self.required_fract_helpers
+            and not self.required_mod_helpers
             and not self.required_saturate_helpers
             and not self.required_resource_types
             and not self.required_resource_sample_types
@@ -11703,17 +11962,27 @@ class MojoCodeGen:
         if self.required_ray_helpers:
             code += self.generate_ray_helpers()
 
+        non_matrix_saturate_helpers = {
+            key for key in self.required_saturate_helpers if key[0] != "matrix"
+        }
+        matrix_saturate_helpers = {
+            key for key in self.required_saturate_helpers if key[0] == "matrix"
+        }
+
         if (
             self.required_math_helpers
             or self.required_fract_helpers
-            or self.required_saturate_helpers
+            or self.required_mod_helpers
+            or non_matrix_saturate_helpers
         ):
             code += "# CrossGL math helpers\n"
             for helper_name in sorted(self.required_math_helpers):
                 code += self.generate_math_helper(helper_name)
             for key in sorted(self.required_fract_helpers):
                 code += self.generate_fract_helper(key)
-            for key in sorted(self.required_saturate_helpers):
+            for key in sorted(self.required_mod_helpers):
+                code += self.generate_mod_helper(key)
+            for key in sorted(non_matrix_saturate_helpers):
                 code += self.generate_saturate_helper(key)
             code += "\n"
 
@@ -11721,6 +11990,12 @@ class MojoCodeGen:
             code += "# CrossGL matrix types\n"
             for key in sorted(self.required_matrix_types):
                 code += self.generate_matrix_type(key)
+            code += "\n"
+
+        if matrix_saturate_helpers:
+            code += "# CrossGL matrix math helpers\n"
+            for key in sorted(matrix_saturate_helpers):
+                code += self.generate_saturate_helper(key)
             code += "\n"
 
         if (
@@ -12064,9 +12339,20 @@ class MojoCodeGen:
 
     def generate_reinterpret_helper(self, func_name, arg_type, return_type):
         code = f"fn {func_name}(value: {arg_type}) -> {return_type}:\n"
-        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), \d+\]", return_type)
+        return_match = re.fullmatch(r"SIMD\[(DType\.\w+), (\d+)\]", return_type)
         if arg_type.startswith("SIMD[") and return_match is not None:
-            code += f"    return value.cast[{return_match.group(1)}]()\n\n"
+            code += (
+                f"    return bitcast[{return_match.group(1)}, "
+                f"{return_match.group(2)}](value)\n\n"
+            )
+            return code
+        scalar_dtype = {
+            "Float32": "DType.float32",
+            "Int32": "DType.int32",
+            "UInt32": "DType.uint32",
+        }.get(return_type)
+        if scalar_dtype is not None:
+            code += f"    return bitcast[{scalar_dtype}](value)\n\n"
             return code
         code += f"    return {return_type}(value)\n\n"
         return code
@@ -12350,15 +12636,9 @@ class MojoCodeGen:
                 "    return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))\n\n"
             )
         if helper_name == "max":
-            return (
-                "fn max(a: Float32, b: Float32) -> Float32:\n"
-                "    return a if a >= b else b\n\n"
-            )
+            return self.generate_min_max_helper("max", ">=")
         if helper_name == "min":
-            return (
-                "fn min(a: Float32, b: Float32) -> Float32:\n"
-                "    return a if a <= b else b\n\n"
-            )
+            return self.generate_min_max_helper("min", "<=")
         if helper_name == "dot_product":
             return (
                 "fn dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:\n"
@@ -12413,6 +12693,24 @@ class MojoCodeGen:
                 "fn fmod(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](fmod(a[0], b[0]), fmod(a[1], b[1]), fmod(a[2], b[2]), fmod(a[3], b[3]))\n\n"
             )
+        if helper_name == "round_even":
+            return (
+                "fn round_even(x: Float32) -> Float32:\n"
+                "    var lower = floor(x)\n"
+                "    var fraction = x - lower\n"
+                "    if fraction < 0.5:\n"
+                "        return lower\n"
+                "    if fraction > 0.5:\n"
+                "        return lower + 1.0\n"
+                "    var parity = lower - floor(lower / 2.0) * 2.0\n"
+                "    if parity == 0.0:\n"
+                "        return lower\n"
+                "    return lower + 1.0\n\n"
+                "fn round_even(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](round_even(v[0]), round_even(v[1]))\n\n"
+                "fn round_even(v: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](round_even(v[0]), round_even(v[1]), round_even(v[2]), round_even(v[3]))\n\n"
+            )
         if helper_name == "cross_product":
             return (
                 "fn cross_product(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
@@ -12436,14 +12734,76 @@ class MojoCodeGen:
             return (
                 "fn step(edge: Float32, x: Float32) -> Float32:\n"
                 "    return 0.0 if x < edge else 1.0\n\n"
+                "fn step(edge: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge, x[0]), step(edge, x[1]))\n\n"
+                "fn step(edge: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge[0], x), step(edge[1], x))\n\n"
+                "fn step(edge: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](step(edge[0], x[0]), step(edge[1], x[1]))\n\n"
+                "fn step(edge: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge, x[0]), step(edge, x[1]), step(edge, x[2]), step(edge, x[3]))\n\n"
+                "fn step(edge: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge[0], x), step(edge[1], x), step(edge[2], x), step(edge[3], x))\n\n"
+                "fn step(edge: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](step(edge[0], x[0]), step(edge[1], x[1]), step(edge[2], x[2]), step(edge[3], x[3]))\n\n"
             )
         if helper_name == "smoothstep":
             return (
                 "fn smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:\n"
                 "    var t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)\n"
                 "    return t * t * (3.0 - 2.0 * t)\n\n"
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]))\n\n"
+                "fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]), smoothstep(edge0, edge1, x[2]), smoothstep(edge0, edge1, x[3]))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x), smoothstep(edge0[2], edge1[2], x), smoothstep(edge0[3], edge1[3], x))\n\n"
+                "fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))\n\n"
             )
         return ""
+
+    def generate_min_max_helper(self, helper_name, comparator):
+        selector = f"a if a {comparator} b else b"
+
+        def lane_selector(left, right):
+            return f"{left} if {left} {comparator} {right} else {right}"
+
+        code = (
+            f"fn {helper_name}(a: Float32, b: Float32) -> Float32:\n"
+            f"    return {selector}\n\n"
+        )
+        for width in (2, 4):
+            vector_type = f"SIMD[DType.float32, {width}]"
+            components = ", ".join(
+                lane_selector(f"a[{index}]", f"b[{index}]") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: {vector_type}, b: {vector_type}) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+            components = ", ".join(
+                lane_selector(f"a[{index}]", "b") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: {vector_type}, b: Float32) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+            components = ", ".join(
+                lane_selector("a", f"b[{index}]") for index in range(width)
+            )
+            code += (
+                f"fn {helper_name}(a: Float32, b: {vector_type}) -> "
+                f"{vector_type}:\n"
+                f"    return {vector_type}({components})\n\n"
+            )
+        return code
 
     def generate_fract_helper(self, key):
         kind, dtype, source_width, storage_width = key
@@ -12475,11 +12835,94 @@ class MojoCodeGen:
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
         return f"_crossgl_fract_{dtype_suffix}_{source_width}_{storage_width}"
 
-    def generate_saturate_helper(self, key):
-        dtype, source_width, storage_width = key
-        _, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+    def generate_mod_helper(self, key):
+        dtype, kind, source_width, storage_width = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        mojo_scalar_type = self.map_type(scalar_type)
+        helper_name = self.mod_helper_name(dtype, kind, source_width, storage_width)
+
+        if kind == "ss":
+            return (
+                f"fn {helper_name}(a: {mojo_scalar_type}, "
+                f"b: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                "    return a - floor(a / b) * b\n\n"
+            )
+
         vector_type = f"SIMD[{dtype}, {storage_width}]"
-        components = [f"clamp(v[{index}], 0.0, 1.0)" for index in range(source_width)]
+        if kind == "vv":
+            params = f"a: {vector_type}, b: {vector_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a[{index}], b[{index}])"
+                for index in range(source_width)
+            ]
+        elif kind == "vs":
+            params = f"a: {vector_type}, b: {mojo_scalar_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a[{index}], b)"
+                for index in range(source_width)
+            ]
+        else:
+            params = f"a: {mojo_scalar_type}, b: {vector_type}"
+            components = [
+                f"{self.mod_helper_name(dtype, 'ss', 1, 1)}(a, b[{index}])"
+                for index in range(source_width)
+            ]
+        if storage_width > source_width:
+            components.append(pad_literal)
+
+        return (
+            f"fn {helper_name}({params}) -> {vector_type}:\n"
+            f"    return {vector_type}({', '.join(components)})\n\n"
+        )
+
+    def mod_helper_name(self, dtype, kind, source_width, storage_width):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        if kind == "ss":
+            return f"_crossgl_mod_{dtype_suffix}"
+        return f"_crossgl_mod_{dtype_suffix}_{source_width}_{storage_width}_{kind}"
+
+    def generate_saturate_helper(self, key):
+        kind, dtype, width_or_columns, storage_width_or_rows = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+
+        if kind == "scalar":
+            mojo_scalar_type = self.map_type(scalar_type)
+            helper_name = self.saturate_scalar_helper_name(dtype)
+            value = self.saturate_value_expression("x")
+            return (
+                f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                f"    return {value}\n\n"
+            )
+
+        if kind == "matrix":
+            columns = width_or_columns
+            rows = storage_width_or_rows
+            matrix_type = self.matrix_type_name(dtype, columns, rows)
+            storage_rows = self.matrix_storage_rows(rows)
+            column_type = f"SIMD[{dtype}, {storage_rows}]"
+            pad_literal = self.matrix_zero_literal(dtype)
+            column_args = []
+            for column in range(columns):
+                components = [
+                    self.saturate_value_expression(f"m.c{column}[{row}]")
+                    for row in range(rows)
+                ]
+                if rows == 3:
+                    components.append(pad_literal)
+                column_args.append(f"{column_type}({', '.join(components)})")
+
+            helper_name = self.saturate_matrix_helper_name(dtype, columns, rows)
+            code = f"fn {helper_name}(m: {matrix_type}) -> {matrix_type}:\n"
+            code += f"    return {matrix_type}({', '.join(column_args)})\n\n"
+            return code
+
+        source_width = width_or_columns
+        storage_width = storage_width_or_rows
+        vector_type = f"SIMD[{dtype}, {storage_width}]"
+        components = [
+            self.saturate_value_expression(f"v[{index}]")
+            for index in range(source_width)
+        ]
         if storage_width > source_width:
             components.append(pad_literal)
 
@@ -12490,9 +12933,19 @@ class MojoCodeGen:
         code += f"    return {vector_type}({', '.join(components)})\n\n"
         return code
 
+    def saturate_value_expression(self, value):
+        return f"0.0 if {value} < 0.0 else (1.0 if {value} > 1.0 else {value})"
+
+    def saturate_scalar_helper_name(self, dtype):
+        return f"_crossgl_saturate_{MOJO_DTYPE_SUFFIX[dtype]}"
+
     def saturate_vector_helper_name(self, dtype, source_width, storage_width):
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
         return f"_crossgl_saturate_{dtype_suffix}_{source_width}_{storage_width}"
+
+    def saturate_matrix_helper_name(self, dtype, columns, rows):
+        dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]
+        return f"_crossgl_saturate_{dtype_suffix}_c{columns}_r{rows}"
 
     def generate_vector_binary_helper(self, dtype, op, helper_kind):
         scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
@@ -12974,8 +13427,25 @@ class MojoCodeGen:
         return type_name
 
     def is_array_type_name(self, type_name):
-        type_text = str(type_name or "")
-        return "[" in type_text and type_text.endswith("]")
+        return self.array_type_suffix(type_name) is not None
+
+    def array_type_suffix(self, type_name):
+        type_text = str(type_name or "").strip()
+        if not type_text.endswith("]"):
+            return None
+
+        open_bracket = type_text.rfind("[")
+        if open_bracket <= 0:
+            return None
+
+        size_text = type_text[open_bracket + 1 : -1].strip()
+        if (
+            not size_text
+            or re.fullmatch(r"\d+", size_text)
+            or re.fullmatch(r"[A-Z_][A-Z0-9_]*", size_text)
+        ):
+            return open_bracket, size_text
+        return None
 
     def is_pointer_type_name(self, type_name):
         type_text = str(type_name or "").strip()
@@ -12989,22 +13459,19 @@ class MojoCodeGen:
 
     def parse_array_type_name(self, type_name):
         type_text = str(type_name)
-        if not self.is_array_type_name(type_text) or not type_text.endswith("]"):
+        array_suffix = self.array_type_suffix(type_text)
+        if array_suffix is None:
             return type_text, None
 
-        open_bracket = type_text.rfind("[")
-        if open_bracket == -1:
-            return parse_array_type(type_text)
-
+        open_bracket, size_text = array_suffix
         element_type = type_text[:open_bracket]
-        size_text = type_text[open_bracket + 1 : -1]
         if not size_text:
             return element_type, None
 
         try:
             return element_type, int(size_text)
         except ValueError:
-            return element_type, None
+            return element_type, size_text
 
     def is_struct_type_name(self, type_name):
         if type_name is None:
@@ -13017,12 +13484,14 @@ class MojoCodeGen:
 
     def array_type_name(self, element_type, size):
         element_type_name = self.type_name(element_type)
+        size = self.format_array_size(size)
         if size is None:
             return f"{element_type_name}[]"
         return f"{element_type_name}[{size}]"
 
     def array_storage_type(self, element_type, size):
         element_type_name = self.map_type(element_type)
+        size = self.format_array_size(size)
         if size is None:
             return f"List[{element_type_name}]"
         return f"InlineArray[{element_type_name}, {size}]"
@@ -13311,7 +13780,11 @@ class MojoCodeGen:
                 return vector_func_name
             if func_name in MOJO_MATRIX_TYPES:
                 return func_name
+            if func_name in self.function_return_types:
+                return self.function_return_types[func_name]
             if func_name in {"fract", "frac"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "roundEven" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"inverse", "transpose"} and expr.args:
                 return self.expression_result_type(expr.args[0])
@@ -13319,9 +13792,25 @@ class MojoCodeGen:
                 return "float"
             if func_name == "normalize" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name == "mix" and expr.args:
+            if func_name in {"inversesqrt", "inverseSqrt", "rsqrt"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"mix", "lerp"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"degrees", "radians"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "pow" and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name == "mod" and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"min", "max"} and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "saturate" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
@@ -13366,11 +13855,12 @@ class MojoCodeGen:
                     return info[1]
             if func_name in {"buffer_store", "buffer_append", "buffer_dimensions"}:
                 return "void"
-            if func_name in MOJO_REINTERPRET_BUILTINS:
+            reinterpret_name = self.mojo_reinterpret_builtin_name(func_name)
+            if reinterpret_name is not None:
                 source_type = (
                     self.expression_result_type(expr.args[0]) if expr.args else None
                 )
-                return self.reinterpret_return_type_name(func_name, source_type)
+                return self.reinterpret_return_type_name(reinterpret_name, source_type)
             if func_name in MOJO_GENERIC_TEXTURE_BUILTINS:
                 _, return_kind = MOJO_GENERIC_TEXTURE_BUILTINS[func_name]
                 if return_kind == "float":
@@ -13831,6 +14321,72 @@ class MojoCodeGen:
                 escaped.append(char)
         return "".join(escaped)
 
+    def mojo_identifier(self, name):
+        """Return a Mojo-safe value or field identifier for source names."""
+        name = str(name)
+        if not name.isidentifier():
+            return name
+        if name in self.mojo_reserved_identifiers():
+            return f"{name}_"
+        return name
+
+    def mojo_reserved_identifiers(self):
+        return {
+            "False",
+            "None",
+            "Self",
+            "True",
+            "alias",
+            "and",
+            "as",
+            "async",
+            "await",
+            "borrowed",
+            "break",
+            "case",
+            "class",
+            "constrained",
+            "continue",
+            "def",
+            "elif",
+            "else",
+            "except",
+            "finally",
+            "fn",
+            "for",
+            "from",
+            "global",
+            "if",
+            "import",
+            "in",
+            "inout",
+            "is",
+            "lambda",
+            "let",
+            "match",
+            "mut",
+            "nonlocal",
+            "not",
+            "or",
+            "owned",
+            "pass",
+            "raise",
+            "raises",
+            "ref",
+            "return",
+            "self",
+            "static",
+            "struct",
+            "trait",
+            "try",
+            "type",
+            "var",
+            "where",
+            "while",
+            "with",
+            "yield",
+        }
+
     def map_type(self, vtype):
         """Map a CrossGL type name or type node to a Mojo type string."""
         if vtype is None:
@@ -13894,10 +14450,38 @@ class MojoCodeGen:
         if vtype_str in self.enum_types:
             return vtype_str
 
-        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
+        mapped_type = self.type_mapping.get(vtype_str)
+        if mapped_type is not None:
+            if self.is_mojo_resource_type(mapped_type):
+                self.required_resource_types.add(mapped_type)
+            return mapped_type
+
+        mojo_generic_type = self.mojo_native_generic_mapped_type(vtype_str)
+        if mojo_generic_type is not None:
+            return mojo_generic_type
+
+        mapped_type = vtype_str
         if self.is_mojo_resource_type(mapped_type):
             self.required_resource_types.add(mapped_type)
         return mapped_type
+
+    def mojo_native_generic_mapped_type(self, type_name):
+        generic = self.parse_generic_type_name(type_name)
+        if generic is None:
+            return None
+
+        base_type, generic_args = generic
+        mapped_args = ", ".join(
+            self.mojo_native_generic_argument(arg) for arg in generic_args
+        )
+        return f"{self.type_mapping.get(base_type, base_type)}[{mapped_args}]"
+
+    def mojo_native_generic_argument(self, arg):
+        arg = str(arg).strip()
+        nested_generic = self.mojo_native_generic_mapped_type(arg)
+        if nested_generic is not None:
+            return nested_generic
+        return self.type_mapping.get(arg, arg)
 
     def is_resource_type_name(self, type_name):
         if self.is_array_type_name(type_name):

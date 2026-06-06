@@ -32,6 +32,14 @@ BACKENDS = {
     "hip": ".hip",
     "slang": ".slang",
 }
+FORBIDDEN_OUTPUT_MARKERS = (
+    "AssignmentNode(",
+    "BinaryOpNode(",
+    "FunctionNode(",
+    "IdentifierNode(",
+    "MemberAccessNode(",
+    "VariableNode(",
+)
 BACKEND_COMPATIBILITY = {
     "graphics": [
         "metal",
@@ -109,6 +117,14 @@ def parse_args(argv=None):
         type=Path,
         help="Optional path for a machine-readable test summary JSON file.",
     )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        help=(
+            "Optional output directory for generated shader files. Defaults to "
+            "examples/output."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -164,7 +180,21 @@ def write_summary_json(summary, path):
 
 
 def display_path(path):
-    return path.relative_to(EXAMPLES_ROOT).as_posix()
+    try:
+        return path.relative_to(EXAMPLES_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def validate_generated_output(output_file):
+    if not output_file.exists() or output_file.stat().st_size <= 100:
+        return "Output file too small"
+
+    output_text = output_file.read_text(encoding="utf-8", errors="replace")
+    for marker in FORBIDDEN_OUTPUT_MARKERS:
+        if marker in output_text:
+            return f"Output contains internal AST representation: {marker}"
+    return None
 
 
 def main(argv=None):
@@ -174,7 +204,7 @@ def main(argv=None):
     print("[CROSSGL] CrossGL Comprehensive Translation Test")
     print("=" * 60)
 
-    output_root = EXAMPLES_ROOT / "output"
+    output_root = args.output_root or EXAMPLES_ROOT / "output"
     for backend in BACKENDS:
         (output_root / backend).mkdir(parents=True, exist_ok=True)
 
@@ -228,14 +258,13 @@ def main(argv=None):
                         save_shader=str(output_file),
                     )
 
-                    if output_file.exists() and output_file.stat().st_size > 100:
+                    validation_error = validate_generated_output(output_file)
+                    if validation_error is None:
                         print(f"  [SUCCESS] {backend:8} -> {display_path(output_file)}")
                         successful_tests += 1
                     else:
-                        print(f"  [WARNING] {backend:8} -> Output too small or missing")
-                        failed_tests.append(
-                            (example_name, backend, "Output file too small")
-                        )
+                        print(f"  [WARNING] {backend:8} -> {validation_error}")
+                        failed_tests.append((example_name, backend, validation_error))
 
                 except Exception as e:
                     print(f"  [ERROR] {backend:8} -> Error: {str(e)[:50]}...")

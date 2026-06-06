@@ -221,6 +221,57 @@ def test_compute_stage_validates_builtin_parameter_types():
     assert "gid @ gl_GlobalInvocationID" not in generated
 
 
+def test_glsl_hlsl_compute_builtin_parameter_aliases_to_glsl_builtins():
+    code = """
+    shader HLSLComputeBuiltinAliases {
+        compute {
+            void main(
+                uvec3 tid @ SV_DispatchThreadID,
+                uvec3 gid @ SV_GroupID,
+                uvec3 lid @ SV_GroupThreadID,
+                uint groupIndex @ SV_GroupIndex
+            ) {
+                uint value = tid.x + gid.y + lid.z + groupIndex;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "void main()" in generated
+    assert (
+        "uint value = (((gl_GlobalInvocationID.x + gl_WorkGroupID.y) + "
+        "gl_LocalInvocationID.z) + gl_LocalInvocationIndex);"
+    ) in generated
+    assert re.search(r"\btid\b", generated) is None
+    assert re.search(r"\bgid\b", generated) is None
+    assert re.search(r"\blid\b", generated) is None
+    assert re.search(r"\bgroupIndex\b", generated) is None
+    assert "SV_DispatchThreadID" not in generated
+
+
+def test_glsl_hlsl_graphics_builtin_parameter_aliases_to_glsl_builtins():
+    code = """
+    shader HLSLGraphicsBuiltinAliases {
+        vertex {
+            void main(int vertexId @ SV_VertexID, int instanceId @ SV_InstanceID) {
+                gl_Position = vec4(float(vertexId + instanceId));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "void main()" in generated
+    assert "in int vertexId;" not in generated
+    assert "in int instanceId;" not in generated
+    assert "float((gl_VertexID + gl_InstanceID))" in generated
+    assert "SV_VertexID" not in generated
+    assert "SV_InstanceID" not in generated
+
+
 def test_readonly_structured_buffer_uses_readonly_ssbo():
     code = """
     shader StructuredBufferGLSL {
@@ -2395,6 +2446,31 @@ def test_glsl_stage_interface_interpolation_precision_qualifiers():
         "layout(location = 0) invariant precise noperspective sample "
         "out mediump vec4 fragColor;" in generated_code
     )
+
+
+def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():
+    # Reduced from KhronosGroup/glslang Test/spv.nonuniform.frag, where
+    # fragment-stage integer varyings are declared with flat interpolation.
+    code = """
+    shader FragmentIntegerInput {
+        in int primitiveId @location(1);
+        out vec4 fragColor @location(0);
+
+        fragment {
+            void main() {
+                fragColor = vec4(float(primitiveId));
+            }
+        }
+    }
+    """
+
+    combined_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 1) flat in int primitiveId;" in combined_code
+    assert "layout(location = 1) flat in int primitiveId;" in fragment_code
 
 
 def test_glsl_stage_interface_extended_layout_qualifiers():
@@ -5318,6 +5394,32 @@ def test_glsl_global_uniforms_do_not_consume_resource_bindings():
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
 
 
+def test_glsl_reserved_global_uniform_names_are_aliased():
+    code = """
+    shader ReservedGlobalUniform {
+        uniform float input;
+        uniform float input_;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                float value = input + input_;
+                return vec4(value, input, input_, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "uniform float input_2;" in generated_code
+    assert "uniform float input_;" in generated_code
+    assert "uniform float input;" not in generated_code
+    assert "float value = (input_2 + input_);" in generated_code
+    assert "fragColor = vec4(value, input_2, input_, 1.0);" in generated_code
+
+
 def test_glsl_cbuffer_binding_attributes_drive_layout_bindings():
     code = """
     shader CBufferBindings {
@@ -5406,6 +5508,76 @@ def test_glsl_hlsl_matrix_aliases_map_to_glsl_names():
     assert "return (input * m);" in generated_code
     assert "float3x3" not in generated_code
     assert "float3x2" not in generated_code
+
+
+def test_glsl_hlsl_mul_alias_emits_binary_matrix_multiply():
+    # Khronos GLSL 4.60 section 5.9 defines matrix/vector/matrix
+    # multiplication through the binary * operator, not a mul() built-in.
+    shader = """
+    shader MatrixMulAlias {
+        vec4 transformColumn(mat4 viewProj, vec4 position) {
+            return mul(viewProj, position);
+        }
+
+        vec4 transformRow(vec4 position, mat4 viewProj) {
+            return mul(position, viewProj);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return (viewProj * position);" in generated_code
+    assert "return (position * viewProj);" in generated_code
+    assert "*(viewProj, position)" not in generated_code
+    assert "*(position, viewProj)" not in generated_code
+    assert "mul(" not in generated_code
+
+
+def test_glsl_hlsl_mad_alias_emits_multiply_add_expression():
+    # Khronos GLSL 4.60 documents fma(x, y, z) as returning x * y + z;
+    # shader ports commonly spell the non-fused source form as mad(x, y, z).
+    shader = """
+    shader MadAlias {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec3 albedo;
+                vec3 lighting;
+                vec3 ambient;
+                vec3 color = mad(albedo, lighting, ambient);
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 color = ((albedo * lighting) + ambient);" in generated_code
+    assert "mad(" not in generated_code
+
+
+def test_glsl_user_defined_mad_function_is_preserved():
+    shader = """
+    shader UserMad {
+        vec3 mad(vec3 value, vec3 scale, vec3 bias) {
+            return bias + value * scale;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 mad(vec3 value, vec3 scale, vec3 bias)" in generated_code
+    assert "vec3 color = mad(vec3(0.25), vec3(2.0), vec3(0.5));" in generated_code
+    assert "((vec3(0.25) * vec3(2.0)) + vec3(0.5))" not in generated_code
 
 
 def test_glsl_hlsl_double_aliases_map_to_glsl_names():
@@ -12666,6 +12838,63 @@ def test_opengl_texture_array_resources_and_indexed_sampling():
     assert "layout(binding = 4) uniform samplerCube envMap;" in generated_code
     assert "texture(textures[layer], uv)" in generated_code
     assert "texture(envMap, normal)" in generated_code
+
+
+def test_glsl_separate_texture_sampler_arrays_preserve_nonuniform_indexing():
+    shader = """
+    shader SeparateTextureSamplerNonuniform {
+        texture2d textures[8] @binding(0);
+        sampler samplers[8] @binding(1);
+
+        struct VSOutput {
+            vec2 uv;
+            uint materialIndex;
+        };
+
+        vec4 sampleMaterial(
+            texture2d textures[8],
+            sampler samplers[8],
+            uint materialIndex,
+            vec2 uv
+        ) {
+            return texture(
+                textures[nonuniformEXT(materialIndex)],
+                samplers[nonuniformEXT(materialIndex)],
+                uv
+            );
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return sampleMaterial(
+                    textures,
+                    samplers,
+                    input.materialIndex,
+                    input.uv
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "#extension GL_EXT_nonuniform_qualifier : require" in generated_code
+    assert "layout(binding = 0) uniform texture2D textures[8];" in generated_code
+    assert "layout(binding = 1) uniform sampler samplers[8];" in generated_code
+    assert (
+        "vec4 sampleMaterial(texture2D textures[8], sampler samplers[8], "
+        "uint materialIndex, vec2 uv)"
+    ) in generated_code
+    assert (
+        "texture(sampler2D(textures[nonuniformEXT(materialIndex)], "
+        "samplers[nonuniformEXT(materialIndex)]), uv)"
+    ) in generated_code
+    assert "in vec2 uv;" in generated_code
+    assert "flat in uint materialIndex;" in generated_code
+    assert "sampleMaterial(textures, samplers, materialIndex, uv)" in generated_code
+    assert "texture(textures[nonuniformEXT(materialIndex)], uv)" not in generated_code
+    assert "samplers[nonuniformEXT(materialIndex)]" in generated_code
 
 
 def test_opengl_fixed_texture_array_keeps_declared_size_with_constant_indices():
@@ -23331,6 +23560,265 @@ def test_opengl_hlsl_texture_aliases_map_to_glsl_names():
     assert "textureGrad(colorMap, uv, vec2(0.1), vec2(0.2))" in generated_code
     assert "tex2Dlod(" not in generated_code
     assert "tex2Dgrad(" not in generated_code
+
+
+def test_opengl_hlsl_saturate_alias_emits_three_argument_clamp():
+    # Microsoft HLSL saturate clamps to [0, 1]:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-saturate
+    # Khronos GLSL 4.60 section 8.3 defines clamp(x, minVal, maxVal)
+    # as min(max(x, minVal), maxVal):
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#common-functions
+    shader = """
+    shader SaturateAlias {
+        struct FSInput {
+            float weight @ TEXCOORD0;
+            vec3 color @ COLOR0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float alpha = saturate(input.weight);
+                vec3 rgb = saturate(input.color);
+                return vec4(rgb, alpha);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float alpha = clamp(weight, 0.0, 1.0);" in generated_code
+    assert "vec3 rgb = clamp(color, 0.0, 1.0);" in generated_code
+    assert "saturate(" not in generated_code
+    assert "clamp(weight)" not in generated_code
+    assert "clamp(color)" not in generated_code
+
+
+def test_opengl_hlsl_saturate_alias_renames_local_clamp_shadow():
+    shader = """
+    shader SaturateAliasLocalClampShadow {
+        fragment {
+            vec4 main(float weight @ TEXCOORD0) @ gl_FragColor {
+                float clamp = weight;
+                float alpha = saturate(weight);
+                return vec4(alpha + clamp);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float clamp_ = weight;" in generated_code
+    assert "float alpha = clamp(weight, 0.0, 1.0);" in generated_code
+    assert "vec4((alpha + clamp_))" in generated_code
+    assert "float clamp = weight;" not in generated_code
+    assert "saturate(" not in generated_code
+
+
+def test_opengl_user_defined_saturate_function_is_preserved():
+    shader = """
+    shader UserSaturate {
+        float saturate(float value) {
+            return value * 2.0;
+        }
+
+        fragment {
+            vec4 main(float value @ TEXCOORD0) @ gl_FragColor {
+                float adjusted = saturate(value);
+                return vec4(adjusted);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float saturate(float value)" in generated_code
+    assert "float adjusted = saturate(value);" in generated_code
+    assert "clamp(" not in generated_code
+
+
+def test_opengl_hlsl_lerp_alias_renames_local_mix_shadow():
+    shader = """
+    shader LerpAliasLocalMixShadow {
+        fragment {
+            vec4 main(float weight @ TEXCOORD0) @ gl_FragColor {
+                vec3 cool = vec3(0.1, 0.2, 0.8);
+                vec3 warm = vec3(1.0, 0.4, 0.1);
+                float mix = weight;
+                vec3 color = lerp(cool, warm, weight);
+                return vec4(color + vec3(mix), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float mix_ = weight;" in generated_code
+    assert "vec3 color = mix(cool, warm, weight);" in generated_code
+    assert "vec3(mix_)" in generated_code
+    assert "float mix = weight;" not in generated_code
+
+
+def test_opengl_hlsl_aliases_rename_parameter_target_shadows():
+    shader = """
+    shader AliasParameterTargetShadow {
+        vec3 shade(vec3 cool, vec3 warm, float mix, float clamp) {
+            vec3 color = lerp(cool, warm, mix);
+            float alpha = saturate(clamp);
+            return color * alpha;
+        }
+
+        fragment {
+            vec4 main(float weight @ TEXCOORD0) @ gl_FragColor {
+                vec3 color = shade(vec3(0.1), vec3(0.9), weight, weight);
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "vec3 shade(vec3 cool, vec3 warm, float mix_, float clamp_)" in generated_code
+    )
+    assert "vec3 color = mix(cool, warm, mix_);" in generated_code
+    assert "float alpha = clamp(clamp_, 0.0, 1.0);" in generated_code
+    assert "return (color * alpha);" in generated_code
+    assert "float mix, float clamp" not in generated_code
+    assert "lerp(" not in generated_code
+    assert "saturate(" not in generated_code
+
+
+def test_opengl_hlsl_rcp_alias_emits_reciprocal_expression():
+    # Microsoft HLSL rcp computes a per-component reciprocal:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/rcp
+    # Khronos GLSL 4.60 defines division for scalar/vector floating-point
+    # operands:
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#operators
+    shader = """
+    shader RcpAlias {
+        fragment {
+            vec4 main(vec3 value, float scalar) @ gl_FragColor {
+                vec3 invValue = rcp(value);
+                float invScalar = rcp(scalar);
+                return vec4(invValue, invScalar);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "vec3 invValue = (1.0 / value);" in generated_code
+    assert "float invScalar = (1.0 / scalar);" in generated_code
+    assert "rcp(" not in generated_code
+
+
+def test_opengl_user_defined_rcp_function_is_preserved():
+    shader = """
+    shader UserRcp {
+        float rcp(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            vec4 main(float value) @ gl_FragColor {
+                float adjusted = rcp(value);
+                return vec4(adjusted);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float rcp(float value)" in generated_code
+    assert "float adjusted = rcp(value);" in generated_code
+    assert "1.0 / value" not in generated_code
+
+
+def test_opengl_hlsl_clip_alias_emits_discard_guards():
+    # Microsoft HLSL clip discards the current pixel if any component is
+    # less than zero:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-clip
+    # Khronos GLSL 4.60 uses the parameterless discard statement in fragment
+    # shaders:
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#jumps
+    shader = """
+    shader ClipAlias {
+        struct FSInput {
+            float alpha @ TEXCOORD0;
+            vec3 distances @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                clip(input.alpha - 0.5);
+                clip(input.distances);
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "if ((alpha - 0.5) < 0.0) {\n        discard;\n    }" in generated_code
+    assert (
+        "if (any(lessThan(distances, vec3(0.0)))) {\n" "        discard;\n" "    }"
+    ) in generated_code
+    assert "discard(" not in generated_code
+    assert "clip(" not in generated_code
+
+
+def test_opengl_user_defined_clip_function_is_preserved():
+    shader = """
+    shader UserClip {
+        float clip(float value) {
+            return value * 2.0;
+        }
+
+        struct FSInput {
+            float alpha @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                float adjusted = clip(input.alpha);
+                return vec4(adjusted);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float clip(float value)" in generated_code
+    assert "float adjusted = clip(alpha);" in generated_code
+    assert "discard" not in generated_code
+
+
+def test_opengl_clip_alias_is_rejected_outside_fragment_stage():
+    shader = """
+    shader VertexClip {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                clip(position.x);
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="OpenGL clip alias lowers to discard and is only valid in fragment",
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_opengl_explicit_sampler_argument_is_dropped():

@@ -508,6 +508,159 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
+    shaderlab = textwrap.dedent("""
+        Shader "Custom/LegacyTex2D"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    CGPROGRAM
+                    sampler2D _MainTex;
+
+                    struct v2f {
+                        float4 position : SV_POSITION;
+                        float2 uv : TEXCOORD0;
+                    };
+
+                    float4 frag(v2f i) : SV_Target
+                    {
+                        return tex2D(_MainTex, i.uv);
+                    }
+                    ENDCG
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert "sampler2D _MainTex;" in crossgl
+    assert "return texture(_MainTex, i.uv);" in crossgl
+    assert "tex2D(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D _MainTex" in hlsl
+    assert "SamplerState _MainTexSampler" in hlsl
+    assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
+
+
+def test_codegen_shaderlab_fixed_precision_aliases_reparse_and_regenerate_hlsl():
+    shaderlab = textwrap.dedent("""
+        Shader "Custom/FixedPrecisionAliases"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    CGPROGRAM
+                    sampler2D_half _MainTex;
+                    sampler2D_float _DetailTex;
+
+                    struct v2f {
+                        fixed2 uv : TEXCOORD0;
+                        fixed3 tint : COLOR0;
+                    };
+
+                    fixed4 frag(v2f i) : SV_Target
+                    {
+                        fixed alpha = 1.0;
+                        fixed2 uv = i.uv;
+                        fixed3 tint = i.tint;
+                        fixed4 baseColor = tex2D(_MainTex, uv);
+                        fixed4 detailColor = tex2D(_DetailTex, uv);
+                        return fixed4((baseColor.rgb * tint) + detailColor.rgb, alpha);
+                    }
+                    ENDCG
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert "sampler2D _MainTex;" in crossgl
+    assert "sampler2D _DetailTex;" in crossgl
+    assert "float alpha = 1.0;" in crossgl
+    assert "vec2 uv = i.uv;" in crossgl
+    assert "vec3 tint = i.tint;" in crossgl
+    assert "vec4 baseColor = texture(_MainTex, uv);" in crossgl
+    assert "vec4 detailColor = texture(_DetailTex, uv);" in crossgl
+    assert "return vec4((baseColor.rgb * tint) + detailColor.rgb, alpha);" in crossgl
+    assert "fixed" not in crossgl
+    assert "sampler2D_half" not in crossgl
+    assert "sampler2D_float" not in crossgl
+    assert "tex2D(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D _MainTex" in hlsl
+    assert "Texture2D _DetailTex" in hlsl
+    assert "SamplerState _MainTexSampler" in hlsl
+    assert "SamplerState _DetailTexSampler" in hlsl
+    assert "float4 frag" in hlsl
+    assert "_MainTex.Sample(_MainTexSampler, uv)" in hlsl
+    assert "_DetailTex.Sample(_DetailTexSampler, uv)" in hlsl
+    assert "fixed" not in hlsl
+    assert "sampler2D_half" not in hlsl
+    assert "sampler2D_float" not in hlsl
+    assert "tex2D(" not in hlsl
+
+
+def test_codegen_shaderlab_legacy_tex2d_lod_bias_grad_imports_canonical_calls():
+    shaderlab = textwrap.dedent("""
+        Shader "Custom/LegacyTex2DVariants"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    CGPROGRAM
+                    sampler2D _MainTex;
+
+                    struct v2f {
+                        float4 position : SV_POSITION;
+                        float2 uv : TEXCOORD0;
+                    };
+
+                    float4 frag(v2f i) : SV_Target
+                    {
+                        float4 lodColor = tex2Dlod(_MainTex, float4(i.uv, 0.0, 2.0));
+                        float4 biasColor = tex2Dbias(_MainTex, float4(i.uv.x, i.uv.y, 0.0, 0.5));
+                        float4 gradColor = tex2Dgrad(_MainTex, i.uv, float2(1.0, 0.0), float2(0.0, 1.0));
+                        return lodColor + biasColor + gradColor;
+                    }
+                    ENDCG
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert "vec4 lodColor = textureLod(_MainTex, i.uv, 2.0);" in crossgl
+    assert "vec4 biasColor = texture(_MainTex, vec2(i.uv.x, i.uv.y), 0.5);" in crossgl
+    assert (
+        "vec4 gradColor = textureGrad(_MainTex, i.uv, vec2(1.0, 0.0), "
+        "vec2(0.0, 1.0));" in crossgl
+    )
+    assert "tex2Dlod(" not in crossgl
+    assert "tex2Dbias(" not in crossgl
+    assert "tex2Dgrad(" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+
+    assert "_MainTex.SampleLevel(_MainTexSampler, i.uv, 2.0)" in hlsl
+    assert "_MainTex.SampleBias(_MainTexSampler, float2(i.uv.x, i.uv.y), 0.5)" in hlsl
+    assert (
+        "_MainTex.SampleGrad(_MainTexSampler, i.uv, float2(1.0, 0.0), "
+        "float2(0.0, 1.0))" in hlsl
+    )
+
+
 def test_codegen_pragma_once_from_directx_fallback_samples():
     hlsl = textwrap.dedent("""
         #pragma once
@@ -527,6 +680,30 @@ def test_codegen_pragma_once_from_directx_fallback_samples():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_skips_struct_forward_declarations_from_dxc_tests():
+    # Sources:
+    # microsoft/DirectXShaderCompiler tools/clang/test/SemaHLSL/sizeof-requires-complete-type.hlsl
+    # microsoft/DirectXShaderCompiler tools/clang/test/CodeGenDXIL/templates/incomplete-target-in-CanConvert.hlsl
+    crossgl = generate_crossgl("""
+        struct Payload;
+        template<typename T> struct Wrapper;
+
+        struct Payload {
+            float value;
+        };
+
+        float get(Wrapper<float> o);
+        float readPayload(Payload payload) {
+            return payload.value;
+        }
+    """)
+
+    assert crossgl.count("struct Payload") == 1
+    assert "struct Wrapper" not in crossgl
+    assert "struct Payload {\n        float value;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     crossgl = generate_crossgl("""
         struct PSInput {
@@ -544,6 +721,80 @@ def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     assert "uint id @ TexCoord1 @ flat;" in crossgl
     assert "vec4 color @ Color0 @ sample;" in crossgl
     assert "vec4 color @ Color0 @ noperspective" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_canonicalizes_high_texcoord_interpolation_metadata():
+    crossgl = generate_crossgl("""
+        struct PSInput {
+            linear float2 uv8 : TEXCOORD8;
+            centroid linear float2 uv12 : TEXCOORD12;
+            sample linear float4 color10 : TEXCOORD10;
+            nointerpolation uint id11 : TEXCOORD11;
+        };
+
+        float4 PSMain(linear float2 uv9 : TEXCOORD9) : SV_Target0 {
+            return float4(uv9, 0.0, 1.0);
+        }
+    """)
+
+    assert "vec2 uv8 @ TexCoord8 @ smooth;" in crossgl
+    assert "vec2 uv12 @ TexCoord12 @ smooth @ centroid;" in crossgl
+    assert "vec4 color10 @ TexCoord10 @ smooth @ sample;" in crossgl
+    assert "uint id11 @ TexCoord11 @ flat;" in crossgl
+    assert "vec2 uv9 @ TexCoord9 @ smooth" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_canonicalizes_high_color_interpolation_metadata():
+    crossgl = generate_crossgl("""
+        struct PSInput {
+            sample float4 debugAlbedo : COLOR8;
+            nointerpolation uint materialId : COLOR11;
+        };
+
+        float4 PSMain(linear float4 packedColor : COLOR9) : SV_Target0 {
+            return packedColor;
+        }
+    """)
+
+    assert "vec4 debugAlbedo @ Color8 @ sample;" in crossgl
+    assert "uint materialId @ Color11 @ flat;" in crossgl
+    assert "vec4 packedColor @ Color9 @ smooth" in crossgl
+    assert "@ COLOR8" not in crossgl
+    assert "@ COLOR9" not in crossgl
+    assert "@ COLOR11" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_canonicalizes_high_index_vertex_stream_semantics():
+    crossgl = generate_crossgl("""
+        struct VertexInput {
+            float3 normal : NORMAL8;
+            float4 tangent : TANGENT9;
+            float3 binormal : BINORMAL10;
+            uint4 blendIndices : BLENDINDICES11;
+            float4 blendWeight : BLENDWEIGHT12;
+        };
+
+        [shader("vertex")]
+        float4 VSMain(VertexInput input, float4 fallbackWeight : BLENDWEIGHT13) : SV_Position {
+            return float4(input.normal, 1.0) + fallbackWeight;
+        }
+    """)
+
+    assert "vec3 normal @ Normal8;" in crossgl
+    assert "vec4 tangent @ Tangent9;" in crossgl
+    assert "vec3 binormal @ Binormal10;" in crossgl
+    assert "uvec4 blendIndices @ BlendIndices11;" in crossgl
+    assert "vec4 blendWeight @ BlendWeight12;" in crossgl
+    assert "vec4 fallbackWeight @ BlendWeight13" in crossgl
+    assert "@ NORMAL8" not in crossgl
+    assert "@ TANGENT9" not in crossgl
+    assert "@ BINORMAL10" not in crossgl
+    assert "@ BLENDINDICES11" not in crossgl
+    assert "@ BLENDWEIGHT12" not in crossgl
+    assert "@ BLENDWEIGHT13" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -635,6 +886,46 @@ def test_codegen_mul_intrinsic_imports_to_multiply_expression():
     parse_crossgl(crossgl)
 
 
+def test_codegen_mad_intrinsic_from_microsoft_docs_imports_to_arithmetic_expression():
+    # Source: Microsoft Learn HLSL mad intrinsic docs.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/mad
+    crossgl = generate_crossgl("""
+        float4 main(float4 base : TEXCOORD0, float4 scale : TEXCOORD1, float4 bias : TEXCOORD2) : SV_Target0 {
+            float4 adjusted = mad(base + 1.0, scale, bias);
+            return adjusted;
+        }
+    """)
+
+    assert "vec4 adjusted = (((base + 1.0) * scale) + bias);" in crossgl
+    assert "mad(" not in crossgl
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "mad(" not in glsl
+    assert "((base + 1.0) * scale) + bias" in glsl
+
+
+def test_codegen_dst_intrinsic_from_microsoft_docs_imports_to_distance_vector_expression():
+    # Sources: Microsoft Learn HLSL dst intrinsic and vertex-shader dst instruction.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dst
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dst---vs
+    crossgl = generate_crossgl("""
+        float4 main(float4 src0 : TEXCOORD0, float4 src1 : TEXCOORD1) : SV_Target0 {
+            float4 distanceVector = dst(src0, src1);
+            return distanceVector;
+        }
+    """)
+
+    assert (
+        "vec4 distanceVector = vec4(1.0, src0.y * src1.y, src0.z, src1.w);" in crossgl
+    )
+    assert "dst(" not in crossgl
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "dst(" not in glsl
+    assert "vec4 distanceVector = vec4(1.0, (src0.y * src1.y), src0.z, src1.w);" in glsl
+
+
 def test_codegen_bit_scan_intrinsics_from_microsoft_docs_reparse():
     # Source: Microsoft Learn HLSL intrinsic functions and firstbitlow docs.
     # URLs:
@@ -690,6 +981,24 @@ def test_codegen_derivative_intrinsics_from_microsoft_docs_reparse():
     parse_crossgl(crossgl)
 
 
+def test_codegen_sincos_intrinsic_from_microsoft_docs_reparse():
+    # Source: Microsoft Learn HLSL sincos intrinsic.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-sincos
+    crossgl = generate_crossgl("""
+        float2 main(float angle : TEXCOORD0) : SV_Target0 {
+            float s;
+            float c;
+            sincos(angle, s, c);
+            return float2(s, c);
+        }
+    """)
+
+    assert "s = sin(angle);" in crossgl
+    assert "c = cos(angle);" in crossgl
+    assert "sincos(" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_bitcast_intrinsics_from_microsoft_docs_reparse():
     # Source: Microsoft Learn asfloat/asint/asuint docs.
     # URLs:
@@ -713,6 +1022,30 @@ def test_codegen_bitcast_intrinsics_from_microsoft_docs_reparse():
     assert "asfloat" not in crossgl
     assert "asint" not in crossgl
     assert "asuint" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_bitcast_intrinsics_infer_resource_load_value_types():
+    # Sources: Microsoft Learn asfloat and ByteAddressBuffer::Load docs.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-asfloat
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/sm5-object-byteaddressbuffer-load
+    crossgl = generate_crossgl("""
+        StructuredBuffer<uint4> packedVectors : register(t0);
+        ByteAddressBuffer rawData : register(t1);
+
+        float4 main(uint index : TEXCOORD0, uint offset : TEXCOORD1) : SV_Target0 {
+            float3 vectorValue = asfloat(packedVectors[index].xyz);
+            float scalarValue = asfloat(rawData.Load(offset));
+            return float4(vectorValue, scalarValue);
+        }
+    """)
+
+    assert "vec3 vectorValue = uintBitsToFloat(packedVectors[index].xyz);" in crossgl
+    assert (
+        "float scalarValue = uintBitsToFloat(buffer_load(rawData, offset));" in crossgl
+    )
+    assert "asfloat" not in crossgl
     parse_crossgl(crossgl)
 
 
@@ -997,6 +1330,26 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     assert "matrix<" not in output
 
     parse_crossgl(output)
+
+
+def test_codegen_signedness_prefixed_int1_aliases_from_microsoft_docs_reparse():
+    # Sources: Microsoft Learn HLSL vector and scalar type docs.
+    # URLs:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    crossgl = generate_crossgl("""
+        uint4 main() : SV_Target0 {
+            unsigned int1 unsignedOne = 1;
+            signed int1 signedOne = -1;
+            return uint4(unsignedOne, uint(signedOne), 0, 1);
+        }
+    """)
+
+    assert "uint unsignedOne = 1;" in crossgl
+    assert "int signedOne = -1;" in crossgl
+    assert "unsigned int1" not in crossgl
+    assert "signed int1" not in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_struct_template_methods_semantic_case_from_dxc_spirv():
@@ -1499,6 +1852,31 @@ def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_block_scope_class_declarations_from_dxc_spec_reparse():
+    # Source: https://github.com/microsoft/DirectXShaderCompiler
+    # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # Path: tools/clang/test/SemaHLSL/spec.hlsl
+    hlsl = textwrap.dedent("""
+        namespace ns_general {
+          void subobjects() {
+            class Class { uint field; };
+            class SuperClass { Class C; uint field; };
+
+            Class C = { 0 };
+            SuperClass SC = { 0, 0 };
+          }
+        }
+    """)
+
+    output = generate_crossgl(hlsl)
+
+    assert "class Class;" not in output
+    assert "class SuperClass;" not in output
+    assert "Class C = {0};" in output
+    assert "SuperClass SC = {0, 0};" in output
+    parse_crossgl(output)
+
+
 def test_codegen_anonymous_struct_array_typedef_from_dxc_codegen_debug_tests():
     hlsl = textwrap.dedent("""
         typedef struct { int a[4]; float2 b[2]; } type[3];
@@ -1642,6 +2020,71 @@ def test_codegen_cbuffer_member_layout_metadata_passthrough():
     assert roughness_offset.member == "x"
 
 
+def test_codegen_cbuffer_name_matching_struct_is_renamed_for_crossgl():
+    # Source: microsoft/DirectX-Graphics-Samples
+    # Libraries/D3D12RaytracingFallback/src/GpuBvh2CopyBindings.h
+    hlsl = textwrap.dedent("""
+        struct DispatchWidthConstant
+        {
+            uint DispatchWidth;
+        };
+
+        cbuffer DispatchWidthConstant : register(b0)
+        {
+            DispatchWidthConstant Constants;
+        };
+
+        float main() : SV_Target0
+        {
+            return Constants.DispatchWidth;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "struct DispatchWidthConstant" in output
+    assert "@ register(b0)" in output
+    assert "cbuffer DispatchWidthConstant_1" in output
+    assert "DispatchWidthConstant Constants;" in output
+    parse_crossgl(output)
+
+
+def test_codegen_duplicate_cbuffer_names_are_renamed_for_crossgl():
+    # Source: microsoft/DirectX-Graphics-Samples
+    # Libraries/D3D12RaytracingFallback/src/FallbackLayerUnitTests/ReadRootConstants.hlsl
+    hlsl = textwrap.dedent("""
+        cbuffer Constants : register(b0)
+        {
+            float4 color0;
+        }
+
+        cbuffer Constants : register(b1)
+        {
+            float4 color1;
+        }
+
+        cbuffer Constants : register(b2)
+        {
+            float4 color2;
+        }
+
+        float4 main() : SV_Target0
+        {
+            return color0 + color1 + color2;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "cbuffer Constants {" in output
+    assert "cbuffer Constants_1 {" in output
+    assert "cbuffer Constants_2 {" in output
+    assert "@ register(b0)" in output
+    assert "@ register(b1)" in output
+    assert "@ register(b2)" in output
+    parse_crossgl(output)
+
+
 def test_codegen_hlsl_tbuffer_roundtrips_with_texture_register():
     hlsl = textwrap.dedent("""
         tbuffer LookupData : register(t3, space2) {
@@ -1697,6 +2140,46 @@ def test_codegen_object_style_constant_and_texture_buffers_roundtrip():
         in regenerated_hlsl
     )
     assert "return (frame.tint + lookup.tint);" in regenerated_hlsl
+
+
+def test_codegen_resource_binding_aliases_from_microsoft_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3d12/resource-binding-in-hlsl
+    hlsl = textwrap.dedent("""
+        Texture2D terrain[] : register(t8);
+        Sampler samp : register(s0);
+
+        struct Data
+        {
+            UINT index;
+            float4 color;
+        };
+
+        struct Stuff
+        {
+            float2 factor;
+            UINT drawID;
+        };
+
+        ConstantBuffer<Data> myData : register(b0);
+        ConstantBuffer<Stuff> myStuff[][3][8] : register(b2, space3);
+
+        float4 main(uint idx : TEXCOORD0, float2 uv : TEXCOORD1) : SV_Target0
+        {
+            return terrain[idx].Sample(samp, uv) + myData.color;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "sampler samp;" in output
+    assert "uint index;" in output
+    assert "uint drawID;" in output
+    assert "ConstantBuffer<Stuff> myStuff[][3][8];" in output
+    assert "Sampler samp" not in output
+    assert "UINT index" not in output
+    assert "UINT drawID" not in output
+
+    parse_crossgl(output)
 
 
 def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
@@ -1966,6 +2449,31 @@ def test_codegen_preserves_uav_coherency_and_register_space():
         "globallycoherent RWStructuredBuffer<int> values : register(u6, space2);"
         in regenerated_hlsl
     )
+
+
+def test_codegen_preserves_globallycoherent_uav_parameter_from_hlsl_specs():
+    # Source: Microsoft HLSL Specifications proposal 0021, vk cooperative matrix.
+    # It declares CoherentStore(globallycoherent RWStructuredBuffer<Type> data, ...).
+    code = textwrap.dedent("""
+        struct Payload {
+            uint value;
+        };
+
+        void CoherentStore(
+            globallycoherent RWStructuredBuffer<Payload> data,
+            uint index
+        ) {
+            data[index].value = 1u;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert (
+        "void CoherentStore(@ globallycoherent "
+        "RWStructuredBuffer<Payload> data, uint index)" in output
+    )
+    assert "data[index].value = 1;" in output
 
 
 def test_codegen_preserves_reordercoherent_uav_from_dxc_dxil_69():
@@ -4292,6 +4800,41 @@ def test_codegen_frac_intrinsic_from_microsoft_docs_roundtrips():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "float4 wrapped = frac(uvPhase);" in regenerated_hlsl
     assert "fract(" not in regenerated_hlsl
+
+
+def test_codegen_rcp_intrinsic_from_microsoft_docs_imports_to_reciprocal_expression():
+    # Source: Microsoft Learn rcp intrinsic docs.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/rcp
+    crossgl = generate_crossgl("""
+        float4 main(float4 lightFalloff : TEXCOORD0) : SV_Target0 {
+            float4 invFalloff = rcp(lightFalloff + 1.0);
+            return invFalloff;
+        }
+    """)
+
+    assert "vec4 invFalloff = (1.0 / (lightFalloff + 1.0));" in crossgl
+    assert "rcp(" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_fmod_and_atan2_intrinsics_from_microsoft_docs_import_to_crossgl_names():
+    # Sources: Microsoft Learn HLSL intrinsic docs for fmod and atan2.
+    # URLs:
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-fmod
+    # https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-atan2
+    crossgl = generate_crossgl("""
+        float4 main(float2 p : TEXCOORD0) : SV_Target0 {
+            float wrapped = fmod(p.x, 1.0);
+            float angle = atan2(p.y, p.x);
+            return float4(wrapped, angle, 0.0, 1.0);
+        }
+    """)
+
+    assert "float wrapped = mod(p.x, 1.0);" in crossgl
+    assert "float angle = atan(p.y, p.x);" in crossgl
+    assert "fmod(" not in crossgl
+    assert "atan2(" not in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_interpolation_intrinsics_roundtrip():

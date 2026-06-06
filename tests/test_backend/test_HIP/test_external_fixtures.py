@@ -3,7 +3,9 @@ from crosstl.backend.HIP.HipAst import (
     BinaryOpNode,
     FunctionCallNode,
     HipAsmNode,
+    IfNode,
     KernelLaunchNode,
+    UnaryOpNode,
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
@@ -18,6 +20,7 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
         "paths": [
             "Applications/convolution/main.hip",
+            "Common/rocjpeg_utils.hpp",
             "HIP-Basic/bit_extract/main.hip",
             "HIP-Basic/cooperative_groups/main.hip",
             "HIP-Basic/device_globals/main.hip",
@@ -433,6 +436,42 @@ def test_external_rocm_graph_api_variable_template_arithmetic_crossgl_reparse():
     ) in crossgl
 
 
+def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
+    # Upstream source:
+    # ROCm HIP C++ language extensions atomic functions table. ROCm examples
+    # exercise ordinary atomics in kernels; HIP docs list the _system variants.
+    source = """
+    __global__ void scoped_atomic_kernel(unsigned int* bins,
+                                         unsigned int* flags) {
+        unsigned int old = atomicAdd_system(&bins[threadIdx.x], 1u);
+        atomicOr_system(flags, old);
+        unsigned int exchanged = atomicCAS_system(flags, 0u, 1u);
+        bins[threadIdx.x] = exchanged;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert isinstance(body[0].value, AtomicOperationNode)
+    assert body[0].value.operation == "atomicAdd_system"
+    assert isinstance(body[1], AtomicOperationNode)
+    assert body[1].operation == "atomicOr_system"
+    assert isinstance(body[2].value, AtomicOperationNode)
+    assert body[2].value.operation == "atomicCAS_system"
+    assert "hip system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
+    assert "hip system-scope atomic atomicOr_system lowered to atomicOr" in crossgl
+    assert (
+        "hip system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
+    ) in crossgl
+    assert "atomicAdd(bins[gl_LocalInvocationID.x], 1u)" in crossgl
+    assert "atomicOr(flags, old)" in crossgl
+    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
+    assert "atomicAdd_system(" not in crossgl
+    assert "atomicOr_system(" not in crossgl
+    assert "atomicCAS_system(" not in crossgl
+
+
 def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():
     source = """
     #define BIN_SIZE 256
@@ -556,7 +595,8 @@ def test_external_rocm_bit_extract_builtin_crossgl_reparse():
     assert isinstance(bit_extract_call, FunctionCallNode)
     assert bit_extract_call.name == "__bitextract_u32"
     assert "gl_NumWorkGroups.x" in crossgl
-    assert "__bitextract_u32(d_input[i], 8, 4)" in crossgl
+    assert "d_output[i] = ((d_input[i] >> 8) & 0xfu);" in crossgl
+    assert "__bitextract_u32" not in crossgl
 
 
 def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
@@ -591,7 +631,7 @@ def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
     assert body[8].operation == "atomicAdd"
     assert "sampler2D tex_obj" in crossgl
     assert "var val: u8 = texture(tex_obj, vec2<f32>(u, v));" in crossgl
-    assert "atomicAdd((&histogram[bin_idx]), 1);" in crossgl
+    assert "atomicAdd(histogram[bin_idx], 1);" in crossgl
 
 
 def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
@@ -653,6 +693,43 @@ def test_external_rocm_histogram_ffs_codegen_reparse():
     assert b_bits_length.value.left.name == "__ffs"
     assert "var b_bits_length: i32 = ((findLSB(block_size) + 1) - 3);" in crossgl
     assert "__ffs" not in crossgl
+
+
+def test_rocm_hip_math_api_ffsll_intrinsic_codegen_reparse():
+    # ROCm HIP math API lists __ffsll as the 64-bit sibling of __ffs.
+    source = """
+    __global__ void ffsll_kernel(unsigned int* out,
+                                 unsigned long long mask) {
+        out[threadIdx.x] = __ffsll(mask);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    assignment = ast.statements[0].body[0]
+
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "__ffsll"
+    assert "out[gl_LocalInvocationID.x] = (findLSB(mask) + 1);" in crossgl
+    assert "__ffsll" not in crossgl
+
+
+def test_external_rocm_rocjpeg_alignment_bitwise_not_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+    # Common/rocjpeg_utils.hpp.
+    source = """
+    static inline int align(int value, int alignment)
+    {
+        return (value + alignment - 1) & ~(alignment - 1);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    return_expr = ast.statements[0].body[0].value
+
+    assert return_expr.op == "&"
+    assert isinstance(return_expr.right, UnaryOpNode)
+    assert return_expr.right.op == "~"
+    assert "return (((value + alignment) - 1) & (~(alignment - 1)));" in crossgl
 
 
 def test_external_rocm_hip_tests_clz_intrinsics_codegen_reparse():
@@ -940,6 +1017,29 @@ def test_external_hip_fp16_scalar_conversion_codegen_reparse():
     assert "__float2half" not in crossgl
 
 
+def test_hipify_half2_high_lane_and_two_float_constructor_codegen_reparse():
+    # Source inspiration:
+    # ROCm HIPIFY CUDA Device API supported-by-HIP table lists the CUDA half2
+    # lane extraction and two-float constructor intrinsics as HIP-supported.
+    source = """
+    __device__ float pack_and_sum_half2(float a, float b) {
+        half2 pair = __floats2half2_rn(a, b);
+        return __low2float(pair) + __high2float(pair);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].value.name == "__floats2half2_rn"
+    assert body[1].value.left.name == "__low2float"
+    assert body[1].value.right.name == "__high2float"
+    assert "var pair: vec2<f16> = vec2<f16>(a, b);" in crossgl
+    assert "return (f32(pair.x) + f32(pair.y));" in crossgl
+    assert "__floats2half2_rn" not in crossgl
+    assert "__high2float" not in crossgl
+
+
 def test_external_rocm_warp_size_reduction_popcount_codegen_reparse():
     source = """
     inline auto popcount(unsigned int x) -> int {
@@ -1038,3 +1138,36 @@ def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():
     assert "((s >> 12) & 0xf)" in crossgl
     assert "y[1] = (((x1 >> 24) & 0xffu)" in crossgl
     assert "= __byte_perm(" not in crossgl
+
+
+def test_public_cuda_kernel_if_init_statement_hip_parity_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/InternLM/lmdeploy
+    # commit: 51334f09560a3432c434ad39c5ea67cc379ad995
+    # path: src/turbomind/kernels/quantization.cu
+    source = """
+    __global__ void guarded_store(int* out,
+                                  int num,
+                                  int dim,
+                                  int rows,
+                                  int row) {
+        int di = threadIdx.x;
+        int ti = blockIdx.x;
+        for (int s = 0; s < 2; ++s) {
+            if (auto r = ti + s * rows + row; r < num && di < dim) {
+                out[r] = di;
+            }
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    loop_body = ast.statements[0].body[2].body
+
+    assert isinstance(loop_body[0], VariableNode)
+    assert loop_body[0].name == "r"
+    assert loop_body[0].vtype == "auto"
+    assert isinstance(loop_body[1], IfNode)
+    assert "var r: auto = ((ti + (s * rows)) + row);" in crossgl
+    assert "if (((r < num) && (di < dim))) {" in crossgl
+    assert "out[r] = di;" in crossgl

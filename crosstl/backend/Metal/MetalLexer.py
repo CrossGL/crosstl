@@ -8,6 +8,18 @@ from .preprocessor import MetalPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
+_DECIMAL_DIGITS = r"\d(?:'?\d)*"
+_HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
+_BINARY_DIGITS = r"[01](?:'?[01])*"
+_NUMBER_PATTERN = (
+    rf"0[xX]{_HEX_DIGITS}[uUlL]*|"
+    rf"0[bB]{_BINARY_DIGITS}[uUlL]*|"
+    rf"(?:{_DECIMAL_DIGITS}\.(?:{_DECIMAL_DIGITS})?|\.{_DECIMAL_DIGITS})"
+    rf"(?:[eE][+-]?{_DECIMAL_DIGITS})?[fFhH]?|"
+    rf"{_DECIMAL_DIGITS}[eE][+-]?{_DECIMAL_DIGITS}[fFhH]?|"
+    rf"{_DECIMAL_DIGITS}[fFhHuUlL]*"
+)
+
 # Token definitions - order matters! More specific patterns should come first
 TOKENS = tuple(
     [
@@ -65,7 +77,10 @@ TOKENS = tuple(
             "VECTOR",
             r"\b(float|half|double|int|uint|short|ushort|char|uchar|bool)[2-4]\b",
         ),
-        ("PACKED_VECTOR", r"\bpacked_(float|half|int|uint)[2-4]\b"),
+        (
+            "PACKED_VECTOR",
+            r"\bpacked_(char|uchar|short|ushort|int|uint|half|float)[2-4]\b",
+        ),
         ("SIMD_VECTOR", r"\bsimd_(float|int|uint)[2-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
@@ -138,10 +153,7 @@ TOKENS = tuple(
         # Identifiers (must come after all keywords)
         ("IDENTIFIER", r"[^\W\d]\w*"),
         # Numeric literals (decimal/hex/binary with suffixes)
-        (
-            "NUMBER",
-            r"0[xX][0-9a-fA-F]+[uUlL]*|0[bB][01]+[uUlL]*|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFhH]?|\d+[eE][+-]?\d+[fFhH]?|\d+[fFhHuUlL]*",
-        ),
+        ("NUMBER", _NUMBER_PATTERN),
         # Brackets and braces
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
@@ -159,6 +171,7 @@ TOKENS = tuple(
         ("QUESTION", r"\?"),
         # Member access must be checked before the single-character minus token.
         ("ARROW", r"->"),
+        ("ELLIPSIS", r"\.\.\."),
         ("DOT", r"\."),
         # Shift and assignment operators (multi-char first)
         ("ASSIGN_SHIFT_LEFT", r"<<="),
@@ -217,6 +230,7 @@ KEYWORDS = {
     "volatile": "VOLATILE",
     "restrict": "RESTRICT",
     "inline": "INLINE",
+    "__inline__": "INLINE",
     "typedef": "TYPEDEF",
     "enum": "ENUM",
     "class": "CLASS",

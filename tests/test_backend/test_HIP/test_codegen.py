@@ -1,3 +1,5 @@
+import re
+
 from crosstl import translate
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
@@ -95,6 +97,24 @@ class TestHipCodeGen:
         assert "var load_callback_dev: auto = load_callback;" in result
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
 
+    def test_public_gpu_template_scope_disambiguator_call_conversion(self):
+        code = """
+        template <typename OPERATOR>
+        __global__ void call_operator() {
+            OPERATOR::template apply<float>(threadIdx.x);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "OPERATOR::apply<float>(gl_LocalInvocationID.x);" in result
+        assert "::template" not in result
+
     def test_public_rocm_hipfft_complex_pointer_declarators_conversion(self):
         code = """
         void host() {
@@ -141,6 +161,29 @@ class TestHipCodeGen:
         assert "var d_local: ptr<u32>;" in result
         assert "var d_shadow: ptr<u32>;" in result
         assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
+
+    def test_public_rocm_bit_extract_intrinsic_conversion(self):
+        code = """
+        __global__ void bit_extract_kernel(
+            uint32_t* d_output,
+            const uint32_t* d_input) {
+            d_output[threadIdx.x] = __bitextract_u32(
+                d_input[threadIdx.x], 8, 4);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "d_output[gl_LocalInvocationID.x] = "
+            "((d_input[gl_LocalInvocationID.x] >> 8) & 0xfu);"
+        ) in result
+        assert "__bitextract_u32" not in result
 
     def test_public_rocm_floyd_warshall_multiline_sizeof_type_operand_conversion(self):
         code = """
@@ -282,6 +325,41 @@ class TestHipCodeGen:
         assert "if ((err != hipSuccess)) {" in result
         assert "return 1;" in result
         assert "return 0;" in result
+
+    def test_public_rocm_address_retrieval_multiline_if_initializer_conversion(self):
+        code = """
+        void host() {
+            void* hipInitFunc;
+            int hipVersion = HIP_VERSION;
+            std::uint64_t flags = 0;
+            hipDriverProcAddressQueryResult symbolStatus;
+
+            if (auto err = hipGetProcAddress(
+                    "hipInit",
+                    reinterpret_cast<void**>(&hipInitFunc),
+                    hipVersion,
+                    flags,
+                    &symbolStatus);
+                err != hipSuccess) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            '// HIP get proc address: symbol: "hipInit", output: hipInitFunc, '
+            "version: hipVersion, flags: flags, status output: symbolStatus"
+        ) in result
+        assert "var err: auto = hipSuccess;" in result
+        assert "if ((err != hipSuccess)) {" in result
+        assert "return;" in result
 
     def test_launch_bounds_after_return_type_conversion(self):
         code = """
@@ -664,11 +742,13 @@ class TestHipCodeGen:
         code = """
         __device__ half2 fp16_ops(half2 a, half2 b, float x) {
             half2 scalar = __float2half2_rn(x);
+            half2 lanes = __floats2half2_rn(x, x + 1.0f);
             half2 prod = __hmul2(a, b);
             half2 sum = __hadd2(prod, scalar);
             half2 fused = __hfma2(a, b, sum);
             float low = __low2float(fused);
-            return fused;
+            float high = __high2float(fused);
+            return __hadd2(fused, lanes);
         }
         """
         lexer = HipLexer(code)
@@ -680,17 +760,22 @@ class TestHipCodeGen:
 
         assert "vec2<f16> fp16_ops(vec2<f16> a, vec2<f16> b, f32 x)" in result
         assert "var scalar: vec2<f16> = vec2<f16>(x, x);" in result
+        assert "var lanes: vec2<f16> = vec2<f16>(x, (x + 1.0f));" in result
         assert "var prod: vec2<f16> = (a * b);" in result
         assert "var sum: vec2<f16> = (prod + scalar);" in result
         assert "var fused: vec2<f16> = fma(a, b, sum);" in result
         assert "var low: f32 = f32(fused.x);" in result
+        assert "var high: f32 = f32(fused.y);" in result
+        assert "return (fused + lanes);" in result
         for raw_name in (
             "half2",
             "__float2half2_rn",
+            "__floats2half2_rn",
             "__hmul2",
             "__hadd2",
             "__hfma2",
             "__low2float",
+            "__high2float",
         ):
             assert raw_name not in result
 
@@ -753,6 +838,32 @@ class TestHipCodeGen:
         assert "out[0] = atan2(y, x);" in result
         assert "out[1] = atan2(y, x);" in result
         assert "atan2f" not in result
+
+    def test_rocm_docs_scalar_fma_builtins_convert_to_crossgl_fma(self):
+        # Source: ROCm HIP math API, HIP 6.4.43484 docs.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-6.4.3/reference/math_api.html
+        code = """
+        __global__ void fused(float* out, double* precise, float a, float b, float c,
+                              double x, double y, double z) {
+            out[0] = fmaf(a, b, c);
+            out[1] = __fmaf_rn(a, b, c);
+            precise[0] = __fma_rn(x, y, z);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "out[0] = fma(a, b, c);" in result
+        assert "out[1] = fma(a, b, c);" in result
+        assert "precise[0] = fma(x, y, z);" in result
+        assert "fmaf" not in result
+        assert "__fma" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
         code = """
@@ -832,6 +943,97 @@ class TestHipCodeGen:
         assert "__syncthreads_or((idx < n))" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_rocm_hip_ldg_address_load_codegen_reparse(self):
+        # Reduced from ROCm hip-tests catch/unit/deviceLib/ldg.cc read-only loads.
+        code = """
+        __global__ void read_only(const float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldg(&input[idx]);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[idx] = input[idx];" in result
+        assert "__ldg" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_cache_load_family_address_operands_codegen_reparse(self):
+        code = """
+        __global__ void cached_loads(const float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldca(&input[idx]);
+            output[idx + 1] = __ldcg(&input[idx + 1]);
+            output[idx + 2] = __ldcs(&input[idx + 2]);
+            output[idx + 3] = __ldcv(&input[idx + 3]);
+            output[idx + 4] = __ldlu(&input[idx + 4]);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[idx] = input[idx];" in result
+        assert "output[(idx + 1)] = input[(idx + 1)];" in result
+        assert "output[(idx + 2)] = input[(idx + 2)];" in result
+        assert "output[(idx + 3)] = input[(idx + 3)];" in result
+        assert "output[(idx + 4)] = input[(idx + 4)];" in result
+        assert "__ldca" not in result
+        assert "__ldcg" not in result
+        assert "__ldcs" not in result
+        assert "__ldcv" not in result
+        assert "__ldlu" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_ldg_non_address_operand_emits_expression_safe_diagnostic(self):
+        code = """
+        __global__ void read_only(float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldg(input + idx);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "/* hip load cache intrinsic __ldg((input + idx)) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert "__ldg(input + idx)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_cache_load_family_non_address_operand_emits_safe_diagnostic(self):
+        code = """
+        __global__ void cached_loads(float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldcg(input + idx);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "/* hip load cache intrinsic __ldcg((input + idx)) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert "__ldcg(input + idx)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
         code = """
         __global__ void warp(unsigned long long mask, int pred, int value, int lane, unsigned int* out) {
@@ -866,6 +1068,30 @@ class TestHipCodeGen:
         ) in result
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
         assert "__activemask();" not in result
+
+    def test_rocm_docs_legacy_warp_any_all_codegen_reparse(self):
+        # Source: ROCm HIP C++ language extensions, HIP 7.2.53211 docs.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/latest/how-to/
+        #      hip_cpp_language_extensions.html#warp-vote-and-ballot-functions
+        code = """
+        __global__ void warp_vote(int* out, int pred) {
+            int any_set = __any(pred);
+            int all_set = __all(pred);
+            out[threadIdx.x] = any_set + all_set;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var any_set: i32 = (WaveActiveAnyTrue((pred != 0)) ? 1 : 0);" in result
+        assert "var all_set: i32 = (WaveActiveAllTrue((pred != 0)) ? 1 : 0);" in result
+        assert "__any(pred)" not in result
+        assert "__all(pred)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_public_llama_cpp_full_warp_shfl_xor_sync_codegen(self):
         # Upstream: ggml-org/llama.cpp@7c158fbb4aec1bdc9c81d6ca0e785139f4826fae,
@@ -1039,6 +1265,38 @@ class TestHipCodeGen:
         assert "hipAtomicExch" not in result
         assert "hipAtomic" not in result
         assert "atomicCAS(" not in result
+
+    def test_bounded_wrap_atomics_preserve_hip_semantics(self):
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
+            __shared__ unsigned int sharedCounters[32];
+            unsigned int oldInc = atomicInc(&values[index], limit);
+            unsigned int oldDec = atomicDec(&sharedCounters[threadIdx.x], limit);
+            unsigned int aliasInc = hipAtomicInc(&values[index + 1], limit);
+            unsigned int aliasDec = hipAtomicDec(&values[index + 2], limit);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var<workgroup> sharedCounters: array<u32, 32>;" in result
+        assert "var oldInc: u32 = atomicInc(values[index], limit);" in result
+        expected_old_dec = (
+            "var oldDec: u32 = "
+            "atomicDec(sharedCounters[gl_LocalInvocationID.x], limit);"
+        )
+        assert expected_old_dec in result
+        assert "var aliasInc: u32 = atomicInc(values[(index + 1)], limit);" in result
+        assert "var aliasDec: u32 = atomicDec(values[(index + 2)], limit);" in result
+        assert "hipAtomicInc" not in result
+        assert "hipAtomicDec" not in result
+        assert "(&values[index])" not in result
+        assert "(&sharedCounters[gl_LocalInvocationID.x])" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_user_defined_atomic_name_call_does_not_convert_to_builtin(self):
         code = """
@@ -1335,6 +1593,30 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("int2") == "vec2<i32>"
         assert codegen.convert_hip_type_to_crossgl("int3") == "vec3<i32>"
         assert codegen.convert_hip_type_to_crossgl("int4") == "vec4<i32>"
+
+    def test_cuda_samples_style_const_dim3_constructor_global_conversion(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var windowSize: vec3<u32> = vec3<u32>(512, 512);" in result
+        assert "var windowBlockSize: vec3<u32> = vec3<u32>(16, 16, 1);" in result
+        assert (
+            "var windowGridSize: vec3<u32> = "
+            "vec3<u32>((windowSize.x / windowBlockSize.x), "
+            "(windowSize.y / windowBlockSize.y));"
+        ) in result
+        assert "const dim3(" not in result
 
     def test_constructor_style_vector_declaration_conversion(self):
         code = """
@@ -15382,6 +15664,30 @@ class TestHipCodeGen:
         assert "for (var i: i32 = 0; (i < n); (++i)) {" in result
         assert "h[i] = f32(i);" in result
 
+    def test_fixed_width_function_style_cast_conversion(self):
+        code = """
+        __global__ void normalize_indices(const int* src, int* dst) {
+            const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
+            uint32_t tmp = uint32_t(i);
+            dst[tmp] = src[i];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var i: i64 = ((i64(gl_WorkGroupSize.x) * gl_WorkGroupID.x) "
+            "+ gl_LocalInvocationID.x);"
+        ) in result
+        assert "var tmp: u32 = u32(i);" in result
+        assert "int64_t(" not in result
+        assert "uint32_t(" not in result
+
     def test_reference_host_helper_parameters_conversion(self):
         code = """
         void prepare(std::vector<float>& h) {
@@ -15865,6 +16171,25 @@ class TestHipCodeGen:
         assert "return LaneMask;" not in result
         assert "x;" not in result
 
+    def test_cuda_samples_const_unknown_pointer_pointer_c_style_cast_conversion(self):
+        code = """
+        void compile_shader(char* data, int size) {
+            glShaderSource(shader, 1, (const GLchar **)&data, &size);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "glShaderSource(shader, 1, ptr<ptr<GLchar>>((&data)), (&size));" in result
+        )
+        assert "const GLchar" not in result
+
     def test_range_based_for_loop_conversion(self):
         code = """
         void host(std::vector<float>& h) {
@@ -16016,6 +16341,44 @@ class TestHipCodeGen:
             "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
         )
         assert "data[indices[0] as usize] = value;" in result
+
+    def test_native_kernel_roundtrip_to_hip_emits_native_types_and_builtins(
+        self, tmp_path
+    ):
+        code = """
+        #include <hip/hip_runtime.h>
+
+        __global__ void scale_mask(float* out,
+                                   const float* in,
+                                   unsigned int* flags,
+                                   unsigned int n,
+                                   float scale) {
+            unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+            if (tid < n) {
+                float value = in[tid] * scale;
+                flags[tid] = tid & 255u;
+                out[tid] = value;
+            }
+        }
+        """
+        source_path = tmp_path / "scale_mask.hip"
+        source_path.write_text(code, encoding="utf-8")
+
+        result = translate(str(source_path), backend="hip", format_output=False)
+
+        assert "__global__ void scale_mask(" in result
+        assert "float* out" in result
+        assert "float* in_" in result
+        assert "unsigned int* flags" in result
+        assert "unsigned int n" in result
+        assert "float scale" in result
+        assert "unsigned int tid = ((blockIdx.x * blockDim.x) + threadIdx.x);" in result
+        assert "float value = (in_[tid] * scale);" in result
+        assert "flags[tid] = (tid & 255u);" in result
+        assert not re.search(r"\b(?:f32|u32)\b", result)
+        assert "gl_LocalInvocationID" not in result
+        assert "gl_WorkGroupID" not in result
+        assert "gl_WorkGroupSize" not in result
 
     def test_qualified_declaration_conversion(self):
         code = """

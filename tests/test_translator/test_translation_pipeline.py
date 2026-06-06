@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl
@@ -49,6 +51,25 @@ NATIVE_SOURCE_SNIPPETS = {
             gl_FragColor = color;
         }
         """,
+    ),
+}
+
+NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
+    "cuda_header": (
+        "shader.cuh",
+        NATIVE_SOURCE_SNIPPETS["cuda"][1],
+    ),
+    "cuda_long": (
+        "shader.cuda",
+        NATIVE_SOURCE_SNIPPETS["cuda"][1],
+    ),
+    "rust_long": (
+        "shader.rust",
+        NATIVE_SOURCE_SNIPPETS["rust"][1],
+    ),
+    "slang_header": (
+        "shader.slangh",
+        NATIVE_SOURCE_SNIPPETS["slang"][1],
     ),
 }
 
@@ -164,6 +185,19 @@ def test_native_sources_translate_to_parseable_crossgl(tmp_path, source_name):
     crosstl.translator.parse(generated)
 
 
+@pytest.mark.parametrize("alias_name", sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS))
+def test_native_source_extension_aliases_translate_to_parseable_crossgl(
+    tmp_path, alias_name
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    crosstl.translator.parse(generated)
+
+
 def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     source_path = _write_source(
         tmp_path,
@@ -187,6 +221,122 @@ def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     assert "gl_Position" not in generated
 
 
+@pytest.mark.parametrize(
+    ("filename", "source", "stage", "expected_crossgl"),
+    (
+        (
+            "shader.vertex",
+            """
+            #version 450 core
+            layout(location = 0) in vec2 position;
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+            }
+            """,
+            ShaderStage.VERTEX,
+            "VertexOutput main(VertexInput input)",
+        ),
+        (
+            "gbuffers_terrain.vsh",
+            """
+            #version 450 core
+            layout(location = 0) in vec3 position;
+            void main() {
+                gl_Position = vec4(position, 1.0);
+            }
+            """,
+            ShaderStage.VERTEX,
+            "VertexOutput main(VertexInput input)",
+        ),
+        (
+            "deferred8.fsh",
+            """
+            #version 450 core
+            layout(location = 0) out vec4 fragColor;
+            void main() {
+                fragColor = vec4(1.0);
+            }
+            """,
+            ShaderStage.FRAGMENT,
+            "fragment {",
+        ),
+        (
+            "eevee_film_frag.glsl",
+            """
+            #version 450 core
+            layout(location = 0) in vec2 vUV;
+            layout(location = 0) out vec4 fragColor;
+            void main() {
+                fragColor = vec4(vUV, 0.0, 1.0);
+            }
+            """,
+            ShaderStage.FRAGMENT,
+            "fragment {",
+        ),
+    ),
+)
+def test_glsl_real_world_stage_filename_conventions_translate_to_crossgl(
+    tmp_path, filename, source, stage, expected_crossgl
+):
+    source_path = _write_source(tmp_path, filename, source)
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    shader_ast = crosstl.translator.parse(generated)
+    assert stage in shader_ast.stages
+    assert expected_crossgl in generated
+
+
+UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS = {
+    "shader.spv": "Binary SPIR-V input files",
+    "shader.spirv": "Binary SPIR-V input files",
+    "shader.air": "Compiled Metal artifacts",
+    "shader.metallib": "Compiled Metal artifacts",
+    "shader.cso": "Compiled DirectX shader binaries",
+    "shader.dxbc": "Compiled DirectX shader binaries",
+    "shader.dxil": "Compiled DirectX shader binaries",
+    "shader.ptx": "Generated CUDA/NVIDIA artifacts",
+    "shader.cubin": "Generated CUDA/NVIDIA artifacts",
+    "shader.fatbin": "Generated CUDA/NVIDIA artifacts",
+    "shader.hsaco": "Compiled HIP/ROCm artifacts",
+}
+
+
+def test_spirv_source_inference_distinguishes_assembly_from_binary():
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension("shader.spvasm").name == "vulkan"
+    with pytest.raises(ValueError, match="Binary SPIR-V input files"):
+        SOURCE_REGISTRY.get_by_extension("shader.spv")
+
+
+@pytest.mark.parametrize(
+    ("filename", "diagnostic"),
+    sorted(UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS.items()),
+)
+def test_known_generated_artifact_extensions_are_not_source_files(filename, diagnostic):
+    register_default_sources()
+
+    with pytest.raises(ValueError, match=re.escape(diagnostic)):
+        SOURCE_REGISTRY.get_by_extension(filename)
+    assert filename[filename.rfind(".") :] not in SOURCE_REGISTRY.extensions()
+
+
+@pytest.mark.parametrize(
+    ("filename", "diagnostic"),
+    sorted(UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS.items()),
+)
+def test_translate_reports_specific_diagnostic_for_generated_artifacts(
+    tmp_path, filename, diagnostic
+):
+    artifact_path = tmp_path / filename
+    artifact_path.write_bytes(b"\x03\x02#shader-binary")
+
+    with pytest.raises(ValueError, match=re.escape(diagnostic)):
+        crosstl.translate(str(artifact_path), backend="cgl", format_output=False)
+
+
 def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):
     source_path = tmp_path / "legacy-comment.hlsl"
     source_path.write_bytes(
@@ -200,12 +350,43 @@ def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):
     crosstl.translator.parse(generated)
 
 
+@pytest.mark.parametrize("filename", ("library.hlsli", "effect.fx", "effect.fxh"))
+def test_directx_real_world_extensions_translate_to_crossgl(tmp_path, filename):
+    source_path = _write_source(
+        tmp_path,
+        filename,
+        "float4 main(float4 pos : SV_Position) : SV_Target { return pos; }",
+    )
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    crosstl.translator.parse(generated)
+    assert "fragment {" in generated
+    assert "vec4 main(vec4 pos @ gl_Position) @ gl_FragColor" in generated
+
+
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 @pytest.mark.parametrize("target_backend", codegen.backend_names())
 def test_native_source_to_registered_target_pipeline_is_total(
     tmp_path, source_name, target_backend
 ):
     filename, source = NATIVE_SOURCE_SNIPPETS[source_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    generated = crosstl.translate(
+        str(source_path), backend=target_backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+
+
+@pytest.mark.parametrize("alias_name", sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS))
+@pytest.mark.parametrize("target_backend", codegen.backend_names())
+def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
+    tmp_path, alias_name, target_backend
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
     source_path = _write_source(tmp_path, filename, source)
 
     generated = crosstl.translate(

@@ -3911,6 +3911,14 @@ mod gpu {
         0
     }
 
+    pub fn subgroup_id() -> u32 {
+        0
+    }
+
+    pub fn num_subgroups() -> u32 {
+        1
+    }
+
     pub fn subgroup_elect() -> bool {
         false
     }
@@ -17191,6 +17199,34 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_wgsl_texture_dimensions_alias_maps_to_unsigned_rust_helpers_and_compile(
+    tmp_path,
+):
+    # W3C WGSL 17.7.1: textureDimensions returns u32/vecN<u32> and the
+    # mip level is optional. Source: https://www.w3.org/TR/WGSL/#texturedimensions
+    code = """
+    shader WgslTextureDimensionsProbe {
+        sampler2D mainTexture;
+        sampler3D volumeMap;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                let size2D = textureDimensions(mainTexture);
+                uvec3 size3D = textureDimensions(volumeMap, 0u);
+                return vec4(float(size2D.x), float(size2D.y), float(size3D.z), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let size2D: Vec2<u32> = texture_size(*MAIN_TEXTURE);" in generated_code
+    assert "let size3D: Vec3<u32> = texture_size_lod(*VOLUME_MAP, 0);" in generated_code
+    assert "textureDimensions" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
     code = """
     shader MultisampleTextureProbe {
@@ -18418,6 +18454,68 @@ def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_resource_placeholders_diagnose_explicit_sampler_sampling(tmp_path):
+    code = """
+    shader RustExplicitSamplerResourceDiagnostic {
+        sampler2D colorMap @set(1) @binding(4);
+        sampler linearSampler @set(1) @binding(5);
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return texture(colorMap, linearSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);" in generated_code
+    assert "texture(" not in generated_code
+    assert (
+        "// CrossGL Rust limitation: resource colorMap is emitted as a "
+        "compile-only placeholder static, not a rust-gpu resource binding"
+    ) in generated_code
+    assert (
+        "// CrossGL Rust limitation: resource linearSampler is emitted as a "
+        "compile-only placeholder static, not a rust-gpu resource binding"
+    ) in generated_code
+    assert (
+        "resource colorMap is emitted as a compile-only placeholder static"
+        in generated_code
+        and "static COLOR_MAP: std::sync::LazyLock<Texture2D<f32>>" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_resource_placeholders_diagnose_storage_image_atomic(tmp_path):
+    code = """
+    shader RustStorageImageAtomicResourceDiagnostic {
+        uimage2D counterImage @r32ui @binding(2);
+
+        compute {
+            void main(ivec2 pixel, uint amount) {
+                uint previous = imageAtomicAdd(counterImage, pixel, amount);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let previous: u32 = image_atomic_add(*COUNTER_IMAGE, pixel, amount);" in (
+        generated_code
+    )
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageLoad" not in generated_code
+    assert (
+        "// CrossGL Rust limitation: resource counterImage is emitted as a "
+        "compile-only placeholder static, not a rust-gpu resource binding"
+    ) in generated_code
+    assert "static COUNTER_IMAGE: std::sync::LazyLock<Image2D<u32>>" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
     duplicate_texture_binding = """
     shader DuplicateRustTextureBindings {
@@ -19169,6 +19267,76 @@ def test_builtin_function_call_names_are_mapped():
     assert "saturate(" not in generated_code
 
 
+def test_builtin_alias_targets_qualify_shadowed_rust_math_helpers_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader RustMathAliasTargetShadowing {
+        fragment {
+            float main(float value) {
+                float fract = value;
+                float clamp = value;
+                float rsqrt = value;
+                float computed = frac(value) + saturate(value) + inverseSqrt(value);
+                return computed + fract + clamp + rsqrt;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let fract: f32 = value;" in generated_code
+    assert "let clamp: f32 = value;" in generated_code
+    assert "let rsqrt: f32 = value;" in generated_code
+    assert (
+        "let computed: f32 = ((math::fract(value) + "
+        "math::clamp(value, 0.0, 1.0)) + math::rsqrt(value));"
+    ) in generated_code
+    assert "let computed: f32 = ((fract(value) + clamp(value, 0.0, 1.0))" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_texture_builtin_alias_targets_qualify_shadowed_runtime_helpers_and_compile(
+    tmp_path,
+):
+    code = """
+    shader RustTextureAliasTargetShadowing {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv) {
+                float sample = 1.0;
+                float sample_sampler = 2.0;
+                let implicitColor = texture(colorMap, uv);
+                let explicitColor = texture(colorMap, linearSampler, uv);
+                return implicitColor + explicitColor
+                    + vec4(sample + sample_sampler, 0.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let sample: f32 = 1.0;" in generated_code
+    assert "let sample_sampler: f32 = 2.0;" in generated_code
+    assert "let implicitColor: Vec4<f32> = gpu::sample(*COLOR_MAP, uv);" in (
+        generated_code
+    )
+    assert (
+        "let explicitColor: Vec4<f32> = "
+        "gpu::sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+    ) in generated_code
+    assert "let implicitColor: Vec4<f32> = sample(*COLOR_MAP, uv);" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_path):
     code = """
     shader BuiltinInference {
@@ -19257,6 +19425,32 @@ def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_pat
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_two_argument_atan_maps_to_atan2_and_qualifies_shadowed_target(
+    tmp_path,
+):
+    code = """
+    shader TwoArgumentAtanAlias {
+        fragment {
+            vec4 main(float y, float x, vec3 vectorY) {
+                float atan2 = x;
+                let scalarAngle = atan(y, x);
+                let vectorAngle = atan(vectorY, y);
+                return vec4(vectorAngle, scalarAngle + atan2);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let atan2: f32 = x;" in generated_code
+    assert "let scalarAngle: f32 = math::atan2(y, x);" in generated_code
+    assert "let vectorAngle: Vec3<f32> = math::atan2(vectorY, y);" in generated_code
+    assert "atan(y, x)" not in generated_code
+    assert "atan(vectorY, y)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_unary_math_intrinsics_preserve_vector_shape_and_smoke_compile(tmp_path):
     code = """
     shader UnaryMathVectorInference {
@@ -19332,6 +19526,109 @@ def test_unary_math_intrinsics_preserve_vector_shape_and_smoke_compile(tmp_path)
     assert "let root: f32 = sqrt(value)" not in generated_code
     assert "let scalar_math: Vec3<f32>" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_inverse_sqrt_alias_preserves_vector_shape_and_smoke_compile(tmp_path):
+    code = """
+    shader InverseSqrtAliasInference {
+        fragment {
+            vec4 main(vec3 value, float scalar) {
+                let inv_root = inverseSqrt(value);
+                let scalar_inv_root = inverseSqrt(scalar);
+                return vec4(inv_root, scalar_inv_root);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let inv_root: Vec3<f32> = rsqrt(value);" in generated_code
+    assert "let scalar_inv_root: f32 = rsqrt(scalar);" in generated_code
+    assert "inverseSqrt(" not in generated_code
+    assert "let inv_root: f32 = rsqrt(value)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_hlsl_rcp_intrinsic_lowers_to_rust_reciprocal_and_smoke_compile(tmp_path):
+    code = """
+    shader ReciprocalIntrinsicInference {
+        fragment {
+            vec4 main(vec3 value, mat2 transform, float scalar) {
+                let inv_value = rcp(value);
+                let inv_scalar = rcp(scalar);
+                let inv_transform = rcp(transform);
+                return vec4(
+                    inv_value + vec3(
+                        inv_transform.c0.x,
+                        inv_transform.c0.y,
+                        inv_transform.c1.x
+                    ),
+                    inv_scalar
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let inv_value: Vec3<f32> = Vec3::<f32>::new("
+        "(1.0 / value.x), (1.0 / value.y), (1.0 / value.z));"
+    ) in generated_code
+    assert "let inv_scalar: f32 = (1.0 / scalar);" in generated_code
+    assert (
+        "let inv_transform: Mat2<f32> = Mat2::<f32>::new("
+        "(1.0 / transform.c0.x), (1.0 / transform.c0.y), "
+        "(1.0 / transform.c1.x), (1.0 / transform.c1.y));"
+    ) in generated_code
+    assert "rcp(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_user_defined_inverse_sqrt_function_is_not_lowered_to_rsqrt():
+    code = """
+    shader UserDefinedInverseSqrt {
+        float inverseSqrt(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            float main(float value) {
+                return inverseSqrt(value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn inverseSqrt(value: f32) -> f32" in generated_code
+    assert "return inverseSqrt(value);" in generated_code
+    assert "rsqrt(" not in generated_code
+
+
+def test_user_defined_rcp_function_is_not_lowered_to_reciprocal():
+    code = """
+    shader UserDefinedRcp {
+        float rcp(float value) {
+            return value + 1.0;
+        }
+
+        fragment {
+            float main(float value) {
+                return rcp(value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn rcp(value: f32) -> f32" in generated_code
+    assert "return rcp(value);" in generated_code
+    assert "1.0 / value" not in generated_code
 
 
 def test_rounding_intrinsics_preserve_float_input_shape_and_smoke_compile(tmp_path):
@@ -19472,6 +19769,49 @@ def test_binary_math_intrinsics_promote_mixed_scalar_vector_operands_and_smoke_c
     assert "let mod_vector_scalar: f32 = modulo" not in generated_code
     assert "let atan_scalar_vector: f32 = atan2" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_hlsl_fmod_alias_lowers_to_rust_modulo_and_smoke_compile(tmp_path):
+    code = """
+    shader FmodAliasInference {
+        fragment {
+            vec4 main(vec3 value, float scalar) {
+                let wrapped_vector = fmod(value, scalar);
+                let wrapped_scalar = fmod(scalar, 2.0);
+                return vec4(wrapped_vector, wrapped_scalar);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let wrapped_vector: Vec3<f32> = modulo(value, scalar);" in generated_code
+    assert "let wrapped_scalar: f32 = modulo(scalar, 2.0);" in generated_code
+    assert "fmod(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_user_defined_fmod_function_is_not_lowered_to_modulo():
+    code = """
+    shader UserDefinedFmod {
+        float fmod(float value, float divisor) {
+            return value + divisor;
+        }
+
+        fragment {
+            float main(float value) {
+                return fmod(value, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn fmod(value: f32, divisor: f32) -> f32" in generated_code
+    assert "return fmod(value, 2.0);" in generated_code
+    assert "modulo(value, 2.0)" not in generated_code
 
 
 def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
@@ -19640,6 +19980,35 @@ def test_derivative_and_fused_math_intrinsics_infer_types_and_smoke_compile(
     assert "let scalar_dy: f32 = dfdy(scale);" in generated_code
     assert "let fused: f32 = fma" not in generated_code
     assert "let dx: f32 = dfdx" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_scalar_fma_and_mad_lower_to_rust_mul_add_method_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader ScalarMulAddInference {
+        fragment {
+            vec4 main(float scale, float value, float bias) {
+                let fused = fma(value, scale, bias);
+                let mad_alias = mad(scale, value, 0.25);
+                let literal_receiver = mad(1, scale, bias);
+                return vec4(vec3(fused + mad_alias + literal_receiver), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let fused: f32 = (value).mul_add(scale, bias);" in generated_code
+    assert "let mad_alias: f32 = (scale).mul_add(value, 0.25);" in generated_code
+    assert (
+        "let literal_receiver: f32 = (1.0 as f32).mul_add(scale, bias);"
+        in generated_code
+    )
+    assert "fma(value, scale, bias)" not in generated_code
+    assert "fma(scale, value, 0.25)" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -19907,6 +20276,158 @@ def test_bit_reinterpret_intrinsics_preserve_shape_and_smoke_compile(tmp_path):
     )
     assert "let signedFromVector: Vec3<u32> = float_bits_to_int" not in generated_code
     assert "let floatFromSigned: Vec3<i32> = int_bits_to_float" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_as_bitcast_aliases_lower_to_rust_helpers_and_smoke_compile(tmp_path):
+    code = """
+    shader AsBitcastAliasInference {
+        fragment {
+            vec4 main(vec3 value, float scalar, ivec3 signedBits, uvec3 unsignedBits, int signedScalar, uint unsignedScalar) {
+                let signedFromVector = asint(value);
+                let unsignedFromVector = asuint(value);
+                let signedFromScalar = asint(scalar);
+                let unsignedFromScalar = asuint(scalar);
+                let floatFromSigned = asfloat(signedBits);
+                let floatFromUnsigned = asfloat(unsignedBits);
+                let scalarFromSigned = asfloat(signedScalar);
+                let scalarFromUnsigned = asfloat(unsignedScalar);
+                int signedMix = signedFromVector.x + signedFromScalar;
+                uint unsignedMix = unsignedFromVector.y + unsignedFromScalar;
+                vec3 restored = floatFromSigned + floatFromUnsigned;
+                return vec4(restored, float(signedMix) + float(unsignedMix)
+                    + scalarFromSigned + scalarFromUnsigned);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let signedFromVector: Vec3<i32> = float_bits_to_int(value);" in generated_code
+    )
+    assert (
+        "let unsignedFromVector: Vec3<u32> = float_bits_to_uint(value);"
+        in generated_code
+    )
+    assert "let signedFromScalar: i32 = float_bits_to_int(scalar);" in generated_code
+    assert "let unsignedFromScalar: u32 = float_bits_to_uint(scalar);" in generated_code
+    assert (
+        "let floatFromSigned: Vec3<f32> = int_bits_to_float(signedBits);"
+        in generated_code
+    )
+    assert (
+        "let floatFromUnsigned: Vec3<f32> = uint_bits_to_float(unsignedBits);"
+        in generated_code
+    )
+    assert (
+        "let scalarFromSigned: f32 = int_bits_to_float(signedScalar);" in generated_code
+    )
+    assert (
+        "let scalarFromUnsigned: f32 = uint_bits_to_float(unsignedScalar);"
+        in generated_code
+    )
+    assert "asfloat(" not in generated_code
+    assert "asint(" not in generated_code
+    assert "asuint(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_bitcast_alias_targets_qualify_shadowed_rust_helpers_and_smoke_compile(
+    tmp_path,
+):
+    code = """
+    shader RustBitcastAliasTargetShadowing {
+        fragment {
+            vec4 main(vec3 value, ivec3 signedBits, uvec3 unsignedBits) {
+                float float_bits_to_int = 1.0;
+                float float_bits_to_uint = 2.0;
+                float int_bits_to_float = 3.0;
+                float uint_bits_to_float = 4.0;
+                let signed = floatBitsToInt(value);
+                let unsigned = asuint(value);
+                let fromSigned = asfloat(signedBits);
+                let fromUnsigned = uintBitsToFloat(unsignedBits);
+                return vec4(fromSigned + fromUnsigned, float(signed.x)
+                    + float(unsigned.y) + float_bits_to_int + float_bits_to_uint
+                    + int_bits_to_float + uint_bits_to_float);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let float_bits_to_int: f32 = 1.0;" in generated_code
+    assert "let float_bits_to_uint: f32 = 2.0;" in generated_code
+    assert "let int_bits_to_float: f32 = 3.0;" in generated_code
+    assert "let uint_bits_to_float: f32 = 4.0;" in generated_code
+    assert "let signed: Vec3<i32> = math::float_bits_to_int(value);" in generated_code
+    assert "let unsigned: Vec3<u32> = math::float_bits_to_uint(value);" in (
+        generated_code
+    )
+    assert (
+        "let fromSigned: Vec3<f32> = math::int_bits_to_float(signedBits);"
+        in generated_code
+    )
+    assert (
+        "let fromUnsigned: Vec3<f32> = math::uint_bits_to_float(unsignedBits);"
+        in generated_code
+    )
+    assert "let signed: Vec3<i32> = float_bits_to_int(value);" not in generated_code
+    assert "let unsigned: Vec3<u32> = float_bits_to_uint(value);" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_vec2_vec4_bitcasts_emit_lane_helpers_and_smoke_compile(tmp_path):
+    code = """
+    shader BitReinterpretVec2Vec4 {
+        fragment {
+            vec4 main(vec2 value2, vec4 value4, ivec2 signed2, uvec4 unsigned4) {
+                float float_bits_to_int = 1.0;
+                float int_bits_to_float = 2.0;
+                let signedFromVec2 = floatBitsToInt(value2);
+                let unsignedFromVec4 = asuint(value4);
+                let floatFromSignedVec2 = asfloat(signed2);
+                let floatFromUnsignedVec4 = uintBitsToFloat(unsigned4);
+                return vec4(
+                    floatFromSignedVec2.x + float_bits_to_int,
+                    floatFromSignedVec2.y + int_bits_to_float,
+                    floatFromUnsignedVec4.x + float(signedFromVec2.x),
+                    floatFromUnsignedVec4.w + float(unsignedFromVec4.w)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let signedFromVec2: Vec2<i32> = Vec2::<i32>::new("
+        "math::float_bits_to_int(value2.x), math::float_bits_to_int(value2.y));"
+    ) in generated_code
+    assert (
+        "let unsignedFromVec4: Vec4<u32> = Vec4::<u32>::new("
+        "float_bits_to_uint(value4.x), float_bits_to_uint(value4.y), "
+        "float_bits_to_uint(value4.z), float_bits_to_uint(value4.w));"
+    ) in generated_code
+    assert (
+        "let floatFromSignedVec2: Vec2<f32> = Vec2::<f32>::new("
+        "math::int_bits_to_float(signed2.x), math::int_bits_to_float(signed2.y));"
+    ) in generated_code
+    assert (
+        "let floatFromUnsignedVec4: Vec4<f32> = Vec4::<f32>::new("
+        "uint_bits_to_float(unsigned4.x), uint_bits_to_float(unsigned4.y), "
+        "uint_bits_to_float(unsigned4.z), uint_bits_to_float(unsigned4.w));"
+    ) in generated_code
+    assert "let signedFromVec2: Vec2<i32> = float_bits_to_int(value2);" not in (
+        generated_code
+    )
+    assert "let unsignedFromVec4: Vec4<u32> = float_bits_to_uint(value4);" not in (
+        generated_code
+    )
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -25140,6 +25661,40 @@ def test_rust_escapes_keyword_struct_fields_and_accesses(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_keyword_like_bindings_escape_in_functions_and_members(tmp_path):
+    code = """
+    struct KeywordFields {
+        type: float;
+        match: vec4;
+    };
+
+    fn match(type: float, match: vec3) -> float {
+        float while = type + match.x;
+        return while;
+    }
+
+    fn read(input: KeywordFields) -> float {
+        return match(input.type, vec3(1.0, 2.0, 3.0)) + input.match.x;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub type_: f32," in generated_code
+    assert "pub match_: Vec4<f32>," in generated_code
+    assert "pub fn match_(type_: f32, match_: Vec3<f32>) -> f32" in generated_code
+    assert "let while_: f32 = (type_ + match_.x);" in generated_code
+    assert "return while_;" in generated_code
+    assert (
+        "return (match_(input.type_, Vec3::<f32>::new(1.0, 2.0, 3.0)) "
+        "+ input.match_.x);"
+    ) in generated_code
+    assert "pub fn match(" not in generated_code
+    assert "let while:" not in generated_code
+    assert "input.match.x" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_keyword_struct_fields_survive_default_formatting(tmp_path):
     import crosstl
 
@@ -25226,6 +25781,34 @@ def test_rust_top_level_constants_and_compute_builtins_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_subgroup_builtin_expressions_lower_to_helpers(tmp_path):
+    code = """
+    shader RustSubgroupBuiltinExpressions {
+        compute {
+            void main() {
+                uint lane = gl_SubgroupInvocationID;
+                uint size = gl_SubgroupSize;
+                uint subgroup = gl_SubgroupID;
+                uint subgroupCount = gl_NumSubgroups;
+                uint combined = lane + size + subgroup + subgroupCount;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let lane: u32 = subgroup_invocation_id();" in generated_code
+    assert "let size: u32 = subgroup_size();" in generated_code
+    assert "let subgroup: u32 = subgroup_id();" in generated_code
+    assert "let subgroupCount: u32 = num_subgroups();" in generated_code
+    assert "gl_SubgroupInvocationID" not in generated_code
+    assert "gl_SubgroupSize" not in generated_code
+    assert "gl_SubgroupID" not in generated_code
+    assert "gl_NumSubgroups" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_swizzle_assignments_emit_component_writes(tmp_path):
     code = """
     shader RustSwizzleAssignments {
@@ -25261,6 +25844,31 @@ def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
     assert "Mat4::<f32>::new(1.0)" not in generated_code
     assert "Mat3::<f32>::new(transpose(" not in generated_code
     assert "let __cgl_mat_arg_" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_hlsl_matrix_alias_constructors_compile(tmp_path):
+    code = """
+    shader RustHlslMatrixAliases {
+        float3 firstColumn() {
+            float3x2 basis = float3x2(1.0);
+            half3x2 halfBasis = half3x2(1.0);
+            min16float3x2 minBasis = min16float3x2(1.0);
+            float16_t3x2 explicitBasis = float16_t3x2(1.0);
+            return basis.c0 + halfBasis.c0 + minBasis.c0 + explicitBasis.c0;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("Mat2x3::<f32>::new") == 4
+    assert "let basis: Mat2x3<f32>" in generated_code
+    assert "let halfBasis: Mat2x3<f32>" in generated_code
+    assert "let minBasis: Mat2x3<f32>" in generated_code
+    assert "let explicitBasis: Mat2x3<f32>" in generated_code
+    for alias in ("float3x2", "half3x2", "min16float3x2", "float16_t3x2"):
+        assert alias not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

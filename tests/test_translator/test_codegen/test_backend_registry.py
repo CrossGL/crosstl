@@ -1,11 +1,21 @@
 import os
+import re
 
 import pytest
 
 import crosstl.translator.codegen as codegen
+from crosstl.formatter import CodeFormatter, ShaderLanguage
 from crosstl.translator import parse
 from crosstl.translator.plugin_loader import discover_backend_plugins
-from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from crosstl.translator.source_registry import (
+    BINARY_SPIRV_UNSUPPORTED_MESSAGE,
+    CUDA_ARTIFACT_UNSUPPORTED_MESSAGE,
+    DIRECTX_BINARY_UNSUPPORTED_MESSAGE,
+    HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
+    METAL_BINARY_UNSUPPORTED_MESSAGE,
+    SOURCE_REGISTRY,
+    register_default_sources,
+)
 
 SMOKE_SHADER = """
 shader main {
@@ -65,6 +75,11 @@ TRANSLATE_API_ROUNDTRIP_BACKENDS = (
     "mojo",
     "rust",
     "spirv",
+)
+
+REAL_WORLD_TARGET_EXTENSION_BACKENDS = (
+    ("cuda", (".cu", ".cuh", ".cuda"), ShaderLanguage.CUDA),
+    ("rust", (".rs", ".rust"), ShaderLanguage.RUST),
 )
 
 
@@ -129,11 +144,19 @@ def test_source_registry_covers_backend_dirs():
     (
         ".glsl",
         ".vs",
+        ".vsh",
         ".fs",
+        ".fsh",
         ".vert",
+        ".vertex",
         ".frag",
+        ".fragment",
         ".comp",
+        ".csh",
+        ".compute",
         ".geom",
+        ".gsh",
+        ".geometry",
         ".tesc",
         ".tese",
     ),
@@ -145,6 +168,78 @@ def test_source_registry_recognizes_glsl_stage_extensions(extension):
     assert (
         SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "opengl"
     )
+
+
+@pytest.mark.parametrize("extension", (".rgen.glsl", ".mesh.glsl", ".frag.glsl"))
+def test_source_registry_recognizes_compound_glsl_extension_strings(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "opengl"
+
+
+@pytest.mark.parametrize("extension", (".hlsl", ".hlsli", ".fx", ".fxh"))
+def test_source_registry_recognizes_directx_real_world_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "directx"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "directx"
+    )
+
+
+@pytest.mark.parametrize("extension", (".slang", ".slangh"))
+def test_source_registry_recognizes_slang_real_world_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "slang"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "slang"
+    )
+
+
+@pytest.mark.parametrize(
+    ("extension", "message"),
+    (
+        (".spv", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
+        (".spirv", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
+        (".air", METAL_BINARY_UNSUPPORTED_MESSAGE),
+        (".metallib", METAL_BINARY_UNSUPPORTED_MESSAGE),
+        (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        (".dxbc", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        (".dxil", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        (".ptx", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        (".cubin", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        (".fatbin", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        (".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE),
+    ),
+)
+def test_source_registry_known_binary_artifacts_raise_clear_diagnostic(
+    extension, message
+):
+    register_default_sources()
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension}")
+
+
+@pytest.mark.parametrize(
+    ("backend", "extensions", "formatter_language"),
+    REAL_WORLD_TARGET_EXTENSION_BACKENDS,
+)
+def test_target_registry_real_world_extensions_match_source_and_formatter(
+    backend, extensions, formatter_language
+):
+    register_default_sources()
+    formatter = CodeFormatter()
+    spec = codegen.get_backend(backend)
+
+    assert spec is not None
+    assert tuple(spec.file_extensions) == extensions
+    assert codegen.get_backend_extension(backend) == extensions[0]
+
+    for extension in extensions:
+        assert SOURCE_REGISTRY.get_by_extension(extension).name == backend
+        assert formatter.detect_language(f"shader{extension}") == formatter_language
 
 
 def test_each_backend_has_codegen_tests():

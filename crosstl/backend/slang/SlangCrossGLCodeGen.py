@@ -104,6 +104,20 @@ class SlangToCrossGLConverter:
         "ByteAddressBuffer",
         "RWByteAddressBuffer",
     }
+    BYTE_ADDRESS_BUFFER_RESOURCE_TYPES = {
+        "ByteAddressBuffer",
+        "RWByteAddressBuffer",
+    }
+    BYTE_ADDRESS_BUFFER_METHOD_MAP = {
+        "Load": "buffer_load",
+        "Load2": "buffer_load2",
+        "Load3": "buffer_load3",
+        "Load4": "buffer_load4",
+        "Store": "buffer_store",
+        "Store2": "buffer_store2",
+        "Store3": "buffer_store3",
+        "Store4": "buffer_store4",
+    }
     GET_DIMENSIONS_TEXTURE_DIMENSIONS = {
         "Texture1D": 1,
         "Texture1DArray": 2,
@@ -313,6 +327,7 @@ class SlangToCrossGLConverter:
             "fmod": "mod",
             "lerp": "mix",
             "rsqrt": "inversesqrt",
+            "atan2": "atan",
         }
         self.user_function_names = set()
         self.function_name_map = {}
@@ -387,6 +402,7 @@ class SlangToCrossGLConverter:
             "TEXCOORD4": "TexCoord4",
             "TEXCOORD5": "TexCoord5",
             "TEXCOORD6": "TexCoord6",
+            "TEXCOORD7": "TexCoord7",
             # Vertex inputs instance
             "FRONT_FACE": "gl_IsFrontFace",
             "PRIMITIVE_ID": "gl_PrimitiveID",
@@ -421,6 +437,41 @@ class SlangToCrossGLConverter:
             "SV_Depth5": "Out_Depth5",
             "SV_Depth6": "Out_Depth6",
             "SV_Depth7": "Out_Depth7",
+        }
+        self.hlsl_system_semantic_map = {
+            semantic.lower(): mapped
+            for semantic, mapped in self.semantic_map.items()
+            if semantic.lower().startswith("sv_")
+        }
+        self.hlsl_passthrough_system_semantic_map = {
+            semantic.lower(): semantic
+            for semantic in (
+                "SV_Barycentrics",
+                "SV_Coverage",
+                "SV_DispatchThreadID",
+                "SV_GroupID",
+                "SV_GroupIndex",
+                "SV_GroupThreadID",
+                "SV_InstanceID",
+                "SV_IsFrontFace",
+                "SV_PrimitiveID",
+                "SV_SampleIndex",
+                "SV_VertexID",
+            )
+        }
+        self.interpolation_qualifiers = {
+            "centroid",
+            "flat",
+            "linear",
+            "linear_centroid",
+            "linear_noperspective",
+            "linear_noperspective_centroid",
+            "linear_sample",
+            "nointerpolation",
+            "noperspective",
+            "pervertex",
+            "sample",
+            "smooth",
         }
 
     def generate(self, ast):
@@ -476,16 +527,12 @@ class SlangToCrossGLConverter:
                         code += f"        {member_name} = {value},\n"
                 code += "    }\n"
         for node in ast.structs:
+            if self.is_forward_struct_declaration(node):
+                continue
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
-                    semantic = self.map_semantic(member.semantic)
-                    semantic_suffix = f" {semantic}" if semantic else ""
-                    member_name = self.format_struct_member_name(node, member.name)
-                    code += (
-                        f"        {self.map_type(member.vtype)} {member_name}"
-                        f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
-                    )
+                    code += f"        {self.generate_struct_member(node, member)};\n"
                 code += "    }\n"
         for node in ast.global_vars:
             code += self.generate_global_variable(node)
@@ -569,6 +616,11 @@ class SlangToCrossGLConverter:
                 f"{constraint.parameter} {relation} {constraint.constraint_type}"
             )
         return constraints
+
+    def is_forward_struct_declaration(self, node):
+        return isinstance(node, StructNode) and getattr(
+            node, "is_forward_declaration", False
+        )
 
     def format_import_path(self, path):
         path = str(path)
@@ -702,15 +754,11 @@ class SlangToCrossGLConverter:
         if isinstance(item, FunctionNode):
             return self.generate_function(item)
         if isinstance(item, StructNode):
+            if self.is_forward_struct_declaration(item):
+                return ""
             code = f"    struct {item.name} {{\n"
             for member in item.members:
-                semantic = self.map_semantic(member.semantic)
-                semantic_suffix = f" {semantic}" if semantic else ""
-                member_name = self.format_struct_member_name(item, member.name)
-                code += (
-                    f"        {self.map_type(member.vtype)} {member_name}"
-                    f"{self.format_array_suffixes(member)}{semantic_suffix};\n"
-                )
+                code += f"        {self.generate_struct_member(item, member)};\n"
             code += "    }\n"
             return code
         if isinstance(item, (VariableNode, AssignmentNode)):
@@ -753,7 +801,11 @@ class SlangToCrossGLConverter:
         self.push_storage_image_resource_scope(func.params)
         for param in func.params:
             self.register_identifier_declaration(param)
-        params = ", ".join(self.generate_parameter(p) for p in func.params)
+        preserve_parameter_qualifiers = self.is_entry_like_function(func)
+        params = ", ".join(
+            self.generate_parameter(p, preserve_parameter_qualifiers)
+            for p in func.params
+        )
         semantic = self.map_semantic(func.semantic)
         semantic_suffix = f" {semantic}" if semantic else ""
         code += (
@@ -768,15 +820,37 @@ class SlangToCrossGLConverter:
         self.pop_identifier_scope()
         return code
 
-    def generate_parameter(self, param):
+    def generate_parameter(self, param, preserve_qualifiers=False):
+        qualifier_prefix = self.format_parameter_qualifier_prefix(
+            param, preserve_qualifiers
+        )
         parameter = (
-            f"{self.map_parameter_type(param.vtype)} {self.format_identifier(param.name)}"
+            f"{qualifier_prefix}{self.map_parameter_type(param.vtype)} "
+            f"{self.format_identifier(param.name)}"
             f"{self.format_array_suffixes(param)}"
         )
         semantic = self.map_semantic(param.semantic)
         if semantic:
             parameter += f" {semantic}"
         return parameter
+
+    def is_entry_like_function(self, func):
+        return bool(
+            normalize_stage_name(getattr(func, "qualifier", None))
+            or getattr(func, "semantic", None)
+            or getattr(func, "name", None) == "main"
+        )
+
+    def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
+        if not preserve_qualifiers:
+            return ""
+        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
+        qualifiers = [
+            str(qualifier)
+            for qualifier in getattr(param, "qualifiers", []) or []
+            if str(qualifier).lower() in allowed_qualifiers
+        ]
+        return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def format_array_suffixes(self, node, is_main=False):
         sizes = getattr(node, "array_sizes", None)
@@ -798,6 +872,10 @@ class SlangToCrossGLConverter:
             )
             if expanded_statement is not None:
                 code += expanded_statement
+                continue
+            sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
+            if sincos_statement is not None:
+                code += sincos_statement
                 continue
             code += "    " * indent
             if isinstance(stmt, VariableNode):
@@ -847,6 +925,20 @@ class SlangToCrossGLConverter:
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
         return code
+
+    def generate_sincos_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt, FunctionCallNode) or stmt.name != "sincos":
+            return None
+        if len(stmt.args) != 3:
+            return None
+        value = self.generate_expression(stmt.args[0], is_main)
+        sine_target = self.generate_expression(stmt.args[1], is_main)
+        cosine_target = self.generate_expression(stmt.args[2], is_main)
+        indent_text = "    " * indent
+        return (
+            f"{indent_text}{sine_target} = sin({value});\n"
+            f"{indent_text}{cosine_target} = cos({value});\n"
+        )
 
     def generate_for_loop(self, node, indent, is_main):
         init = self.generate_for_clause(node.init, is_main)
@@ -954,6 +1046,31 @@ class SlangToCrossGLConverter:
             f"{self.format_identifier(node.name)}{self.format_array_suffixes(node)}"
             f"{self.format_variable_metadata(node)}"
         )
+
+    def generate_struct_member(self, struct_node, member):
+        qualifiers = self.format_struct_member_qualifiers(member)
+        if qualifiers:
+            qualifiers += " "
+        member_name = self.format_struct_member_name(struct_node, member.name)
+        declaration = (
+            f"{qualifiers}{self.map_type(member.vtype)} {member_name}"
+            f"{self.format_array_suffixes(member)}"
+        )
+        if getattr(member, "value", None) is not None:
+            declaration += f" = {self.generate_expression(member.value)}"
+        semantic = self.map_semantic(member.semantic)
+        if semantic:
+            declaration += f" {semantic}"
+        return declaration
+
+    def format_struct_member_qualifiers(self, member):
+        allowed_qualifiers = {"static", "const"} | self.interpolation_qualifiers
+        qualifiers = [
+            qualifier
+            for qualifier in getattr(member, "qualifiers", []) or []
+            if str(qualifier).lower() in allowed_qualifiers
+        ]
+        return " ".join(qualifiers)
 
     def format_variable_metadata(self, node):
         metadata = []
@@ -1094,6 +1211,22 @@ class SlangToCrossGLConverter:
         right = self.maybe_parenthesize_expression(expr.args[1], right)
         return f"({left} * {right})"
 
+    def generate_mad_call(self, expr, is_main):
+        if (
+            expr.name != "mad"
+            or len(expr.args) != 3
+            or expr.name in self.user_function_names
+        ):
+            return None
+
+        multiplier = self.generate_expression(expr.args[0], is_main)
+        multiplicand = self.generate_expression(expr.args[1], is_main)
+        addend = self.generate_expression(expr.args[2], is_main)
+        multiplier = self.maybe_parenthesize_expression(expr.args[0], multiplier)
+        multiplicand = self.maybe_parenthesize_expression(expr.args[1], multiplicand)
+        addend = self.maybe_parenthesize_expression(expr.args[2], addend)
+        return f"(({multiplier} * {multiplicand}) + {addend})"
+
     def generate_expression(self, expr, is_main=False):
         """Render a Slang backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
@@ -1132,6 +1265,9 @@ class SlangToCrossGLConverter:
             mul_call = self.generate_hlsl_mul_call(expr, is_main)
             if mul_call is not None:
                 return mul_call
+            mad_call = self.generate_mad_call(expr, is_main)
+            if mad_call is not None:
+                return mad_call
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -1141,6 +1277,14 @@ class SlangToCrossGLConverter:
                 and expr.name not in self.user_function_names
             ):
                 return f"clamp({args}, 0.0, 1.0)"
+            if (
+                expr.name == "rcp"
+                and len(expr.args) == 1
+                and expr.name not in self.user_function_names
+            ):
+                value = self.generate_expression(expr.args[0], is_main)
+                value = self.maybe_parenthesize_expression(expr.args[0], value)
+                return f"(1.0 / {value})"
             if expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
             elif expr.name in self.type_map and expr.name[:1].islower():
@@ -1153,6 +1297,12 @@ class SlangToCrossGLConverter:
             image_call = self.generate_storage_image_method_call(expr, obj, is_main)
             if image_call is not None:
                 return image_call
+
+            byte_address_buffer_call = self.generate_byte_address_buffer_method_call(
+                expr, obj, is_main
+            )
+            if byte_address_buffer_call is not None:
+                return byte_address_buffer_call
 
             texture_call = self.generate_texture_method_call(expr, obj, is_main)
             if texture_call is not None:
@@ -1483,6 +1633,26 @@ class SlangToCrossGLConverter:
             return None
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
         return f"imageLoad({', '.join([obj] + args)})"
+
+    def generate_byte_address_buffer_method_call(self, expr, obj, is_main=False):
+        method = self.method_base_name(expr.method)
+        helper = self.BYTE_ADDRESS_BUFFER_METHOD_MAP.get(method)
+        if helper is None:
+            return None
+
+        resource_type = self.buffer_resource_expression_type(expr.object)
+        if (
+            self.resource_type_base(resource_type)
+            not in self.BYTE_ADDRESS_BUFFER_RESOURCE_TYPES
+        ):
+            return None
+
+        args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
+        if method.startswith("Load") and len(args) != 1:
+            return None
+        if method.startswith("Store") and len(args) != 2:
+            return None
+        return f"{helper}({', '.join([obj] + args)})"
 
     def generate_structured_buffer_method_call(self, expr, obj, is_main=False):
         if self.method_base_name(expr.method) != "Load":
@@ -1966,7 +2136,36 @@ class SlangToCrossGLConverter:
         ray_payload_access = self.map_ray_payload_access_semantic(semantic)
         if ray_payload_access:
             return ray_payload_access
-        return f"@ {self.semantic_map.get(semantic, semantic)}"
+        mapped_semantic = self.semantic_map.get(semantic)
+        if mapped_semantic is None:
+            mapped_semantic = self.hlsl_system_semantic_map.get(str(semantic).lower())
+        if mapped_semantic is None:
+            mapped_semantic = self.hlsl_passthrough_system_semantic_map.get(
+                str(semantic).lower()
+            )
+        if mapped_semantic is None:
+            texcoord_match = re.fullmatch(r"TEXCOORD(\d+)", str(semantic).upper())
+            if texcoord_match:
+                mapped_semantic = f"TexCoord{texcoord_match.group(1)}"
+        if mapped_semantic is None:
+            color_match = re.fullmatch(r"COLOR(\d+)", str(semantic).upper())
+            if color_match:
+                mapped_semantic = f"Color{color_match.group(1)}"
+        if mapped_semantic is None:
+            for hlsl_prefix, crossgl_prefix in (
+                ("NORMAL", "in_Normal"),
+                ("TANGENT", "in_Tangent"),
+                ("BINORMAL", "in_Binormal"),
+                ("BLENDINDICES", "in_BlendIndices"),
+                ("BLENDWEIGHT", "in_BlendWeight"),
+            ):
+                indexed_match = re.fullmatch(
+                    rf"{hlsl_prefix}(\d+)", str(semantic).upper()
+                )
+                if indexed_match:
+                    mapped_semantic = f"{crossgl_prefix}{indexed_match.group(1)}"
+                    break
+        return f"@ {mapped_semantic or semantic}"
 
     def map_ray_payload_access_semantic(self, semantic):
         access_parts = self.split_semantic_chain(semantic)

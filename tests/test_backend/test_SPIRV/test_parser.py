@@ -580,6 +580,39 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for GLSL module-scope globals:
+; vec4 privateColor; float privateWeight = 1.0;
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %private_color "privateColor"
+OpName %private_weight "privateWeight"
+OpName %out_color "outColor"
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_private_v4float = OpTypePointer Private %v4float
+%ptr_private_float = OpTypePointer Private %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%zero = OpConstant %float 0.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%private_color = OpVariable %ptr_private_v4float Private
+%private_weight = OpVariable %ptr_private_float Private %one
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpStore %private_color %red
+%loaded = OpLoad %v4float %private_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PUSH_CONSTANT_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -850,6 +883,42 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source pattern: reduced from Vulkan subgroupBroadcastFirst/subgroupAdd style
+; compute shader assembly emitted by glslang for subgroup arithmetic builtins.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformArithmetic
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %value %broadcast_out %sum_out
+OpExecutionMode %main LocalSize 32 1 1
+OpName %value "value"
+OpName %broadcast_out "broadcastOut"
+OpName %sum_out "sumOut"
+OpDecorate %value Location 0
+OpDecorate %broadcast_out Location 0
+OpDecorate %sum_out Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_3 = OpConstant %uint 3
+%ptr_input_uint = OpTypePointer Input %uint
+%ptr_output_uint = OpTypePointer Output %uint
+%value = OpVariable %ptr_input_uint Input
+%broadcast_out = OpVariable %ptr_output_uint Output
+%sum_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %uint %value
+%broadcast = OpGroupNonUniformBroadcastFirst %uint %uint_3 %loaded
+%sum = OpGroupNonUniformIAdd %uint %uint_3 Reduce %loaded
+OpStore %broadcast_out %broadcast
+OpStore %sum_out %sum
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -955,6 +1024,66 @@ OpStore %sample_color %sample
 %pixel = OpLoad %v2int %fetch_coord
 %fetch = OpImageFetch %v4float %image_only %pixel Lod %zero
 OpStore %fetch_color %fetch
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_DESCRIPTOR_INDEXING_NONUNIFORM_ASSEMBLY = """
+; Reduced from descriptor-indexed sampled texture SPIR-V emitted by Vulkan
+; toolchains for GL_EXT_nonuniform_qualifier/nonuniformEXT material indexing.
+OpCapability Shader
+OpCapability ShaderNonUniform
+OpExtension "SPV_EXT_descriptor_indexing"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %material_index %uv %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %textures "textures"
+OpName %linear_sampler "linearSampler"
+OpName %material_index "materialIndex"
+OpName %uv "uv"
+OpName %out_color "outColor"
+OpDecorate %textures DescriptorSet 0
+OpDecorate %textures Binding 0
+OpDecorate %linear_sampler DescriptorSet 0
+OpDecorate %linear_sampler Binding 1
+OpDecorate %material_index Location 0
+OpDecorate %uv Location 1
+OpDecorate %out_color Location 0
+OpDecorate %idx NonUniform
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%sampler = OpTypeSampler
+%array_count = OpConstant %int 4
+%zero = OpConstant %float 0.0
+%texture_array = OpTypeArray %image %array_count
+%ptr_textures = OpTypePointer UniformConstant %texture_array
+%ptr_texture = OpTypePointer UniformConstant %image
+%ptr_sampler = OpTypePointer UniformConstant %sampler
+%ptr_input_int = OpTypePointer Input %int
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%textures = OpVariable %ptr_textures UniformConstant
+%linear_sampler = OpVariable %ptr_sampler UniformConstant
+%material_index = OpVariable %ptr_input_int Input
+%uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_index = OpLoad %int %material_index
+%idx = OpCopyObject %int %loaded_index
+%texture_ptr = OpAccessChain %ptr_texture %textures %idx
+%loaded_texture = OpLoad %image %texture_ptr
+%loaded_sampler = OpLoad %sampler %linear_sampler
+%combined = OpSampledImage %sampled %loaded_texture %loaded_sampler
+%loaded_uv = OpLoad %v2float %uv
+%sample = OpImageSampleExplicitLod %v4float %combined %loaded_uv Lod %zero
+OpStore %out_color %sample
 OpReturn
 OpFunctionEnd
 """
@@ -1139,6 +1268,34 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for ESSL 310 mediump fragment IO.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color %in_color
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpName %in_color "color"
+OpDecorate %out_color RelaxedPrecision
+OpDecorate %out_color Location 0
+OpDecorate %in_color RelaxedPrecision
+OpDecorate %in_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_input_v4float = OpTypePointer Input %v4float
+%out_color = OpVariable %ptr_output_v4float Output
+%in_color = OpVariable %ptr_input_v4float Input
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %in_color
+OpStore %out_color %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_FORWARD_POINTER_STRUCT_ASSEMBLY = """
 ; Reduced from Khronos SPIRV-Tools test/diff/diff_files/OpTypeForwardPointer_basic_src.spvasm.
 OpCapability Kernel
@@ -1196,6 +1353,39 @@ OpDecorate %17 Block
 %24 = OpLoad %2 %4
 %26 = OpAccessChain %13 %19 %25
 OpStore %26 %24
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from the core OpCompositeExtract instruction definition where Composite
+; is an OpTypeStruct value and Indexes select a structure member.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %Pair "Pair"
+OpMemberName %Pair 0 "weight"
+OpMemberName %Pair 1 "index"
+OpName %pair "pair"
+OpName %out_value "outValue"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%Pair = OpTypeStruct %float %uint
+%ptr_function_pair = OpTypePointer Function %Pair
+%ptr_output_float = OpTypePointer Output %float
+%out_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%pair = OpVariable %ptr_function_pair Function
+%loaded_pair = OpLoad %Pair %pair
+%weight = OpCompositeExtract %float %loaded_pair 0
+OpStore %out_value %weight
 OpReturn
 OpFunctionEnd
 """
@@ -1349,6 +1539,92 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a fragment shader
+; containing if (value > 0.0) { outColor = red; } else { outColor = blue; }.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %value %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %value "value"
+OpName %out_color "outColor"
+OpDecorate %value Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%blue = OpConstantComposite %v4float %zero %zero %one %one
+%value = OpVariable %ptr_input_float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %value
+%gt = OpFOrdGreaterThan %bool %loaded %zero
+OpSelectionMerge %merge None
+OpBranchConditional %gt %then %else
+%then = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%else = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_SWITCH_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from a fragment shader
+; containing switch(mode) with two cases and a default color store.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %mode %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %mode "mode"
+OpName %out_color "outColor"
+OpDecorate %mode Flat
+OpDecorate %mode Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v4float = OpTypeVector %float 4
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero_f = OpConstant %float 0.0
+%one_f = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one_f %zero_f %zero_f %one_f
+%green = OpConstantComposite %v4float %zero_f %one_f %zero_f %one_f
+%blue = OpConstantComposite %v4float %zero_f %zero_f %one_f %one_f
+%mode = OpVariable %ptr_input_int Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_mode = OpLoad %int %mode
+OpSelectionMerge %merge None
+OpSwitch %loaded_mode %default 0 %case_zero 1 %case_one
+%case_zero = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%case_one = OpLabel
+OpStore %out_color %green
+OpBranch %merge
+%default = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
@@ -1461,6 +1737,26 @@ def test_spirv_assembly_matrix_interface_parse():
     assert input_layout.data_type == "mat4"
     assert input_layout.variable_name == "model"
     assert input_layout.qualifiers == [("location", "0")]
+
+
+def test_glslang_private_global_variables_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    output_layout = ast.global_variables[0]
+    private_color = ast.global_variables[1]
+    private_weight = ast.global_variables[2]
+
+    assert isinstance(output_layout, LayoutNode)
+    assert output_layout.variable_name == "outColor"
+    assert isinstance(private_color, VariableNode)
+    assert private_color.vtype == "vec4"
+    assert private_color.name == "privateColor"
+    assert isinstance(private_weight, AssignmentNode)
+    assert isinstance(private_weight.left, VariableNode)
+    assert private_weight.left.vtype == "float"
+    assert private_weight.left.name == "privateWeight"
+    assert private_weight.right == "1.0"
 
 
 def test_spirv_assembly_push_constant_block_parse():
@@ -1667,6 +1963,23 @@ def test_glslang_web_comp_barrier_instructions_parse():
     assert isinstance(body[3], ReturnNode)
 
 
+def test_spirv_subgroup_broadcast_and_reduce_parse():
+    tokens = tokenize_code(SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    body = ast.functions[0].body
+
+    assert ast.functions[0].spirv_execution_model == "GLCompute"
+    assert isinstance(body[0], AssignmentNode)
+    assert isinstance(body[0].right, FunctionCallNode)
+    assert body[0].right.name == "subgroupBroadcastFirst"
+    assert body[0].right.args[0].name == "value"
+    assert isinstance(body[1], AssignmentNode)
+    assert isinstance(body[1].right, FunctionCallNode)
+    assert body[1].right.name == "subgroupAdd"
+    assert body[1].right.args[0].name == "value"
+    assert isinstance(body[2], ReturnNode)
+
+
 def test_spirv_assembly_uniform_constant_resources_parse():
     tokens = tokenize_code(SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY)
     ast = parse_code(tokens)
@@ -1709,6 +2022,30 @@ def test_spirv_tools_implicit_lod_bias_parse():
     assert isinstance(assignment.right.args[1], VariableNode)
     assert assignment.right.args[1].name == "uv"
     assert assignment.right.args[2] == "0.25"
+
+
+def test_spirv_descriptor_indexing_nonuniform_parse():
+    tokens = tokenize_code(SPIRV_DESCRIPTOR_INDEXING_NONUNIFORM_ASSEMBLY)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_decorations["%idx"] == [("NonUniform", [])]
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, FunctionCallNode)
+    assert assignment.right.name == "textureLod"
+
+    sampled_texture = assignment.right.args[0]
+    assert isinstance(sampled_texture, FunctionCallNode)
+    assert sampled_texture.name == "sampler2D"
+    assert len(sampled_texture.args) == 2
+
+    indexed_texture = sampled_texture.args[0]
+    assert isinstance(indexed_texture, ArrayAccessNode)
+    assert isinstance(indexed_texture.index, FunctionCallNode)
+    assert indexed_texture.index.name == "nonuniformEXT"
+    assert isinstance(indexed_texture.index.args[0], VariableNode)
+    assert indexed_texture.index.args[0].name == "materialIndex"
 
 
 def test_spirv_implicit_lod_min_lod_offset_parse():
@@ -1785,6 +2122,23 @@ def test_spirv_assembly_flat_location_interface_parse():
     assert layout.spirv_decorations == [("Flat", []), ("Location", ["0"])]
 
 
+def test_spirv_assembly_relaxed_precision_interface_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_RELAXED_PRECISION_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    layouts = {layout.variable_name: layout for layout in ast.global_variables}
+    assert layouts["color"].declaration_qualifiers == ["mediump"]
+    assert layouts["outColor"].declaration_qualifiers == ["mediump"]
+    assert layouts["color"].spirv_decorations == [
+        ("RelaxedPrecision", []),
+        ("Location", ["0"]),
+    ]
+    assert layouts["outColor"].spirv_decorations == [
+        ("RelaxedPrecision", []),
+        ("Location", ["0"]),
+    ]
+
+
 def test_spirv_assembly_forward_pointer_structs_parse():
     tokens = tokenize_code(SPIRV_TOOLS_FORWARD_POINTER_STRUCT_ASSEMBLY)
     ast = parse_code(tokens)
@@ -1824,6 +2178,28 @@ def test_spirv_tools_gl_pervertex_access_chain_parse():
     assert assignment.left.name == "gl_Position"
     assert isinstance(assignment.right, VariableNode)
     assert assignment.right.name == "_ua_position"
+
+
+def test_spirv_spec_struct_composite_extract_parse():
+    tokens = tokenize_code(SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY)
+    ast = parse_code(tokens)
+    declaration = ast.functions[0].body[0]
+    assignment = ast.functions[0].body[1]
+
+    assert ast.spirv_assembly is True
+    assert ast.structs[0].name == "Pair"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("float", "weight"),
+        ("uint", "index"),
+    ]
+    assert isinstance(declaration, VariableNode)
+    assert declaration.vtype == "Pair"
+    assert declaration.name == "pair"
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, MemberAccessNode)
+    assert assignment.right.member == "weight"
+    assert isinstance(assignment.right.object, VariableNode)
+    assert assignment.right.object.name == "pair"
 
 
 def test_spirv_spec_vector_insert_dynamic_parse():
@@ -1908,6 +2284,38 @@ def test_spirv_glslang_void_function_call_parse():
     assert main.body[0].args == []
     assert isinstance(main.body[1], AssignmentNode)
     assert isinstance(main.body[2], ReturnNode)
+
+
+def test_spirv_glslang_selection_merge_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY)
+    ast = parse_code(tokens)
+    main = ast.functions[0]
+    selection = main.body[0]
+
+    assert ast.spirv_assembly is True
+    assert isinstance(selection, IfNode)
+    assert isinstance(selection.condition, BinaryOpNode)
+    assert selection.condition.op == ">"
+    assert len(selection.if_body) == 1
+    assert len(selection.else_body) == 1
+    assert selection.if_body[0].left.name == "outColor"
+    assert selection.else_body[0].left.name == "outColor"
+    assert isinstance(main.body[1], ReturnNode)
+
+
+def test_spirv_glslang_switch_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SWITCH_ASSEMBLY)
+    ast = parse_code(tokens)
+    main = ast.functions[0]
+    switch = main.body[0]
+
+    assert ast.spirv_assembly is True
+    assert isinstance(switch, SwitchNode)
+    assert switch.expression.name == "mode"
+    assert [case.value for case in switch.cases] == ["0", "1", None]
+    assert all(case.body[0].left.name == "outColor" for case in switch.cases)
+    assert all(isinstance(case.body[-1], BreakNode) for case in switch.cases)
+    assert isinstance(main.body[1], ReturnNode)
 
 
 def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_parse():

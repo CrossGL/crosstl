@@ -79,6 +79,7 @@ TOKENS = tuple(
         ("PLUS_EQUALS", r"\+="),
         ("MINUS_EQUALS", r"-="),
         ("MULTIPLY_EQUALS", r"\*="),
+        ("FLOOR_DIVIDE_EQUALS", r"//="),
         ("DIVIDE_EQUALS", r"/="),
         ("FLOOR_DIVIDE", r"//"),
         ("POWER", r"\*\*"),

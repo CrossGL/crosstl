@@ -16,6 +16,7 @@ from crosstl.backend.Rust.RustAst import (
 from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
 
 def parse_and_generate(code: str) -> str:
@@ -498,6 +499,36 @@ def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
     assert "vertex vertex_body {" not in result
 
 
+def test_rust_gpu_ray_payload_spirv_attributes_codegen_from_release_notes():
+    # Reduced from EmbarkStudios/rust-gpu v0.5 release notes ray-tracing example:
+    # https://github.com/EmbarkStudios/rust-gpu/releases/tag/v0.5.0
+    code = """
+    use spirv_std::spirv;
+
+    pub struct ShadowPayload {
+        shadowed: u32,
+    }
+
+    #[spirv(miss)]
+    pub fn miss(#[spirv(incoming_ray_payload)] payload: &mut ShadowPayload) {
+        payload.shadowed = 0;
+    }
+
+    #[spirv(ray_generation)]
+    pub fn raygen(#[spirv(ray_payload)] payload: &mut ShadowPayload) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ray_miss miss_ {" in result
+    assert "ShadowPayload payload @ rayPayloadInEXT" in result
+    assert "ray_generation raygen {" in result
+    assert "ShadowPayload payload @ rayPayloadEXT" in result
+    assert "incoming_ray_payload" not in result
+    assert "ray_payload" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_vec_extend_codegen_from_upstream_examples():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
@@ -550,6 +581,32 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     assert "Image2d sampled_tex @ set(2) @ binding(5)" in result
     assert "image2D storage_tex @ set(3) @ binding(1)" in result
     assert "sampler2D direct_tex @ set(4) @ binding(2)" in result
+
+
+def test_rust_gpu_typed_buffer_resource_parameters_codegen_from_upstream():
+    # Reduced from Rust-GPU/rust-gpu tests/compiletests/ui/storage_class/typed_buffer.rs
+    # and crates/spirv-std/src/typed_buffer.rs documented slice form.
+    code = """
+    use glam::Vec4;
+    use spirv_std::TypedBuffer;
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] single: &TypedBuffer<Vec4>,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] single_mut: &mut TypedBuffer<Vec4>,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 2)] slice: &TypedBuffer<[u32]>,
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment {" in result
+    assert "StructuredBuffer<vec4> single @ set(0) @ binding(0)" in result
+    assert "RWStructuredBuffer<vec4> single_mut @ set(0) @ binding(1)" in result
+    assert "StructuredBuffer<uint> slice @ set(0) @ binding(2)" in result
+    assert "void main(TypedBuffer" not in result
+    crosstl.translator.parse(result)
 
 
 def test_vulkan_shader_examples_oit_block_scoped_use_codegen():
@@ -644,6 +701,34 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     assert ".query_size_lod(" not in result
     assert ".query_levels(" not in result
     assert ".query_samples(" not in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_image_gather_method_codegen_from_spirv_std_api():
+    # Reduced from spirv_std::image::Image gather API:
+    # https://embarkstudios.github.io/rust-gpu/api/spirv_std/image/type.Image2dArray.html
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] tex: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+        output: &mut Vec4,
+    ) {
+        let uv = Vec2::new(0.0, 1.0);
+        let gathered: Vec4 = tex.gather(*sampler, uv, 2);
+        *output = gathered;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D tex @ set(0) @ binding(0)" in result
+    assert "sampler sampler_ @ set(0) @ binding(1)" in result
+    assert "gathered = textureGather(tex, sampler_, uv, 2);" in result
+    assert ".gather(" not in result
     crosstl.translator.parse(result)
 
 
@@ -809,6 +894,34 @@ def test_rust_gpu_sample_with_and_depth_project_methods_codegen_from_upstream():
     assert ".sample_with(" not in result
     assert ".sample_depth_reference" not in result
     assert "sample_with::" not in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_glam_vec3a_constructor_codegen_from_depth_sample_compiletest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/sample_depth_reference/sample.rs.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] image_array: &Image!(2D, type=f32, arrayed, sampled),
+        #[spirv(descriptor_set = 1, binding = 1)] sampler: &Sampler,
+        output: &mut f32,
+    ) {
+        let v3 = glam::Vec3A::new(0.0, 0.0, 1.0);
+        *output = image_array.sample_depth_reference(*sampler, v3, 1.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2DArray image_array @ set(0) @ binding(0)" in result
+    assert "let v3 = vec3(0.0, 0.0, 1.0);" in result
+    assert "output = textureCompare(image_array, sampler_, v3, 1.0);" in result
+    assert "glam_Vec3A" not in result
     crosstl.translator.parse(result)
 
 
@@ -1112,7 +1225,8 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     assert "uint shared_[256] @ groupshared" in result
     assert "@numthreads(256, 1, 1)" in result
     assert "sum = subgroup_add(sum);" in result
-    assert "spirv_std::arch::workgroup_memory_barrier_with_group_sync();" in result
+    assert "GroupMemoryBarrierWithGroupSync();" in result
+    assert "workgroup_memory_barrier_with_group_sync" not in result
     assert "output[workgroup_id_x] = sum_;" in result
     crosstl.translator.parse(result)
 
@@ -1158,6 +1272,64 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     assert "::NEG_Y" not in result
     assert "Vec4::X" not in result
     assert "Vec4::Y" not in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_mouse_shader_perp_dot_method_codegen_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs main_fs background expression.
+    code = """
+    fn determinant_magnitude(to_frag: Vec2, start_to_end: Vec2) -> f32 {
+        to_frag.perp_dot(start_to_end).abs()
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "return abs(((to_frag.x * start_to_end.y) - "
+        "(to_frag.y * start_to_end.x)));" in result
+    )
+    assert ".perp_dot(" not in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_glam_reflect_refract_methods_codegen_reparse():
+    # Common glam method-form lighting/refraction idiom used by Rust GPU shaders.
+    code = """
+    fn shade(view_dir: Vec3<f32>, normal: Vec3<f32>, eta: f32) -> Vec3<f32> {
+        let reflected = view_dir.reflect(normal);
+        let refracted = view_dir.refract(normal, eta);
+        reflected + refracted
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "reflected = reflect(view_dir, normal);" in result
+    assert "refracted = refract(view_dir, normal, eta);" in result
+    assert ".reflect(" not in result
+    assert ".refract(" not in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_glam_squared_norm_methods_codegen_reparse():
+    # glam Vec methods documented in rust-gpu APIs and common in distance checks.
+    code = """
+    fn squared_metrics(normal: Vec3<f32>, point: Vec3<f32>, light: Vec3<f32>) -> f32 {
+        let normal_len2 = normal.length_squared();
+        let light_dist2 = point.distance_squared(light);
+        normal_len2 + light_dist2
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "normal_len2 = dot(normal, normal);" in result
+    assert "light_dist2 = dot((point - light), (point - light));" in result
+    assert ".length_squared(" not in result
+    assert ".distance_squared(" not in result
     crosstl.translator.parse(result)
 
 
@@ -1232,9 +1404,10 @@ def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     assert "@numthreads(64, 1, 1)" in result
     assert "let index = (uint)id.x;" in result
     assert (
-        "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);"
+        "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(4294967295);"
         in result
     )
+    assert "u32::MAX" not in result
     assert "Unhandled statement type" not in result
 
 
@@ -1931,6 +2104,9 @@ def test_scalar_math_method_conversion():
         let k = x.min(y);
         let l = x.max(y);
         let m = y.atan2(x);
+        let nan = x.is_nan();
+        let inf = y.is_infinite();
+        let finite = angle.is_finite();
         return a + b + c + d + e + f + g + h + i + j + k + l + m;
     }
     """
@@ -1950,6 +2126,9 @@ def test_scalar_math_method_conversion():
         assert "k = min(x, y);" in result
         assert "l = max(x, y);" in result
         assert "m = atan2(y, x);" in result
+        assert "nan = isnan(x);" in result
+        assert "inf = isinf(y);" in result
+        assert "finite = isfinite(angle);" in result
         assert ".abs()" not in result
         assert ".sqrt()" not in result
         assert ".sin()" not in result
@@ -1962,6 +2141,9 @@ def test_scalar_math_method_conversion():
         assert ".min(" not in result
         assert ".max(" not in result
         assert ".atan2(" not in result
+        assert ".is_nan()" not in result
+        assert ".is_infinite()" not in result
+        assert ".is_finite()" not in result
     except Exception as e:
         pytest.fail(f"Scalar math method conversion failed: {e}")
 
@@ -2062,6 +2244,60 @@ def test_unary_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::fract" not in result
     assert ".sqrt()" not in result
     assert ".fract()" not in result
+
+
+def test_recip_calls_lower_to_crossgl_division_and_target_glsl():
+    # Rust exposes recip() on f32/f64, while shader math also commonly uses the
+    # same reciprocal shape on vectors such as inverse ray directions.
+    code = """
+    fn reciprocal_ops(x: f32, normal: Vec3<f32>) -> Vec3<f32> {
+        let scalar_method = x.recip();
+        let scalar_ufcs = f32::recip(x);
+        let std_ufcs = std::f32::recip(x);
+        let core_ufcs = core::f32::recip(x);
+        let helper_ufcs = crate::math::recip(x);
+        let vector_method = normal.recip();
+        vector_method * (scalar_method + scalar_ufcs + std_ufcs + core_ufcs + helper_ufcs)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "scalar_method = (1.0 / x);" in result
+    assert "scalar_ufcs = (1.0 / x);" in result
+    assert "std_ufcs = (1.0 / x);" in result
+    assert "core_ufcs = (1.0 / x);" in result
+    assert "helper_ufcs = (1.0 / x);" in result
+    assert "vector_method = (1.0 / normal);" in result
+    assert ".recip(" not in result
+    assert "std::f32::recip" not in result
+    assert "core::f32::recip" not in result
+    assert "crate::math::recip" not in result
+
+    ast = crosstl.translator.parse(result)
+    glsl = GLSLCodeGen().generate(ast)
+    assert ".recip(" not in glsl
+    assert "::recip(" not in glsl
+    assert "1.0 / x" in glsl
+    assert "1.0 / normal" in glsl
+
+
+def test_user_defined_recip_call_does_not_lower_to_division():
+    code = """
+    fn recip(x: f32) -> f32 {
+        x + 1.0
+    }
+
+    fn call_recip(x: f32) -> f32 {
+        recip(x)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "float recip(float x)" in result
+    assert "return recip(x);" in result
+    assert "return (1.0 / x);" not in result
 
 
 def test_rounding_intrinsic_calls_convert_to_crossgl_intrinsics():
@@ -2218,6 +2454,33 @@ def test_step_and_smoothstep_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::smoothstep" not in result
 
 
+def test_rust_gpu_shadertoy_step_and_rem_euclid_methods_codegen():
+    # Reduced from Rust-GPU/rust-gpu-shadertoys shaders that use method-form
+    # step and rem_euclid for periodic SDF/repetition math.
+    code = """
+    fn repeat_tile(point: Vec3<f32>, face_blend: f32, delta: f32) -> Vec3<f32> {
+        let repeated = point.rem_euclid(Vec3::splat(6.0)) - Vec3::splat(3.0);
+        let angle = (face_blend + delta * 22.5).rem_euclid(delta * 45.0) - delta * 22.5;
+        let scalar_gate = 0.5.step(face_blend);
+        let vector_gate = Vec3::ZERO.step(point);
+        return repeated + vector_gate + Vec3::splat(angle + scalar_gate);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec3 repeat_tile(vec3 point, float face_blend, float delta)" in result
+    assert "repeated = (mod(point, vec3(6.0)) - vec3(3.0));" in result
+    assert (
+        "angle = (mod((face_blend + (delta * 22.5)), (delta * 45.0)) "
+        "- (delta * 22.5));" in result
+    )
+    assert "scalar_gate = step(0.5, face_blend);" in result
+    assert "vector_gate = step(vec3(0.0, 0.0, 0.0), point);" in result
+    assert ".rem_euclid(" not in result
+    assert ".step(" not in result
+
+
 def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
     code = """
     fn derivative_ops(value: Vec3<f32>, scale: f32, bias: f32) -> Vec3<f32> {
@@ -2249,6 +2512,45 @@ def test_derivative_and_fused_math_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::dfdy" not in result
     assert "crate::math::fwidth_coarse" not in result
     assert ".mul_add(" not in result
+
+
+def test_rust_gpu_derivative_trait_calls_convert_to_crossgl_intrinsics():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/arch/{derivative,derivative_control}.rs.
+    code = """
+    use spirv_std::arch::Derivative;
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main(value: Vec3<f32>) {
+        let dx = Derivative::dfdx(value);
+        let dy = spirv_std::arch::Derivative::dfdy(value);
+        let fine_x = Derivative::dfdx_fine(value);
+        let fine_y = Derivative::dfdy_fine(value);
+        let coarse_x = Derivative::dfdx_coarse(value);
+        let coarse_y = Derivative::dfdy_coarse(value);
+        let wide = Derivative::fwidth(value);
+        let wide_fine = Derivative::fwidth_fine(value);
+        let wide_coarse = Derivative::fwidth_coarse(value);
+        let method_dx = value.dfdx();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "dx = dFdx(value);" in result
+    assert "dy = dFdy(value);" in result
+    assert "fine_x = dFdxFine(value);" in result
+    assert "fine_y = dFdyFine(value);" in result
+    assert "coarse_x = dFdxCoarse(value);" in result
+    assert "coarse_y = dFdyCoarse(value);" in result
+    assert "wide = fwidth(value);" in result
+    assert "wide_fine = fwidthFine(value);" in result
+    assert "wide_coarse = fwidthCoarse(value);" in result
+    assert "method_dx = dFdx(value);" in result
+    assert "Derivative::" not in result
+    crosstl.translator.parse(result)
 
 
 def test_ldexp_intrinsic_calls_convert_to_crossgl_intrinsic():
@@ -6843,7 +7145,7 @@ def test_lifetime_receiver_codegen_from_rust_gpu_wgpu_runner():
     try:
         result = parse_and_generate(code)
         assert (
-            "wgpu::ShaderModuleDescriptor "
+            "wgpu_ShaderModuleDescriptor "
             "CompiledShaderModules_spv_module_for_entry_point("
             "CompiledShaderModules self, str wanted_entry)" in result
         )
@@ -6851,6 +7153,32 @@ def test_lifetime_receiver_codegen_from_rust_gpu_wgpu_runner():
         assert "&" not in result
     except Exception as e:
         pytest.fail(f"Lifetime receiver conversion failed: {e}")
+
+
+def test_wgpu_shader_loading_host_types_codegen_reparse():
+    # Reduced from gfx-rs/wgpu hello_triangle and stencil_triangles examples,
+    # plus wgpu's documented include_wgsl! shader-loading macro.
+    code = """
+    use std::borrow::Cow;
+
+    fn init(device: wgpu::Device) {
+        spawn(async move {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
+            });
+            let shader2 = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        });
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void init(wgpu_Device device)" in result
+    assert "wgpu::ShaderModuleDescriptor {" in result
+    assert 'include_str!("shader.wgsl")' in result
+    assert 'wgpu::include_wgsl!("shader.wgsl")' in result
+    crosstl.translator.parse(result)
 
 
 def test_use_statement_conversion():
@@ -8874,6 +9202,24 @@ def test_rust_gpu_mouse_shader_tuple_struct_destructure_codegen():
     assert "b = unwrap_Line_1(_rust_match_subject_0);" in result
     assert "let ap = (p - a);" in result
     assert "return ap.x;" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_mouse_shader_glam_distance_method_codegen():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Line::distance.
+    code = """
+    fn line_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+        let proj = dot(p - a, b - a) / dot(b - a, b - a);
+        p.distance(a.lerp(b, proj))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return distance(p, mix(a, b, proj));" in result
+    assert ".distance(" not in result
     crosstl.translator.parse(result)
 
 

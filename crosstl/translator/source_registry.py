@@ -113,6 +113,7 @@ class SourceRegistry:
         self._by_name: dict[str, SourceSpec] = {}
         self._by_alias: dict[str, str] = {}
         self._by_extension: dict[str, str] = {}
+        self._unsupported_extensions: dict[str, str] = {}
 
     def register(self, spec: SourceSpec, *, overwrite: bool = False) -> SourceSpec:
         """Register a source spec and all of its aliases/extensions."""
@@ -142,8 +143,24 @@ class SourceRegistry:
                     continue
                 raise ValueError(f"Extension '{ext_key}' already registered")
             self._by_extension[ext_key] = name
+            self._unsupported_extensions.pop(ext_key, None)
 
         return spec
+
+    def register_unsupported_extension(
+        self, ext: str, message: str, *, overwrite: bool = False
+    ) -> None:
+        """Register a known-but-unsupported source extension diagnostic."""
+        ext_key = _normalize_extension(ext)
+        if not ext_key:
+            raise ValueError("Unsupported source extension must be non-empty")
+        if ext_key in self._by_extension and not overwrite:
+            raise ValueError(f"Extension '{ext_key}' already registered")
+        if ext_key in self._unsupported_extensions and not overwrite:
+            if self._unsupported_extensions[ext_key] == message:
+                return
+            raise ValueError(f"Unsupported extension '{ext_key}' already registered")
+        self._unsupported_extensions[ext_key] = message
 
     def resolve_name(self, name: str) -> str | None:
         """Resolve a source name or alias to its canonical registry name."""
@@ -170,7 +187,15 @@ class SourceRegistry:
             if looks_like_path or looks_like_filename:
                 _, ext = os.path.splitext(path_or_ext)
         ext_key = _normalize_extension(ext or "")
+        if ext_key in self._unsupported_extensions:
+            raise ValueError(self._unsupported_extensions[ext_key])
         name = self._by_extension.get(ext_key)
+        if not name and ext_key.startswith("."):
+            _, trailing_ext = os.path.splitext(ext_key)
+            if trailing_ext and trailing_ext != ext_key:
+                if trailing_ext in self._unsupported_extensions:
+                    raise ValueError(self._unsupported_extensions[trailing_ext])
+                name = self._by_extension.get(_normalize_extension(trailing_ext))
         if not name:
             return None
         return self._by_name.get(name)
@@ -185,6 +210,27 @@ class SourceRegistry:
 
 
 SOURCE_REGISTRY = SourceRegistry()
+
+BINARY_SPIRV_UNSUPPORTED_MESSAGE = (
+    "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
+    "assembly (.spvasm) or disassemble the binary with spirv-dis first."
+)
+METAL_BINARY_UNSUPPORTED_MESSAGE = (
+    "Compiled Metal artifacts (.air, .metallib) are not supported; provide "
+    "Metal source (.metal) first."
+)
+DIRECTX_BINARY_UNSUPPORTED_MESSAGE = (
+    "Compiled DirectX shader binaries (.cso, .dxbc, .dxil) are not supported; "
+    "provide HLSL source (.hlsl, .hlsli, .fx, .fxh) first."
+)
+CUDA_ARTIFACT_UNSUPPORTED_MESSAGE = (
+    "Generated CUDA/NVIDIA artifacts (.ptx, .cubin, .fatbin) are not supported; "
+    "provide CUDA source (.cu, .cuh, .cuda) first."
+)
+HIP_ARTIFACT_UNSUPPORTED_MESSAGE = (
+    "Compiled HIP/ROCm artifacts (.hsaco) are not supported; provide HIP source "
+    "(.hip) first."
+)
 
 
 def _load_cgl():
@@ -266,19 +312,77 @@ def _reverse_glsl():
 _GLSL_EXTENSION_SHADER_TYPES = {
     ".glsl": "auto",
     ".vs": "vertex",
+    ".vsh": "vertex",
     ".vert": "vertex",
+    ".vertex": "vertex",
     ".fs": "fragment",
+    ".fsh": "fragment",
     ".frag": "fragment",
+    ".fragment": "fragment",
     ".comp": "compute",
+    ".csh": "compute",
+    ".compute": "compute",
     ".geom": "geometry",
+    ".gsh": "geometry",
+    ".geometry": "geometry",
     ".tesc": "tessellation_control",
     ".tese": "tessellation_evaluation",
+    ".mesh": "mesh",
+    ".task": "task",
+    ".rgen": "ray_generation",
+    ".rint": "ray_intersection",
+    ".rahit": "ray_any_hit",
+    ".rchit": "ray_closest_hit",
+    ".rmiss": "ray_miss",
+    ".rcall": "ray_callable",
+}
+
+_GLSL_FILENAME_STAGE_SUFFIX_TYPES = {
+    "_vs": "vertex",
+    "_vert": "vertex",
+    "_vertex": "vertex",
+    "_fs": "fragment",
+    "_frag": "fragment",
+    "_fragment": "fragment",
+    "_comp": "compute",
+    "_compute": "compute",
+    "_geom": "geometry",
+    "_geometry": "geometry",
+    "_tesc": "tessellation_control",
+    "_tese": "tessellation_evaluation",
+    "_mesh": "mesh",
+    "_task": "task",
+    "_rgen": "ray_generation",
+    "_rint": "ray_intersection",
+    "_rahit": "ray_any_hit",
+    "_rchit": "ray_closest_hit",
+    "_rmiss": "ray_miss",
+    "_rcall": "ray_callable",
 }
 
 
 def _glsl_shader_type_from_path(file_path: str) -> str | None:
-    _, ext = os.path.splitext(file_path)
-    return _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(ext))
+    stem, ext = os.path.splitext(os.path.basename(file_path))
+    ext = _normalize_extension(ext)
+    if not ext:
+        shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(stem))
+        if shader_type and shader_type != "auto":
+            return shader_type
+    if ext == ".glsl":
+        _, stage_ext = os.path.splitext(stem)
+        shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(stage_ext))
+        if shader_type and shader_type != "auto":
+            return shader_type
+        shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(
+            _normalize_extension(stem.lstrip("."))
+        )
+        if shader_type and shader_type != "auto":
+            return shader_type
+        normalized_stem = stem.lower()
+        for suffix, shader_type in _GLSL_FILENAME_STAGE_SUFFIX_TYPES.items():
+            if normalized_stem.endswith(suffix):
+                return shader_type
+    return _GLSL_EXTENSION_SHADER_TYPES.get(ext)
 
 
 def _reverse_slang():
@@ -326,6 +430,12 @@ def register_default_sources() -> None:
         except ValueError:
             return
 
+    def _register_unsupported_extension(ext: str, message: str) -> None:
+        try:
+            SOURCE_REGISTRY.register_unsupported_extension(ext, message)
+        except ValueError:
+            return
+
     _register(
         SourceSpec(
             name="cgl",
@@ -337,7 +447,7 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="directx",
-            extensions=(".hlsl",),
+            extensions=(".hlsl", ".hlsli", ".fx", ".fxh"),
             load_lexer_parser=_load_directx,
             reverse_codegen_factory=_reverse_directx,
             aliases=("hlsl", "dx"),
@@ -358,13 +468,29 @@ def register_default_sources() -> None:
             extensions=(
                 ".glsl",
                 ".vs",
+                ".vsh",
                 ".fs",
+                ".fsh",
                 ".vert",
+                ".vertex",
                 ".frag",
+                ".fragment",
                 ".comp",
+                ".csh",
+                ".compute",
                 ".geom",
+                ".gsh",
+                ".geometry",
                 ".tesc",
                 ".tese",
+                ".mesh",
+                ".task",
+                ".rgen",
+                ".rint",
+                ".rahit",
+                ".rchit",
+                ".rmiss",
+                ".rcall",
             ),
             load_lexer_parser=_load_glsl,
             reverse_codegen_factory=_reverse_glsl,
@@ -375,7 +501,7 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="slang",
-            extensions=(".slang",),
+            extensions=(".slang", ".slangh"),
             load_lexer_parser=_load_slang,
             reverse_codegen_factory=_reverse_slang,
             aliases=("slang",),
@@ -390,6 +516,15 @@ def register_default_sources() -> None:
             aliases=("spirv", "spv"),
         )
     )
+    _register_unsupported_extension(".spv", BINARY_SPIRV_UNSUPPORTED_MESSAGE)
+    _register_unsupported_extension(".spirv", BINARY_SPIRV_UNSUPPORTED_MESSAGE)
+    for ext in (".air", ".metallib"):
+        _register_unsupported_extension(ext, METAL_BINARY_UNSUPPORTED_MESSAGE)
+    for ext in (".cso", ".dxbc", ".dxil"):
+        _register_unsupported_extension(ext, DIRECTX_BINARY_UNSUPPORTED_MESSAGE)
+    for ext in (".ptx", ".cubin", ".fatbin"):
+        _register_unsupported_extension(ext, CUDA_ARTIFACT_UNSUPPORTED_MESSAGE)
+    _register_unsupported_extension(".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE)
     _register(
         SourceSpec(
             name="mojo",

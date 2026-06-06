@@ -630,3 +630,192 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
     assert f"constant uint* {target_name}Length" in metal
     assert f"len = {target_name}Length[0];" in metal
     assert f"{target_name}[tid.x] = value;" in metal
+
+
+def test_primary_compute_builtin_parameters_map_to_backend_native_aliases():
+    shader = """
+    shader ComputeBuiltinAliasConsistency {
+        compute {
+            void main(
+                uvec3 dispatchId @ gl_GlobalInvocationID,
+                uvec3 groupId @ gl_WorkGroupID,
+                uvec3 groupThreadId @ gl_LocalInvocationID,
+                uint groupIndex @ gl_LocalInvocationIndex
+            ) {
+                uint folded = dispatchId.x + groupId.y + groupThreadId.z
+                    + groupIndex;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate_stage(ast, "compute")
+    glsl = GLSLCodeGen().generate_stage(ast, "compute")
+    metal = MetalCodeGen().generate_stage(ast, "compute")
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "uint3 dispatchId : SV_DispatchThreadID" in hlsl
+    assert "uint3 groupId : SV_GroupID" in hlsl
+    assert "uint3 groupThreadId : SV_GroupThreadID" in hlsl
+    assert "uint groupIndex : SV_GroupIndex" in hlsl
+    assert "gl_GlobalInvocationID" not in hlsl
+
+    assert "void main()" in glsl
+    assert "gl_GlobalInvocationID.x" in glsl
+    assert "gl_WorkGroupID.y" in glsl
+    assert "gl_LocalInvocationID.z" in glsl
+    assert "gl_LocalInvocationIndex" in glsl
+    for source_name in ("dispatchId", "groupId", "groupThreadId", "groupIndex"):
+        assert source_name not in glsl
+
+    assert "uint3 dispatchId [[thread_position_in_grid]]" in metal
+    assert "uint3 groupId [[threadgroup_position_in_grid]]" in metal
+    assert "uint3 groupThreadId [[thread_position_in_threadgroup]]" in metal
+    assert "uint groupIndex [[thread_index_in_threadgroup]]" in metal
+    assert "gl_GlobalInvocationID" not in metal
+
+
+def test_primary_graphics_vector_result_types_are_preserved():
+    shader = """
+    shader VectorResultTypeConsistency {
+        vec3 bend(vec3 normal, vec3 tangent, float scale) {
+            vec3 n = normalize(normal);
+            vec3 t = normalize(tangent);
+            vec3 b = cross(n, t);
+            return reflect(b * scale, n);
+        }
+
+        fragment {
+            vec4 main(vec3 normal @ NORMAL, vec3 tangent @ TANGENT)
+                @ gl_FragColor {
+                vec3 lit = bend(normal, tangent, 0.5);
+                return vec4(lit, 1.0);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate_stage(ast, "fragment")
+    glsl = GLSLCodeGen().generate_stage(ast, "fragment")
+    metal = MetalCodeGen().generate_stage(ast, "fragment")
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "float3 bend(float3 normal, float3 tangent, float scale)" in hlsl
+    assert "float3 n = normalize(normal);" in hlsl
+    assert "float3 b = cross(n, t);" in hlsl
+    assert "float3 lit = bend(normal, tangent, 0.5);" in hlsl
+
+    assert "vec3 bend(vec3 normal, vec3 tangent, float scale)" in glsl
+    assert "vec3 n = normalize(normal);" in glsl
+    assert "vec3 b = cross(n, t);" in glsl
+    assert "vec3 lit = bend(normal, tangent, 0.5);" in glsl
+
+    assert "float3 bend(float3 normal, float3 tangent, float scale)" in metal
+    assert "float3 n = normalize(normal);" in metal
+    assert "float3 b = cross(n, t);" in metal
+    assert "float3 lit = bend(normal, tangent, 0.5);" in metal
+
+
+def test_primary_graphics_texture_helper_calls_survive_shadowed_identifier_names():
+    shader = """
+    shader TextureHelperShadowedIdentifiers {
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            int layer @ TEXCOORD1;
+        };
+
+        vec4 sampleLayer(
+            sampler2D textures[4],
+            sampler samplers[4],
+            int layer,
+            vec2 uv
+        ) {
+            sampler2D texture = textures[layer];
+            sampler sampler = samplers[layer];
+            return texture(texture, sampler, uv);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return sampleLayer(textures, samplers, input.layer, input.uv);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate_stage(ast, "fragment")
+    glsl = GLSLCodeGen().generate_stage(ast, "fragment")
+    metal = MetalCodeGen().generate_stage(ast, "fragment")
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "Texture2D texture = textures[layer];" in hlsl
+    assert "SamplerState sampler = samplers[layer];" in hlsl
+    assert "return texture.Sample(sampler, uv);" in hlsl
+    assert "texture(texture" not in hlsl
+
+    assert "vec4 sampleLayer(sampler2D textures[4], int layer, vec2 uv)" in glsl
+    assert "return texture(textures[layer], uv);" in glsl
+    assert "samplers" not in glsl
+    assert "sampler sampler" not in glsl
+
+    assert "texture2d<float> texture = textures[layer];" in metal
+    assert "sampler sampler = samplers[layer];" in metal
+    assert "return texture.sample(sampler, uv);" in metal
+    assert "texture(texture" not in metal
+
+
+def test_hlsl_lerp_alias_does_not_call_shadowed_mix_target():
+    shader = """
+    shader LerpAliasTargetShadow {
+        float shade(float a, float b, float t) {
+            float mix = t;
+            return lerp(a, b, t) + mix;
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "return (lerp(a, b, t) + mix);" in hlsl
+
+    assert "float mix_ = t;" in glsl
+    assert "return (mix(a, b, t) + mix_);" in glsl
+    assert "return (mix(a, b, t) + mix);" not in glsl
+
+    assert "float mix = t;" in metal
+    assert "return metal::mix(a, b, t) + mix;" in metal
+    assert "return mix(a, b, t) + mix;" not in metal

@@ -106,6 +106,8 @@ class GLSLToCrossGLConverter:
         "component",
         "index",
         "input_attachment_index",
+        "offset",
+        "align",
         "stream",
         "xfb_buffer",
         "xfb_offset",
@@ -130,12 +132,14 @@ class GLSLToCrossGLConverter:
         "blend_support_all_equations",
     )
     BARE_LAYOUT_ATTRIBUTE_NAMES = (
+        "column_major",
         "depth_any",
         "depth_greater",
         "depth_less",
         "depth_unchanged",
         "origin_upper_left",
         "pixel_center_integer",
+        "row_major",
         *BLEND_SUPPORT_LAYOUT_ATTRIBUTE_NAMES,
     )
     NON_STRUCT_STAGE_TYPES = {
@@ -223,7 +227,10 @@ class GLSLToCrossGLConverter:
     VERTEX_BUILTIN_OUTPUT_TYPES = {
         "gl_Position": "vec4",
         "gl_PointSize": "float",
+        "gl_ClipDistance": "float",
+        "gl_CullDistance": "float",
     }
+    VERTEX_BUILTIN_ARRAY_OUTPUTS = {"gl_ClipDistance", "gl_CullDistance"}
     DEFAULT_SHADER_TYPE = "vertex"
 
     def __init__(self, shader_type="vertex"):
@@ -281,20 +288,45 @@ class GLSLToCrossGLConverter:
             "fwidthFine": "fwidth_fine",
             "fwidthCoarse": "fwidth_coarse",
         }
+        legacy_texture_aliases = {
+            "texture1D": ("texture", "sample"),
+            "texture2D": ("texture", "sample"),
+            "texture3D": ("texture", "sample"),
+            "textureCube": ("texture", "sample"),
+            "texture1DProj": ("textureProj", "sample_projected"),
+            "texture2DProj": ("textureProj", "sample_projected"),
+            "texture3DProj": ("textureProj", "sample_projected"),
+            "texture1DLod": ("textureLod", "sample_lod"),
+            "texture2DLod": ("textureLod", "sample_lod"),
+            "texture3DLod": ("textureLod", "sample_lod"),
+            "textureCubeLod": ("textureLod", "sample_lod"),
+            "texture1DProjLod": ("textureProjLod", "sample_projected"),
+            "texture2DProjLod": ("textureProjLod", "sample_projected"),
+            "texture3DProjLod": ("textureProjLod", "sample_projected"),
+            "texture1DGrad": ("textureGrad", "sample_grad"),
+            "texture2DGrad": ("textureGrad", "sample_grad"),
+            "texture3DGrad": ("textureGrad", "sample_grad"),
+            "textureCubeGrad": ("textureGrad", "sample_grad"),
+            "texture1DProjGrad": ("textureProjGrad", "sample_projected"),
+            "texture2DProjGrad": ("textureProjGrad", "sample_projected"),
+            "texture3DProjGrad": ("textureProjGrad", "sample_projected"),
+            "texture1DOffset": ("textureOffset", "sample_offset"),
+            "texture2DOffset": ("textureOffset", "sample_offset"),
+            "texture3DOffset": ("textureOffset", "sample_offset"),
+            "texture1DLodOffset": ("textureLodOffset", "sample_lod"),
+            "texture2DLodOffset": ("textureLodOffset", "sample_lod"),
+            "texture3DLodOffset": ("textureLodOffset", "sample_lod"),
+            "texture1DGradOffset": ("textureGradOffset", "sample_grad"),
+            "texture2DGradOffset": ("textureGradOffset", "sample_grad"),
+            "texture3DGradOffset": ("textureGradOffset", "sample_grad"),
+        }
         self.texture_function_operations = {
             "texture": "sample",
-            "texture1D": "sample",
-            "texture2D": "sample",
-            "texture3D": "sample",
-            "textureCube": "sample",
             "textureLod": "sample_lod",
             "textureLodOffset": "sample_lod",
             "textureGrad": "sample_grad",
             "textureGradOffset": "sample_grad",
             "textureProj": "sample_projected",
-            "texture1DProj": "sample_projected",
-            "texture2DProj": "sample_projected",
-            "texture3DProj": "sample_projected",
             "textureProjLod": "sample_projected",
             "textureProjLodOffset": "sample_projected",
             "textureProjGrad": "sample_projected",
@@ -325,14 +357,11 @@ class GLSLToCrossGLConverter:
             "textureQueryLod": "query_lod",
             "textureSamples": "query_samples",
         }
+        self.texture_function_operations.update(
+            {name: operation for name, (_, operation) in legacy_texture_aliases.items()}
+        )
         self.legacy_texture_function_names = {
-            "texture1D": "texture",
-            "texture2D": "texture",
-            "texture3D": "texture",
-            "textureCube": "texture",
-            "texture1DProj": "textureProj",
-            "texture2DProj": "textureProj",
-            "texture3DProj": "textureProj",
+            name: canonical for name, (canonical, _) in legacy_texture_aliases.items()
         }
         self.image_function_operations = {
             "imageLoad": "load",
@@ -505,6 +534,7 @@ class GLSLToCrossGLConverter:
         self.task_payload_shared_names = set()
         self.variable_type_scopes = []
         self.function_name_renames = {}
+        self.user_function_arities = set()
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -620,6 +650,40 @@ class GLSLToCrossGLConverter:
             return "textureGatherCompareOffsets"
         return name
 
+    def combined_sampler_constructor_parts(self, node):
+        if not isinstance(node, FunctionCallNode) or len(node.args) != 2:
+            return None
+
+        constructor_name = self.function_call_name(node)
+        if not isinstance(constructor_name, str):
+            return None
+
+        if not constructor_name.startswith(("sampler", "isampler", "usampler")):
+            return None
+
+        return node.args[0], node.args[1]
+
+    def texture_function_arguments(self, args, operation=None):
+        if not args:
+            return []
+
+        combined_sampler = self.combined_sampler_constructor_parts(args[0])
+        if combined_sampler is None:
+            return [self.generate_expression(arg) for arg in args]
+
+        texture_arg, sampler_arg = combined_sampler
+        if operation in {"fetch", "query_size", "query_levels", "query_samples"}:
+            return [
+                self.generate_expression(texture_arg),
+                *[self.generate_expression(arg) for arg in args[1:]],
+            ]
+
+        return [
+            self.generate_expression(texture_arg),
+            self.generate_expression(sampler_arg),
+            *[self.generate_expression(arg) for arg in args[1:]],
+        ]
+
     def sanitize_crossgl_identifier(self, name):
         if name in CROSSGL_RESERVED_IDENTIFIERS:
             return f"{name}_"
@@ -653,18 +717,25 @@ class GLSLToCrossGLConverter:
 
     def ssbo_binding_attribute_suffix(self, var):
         layout = getattr(var, "layout", None) or {}
+        attributes = []
+        descriptor_set = layout.get("set")
+        if descriptor_set is not None:
+            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
         binding = layout.get("binding")
-        return (
-            f" @binding({self.layout_value_to_string(binding)})"
-            if binding is not None
-            else ""
-        )
+        if binding is not None:
+            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        return f" {' '.join(attributes)}" if attributes else ""
 
     def ssbo_block_attribute_suffix(self, var):
+        layout = getattr(var, "layout", None) or {}
         layout_names = self.ssbo_block_layout_names(var)
         attributes = [f"@glsl_buffer_block({', '.join(layout_names)})"]
         if self.is_shader_record_buffer_block(var):
             self.validate_shader_record_layout(var)
+
+        descriptor_set = layout.get("set")
+        if descriptor_set is not None:
+            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
 
         binding = self.ssbo_binding(var)
         if binding is not None:
@@ -840,6 +911,9 @@ class GLSLToCrossGLConverter:
 
         attributes = []
         layout = getattr(var, "layout", None) or {}
+        descriptor_set = layout.get("set")
+        if descriptor_set is not None:
+            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
         binding = layout.get("binding")
         if binding is not None:
             attributes.append(f"@binding({self.layout_value_to_string(binding)})")
@@ -918,6 +992,7 @@ class GLSLToCrossGLConverter:
             for qualifier, attribute in self.VARIABLE_QUALIFIER_ATTRIBUTES.items()
             if qualifier in qualifiers and qualifier not in excluded_qualifiers
         ]
+        attributes.extend(self.subroutine_qualifier_attributes(var))
         return f" {' '.join(attributes)}" if attributes else ""
 
     def vulkan_memory_model_qualifier_attributes(self, var):
@@ -932,6 +1007,28 @@ class GLSLToCrossGLConverter:
     def vulkan_memory_model_qualifier_attribute_suffix(self, var):
         attributes = self.vulkan_memory_model_qualifier_attributes(var)
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def subroutine_qualifier_attributes(self, node):
+        attributes = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            qualifier_text = str(qualifier)
+            lowered = qualifier_text.lower()
+            if lowered == "subroutine":
+                attributes.append("@subroutine")
+            elif lowered.startswith("subroutine(") and qualifier_text.endswith(")"):
+                arguments = qualifier_text[qualifier_text.find("(") + 1 : -1]
+                attributes.append(f"@subroutine({arguments})")
+        return attributes
+
+    def subroutine_qualifier_attribute_suffix(self, node):
+        attributes = self.subroutine_qualifier_attributes(node)
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def is_subroutine_qualified(self, node):
+        return any(
+            str(qualifier).lower().startswith("subroutine")
+            for qualifier in getattr(node, "qualifiers", []) or []
+        )
 
     def is_qualifier_only_builtin_declaration(self, var):
         if not isinstance(var, VariableNode):
@@ -1009,14 +1106,17 @@ class GLSLToCrossGLConverter:
             or fragment_writes_sample_mask
         )
 
-    def fragment_main_writes_name(self, node, name):
-        if self.shader_type != "fragment":
+    def main_writes_name(self, node, name, shader_type=None):
+        if shader_type is not None and self.shader_type != shader_type:
             return False
         for function in getattr(node, "functions", []) or []:
             if getattr(function, "name", None) != "main":
                 continue
             return self.statements_write_name(getattr(function, "body", []) or [], name)
         return False
+
+    def fragment_main_writes_name(self, node, name):
+        return self.main_writes_name(node, name, shader_type="fragment")
 
     def statements_write_name(self, statements, name):
         return any(
@@ -1266,6 +1366,14 @@ class GLSLToCrossGLConverter:
         self.function_name_renames = self.collect_function_name_renames(
             getattr(node, "functions", []) or []
         )
+        self.user_function_arities = {
+            (
+                getattr(function, "name", None),
+                len(getattr(function, "params", []) or []),
+            )
+            for function in getattr(node, "functions", []) or []
+            if getattr(function, "name", None)
+        }
         self.prepare_structured_buffers(node)
 
         for var in node.io_variables:
@@ -1284,6 +1392,15 @@ class GLSLToCrossGLConverter:
         fragment_writes_sample_mask = self.fragment_main_writes_name(
             node, "gl_SampleMask"
         )
+        vertex_writes_point_size = self.main_writes_name(
+            node, "gl_PointSize", shader_type="vertex"
+        )
+        vertex_builtin_output_writes = {}
+        if self.shader_type == "vertex":
+            for builtin_name in self.VERTEX_BUILTIN_OUTPUT_TYPES:
+                vertex_builtin_output_writes[builtin_name] = self.main_writes_name(
+                    node, builtin_name, shader_type="vertex"
+                )
 
         # Ensure vertex stages include gl_Position
         if self.shader_type == "vertex":
@@ -1303,13 +1420,15 @@ class GLSLToCrossGLConverter:
                 output_names.add("gl_Position")
 
             for name, vtype in self.VERTEX_BUILTIN_OUTPUT_TYPES.items():
-                if (
-                    name == "gl_Position"
-                    or name not in builtin_redeclaration_qualifiers
+                if name == "gl_Position" or (
+                    name not in builtin_redeclaration_qualifiers
+                    and not (name == "gl_PointSize" and vertex_writes_point_size)
+                    and not vertex_builtin_output_writes.get(name, False)
                 ):
                     continue
                 if name in output_names:
                     continue
+                is_array = name in self.VERTEX_BUILTIN_ARRAY_OUTPUTS
                 self.outputs.append(
                     VariableNode(
                         vtype,
@@ -1317,6 +1436,8 @@ class GLSLToCrossGLConverter:
                         qualifiers=self.builtin_output_qualifiers(
                             name, builtin_redeclaration_qualifiers
                         ),
+                        array_sizes=[None] if is_array else [],
+                        is_array=is_array,
                         semantic=name,
                     )
                 )
@@ -1382,8 +1503,17 @@ class GLSLToCrossGLConverter:
             resource_uniforms = [
                 u for u in self.uniform_vars if self._is_resource_type(u.vtype)
             ]
+            subroutine_uniforms = [
+                u for u in self.uniform_vars if self.is_subroutine_qualified(u)
+            ]
+            resource_uniforms = [
+                u for u in resource_uniforms if not self.is_subroutine_qualified(u)
+            ]
             data_uniforms = [
-                u for u in self.uniform_vars if not self._is_resource_type(u.vtype)
+                u
+                for u in self.uniform_vars
+                if not self._is_resource_type(u.vtype)
+                and not self.is_subroutine_qualified(u)
             ]
             push_constant_blocks = {}
             ordinary_data_uniforms = []
@@ -1402,6 +1532,13 @@ class GLSLToCrossGLConverter:
                 result += (
                     self.indent_str
                     + f"{var_type} {var_name}{array_suffix}{attributes};\n"
+                )
+
+            for uniform in subroutine_uniforms:
+                result += (
+                    self.indent_str
+                    + self.generate_variable_declaration(uniform)
+                    + ";\n"
                 )
 
             for block_name, uniforms in push_constant_blocks.items():
@@ -1500,6 +1637,10 @@ class GLSLToCrossGLConverter:
             else:
                 other_functions.append(function)
 
+        shadertoy_main_image = None
+        if main_function is None and self.shader_type == "fragment":
+            shadertoy_main_image = self.find_shadertoy_main_image(other_functions)
+
         # Generate auxiliary functions first
         for function in other_functions:
             self.increase_indent()
@@ -1507,7 +1648,7 @@ class GLSLToCrossGLConverter:
             self.decrease_indent()
 
         # Generate the main function if it exists
-        if main_function:
+        if main_function or shadertoy_main_image:
             self.increase_indent()
             input_parameter = (
                 f"{self.stage_struct_name()}Input input" if self.inputs else ""
@@ -1559,27 +1700,38 @@ class GLSLToCrossGLConverter:
                 self.shader_type == "fragment"
                 and self.outputs
                 and not fragment_uses_direct_outputs
+                and shadertoy_main_image is None
             ):
                 output_type = self.convert_type(self.outputs[0].vtype)
                 output_name = self.outputs[0].name
                 result += self.indent() + f"{output_type} {output_name};\n"
 
             # Generate statements for the main function
-            for statement in self.generate_statement_sequence(main_function.body):
-                result += self.indent() + statement + "\n"
+            if shadertoy_main_image is not None:
+                for statement in self.generate_shadertoy_main_image_entrypoint(
+                    shadertoy_main_image, fragment_uses_direct_outputs
+                ):
+                    result += self.indent() + statement + "\n"
+            else:
+                for statement in self.generate_statement_sequence(main_function.body):
+                    result += self.indent() + statement + "\n"
 
-            if self.shader_type in ("vertex",) and not any(
-                isinstance(stmt, ReturnNode) for stmt in main_function.body
-            ):
-                result += self.indent() + "return output;\n"
+                if self.shader_type in ("vertex",) and not any(
+                    isinstance(stmt, ReturnNode) for stmt in main_function.body
+                ):
+                    result += self.indent() + "return output;\n"
 
-            if (
-                self.shader_type == "fragment"
-                and not fragment_uses_direct_outputs
-                and not any(isinstance(stmt, ReturnNode) for stmt in main_function.body)
-            ):
-                output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
-                result += self.indent() + f"return {output_name};\n"
+                if (
+                    self.shader_type == "fragment"
+                    and not fragment_uses_direct_outputs
+                    and not any(
+                        isinstance(stmt, ReturnNode) for stmt in main_function.body
+                    )
+                ):
+                    output_name = (
+                        self.outputs[0].name if self.outputs else "gl_FragColor"
+                    )
+                    result += self.indent() + f"return {output_name};\n"
 
             self.decrease_indent()
             result += self.indent() + "}\n"
@@ -1590,6 +1742,64 @@ class GLSLToCrossGLConverter:
         result += "}\n"
 
         return result
+
+    def find_shadertoy_main_image(self, functions):
+        for function in functions:
+            if self.is_shadertoy_main_image(function):
+                return function
+        return None
+
+    def is_shadertoy_main_image(self, function):
+        if getattr(function, "name", None) != "mainImage":
+            return False
+        if getattr(function, "return_type", None) != "void":
+            return False
+
+        params = getattr(function, "params", None) or []
+        if len(params) < 2:
+            return False
+
+        color_param, coord_param = params[:2]
+        if not isinstance(color_param, VariableNode) or not isinstance(
+            coord_param, VariableNode
+        ):
+            return False
+
+        color_qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(color_param, "qualifiers", []) or []
+        }
+        coord_qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(coord_param, "qualifiers", []) or []
+        }
+
+        return (
+            color_param.vtype == "vec4"
+            and coord_param.vtype == "vec2"
+            and bool(color_qualifiers & {"out", "inout"})
+            and "out" not in coord_qualifiers
+        )
+
+    def generate_shadertoy_main_image_entrypoint(
+        self, function, fragment_uses_direct_outputs
+    ):
+        color_param = function.params[0]
+        color_type = self.convert_type(getattr(color_param, "vtype", None) or "vec4")
+        local_color = "shadertoyFragColor"
+        call_name = self.format_function_name(function.name)
+        statements = [
+            f"{color_type} {local_color};",
+            f"{call_name}({local_color}, gl_FragCoord.xy);",
+        ]
+
+        if fragment_uses_direct_outputs:
+            output_name = self.outputs[0].name if self.outputs else "gl_FragColor"
+            statements.append(f"{output_name} = {local_color};")
+        else:
+            statements.append(f"return {local_color};")
+
+        return statements
 
     def generate_struct(self, node):
         result = f"{self.interface_block_attribute_prefix(node)}struct {node.name} {{\n"
@@ -1618,6 +1828,7 @@ class GLSLToCrossGLConverter:
                     semantic += self.interface_member_layout_attribute_suffix(field)
                     semantic += self.variable_qualifier_attribute_suffix(field)
                 else:
+                    semantic += self.interface_member_layout_attribute_suffix(field)
                     semantic += self.vulkan_memory_model_qualifier_attribute_suffix(
                         field
                     )
@@ -1668,6 +1879,11 @@ class GLSLToCrossGLConverter:
         try:
             return_type = self.convert_type(node.return_type)
             name = self.format_function_name(node.name)
+            attributes = (
+                self.variable_layout_attribute_suffix(node)
+                + self.subroutine_qualifier_attribute_suffix(node)
+            ).strip()
+            attribute_prefix = f"{attributes} " if attributes else ""
 
             params = []
             for param in node.params:
@@ -1677,7 +1893,7 @@ class GLSLToCrossGLConverter:
 
             params_str = ", ".join(params)
 
-            result = f"{return_type} {name}({params_str}) {{\n"
+            result = f"{attribute_prefix}{return_type} {name}({params_str}) {{\n"
 
             self.increase_indent()
             for statement in self.generate_statement_sequence(node.body):
@@ -2193,15 +2409,27 @@ class GLSLToCrossGLConverter:
             return f"{name}{{{args}}}"
 
         descriptor = self.resource_function_descriptor(name)
-        mapped_name = (
-            descriptor["function"]
-            if descriptor is not None
-            else self.function_map.get(name, self.format_function_name(name))
-        )
+        mapped_name = self.mapped_function_name(name, node.args, descriptor)
 
-        args = ", ".join(self.generate_expression(arg) for arg in node.args)
+        if descriptor is not None and descriptor.get("resource") == "texture":
+            args = ", ".join(
+                self.texture_function_arguments(node.args, descriptor.get("operation"))
+            )
+        else:
+            args = ", ".join(self.generate_expression(arg) for arg in node.args)
 
         return f"{mapped_name}({args})"
+
+    def mapped_function_name(self, name, args, descriptor=None):
+        if descriptor is not None:
+            return descriptor["function"]
+        if (
+            name == "atan"
+            and len(args) == 2
+            and (name, len(args)) not in self.user_function_arities
+        ):
+            return "atan2"
+        return self.function_map.get(name, self.format_function_name(name))
 
     def generate_ray_query_method_call(self, name, args):
         if name in self.RAY_QUERY_SIMPLE_METHODS and args:

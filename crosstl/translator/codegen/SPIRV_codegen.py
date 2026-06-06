@@ -103,8 +103,9 @@ class SpirvId:
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
-    def __init__(self):
+    def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
+        self.include_resource_interface_variables = include_resource_interface_variables
         self.reset_generation_state()
 
     def reset_generation_state(self):
@@ -162,6 +163,7 @@ class VulkanSPIRVCodeGen:
         self.precise_local_variables = set()
         self.no_contraction_ids = set()
         self.precise_expression_depth = 0
+        self.non_uniform_ids = set()
 
         self.functions = {}
         self.function_nodes = {}
@@ -209,6 +211,7 @@ class VulkanSPIRVCodeGen:
         self.tessellation_patch_constant_interfaces = {}
         self.tessellation_patch_constant_output_variables = {}
         self.tessellation_patch_constant_input_variables = {}
+        self.fragment_depth_replacing_function_ids = set()
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -267,6 +270,22 @@ class VulkanSPIRVCodeGen:
     def require_extension(self, extension: str):
         """Request a SPIR-V extension for instructions emitted later."""
         self.required_extensions.add(extension)
+
+    def require_non_uniform_descriptor_indexing(self):
+        self.require_capability("ShaderNonUniform")
+        self.require_extension("SPV_EXT_descriptor_indexing")
+
+    def is_non_uniform_value(self, value_id) -> bool:
+        id_number = value_id.id if isinstance(value_id, SpirvId) else value_id
+        return id_number in self.non_uniform_ids
+
+    def mark_non_uniform_result(self, value_id):
+        id_number = value_id.id if isinstance(value_id, SpirvId) else value_id
+        if id_number in self.non_uniform_ids:
+            return
+        self.require_non_uniform_descriptor_indexing()
+        self.non_uniform_ids.add(id_number)
+        self.decorations.append(f"OpDecorate %{id_number} NonUniform")
 
     def require_compute_derivatives(self):
         """Enable compute shader derivatives for derivative-dependent image ops."""
@@ -379,8 +398,16 @@ class VulkanSPIRVCodeGen:
             self.require_capability("StorageImageMultisample")
             if arrayed:
                 self.require_capability("ImageMSArray")
-        if sampled == 1 and dim == "1D":
-            self.require_capability("Sampled1D")
+        if dim == "Cube" and arrayed:
+            if sampled == 2:
+                self.require_capability("ImageCubeArray")
+            else:
+                self.require_capability("SampledCubeArray")
+        if dim == "1D":
+            if sampled == 2:
+                self.require_capability("Image1D")
+            else:
+                self.require_capability("Sampled1D")
 
         id_value = self.get_id()
         self.emit(
@@ -931,6 +958,8 @@ class VulkanSPIRVCodeGen:
         resource_metadata = self.resource_metadata_for_pointer(variable_id)
         if resource_metadata is not None:
             self.resource_type_metadata[id_value] = resource_metadata
+        if self.is_non_uniform_value(variable_id):
+            self.mark_non_uniform_result(spirv_id)
         return spirv_id
 
     def convert_value_for_store(
@@ -1197,6 +1226,10 @@ class VulkanSPIRVCodeGen:
         )
 
         spirv_id = SpirvId(id_value, result_type.type)
+        if self.is_non_uniform_value(base_id) or any(
+            self.is_non_uniform_value(index) for index in indices
+        ):
+            self.mark_non_uniform_result(spirv_id)
         return spirv_id
 
     def composite_extract(
@@ -1959,16 +1992,72 @@ class VulkanSPIRVCodeGen:
             return bool_type, left, right
 
         component_type, component_count = left_vector or right_vector
-        vector_operand_type = self.ensure_registered_type(
-            left.type if left_vector is not None else right.type
+        promoted_component_type = component_type
+        if left_vector is not None and right_vector is not None:
+            if left_vector[1] != right_vector[1]:
+                return (
+                    self.register_vector_type(bool_type, component_count),
+                    left,
+                    right,
+                )
+            promoted_component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_vector[0]]
+            )
+            if promoted_component_type is None:
+                promoted_component_type = (
+                    left_vector[0]
+                    if left_vector[0] == right_vector[0]
+                    else component_type
+                )
+        elif left_vector is not None:
+            right_component = self.scalar_or_vector_component_type(right.type)
+            promoted_component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_component]
+            )
+            if promoted_component_type is None:
+                promoted_component_type = (
+                    left_vector[0]
+                    if right_component == left_vector[0]
+                    else component_type
+                )
+        elif right_vector is not None:
+            left_component = self.scalar_or_vector_component_type(left.type)
+            promoted_component_type = self.promoted_numeric_type_name(
+                [left_component, right_vector[0]]
+            )
+            if promoted_component_type is None:
+                promoted_component_type = (
+                    right_vector[0]
+                    if left_component == right_vector[0]
+                    else component_type
+                )
+
+        vector_operand_type = self.register_vector_type(
+            self.register_primitive_type(promoted_component_type),
+            component_count,
         )
 
         if left_vector is not None and right_vector is None:
-            if self.scalar_or_vector_component_type(right.type) == component_type:
+            left = self.convert_value_to_type(left, vector_operand_type)
+            component = self.register_primitive_type(promoted_component_type)
+            right = self.convert_scalar_to_type(right, component)
+            if (
+                self.scalar_or_vector_component_type(right.type)
+                == promoted_component_type
+            ):
                 right = self.splat_scalar_to_vector(right, vector_operand_type)
         elif right_vector is not None and left_vector is None:
-            if self.scalar_or_vector_component_type(left.type) == component_type:
+            right = self.convert_value_to_type(right, vector_operand_type)
+            component = self.register_primitive_type(promoted_component_type)
+            left = self.convert_scalar_to_type(left, component)
+            if (
+                self.scalar_or_vector_component_type(left.type)
+                == promoted_component_type
+            ):
                 left = self.splat_scalar_to_vector(left, vector_operand_type)
+        elif left_vector is not None and right_vector is not None:
+            left = self.convert_value_to_type(left, vector_operand_type)
+            right = self.convert_value_to_type(right, vector_operand_type)
 
         return self.register_vector_type(bool_type, component_count), left, right
 
@@ -1980,31 +2069,138 @@ class VulkanSPIRVCodeGen:
         right_vector = self.vector_component_type_and_count(right.type.base_type)
 
         if left_vector is not None and right_vector is None:
-            vector_type = self.ensure_registered_type(left.type)
-            component_type = self.register_primitive_type(left_vector[0])
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            vector_type = (
+                result_type
+                if result_vector is not None and result_vector[1] == left_vector[1]
+                else self.ensure_registered_type(left.type)
+            )
+            component_type_name = self.vector_component_type_and_count(
+                vector_type.type.base_type
+            )[0]
+            component_type = self.register_primitive_type(component_type_name)
+            left = self.convert_value_to_type(left, vector_type)
             right = self.convert_scalar_to_type(right, component_type)
-            if self.scalar_or_vector_component_type(right.type) == left_vector[0]:
+            if self.scalar_or_vector_component_type(right.type) == component_type_name:
                 return (
                     vector_type,
                     left,
                     self.splat_scalar_to_vector(right, vector_type),
                 )
         if right_vector is not None and left_vector is None:
-            vector_type = self.ensure_registered_type(right.type)
-            component_type = self.register_primitive_type(right_vector[0])
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            vector_type = (
+                result_type
+                if result_vector is not None and result_vector[1] == right_vector[1]
+                else self.ensure_registered_type(right.type)
+            )
+            component_type_name = self.vector_component_type_and_count(
+                vector_type.type.base_type
+            )[0]
+            component_type = self.register_primitive_type(component_type_name)
+            right = self.convert_value_to_type(right, vector_type)
             left = self.convert_scalar_to_type(left, component_type)
-            if self.scalar_or_vector_component_type(left.type) == right_vector[0]:
+            if self.scalar_or_vector_component_type(left.type) == component_type_name:
                 return (
                     vector_type,
                     self.splat_scalar_to_vector(left, vector_type),
                     right,
                 )
+        if left_vector is not None and right_vector is not None:
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            if (
+                result_vector is not None
+                and left_vector[1] == result_vector[1]
+                and right_vector[1] == result_vector[1]
+            ):
+                left = self.convert_value_to_type(left, result_type)
+                right = self.convert_value_to_type(right, result_type)
+                if self.value_has_type(left, result_type) and self.value_has_type(
+                    right, result_type
+                ):
+                    return result_type, left, right
 
         if left_vector is None and right_vector is None:
             left = self.convert_value_to_type(left, result_type)
             right = self.convert_value_to_type(right, result_type)
 
         return result_type, left, right
+
+    def binary_expression_result_type(
+        self, op: str, left_type: Optional[SpirvId], right_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        """Infer the SPIR-V result type for a binary expression."""
+        if left_type is None or right_type is None:
+            return left_type or right_type
+
+        left_type = self.ensure_registered_type(left_type)
+        right_type = self.ensure_registered_type(right_type)
+        left_vector = self.vector_component_type_and_count(left_type.type.base_type)
+        right_vector = self.vector_component_type_and_count(right_type.type.base_type)
+
+        if op in {"&&", "||"}:
+            if left_vector is not None or right_vector is not None:
+                component_count = (left_vector or right_vector)[1]
+                return self.register_vector_type(
+                    self.register_primitive_type("bool"), component_count
+                )
+            return self.register_primitive_type("bool")
+
+        if op in {"==", "!=", "<", ">", "<=", ">="}:
+            if left_vector is not None or right_vector is not None:
+                component_count = (left_vector or right_vector)[1]
+                return self.register_vector_type(
+                    self.register_primitive_type("bool"), component_count
+                )
+            return self.register_primitive_type("bool")
+
+        if op not in {"+", "-", "*", "MULTIPLY", "/", "%"}:
+            return left_type
+
+        if left_vector is not None and right_vector is not None:
+            if left_vector[1] != right_vector[1]:
+                return left_type
+            component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_vector[0]]
+            )
+            if component_type is None:
+                return left_type
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), left_vector[1]
+            )
+
+        if left_vector is not None:
+            component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_type.type.base_type]
+            )
+            if component_type is None:
+                return left_type
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), left_vector[1]
+            )
+
+        if right_vector is not None:
+            component_type = self.promoted_numeric_type_name(
+                [left_type.type.base_type, right_vector[0]]
+            )
+            if component_type is None:
+                return right_type
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), right_vector[1]
+            )
+
+        scalar_type = self.promoted_numeric_type_name(
+            [left_type.type.base_type, right_type.type.base_type]
+        )
+        if scalar_type is None:
+            return left_type
+        return self.register_primitive_type(scalar_type)
 
     def splat_scalar_to_vector(
         self, scalar_id: SpirvId, vector_type: SpirvId
@@ -2657,10 +2853,12 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId], extra_arg_count: int = 0
     ):
         coord_index = 1
+        sampler_id = None
         if len(args) > 1:
             sampler_metadata = self.resource_metadata_for_value(args[1])
             if sampler_metadata and sampler_metadata.get("kind") == "sampler":
                 coord_index = 2
+                sampler_id = args[1]
 
         required_arg_count = coord_index + 1 + extra_arg_count
         if len(args) < required_arg_count:
@@ -2674,11 +2872,103 @@ class VulkanSPIRVCodeGen:
         coord_id = args[coord_index]
         extra_args = args[coord_index + 1 :]
         metadata = self.resource_metadata_for_value(sampled_image_id)
+        if metadata and metadata.get("kind") == "texture":
+            if sampler_id is None:
+                self.emit(
+                    f"; WARNING: {function_name} requires a sampler for separate "
+                    "texture operands"
+                )
+                return None
+            sampled_image_id = self.combine_texture_and_sampler(
+                function_name, sampled_image_id, sampler_id, metadata
+            )
+            if sampled_image_id is None:
+                return None
+            metadata = self.resource_metadata_for_value(sampled_image_id)
+
         if not metadata or metadata.get("kind") != "sampled_image":
             self.emit(f"; WARNING: {function_name} requires a sampled image operand")
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def combine_texture_and_sampler(
+        self,
+        function_name: str,
+        texture_id: SpirvId,
+        sampler_id: SpirvId,
+        texture_metadata,
+    ) -> Optional[SpirvId]:
+        sampler_metadata = self.resource_metadata_for_value(sampler_id)
+        if not sampler_metadata or sampler_metadata.get("kind") != "sampler":
+            self.emit(f"; WARNING: {function_name} requires a sampler operand")
+            return None
+
+        image_type_id = texture_metadata.get("image_type_id")
+        if image_type_id is None:
+            image_type_id = self.value_types.get(texture_id.id, texture_id).id
+        sampled_image_type = self.register_sampled_image_type_for_image(
+            image_type_id, texture_metadata
+        )
+        if sampled_image_type is None:
+            self.emit(
+                f"; WARNING: {function_name} could not construct a sampled image "
+                "from separate texture and sampler operands"
+            )
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpSampledImage %{sampled_image_type.id} "
+            f"%{texture_id.id} %{sampler_id.id}"
+        )
+        self.value_types[id_value] = sampled_image_type
+        self.resource_type_metadata[id_value] = (
+            self.sampled_image_metadata_from_texture(
+                sampled_image_type, texture_metadata
+            )
+        )
+        sampled_image = SpirvId(id_value, sampled_image_type.type)
+        if self.is_non_uniform_value(texture_id) or self.is_non_uniform_value(
+            sampler_id
+        ):
+            self.mark_non_uniform_result(sampled_image)
+        return sampled_image
+
+    def register_sampled_image_type_for_image(
+        self, image_type_id: int, texture_metadata
+    ) -> Optional[SpirvId]:
+        image_type = self.find_registered_type_by_id(image_type_id)
+        if image_type is None:
+            return None
+
+        type_name = f"{texture_metadata.get('type_name', 'texture')}_sampled"
+        cache_key = (
+            type_name,
+            "sampled_image",
+            texture_metadata.get("component_type", "float"),
+            texture_metadata.get("format", "Unknown"),
+            image_type_id,
+        )
+        if cache_key in self.resource_types:
+            return self.resource_types[cache_key]
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpTypeSampledImage %{image_type.id}")
+        sampled_image_type = SpirvId(id_value, SpirvType(type_name), type_name)
+        self.resource_types[cache_key] = sampled_image_type
+        self.resource_type_metadata[id_value] = (
+            self.sampled_image_metadata_from_texture(
+                sampled_image_type, texture_metadata
+            )
+        )
+        return sampled_image_type
+
+    def sampled_image_metadata_from_texture(self, sampled_image_type, texture_metadata):
+        metadata = dict(texture_metadata)
+        metadata["kind"] = "sampled_image"
+        metadata["type_name"] = sampled_image_type.type.base_type
+        return metadata
 
     def sampled_texture_excess_operand_warning(self, function_name: str) -> str:
         operation_operands = {
@@ -8020,11 +8310,114 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return spirv_id
 
+    def bitcast_builtin_target_component_type(
+        self, function_name: str
+    ) -> Optional[str]:
+        return {
+            "asfloat": "float",
+            "asint": "int",
+            "asuint": "uint",
+            "floatBitsToInt": "int",
+            "floatBitsToUint": "uint",
+            "intBitsToFloat": "float",
+            "uintBitsToFloat": "float",
+        }.get(function_name)
+
+    def bitcast_builtin_result_type(
+        self, function_name: str, source_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        target_component_name = self.bitcast_builtin_target_component_type(
+            function_name
+        )
+        if target_component_name is None:
+            return None
+
+        target_component_type = self.register_primitive_type(target_component_name)
+        if source_type is None:
+            return target_component_type
+
+        source_vector = self.vector_component_type_and_count(source_type.type.base_type)
+        if source_vector is None:
+            return target_component_type
+
+        return self.register_vector_type(target_component_type, source_vector[1])
+
+    def bitcast_builtin_source_is_valid(self, source_type: SpirvId) -> bool:
+        source_vector = self.vector_component_type_and_count(source_type.type.base_type)
+        if source_vector is not None:
+            source_component_name = source_vector[0]
+        else:
+            source_component_name = self.normalize_primitive_name(
+                source_type.type.base_type
+            )
+        return source_component_name in {"float", "int", "uint"}
+
+    def call_bitcast_builtin_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if function_name in self.struct_types:
+            return None
+
+        target_component_name = self.bitcast_builtin_target_component_type(
+            function_name
+        )
+        if target_component_name is None:
+            return None
+
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            result_type = self.register_primitive_type(target_component_name)
+            return self.default_value_for_type(result_type)
+
+        source_type = self.registered_value_type(
+            args[0]
+        ) or self.ensure_registered_type(args[0].type)
+        result_type = self.bitcast_builtin_result_type(function_name, source_type)
+        if result_type is None:
+            return None
+
+        if not self.bitcast_builtin_source_is_valid(source_type):
+            self.emit(
+                f"; WARNING: {function_name} requires a 32-bit numeric scalar "
+                "or vector operand"
+            )
+            return self.default_value_for_type(result_type)
+
+        if source_type.type.base_type == result_type.type.base_type:
+            return args[0]
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpBitcast %{result_type.id} %{args[0].id}")
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        if self.is_non_uniform_value(args[0]):
+            self.mark_non_uniform_result(spirv_id)
+        return spirv_id
+
+    def infer_bitcast_builtin_result_type(
+        self, function_name: str, args: List
+    ) -> Optional[SpirvId]:
+        target_component_name = self.bitcast_builtin_target_component_type(
+            function_name
+        )
+        if target_component_name is None:
+            return None
+        if len(args) != 1:
+            return self.register_primitive_type(target_component_name)
+
+        source_type = self.infer_expression_result_type(args[0])
+        return self.bitcast_builtin_result_type(function_name, source_type)
+
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a built-in function."""
-        function_name = {"frac": "fract"}.get(function_name, function_name)
+        function_name = {
+            "frac": "fract",
+            "inverseSqrt": "inversesqrt",
+            "lerp": "mix",
+            "rsqrt": "inversesqrt",
+        }.get(function_name, function_name)
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:
             return synchronization_call
@@ -8032,6 +8425,14 @@ class VulkanSPIRVCodeGen:
         scalar_constructor = self.call_scalar_constructor(function_name, args)
         if scalar_constructor is not None:
             return scalar_constructor
+
+        derivative_call = self.call_derivative_function(function_name, args)
+        if derivative_call is not None:
+            return derivative_call
+
+        bitcast_call = self.call_bitcast_builtin_function(function_name, args)
+        if bitcast_call is not None:
+            return bitcast_call
 
         exact_operand_counts = {
             "min": 2,
@@ -8271,9 +8672,11 @@ class VulkanSPIRVCodeGen:
             constructor_args = self.struct_constructor_args(function_name, args)
             return self.composite_construct(struct_type, constructor_args)
 
+        matrix_function_name = self.normalize_hlsl_matrix_type(function_name)
+
         # Matrix constructors
-        elif re.fullmatch(r"(d)?mat([234])(?:x([234]))?", function_name):
-            match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", function_name)
+        if re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_function_name):
+            match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_function_name)
             is_double, cols, rows = match.groups()
             cols = int(cols)
             rows = int(rows or cols)
@@ -8500,6 +8903,95 @@ class VulkanSPIRVCodeGen:
             return self.emit_glsl_std450_instruction(
                 glsl_std450_map[function_name], result_type_id, args
             )
+
+    def derivative_function_opcode(self, function_name: str) -> Optional[str]:
+        aliases = {
+            "ddx": "dFdx",
+            "ddx_fine": "dFdxFine",
+            "ddx_coarse": "dFdxCoarse",
+            "ddy": "dFdy",
+            "ddy_fine": "dFdyFine",
+            "ddy_coarse": "dFdyCoarse",
+            "fwidth_fine": "fwidthFine",
+            "fwidth_coarse": "fwidthCoarse",
+        }
+        function_name = aliases.get(function_name, function_name)
+        opcodes = {
+            "dFdx": "OpDPdx",
+            "dFdxFine": "OpDPdxFine",
+            "dFdxCoarse": "OpDPdxCoarse",
+            "dFdy": "OpDPdy",
+            "dFdyFine": "OpDPdyFine",
+            "dFdyCoarse": "OpDPdyCoarse",
+            "fwidth": "OpFwidth",
+            "fwidthFine": "OpFwidthFine",
+            "fwidthCoarse": "OpFwidthCoarse",
+        }
+        return opcodes.get(function_name)
+
+    def derivative_operand_is_valid(self, value: SpirvId) -> bool:
+        result_type = self.ensure_registered_type(value.type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return False
+
+        type_name = self.normalize_primitive_name(result_type.type.base_type)
+        return (
+            type_name in {"float", "double"}
+            or self.vector_component_type_and_count(result_type.type.base_type)
+            is not None
+        )
+
+    def current_derivative_execution_models(self) -> set:
+        return self.current_synchronization_execution_models()
+
+    def can_emit_derivative_function(self) -> bool:
+        execution_models = self.current_derivative_execution_models()
+        derivative_execution_models = {"Fragment", "GLCompute", "MeshEXT", "TaskEXT"}
+        return bool(execution_models) and execution_models.issubset(
+            derivative_execution_models
+        )
+
+    def call_derivative_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        opcode = self.derivative_function_opcode(function_name)
+        if opcode is None:
+            return None
+
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires 1 operand")
+            return self.register_constant(0.0, self.register_primitive_type("float"))
+
+        result_type = self.ensure_registered_type(args[0].type)
+        if not self.derivative_operand_is_valid(args[0]):
+            self.emit(
+                f"; WARNING: {function_name} requires floating-point scalar "
+                "or vector operand"
+            )
+            return self.default_value_for_type(result_type)
+
+        if not self.can_emit_derivative_function():
+            self.emit(
+                f"; WARNING: derivative builtin '{function_name}' requires Fragment "
+                "or compute-derivative-capable execution model; current execution "
+                f"model: {self.current_execution_model_label()}"
+            )
+            return self.default_value_for_type(result_type)
+
+        compute_derivative_models = {"GLCompute", "MeshEXT", "TaskEXT"}
+        if self.current_derivative_execution_models() & compute_derivative_models:
+            self.require_compute_derivatives()
+
+        if opcode.endswith("Fine") or opcode.endswith("Coarse"):
+            self.require_capability("DerivativeControl")
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{result_type.id} %{args[0].id}")
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
 
     def call_scalar_constructor(
         self, function_name: str, args: List[SpirvId]
@@ -9287,11 +9779,15 @@ class VulkanSPIRVCodeGen:
     def normalize_generic_vector_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
         match = re.fullmatch(r"vec([234])<([^>]+)>", compact)
-        if not match:
-            return compact
+        if match:
+            size, element_type = match.groups()
+            element_type = self.normalize_primitive_name(element_type)
+        else:
+            match = re.fullmatch(r"(float|double|int|uint|bool)([234])", compact)
+            if not match:
+                return compact
+            element_type, size = match.groups()
 
-        size, element_type = match.groups()
-        element_type = self.normalize_primitive_name(element_type)
         prefixes = {
             "float": "vec",
             "double": "dvec",
@@ -9300,6 +9796,23 @@ class VulkanSPIRVCodeGen:
             "bool": "bvec",
         }
         return f"{prefixes.get(element_type, 'vec')}{size}"
+
+    def normalize_hlsl_matrix_type(self, type_str: str) -> str:
+        compact = re.sub(r"\s+", "", str(type_str))
+        match = re.fullmatch(
+            r"(float|double|half|min16float|float16_t)([234])x([234])",
+            compact,
+        )
+        if not match:
+            return str(type_str)
+
+        component_type, rows, cols = match.groups()
+        prefix = "dmat" if component_type == "double" else "mat"
+        rows = int(rows)
+        cols = int(cols)
+        if rows == cols:
+            return f"{prefix}{cols}"
+        return f"{prefix}{cols}x{rows}"
 
     def vector_component_type_and_count(
         self, type_str: str
@@ -9325,6 +9838,66 @@ class VulkanSPIRVCodeGen:
     def resource_type_info(self, type_str: str):
         sampler_info = {
             "sampler": {"kind": "sampler"},
+            "texture1D": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "1D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "texture2D": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "texture3D": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "3D",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "textureCube": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 0,
+                "arrayed": 0,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "texture2DArray": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "2D",
+                "depth": 0,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
+            "textureCubeArray": {
+                "kind": "texture",
+                "component_type": "float",
+                "dim": "Cube",
+                "depth": 0,
+                "arrayed": 1,
+                "multisampled": 0,
+                "sampled": 1,
+                "format": "Unknown",
+            },
             "sampler1D": {
                 "kind": "sampled_image",
                 "component_type": "float",
@@ -9462,7 +10035,9 @@ class VulkanSPIRVCodeGen:
         if self.is_acceleration_structure_type_name(type_str):
             return {"kind": "acceleration_structure"}
 
-        image_match = re.fullmatch(r"([iu]?image)(2D|3D|Cube)(MS)?(Array)?", type_str)
+        image_match = re.fullmatch(
+            r"([iu]?image)(1D|2D|3D|Cube)(MS)?(Array)?", type_str
+        )
         if image_match:
             prefix, dim, ms_suffix, array_suffix = image_match.groups()
             if ms_suffix and dim != "2D":
@@ -10033,6 +10608,7 @@ class VulkanSPIRVCodeGen:
             cache_key = f"__return_semantic_builtin::{name}"
             if cache_key in self.global_variables:
                 variable = self.global_variables[cache_key]
+                self.mark_fragment_depth_replacing_if_needed(builtin_name, "Output")
                 self.mark_function_interface_variable(variable)
                 return variable
 
@@ -10349,6 +10925,7 @@ class VulkanSPIRVCodeGen:
             type_str = str(type_name)
 
         type_str = self.normalize_generic_vector_type(type_str)
+        type_str = self.normalize_hlsl_matrix_type(type_str)
         explicit_format = self.explicit_image_format(node) if node is not None else None
 
         array_type = self.split_outer_array_type(type_str)
@@ -10364,7 +10941,7 @@ class VulkanSPIRVCodeGen:
         if self.is_resource_type_name(type_str):
             return self.register_resource_type(type_str, explicit_format)
 
-        return self.map_crossgl_type(type_name)
+        return self.map_crossgl_type(type_str)
 
     def spirv_struct_member_storage_type_name(
         self, type_name, allow_runtime_array: bool = False
@@ -10540,6 +11117,7 @@ class VulkanSPIRVCodeGen:
             type_str = str(type_name)
 
         type_str = self.normalize_generic_vector_type(type_str)
+        type_str = self.normalize_hlsl_matrix_type(type_str)
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:
@@ -12333,6 +12911,9 @@ class VulkanSPIRVCodeGen:
                 return self.variable_value_types.get(
                     variable.id
                 ) or self.value_types.get(variable.id)
+            builtin_type = self.infer_builtin_expression_result_type(name)
+            if builtin_type is not None:
+                return builtin_type
             return None
         if isinstance(expr, FunctionCallNode):
             callee_name = self.function_call_name(expr)
@@ -12344,6 +12925,9 @@ class VulkanSPIRVCodeGen:
                 return self.register_vector_type(
                     self.register_primitive_type(component_type), component_count
                 )
+            matrix_type_name = self.normalize_hlsl_matrix_type(callee_name)
+            if re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_type_name):
+                return self.map_crossgl_type(matrix_type_name)
             primitive_name = self.normalize_primitive_name(callee_name)
             if primitive_name in {"bool", "int", "uint", "float", "double"}:
                 return self.register_primitive_type(primitive_name)
@@ -12352,6 +12936,25 @@ class VulkanSPIRVCodeGen:
                 return signature[0]
             if callee_name in self.struct_types:
                 return self.struct_types[callee_name]
+            bitcast_type = self.infer_bitcast_builtin_result_type(
+                callee_name, expr.args
+            )
+            if bitcast_type is not None:
+                return bitcast_type
+            return None
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.infer_expression_result_type(expr.array)
+            if array_type is None:
+                return None
+            element_type = self.array_element_type_from_type(array_type)
+            if element_type is not None:
+                return element_type
+            vector_info = self.vector_type_info_from_type(array_type)
+            if vector_info is not None:
+                return vector_info[0]
+            matrix_info = self.matrix_type_info_from_type(array_type)
+            if matrix_info is not None:
+                return matrix_info[0]
             return None
         if isinstance(expr, MemberAccessNode):
             base_type = self.infer_expression_result_type(expr.object)
@@ -12372,7 +12975,9 @@ class VulkanSPIRVCodeGen:
                 return swizzle_info[2]
             return None
         if isinstance(expr, BinaryOpNode):
-            return self.infer_expression_result_type(expr.left)
+            left_type = self.infer_expression_result_type(expr.left)
+            right_type = self.infer_expression_result_type(expr.right)
+            return self.binary_expression_result_type(expr.op, left_type, right_type)
         if isinstance(expr, TernaryOpNode):
             true_type = self.infer_expression_result_type(expr.true_expr)
             false_type = self.infer_expression_result_type(expr.false_expr)
@@ -12383,6 +12988,40 @@ class VulkanSPIRVCodeGen:
             return true_type or false_type
         if isinstance(expr, MatchNode):
             return self.infer_match_expression_result_type(expr)
+        return None
+
+    def infer_builtin_expression_result_type(self, name: str) -> Optional[SpirvId]:
+        builtin_type = self.infer_builtin_variable_result_type(name)
+        if builtin_type is not None:
+            return builtin_type
+
+        if not isinstance(name, str) or "." not in name:
+            return None
+
+        base_name, member_name = name.rsplit(".", 1)
+        base_type = self.infer_builtin_variable_result_type(base_name)
+        if base_type is None:
+            return None
+
+        member_info = self.vector_member_info(base_type.type.base_type, member_name)
+        if member_info is not None:
+            return member_info[1]
+
+        swizzle_info = self.vector_swizzle_info(base_type.type.base_type, member_name)
+        if swizzle_info is not None:
+            return swizzle_info[2]
+
+        return None
+
+    def infer_builtin_variable_result_type(self, name: str) -> Optional[SpirvId]:
+        compute_info = self.compute_builtin_info(name)
+        if compute_info is not None:
+            return self.map_crossgl_type(compute_info[0])
+
+        stage_info = self.stage_builtin_info(name)
+        if stage_info is not None:
+            return self.map_crossgl_type(stage_info[0])
+
         return None
 
     def infer_match_expression_result_type(self, node: MatchNode) -> Optional[SpirvId]:
@@ -13544,6 +14183,7 @@ class VulkanSPIRVCodeGen:
             return [4]
 
         type_name = self.normalize_generic_vector_type(type_name)
+        type_name = self.normalize_hlsl_matrix_type(type_name)
         array_type = self.split_outer_array_type(type_name)
         if array_type is not None:
             element_type_name, size = array_type
@@ -18187,6 +18827,26 @@ class VulkanSPIRVCodeGen:
             return old_value
         return new_value
 
+    def process_non_uniform_function_call(self, function_name, args) -> SpirvId:
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        value = self.process_expression(args[0])
+        if value is None:
+            self.emit(f"; WARNING: {function_name} operand could not be evaluated")
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        result_type = self.value_types.get(value.id) or self.ensure_registered_type(
+            value.type
+        )
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpCopyObject %{result_type.id} %{value.id}")
+        copied = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        self.mark_non_uniform_result(copied)
+        return copied
+
     def process_expression(self, expr) -> Optional[SpirvId]:
         """Process a CrossGL expression."""
         if expr is None:
@@ -18219,6 +18879,7 @@ class VulkanSPIRVCodeGen:
                 return self.named_constants[expr]
             elif expr in self.global_variables:
                 var_id = self.global_variables[expr]
+                self.mark_interface_variable_if_needed(var_id)
                 self.mark_builtin_interface_variable(var_id)
                 return self.get_variable_value(var_id)
             elif expr in self.cbuffer_members:
@@ -18281,6 +18942,7 @@ class VulkanSPIRVCodeGen:
                 return self.named_constants[expr.name]
             elif expr.name in self.global_variables:
                 var_id = self.global_variables[expr.name]
+                self.mark_interface_variable_if_needed(var_id)
                 self.mark_builtin_interface_variable(var_id)
                 return self.get_variable_value(var_id)
             elif expr.name in self.cbuffer_members:
@@ -18332,11 +18994,19 @@ class VulkanSPIRVCodeGen:
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            result_type = left.type  # Default to left operand's type
-
-            return self.binary_operation(
-                expr.op, self.map_crossgl_type(result_type.base_type), left, right
+            left_type = self.registered_value_type(left) or self.ensure_registered_type(
+                left.type
             )
+            right_type = self.registered_value_type(
+                right
+            ) or self.ensure_registered_type(right.type)
+            result_type = self.binary_expression_result_type(
+                expr.op, left_type, right_type
+            )
+            if result_type is None:
+                result_type = left_type
+
+            return self.binary_operation(expr.op, result_type, left, right)
 
         elif isinstance(expr, UnaryOpNode):
             if expr.op in {"++", "--"}:
@@ -18415,6 +19085,9 @@ class VulkanSPIRVCodeGen:
                 callee_name = callee_expr.name
             elif isinstance(callee_expr, str):
                 callee_name = callee_expr
+
+            if isinstance(callee_name, str) and callee_name.lower() == "nonuniformext":
+                return self.process_non_uniform_function_call(callee_name, expr.args)
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
@@ -18637,6 +19310,9 @@ class VulkanSPIRVCodeGen:
             "SV_DEPTH": "gl_FragDepth",
         }
         return aliases.get(str(name).upper(), name)
+
+    def spirv_builtin_cache_name(self, name: str) -> str:
+        return self.spirv_builtin_alias(name)
 
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
@@ -18897,6 +19573,15 @@ class VulkanSPIRVCodeGen:
             if interface_variable.id == variable.id:
                 self.mark_function_interface_variable(interface_variable)
                 return
+        if (
+            self.include_resource_interface_variables
+            and variable.type.storage_class in {"Uniform", "UniformConstant"}
+            and any(
+                global_variable.id == variable.id
+                for global_variable in self.global_variables.values()
+            )
+        ):
+            self.mark_function_interface_variable(variable)
 
     def merge_function_interface_variables_from_callee(
         self, function_name: str, function_id: Optional[int] = None
@@ -18916,6 +19601,18 @@ class VulkanSPIRVCodeGen:
         if variable.id in self.builtin_interface_variable_ids:
             self.mark_function_interface_variable(variable)
 
+    def mark_fragment_depth_replacing_if_needed(
+        self, builtin_name: str, storage_class: str
+    ):
+        if (
+            builtin_name != "FragDepth"
+            or storage_class != "Output"
+            or self.current_execution_model != "Fragment"
+            or self.current_function_id is None
+        ):
+            return
+        self.fragment_depth_replacing_function_ids.add(self.current_function_id)
+
     def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
         builtin = self.ensure_compute_builtin(name)
         if builtin is not None:
@@ -18927,8 +19624,9 @@ class VulkanSPIRVCodeGen:
         if info is None:
             return None
 
-        if name in self.global_variables:
-            builtin_id = self.global_variables[name]
+        cache_name = self.spirv_builtin_cache_name(name)
+        if cache_name in self.global_variables:
+            builtin_id = self.global_variables[cache_name]
             self.mark_builtin_interface_variable(builtin_id)
             return builtin_id
 
@@ -18943,7 +19641,7 @@ class VulkanSPIRVCodeGen:
         else:
             builtin_id = self.register_builtin_input(name, type_id, builtin_name)
 
-        self.global_variables[name] = builtin_id
+        self.global_variables[cache_name] = builtin_id
         self.mark_builtin_interface_variable(builtin_id)
         return builtin_id
 
@@ -18959,9 +19657,12 @@ class VulkanSPIRVCodeGen:
         if storage_class is None:
             return None
 
-        cache_key = self.stage_builtin_cache_key(name, storage_spec, storage_class)
+        cache_key = self.stage_builtin_cache_key(
+            self.spirv_builtin_cache_name(name), storage_spec, storage_class
+        )
         if cache_key in self.global_variables:
             builtin_id = self.global_variables[cache_key]
+            self.mark_fragment_depth_replacing_if_needed(builtin_name, storage_class)
             self.mark_builtin_interface_variable(builtin_id)
             return builtin_id
 
@@ -18995,6 +19696,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{id_value} = OpVariable %{ptr_type.id} {storage_class}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
+        self.mark_fragment_depth_replacing_if_needed(builtin_name, storage_class)
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         self.variable_value_types[id_value] = type_id
@@ -19659,6 +20361,8 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+            if function_id.id in self.fragment_depth_replacing_function_ids:
+                self.emit(f"OpExecutionMode %{function_id.id} DepthReplacing")
         elif execution_model == "Geometry":
             self.emit_geometry_execution_modes(function_id, stage)
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
@@ -19701,6 +20405,8 @@ class VulkanSPIRVCodeGen:
             self.require_extension("SPV_KHR_ray_tracing")
 
     def spirv_module_version(self) -> str:
+        if self.include_resource_interface_variables:
+            return "1.4"
         if "MeshShadingEXT" in self.required_capabilities:
             return "1.4"
         if "RayTracingKHR" in self.required_capabilities:

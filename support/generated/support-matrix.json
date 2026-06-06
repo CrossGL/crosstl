@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 909
+        "test_count": 960
       },
       "translator_codegen": {
         "exists": true,
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1024
+        "test_count": 1063
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 480,
+        "unsupported_marker_count": 482,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 798
+        "test_count": 862
       },
       "translator_codegen": {
         "exists": true,
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 812
+        "test_count": 863
       },
       "translator_codegen": {
         "exists": true,
@@ -493,8 +493,12 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 175,
+        "unsupported_marker_count": 192,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "CUDA_UNSUPPORTED_FP16_VECTOR_TYPES = {"
+          },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "self.reject_unsupported_generic_functions(ast_node)"
@@ -570,10 +574,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
           }
         ]
       },
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 613
+        "test_count": 649
       },
       "translator_codegen": {
         "exists": true,
@@ -607,8 +607,12 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 116,
+        "unsupported_marker_count": 132,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {"
+          },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "self.reject_unsupported_generic_functions(node)"
@@ -684,10 +688,6 @@
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP codegen; \""
           }
         ]
       },
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 659
+        "test_count": 702
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 718
+        "test_count": 758
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 792
+        "test_count": 826
       },
       "translator_codegen": {
         "exists": true,
@@ -949,7 +949,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 402,
+        "unsupported_marker_count": 404,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 650
+        "test_count": 698
       },
       "translator_codegen": {
         "exists": true,

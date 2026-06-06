@@ -581,6 +581,7 @@ class GLSLCodeGen:
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
+    GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {"clamp", "mix"}
     GLSL_INTERPOLATION_FUNCTIONS = {
         "interpolateAtCentroid": 1,
         "interpolateAtSample": 2,
@@ -896,7 +897,15 @@ class GLSLCodeGen:
         self.glsl_buffer_block_read_validation_suppression = 0
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
+            "SV_VertexID": "gl_VertexID",
+            "SV_VertexId": "gl_VertexID",
+            "sv_vertex_id": "gl_VertexID",
+            "sv_vertexid": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
+            "SV_InstanceID": "gl_InstanceID",
+            "SV_InstanceId": "gl_InstanceID",
+            "sv_instance_id": "gl_InstanceID",
+            "sv_instanceid": "gl_InstanceID",
             "gl_IsFrontFace": "gl_FrontFacing",
             "gl_PrimitiveID": "gl_PrimitiveID",
             "POSITION": "layout(location = 0)",
@@ -955,9 +964,24 @@ class GLSLCodeGen:
             "sample_mask_in": "gl_SampleMaskIn",
             # Compute shader specific
             "gl_GlobalInvocationID": "gl_GlobalInvocationID",
+            "SV_DispatchThreadID": "gl_GlobalInvocationID",
+            "SV_DispatchThreadId": "gl_GlobalInvocationID",
+            "sv_dispatch_thread_id": "gl_GlobalInvocationID",
+            "sv_dispatchthreadid": "gl_GlobalInvocationID",
             "gl_LocalInvocationID": "gl_LocalInvocationID",
+            "SV_GroupThreadID": "gl_LocalInvocationID",
+            "SV_GroupThreadId": "gl_LocalInvocationID",
+            "sv_group_thread_id": "gl_LocalInvocationID",
+            "sv_groupthreadid": "gl_LocalInvocationID",
             "gl_WorkGroupID": "gl_WorkGroupID",
+            "SV_GroupID": "gl_WorkGroupID",
+            "SV_GroupId": "gl_WorkGroupID",
+            "sv_group_id": "gl_WorkGroupID",
+            "sv_groupid": "gl_WorkGroupID",
             "gl_LocalInvocationIndex": "gl_LocalInvocationIndex",
+            "SV_GroupIndex": "gl_LocalInvocationIndex",
+            "sv_group_index": "gl_LocalInvocationIndex",
+            "sv_groupindex": "gl_LocalInvocationIndex",
             "gl_WorkGroupSize": "gl_WorkGroupSize",
             "gl_NumWorkGroups": "gl_NumWorkGroups",
         }
@@ -1162,6 +1186,13 @@ class GLSLCodeGen:
             "double": "double",
             "void": "void",
             "sampler": "sampler",
+            "texture1D": "texture1D",
+            "texture1DArray": "texture1DArray",
+            "texture2D": "texture2D",
+            "texture3D": "texture3D",
+            "textureCube": "textureCube",
+            "texture2DArray": "texture2DArray",
+            "textureCubeArray": "textureCubeArray",
             "sampler1D": "sampler1D",
             "sampler1DArray": "sampler1DArray",
             "sampler2D": "sampler2D",
@@ -1171,6 +1202,8 @@ class GLSLCodeGen:
             "samplerCubeArray": "samplerCubeArray",
             "sampler2DMS": "sampler2DMS",
             "sampler2DMSArray": "sampler2DMSArray",
+            "samplerExternalOES": "samplerExternalOES",
+            "__samplerExternal2DY2YEXT": "__samplerExternal2DY2YEXT",
             "sampler2DShadow": "sampler2DShadow",
             "sampler2DArrayShadow": "sampler2DArrayShadow",
             "samplerCubeShadow": "samplerCubeShadow",
@@ -1272,7 +1305,6 @@ class GLSLCodeGen:
             "atomicCounterDecrement": "atomicCounterDecrement",
             "atomicCounter": "atomicCounter",
             "atomicCounterAdd": "atomicCounterAdd",
-            "mul": "*",  # Matrix multiplication
             "ddx": "dFdx",
             "ddx_fine": "dFdxFine",
             "ddx_coarse": "dFdxCoarse",
@@ -1283,7 +1315,6 @@ class GLSLCodeGen:
             "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
             "sincos": "sin_cos",  # Custom function needed
-            "clip": "discard",  # HLSL clip becomes GLSL discard
             "log2": "log2",
             "exp2": "exp2",
             "pow": "pow",
@@ -1359,6 +1390,8 @@ class GLSLCodeGen:
         stage_names = self.glsl_stage_names(ast, target_stage)
 
         lines = []
+        if self.uses_nonuniform_ext(ast):
+            lines.append("#extension GL_EXT_nonuniform_qualifier : require")
         if stage_names & self.MESH_STAGE_NAMES:
             lines.append("#extension GL_EXT_mesh_shader : require")
         uses_ray_stage = bool(stage_names & self.RAY_STAGE_NAMES)
@@ -1384,6 +1417,15 @@ class GLSLCodeGen:
                     if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                         operations.add(operation)
         return operations
+
+    def uses_nonuniform_ext(self, ast):
+        for node in self.walk_ast(ast):
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == "nonuniformEXT"
+            ):
+                return True
+        return False
 
     def glsl_wave_extension_lines(self, ast, target_stage=None):
         operations = self.glsl_wave_operations(ast, target_stage)
@@ -1950,6 +1992,8 @@ class GLSLCodeGen:
             self.collect_function_sampler_parameter_indices(ast)
         )
         functions = self.collect_functions(ast)
+        self.preserved_sampler_variables = set()
+        self.preserved_sampler_parameters = {}
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
             for func in functions
@@ -1961,6 +2005,7 @@ class GLSLCodeGen:
         self.function_definitions = {
             func.name: func for func in functions if getattr(func, "name", None)
         }
+        self.collect_preserved_nonuniform_sampler_resources(ast, functions)
         self.validate_glsl_tessellation_control_barriers(ast, target_stage, functions)
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
@@ -2009,6 +2054,17 @@ class GLSLCodeGen:
         self.stage_entry_functions_by_stage = {}
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
+        stage_names = {
+            stage_name
+            for stage_name in self.glsl_stage_names(ast, target_stage)
+            if stage_name is not None
+        }
+        if target_stage is not None:
+            self.current_global_stage_io_stage = target_stage
+        elif len(stage_names) == 1:
+            self.current_global_stage_io_stage = next(iter(stage_names))
+        else:
+            self.current_global_stage_io_stage = None
         self.emit_stage_guards = self.should_emit_stage_guards(ast, target_stage)
         self.task_payload_shared_variables = []
         self.stage_io_used_locations = {}
@@ -2526,6 +2582,40 @@ class GLSLCodeGen:
             if mapped_type == "sampler":
                 self.explicit_resource_binding_index(node)
                 self.sampler_variables.add(var_name)
+                if self.should_preserve_sampler_resource(var_name):
+                    binding_namespace = "sampler binding"
+                    explicit_binding = self.explicit_resource_binding_index(node)
+                    resource_binding = (
+                        explicit_binding
+                        if explicit_binding is not None
+                        else self.next_available_resource_binding(
+                            used_resource_bindings,
+                            resource_binding_cursors,
+                            binding_namespace,
+                            resource_count,
+                        )
+                    )
+                    self.reserve_resource_binding_range(
+                        used_resource_bindings,
+                        "OpenGL",
+                        binding_namespace,
+                        resource_binding,
+                        resource_count,
+                        var_name,
+                    )
+                    declaration = format_c_style_array_declaration(
+                        f"{mapped_type}{array_suffix}", var_name
+                    )
+                    code += (
+                        f"layout(binding = {resource_binding}) uniform "
+                        f"{declaration};\n"
+                    )
+                    self.advance_resource_binding(
+                        resource_binding_cursors,
+                        binding_namespace,
+                        resource_binding,
+                        resource_count,
+                    )
                 continue
             if self.is_structured_buffer_type(vtype):
                 self.record_structured_buffer_access_metadata(var_name, vtype, node)
@@ -2921,6 +3011,8 @@ class GLSLCodeGen:
     def is_fragment_only_call_name(self, func_name):
         if not func_name:
             return False
+        if func_name == "clip" and func_name not in self.function_return_types:
+            return True
         mapped_name = self.function_map.get(func_name, func_name)
         return (
             mapped_name in self.GLSL_DERIVATIVE_FUNCTIONS
@@ -5217,6 +5309,7 @@ class GLSLCodeGen:
         )
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_identifier_aliases = self.current_identifier_aliases
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -5230,6 +5323,7 @@ class GLSLCodeGen:
             self.current_structured_buffer_access_parameters
         )
         self.local_variable_types = {}
+        self.current_identifier_aliases = dict(self.current_identifier_aliases)
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
@@ -5261,7 +5355,10 @@ class GLSLCodeGen:
             if self.is_sampler_type(raw_param_type):
                 self.explicit_resource_binding_index(p)
                 sampler_parameters.add(p.name)
-                continue
+                if not self.should_preserve_sampler_parameter(
+                    getattr(func, "name", None), p.name
+                ):
+                    continue
 
             buffer_array = self.structured_buffer_array_parameter_info(
                 raw_param_type, p.name, getattr(func, "name", None)
@@ -5318,7 +5415,12 @@ class GLSLCodeGen:
 
             semantic = self.semantic_from_node(p)
 
-            declaration = format_c_style_array_declaration(param_type, p.name)
+            parameter_name = (
+                self.glsl_parameter_identifier_name(p.name)
+                if shader_type is None
+                else p.name
+            )
+            declaration = format_c_style_array_declaration(param_type, parameter_name)
             if self.is_storage_image_type(param_type):
                 memory_qualifiers = self.resource_memory_qualifiers(p)
                 if memory_qualifiers:
@@ -5347,6 +5449,7 @@ class GLSLCodeGen:
             )
             self.current_function_return_type = previous_function_return_type
             self.local_variable_types = previous_local_variable_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -5447,7 +5550,6 @@ class GLSLCodeGen:
         previous_stage_return_type = self.current_stage_return_type
         previous_stage_entry_type = self.current_stage_entry_type
         previous_local_variable_types = self.local_variable_types
-        previous_identifier_aliases = self.current_identifier_aliases
         previous_compile_time_int_constants = self.current_compile_time_int_constants
         previous_compile_time_int_vector_constants = (
             self.current_compile_time_int_vector_constants
@@ -7284,6 +7386,9 @@ class GLSLCodeGen:
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            clip_statement = self.generate_clip_statement(expression, indent)
+            if clip_statement is not None:
+                return clip_statement
             expr_code = self.generate_expression_statement(stmt)
             return f"{indent_str}{expr_code};\n"
         else:
@@ -7301,6 +7406,9 @@ class GLSLCodeGen:
             )
             if dynamic_resource_statement is not None:
                 return dynamic_resource_statement
+            clip_statement = self.generate_clip_statement(stmt, indent)
+            if clip_statement is not None:
+                return clip_statement
             expr_result = self.generate_expression(stmt)
             if expr_result.strip():
                 return f"{indent_str}{expr_result};\n"
@@ -7482,15 +7590,50 @@ class GLSLCodeGen:
             var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
         return self.type_name_string(var_type) or "float"
 
+    def glsl_parameter_identifier_name(self, name):
+        if name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS:
+            return name
+
+        used_names = set(self.local_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
+
+        alias = f"{name}_"
+        suffix = 1
+        while alias in used_names:
+            suffix += 1
+            alias = f"{name}_{suffix}"
+        self.current_identifier_aliases[name] = alias
+        return alias
+
     def glsl_local_identifier_name(self, name):
         reserved_names = self.current_stage_declared_names()
-        if name not in self.GLSL_RESERVED_IDENTIFIERS and name not in reserved_names:
+        if (
+            name not in self.GLSL_RESERVED_IDENTIFIERS
+            and name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
+            and name not in reserved_names
+        ):
             return name
 
         used_names = set(self.local_variable_types)
         used_names.update(self.current_identifier_aliases.values())
         used_names.update(reserved_names)
+        used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
 
+        alias = f"{name}_"
+        suffix = 1
+        while alias in used_names:
+            suffix += 1
+            alias = f"{name}_{suffix}"
+        self.current_identifier_aliases[name] = alias
+        return alias
+
+    def glsl_global_identifier_name(self, name):
+        if name not in self.GLSL_RESERVED_IDENTIFIERS:
+            return name
+
+        used_names = set(self.global_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
         alias = f"{name}_"
         suffix = 1
         while alias in used_names:
@@ -7568,14 +7711,19 @@ class GLSLCodeGen:
     def generate_global_variable_declaration(
         self, node, declaration, vtype, mapped_type_for_layout=None
     ):
+        name = self.resource_node_name(node, "")
         builtin_output = self.fragment_output_variable_builtin_target(node)
         if builtin_output is not None:
-            self.current_identifier_aliases[self.resource_node_name(node, "")] = (
-                builtin_output
-            )
+            self.current_identifier_aliases[name] = builtin_output
             return ""
 
         qualifier = self.global_variable_qualifier(node)
+        emitted_name = self.glsl_global_identifier_name(name)
+        if emitted_name != name:
+            declaration = format_c_style_array_declaration(
+                mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
+                emitted_name,
+            )
         initializer = ""
         initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
@@ -7583,11 +7731,21 @@ class GLSLCodeGen:
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
         layout = self.glsl_variable_layout_prefix(node)
+        mapped_type = (
+            mapped_type_for_layout if mapped_type_for_layout is not None else vtype
+        )
+        stage_name = getattr(
+            self, "current_global_stage_io_stage", self.current_target_stage
+        )
+        if self.global_stage_io_layout_direction(
+            qualifier
+        ) == "input" and self.requires_flat_stage_input(stage_name, mapped_type):
+            qualifier = f"{self.with_flat_stage_input_qualifier(qualifier.strip())} "
         self.reserve_global_stage_io_layout(
             node,
             qualifier,
             layout,
-            mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
+            mapped_type,
         )
         return f"{layout}{qualifier}{declaration}{initializer};\n"
 
@@ -8107,6 +8265,18 @@ class GLSLCodeGen:
                 if self.is_vector_value_type(right_type):
                     return right_type
                 return left_type or right_type
+            if (
+                func_name == "saturate"
+                and args
+                and func_name not in self.function_return_types
+            ):
+                return self.expression_result_type(args[0])
+            if (
+                func_name == "rcp"
+                and args
+                and func_name not in self.function_return_types
+            ):
+                return self.expression_result_type(args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in self.function_return_types:
                 return self.function_return_types[specialized_func_name]
@@ -9102,7 +9272,26 @@ class GLSLCodeGen:
 
             self.validate_glsl_buffer_block_atomic_call(original_func_name, expr.args)
 
-            func_name = self.function_map.get(func_name, func_name)
+            saturate_call = self.generate_saturate_call(original_func_name, expr.args)
+            if saturate_call is not None:
+                return saturate_call
+
+            reciprocal_call = self.generate_reciprocal_call(
+                original_func_name, expr.args
+            )
+            if reciprocal_call is not None:
+                return reciprocal_call
+
+            mul_call = self.generate_mul_call(original_func_name, expr.args)
+            if mul_call is not None:
+                return mul_call
+
+            mad_call = self.generate_mad_call(original_func_name, expr.args)
+            if mad_call is not None:
+                return mad_call
+
+            if original_func_name not in self.function_return_types:
+                func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
             static_generic_call = generate_static_generic_numeric_call(
@@ -9204,6 +9393,108 @@ class GLSLCodeGen:
 
     def generate_glsl_wave_op_expression(self, node):
         return self.generate_glsl_wave_operation(node.operation, node.arguments)
+
+    def generate_saturate_call(self, func_name, args):
+        if func_name != "saturate" or func_name in self.function_return_types:
+            return None
+        if len(args) != 1:
+            raise ValueError("OpenGL saturate alias requires 1 argument")
+
+        value = self.generate_expression(args[0])
+        zero, one = self.saturate_bound_literals(args[0])
+        return f"clamp({value}, {zero}, {one})"
+
+    def generate_reciprocal_call(self, func_name, args):
+        if func_name != "rcp" or func_name in self.function_return_types:
+            return None
+        if len(args) != 1:
+            raise ValueError("OpenGL rcp alias requires 1 argument")
+
+        value_expr = args[0]
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type not in {"float", "double"}:
+            return None
+
+        value = self.generate_expression(value_expr)
+        if self.is_scalar_value_type(value_type) or self.is_vector_value_type(
+            value_type
+        ):
+            return f"(1.0 / {value})"
+        return None
+
+    def generate_mul_call(self, func_name, args):
+        if func_name != "mul":
+            return None
+        if len(args) != 2:
+            raise ValueError("OpenGL mul alias requires 2 arguments")
+
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        return f"({left} * {right})"
+
+    def generate_mad_call(self, func_name, args):
+        if func_name != "mad" or func_name in self.function_return_types:
+            return None
+        if len(args) != 3:
+            raise ValueError("OpenGL mad alias requires 3 arguments")
+
+        left = self.generate_expression(args[0])
+        right = self.generate_expression(args[1])
+        addend = self.generate_expression(args[2])
+        return f"(({left} * {right}) + {addend})"
+
+    def generate_clip_statement(self, expression, indent):
+        if not isinstance(expression, FunctionCallNode):
+            return None
+
+        func_name = self.function_call_name(expression)
+        if func_name != "clip" or func_name in self.function_return_types:
+            return None
+
+        args = getattr(expression, "arguments", getattr(expression, "args", [])) or []
+        if len(args) != 1:
+            raise ValueError("OpenGL clip alias requires 1 argument")
+        if self.current_stage_entry_type not in (None, "fragment"):
+            raise ValueError(
+                "OpenGL clip alias lowers to discard and is only valid in "
+                "fragment stages"
+            )
+
+        value_expr = args[0]
+        value = self.generate_expression(value_expr)
+        condition = self.clip_discard_condition(value_expr, value)
+        indent_str = "    " * indent
+        return (
+            f"{indent_str}if ({condition}) {{\n"
+            f"{indent_str}    discard;\n"
+            f"{indent_str}}}\n"
+        )
+
+    def clip_discard_condition(self, value_expr, value):
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        zero = self.clip_zero_literal(value_type)
+        if self.is_vector_value_type(value_type):
+            return f"any(lessThan({value}, {value_type}({zero})))"
+        return f"{value} < {zero}"
+
+    def clip_zero_literal(self, value_type):
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type == "uint":
+            return "0u"
+        if component_type == "int":
+            return "0"
+        return "0.0"
+
+    def saturate_bound_literals(self, value_expr):
+        value_type = self.expression_result_type(value_expr)
+        mapped_type = self.map_type(value_type)
+        component_type = self.vector_component_type(mapped_type) or mapped_type
+        if component_type == "uint":
+            return "0u", "1u"
+        if component_type == "int":
+            return "0", "1"
+        return "0.0", "1.0"
 
     def generate_glsl_wave_operation(self, operation, arguments):
         expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES.get(operation)
@@ -9923,6 +10214,9 @@ class GLSLCodeGen:
         return texture_name, coord, extra_args
 
     def texture_resource_type(self, texture_arg):
+        return self.sampled_image_type(self.texture_declared_resource_type(texture_arg))
+
+    def texture_declared_resource_type(self, texture_arg):
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
             return None
@@ -9932,6 +10226,36 @@ class GLSLCodeGen:
         return self.current_texture_parameters.get(
             texture_name, self.texture_variable_types.get(texture_name)
         )
+
+    def sampled_image_type(self, texture_type):
+        base_type = self.resource_base_type(texture_type)
+        texture_to_sampler = {
+            "texture1D": "sampler1D",
+            "texture1DArray": "sampler1DArray",
+            "texture2D": "sampler2D",
+            "texture3D": "sampler3D",
+            "textureCube": "samplerCube",
+            "texture2DArray": "sampler2DArray",
+            "textureCubeArray": "samplerCubeArray",
+        }
+        sampled_type = texture_to_sampler.get(base_type)
+        if sampled_type is None:
+            return texture_type
+        if "[" not in str(texture_type):
+            return sampled_type
+        _, array_suffix = split_array_type_suffix(str(texture_type))
+        return f"{sampled_type}{array_suffix}"
+
+    def is_separate_texture_object_type(self, texture_type):
+        return self.resource_base_type(texture_type) in {
+            "texture1D",
+            "texture1DArray",
+            "texture2D",
+            "texture3D",
+            "textureCube",
+            "texture2DArray",
+            "textureCubeArray",
+        }
 
     def texture_argument_resource_type(self, texture_arg):
         texture_type = self.texture_resource_type(texture_arg)
@@ -10432,6 +10756,8 @@ class GLSLCodeGen:
                     "sampler1D": 1,
                     "sampler1DArray": 2,
                     "sampler2D": 2,
+                    "samplerExternalOES": 2,
+                    "__samplerExternal2DY2YEXT": 2,
                     "sampler2DArray": 3,
                     "sampler2DMS": 2,
                     "sampler2DMSArray": 3,
@@ -12882,6 +13208,12 @@ class GLSLCodeGen:
         if parts is None:
             return None
         texture_name, coord, extra_args = parts
+        sampler_name = self.generate_expression(args[1])
+        declared_texture_type = self.texture_declared_resource_type(args[0])
+        if self.is_separate_texture_object_type(declared_texture_type):
+            sampled_type = self.sampled_image_type(declared_texture_type)
+            sampled_type = self.resource_base_type(sampled_type)
+            texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]
@@ -12959,6 +13291,103 @@ class GLSLCodeGen:
         if not skipped_indices:
             return args
         return [arg for index, arg in enumerate(args) if index not in skipped_indices]
+
+    def should_preserve_sampler_resource(self, name):
+        return name in getattr(self, "preserved_sampler_variables", set())
+
+    def should_preserve_sampler_parameter(self, func_name, param_name):
+        if not func_name:
+            return False
+        return param_name in getattr(self, "preserved_sampler_parameters", {}).get(
+            func_name, set()
+        )
+
+    def expression_uses_nonuniform_ext(self, expr):
+        for node in self.walk_ast(expr):
+            if (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == "nonuniformEXT"
+            ):
+                return True
+        return False
+
+    def collect_preserved_nonuniform_sampler_resources(self, ast, functions):
+        global_samplers = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            name = self.resource_node_name(node)
+            if name and self.is_sampler_type(self.resource_node_type(node)):
+                global_samplers.add(name)
+
+        sampler_parameters = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            sampler_parameters[func_name] = {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+                if self.is_sampler_type(
+                    getattr(param, "param_type", getattr(param, "vtype", None))
+                )
+            }
+
+        preserved_globals = set()
+        preserved_params = {name: set() for name in sampler_parameters}
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions or []:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    index_expr = getattr(
+                        node, "index", getattr(node, "index_expr", None)
+                    )
+                    if isinstance(
+                        node, ArrayAccessNode
+                    ) and self.expression_uses_nonuniform_ext(index_expr):
+                        array_name = self.expression_name(
+                            getattr(node, "array", getattr(node, "array_expr", None))
+                        )
+                        if array_name in sampler_parameters.get(func_name, set()):
+                            if array_name not in preserved_params[func_name]:
+                                preserved_params[func_name].add(array_name)
+                                changed = True
+                        elif array_name in global_samplers:
+                            if array_name not in preserved_globals:
+                                preserved_globals.add(array_name)
+                                changed = True
+
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(node)
+                    callee_preserved = preserved_params.get(callee_name)
+                    if not callee_preserved:
+                        continue
+                    callee_params = self.function_parameter_names.get(callee_name, [])
+                    args = list(getattr(node, "arguments", getattr(node, "args", [])))
+                    for index, arg in enumerate(args):
+                        if index >= len(callee_params):
+                            break
+                        if callee_params[index] not in callee_preserved:
+                            continue
+                        arg_name = self.expression_name(arg)
+                        if arg_name in sampler_parameters.get(func_name, set()):
+                            if arg_name not in preserved_params[func_name]:
+                                preserved_params[func_name].add(arg_name)
+                                changed = True
+                        elif arg_name in global_samplers:
+                            if arg_name not in preserved_globals:
+                                preserved_globals.add(arg_name)
+                                changed = True
+
+        self.preserved_sampler_variables = preserved_globals
+        self.preserved_sampler_parameters = {
+            func_name: names for func_name, names in preserved_params.items() if names
+        }
 
     def collect_resource_array_size_hints(self, ast):
         global_hints, function_hints = collect_resource_array_size_hints(
@@ -13392,6 +13821,17 @@ class GLSLCodeGen:
 
     def skipped_function_parameter_indices(self, func_name):
         skipped = set(self.function_sampler_parameter_indices.get(func_name, set()))
+        preserved = getattr(self, "preserved_sampler_parameters", {}).get(
+            func_name, set()
+        )
+        if preserved:
+            parameter_names = self.function_parameter_names.get(func_name, [])
+            skipped = {
+                index
+                for index in skipped
+                if index >= len(parameter_names)
+                or parameter_names[index] not in preserved
+            }
         unsupported = self.unsupported_structured_buffer_array_functions.get(
             func_name, {}
         )
@@ -13839,14 +14279,17 @@ class GLSLCodeGen:
         else:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
+                if not self.should_preserve_sampler_resource(var_name):
+                    return None
+                namespace = "sampler binding"
+            elif not self.is_opaque_resource_type(mapped_type):
                 return None
-            if not self.is_opaque_resource_type(mapped_type):
-                return None
-            namespace = (
-                "image binding"
-                if self.is_storage_image_type(vtype)
-                else "texture binding"
-            )
+            else:
+                namespace = (
+                    "image binding"
+                    if self.is_storage_image_type(vtype)
+                    else "texture binding"
+                )
 
         binding = self.explicit_resource_binding_index(node)
         if binding is None:
@@ -14379,9 +14822,18 @@ class GLSLCodeGen:
 
     def is_opaque_resource_type(self, vtype):
         return vtype in {
+            "texture1D",
+            "texture1DArray",
+            "texture2D",
+            "texture3D",
+            "textureCube",
+            "texture2DArray",
+            "textureCubeArray",
             "sampler1D",
             "sampler1DArray",
             "sampler2D",
+            "samplerExternalOES",
+            "__samplerExternal2DY2YEXT",
             "sampler3D",
             "samplerCube",
             "sampler2DArray",

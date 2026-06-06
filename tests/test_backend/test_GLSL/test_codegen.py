@@ -163,6 +163,34 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_shadertoy_main_image_synthesizes_fragment_entrypoint():
+    # Shadertoy-style fragments provide mainImage instead of GLSL main.
+    code = textwrap.dedent("""
+        #version 300 es
+        precision highp float;
+        uniform vec3 iResolution;
+        uniform sampler2D iChannel0;
+
+        void mainImage(out vec4 fragColor, in vec2 fragCoord)
+        {
+            vec2 uv = fragCoord / iResolution.xy;
+            fragColor = texture(iChannel0, uv);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "void mainImage(out vec4 fragColor, in vec2 fragCoord)" in crossgl
+    assert "vec4 main() @ gl_FragColor" in crossgl
+    assert "mainImage(shadertoyFragColor, gl_FragCoord.xy);" in crossgl
+    assert "return shadertoyFragColor;" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "void main()" in glsl
+    assert "mainImage(shadertoyFragColor, gl_FragCoord.xy);" in glsl
+    assert "fragColor = shadertoyFragColor;" in glsl
+
+
 def test_codegen_block_scope_precision_statement_from_glslang_precision_frag():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/precision.frag, which declares precision defaults inside nested blocks.
@@ -348,6 +376,87 @@ def test_codegen_explicit_typecast_from_glslang_nv_extension():
     assert "func(float(u_0), vec2(v4_0));" in output
 
 
+def test_codegen_two_argument_atan_from_khronos_docs_maps_to_crossgl_atan2():
+    # Khronos GLSL docs define atan(y, x) as the quadrant-aware form; CrossGL
+    # uses atan2 for that portable builtin spelling.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) in vec2 direction;
+        layout(location = 0) out vec4 fragColor;
+
+        void main()
+        {
+            float angle = atan(direction.y, direction.x);
+            float slope = atan(direction.y);
+            fragColor = vec4(angle, slope, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
+    assert "float slope = atan(input.direction.y);" in crossgl
+    assert "atan(input.direction.y, input.direction.x)" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float angle = atan(direction.y, direction.x);" in glsl
+    assert "float slope = atan(direction.y);" in glsl
+
+
+def test_codegen_user_defined_two_argument_atan_is_preserved():
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) in vec2 direction;
+        layout(location = 0) out vec4 fragColor;
+
+        float atan(float y, float x)
+        {
+            return y + x;
+        }
+
+        void main()
+        {
+            float angle = atan(direction.y, direction.x);
+            fragColor = vec4(angle, 0.0, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float atan(float y, float x)" in crossgl
+    assert "float angle = atan(input.direction.y, input.direction.x);" in crossgl
+    assert "atan2(" not in crossgl
+
+
+def test_codegen_user_defined_one_argument_atan_does_not_shadow_builtin_two_argument_atan():
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) in vec2 direction;
+        layout(location = 0) out vec4 fragColor;
+
+        float atan(float y)
+        {
+            return y + 1.0;
+        }
+
+        void main()
+        {
+            float custom = atan(direction.y);
+            float angle = atan(direction.y, direction.x);
+            fragColor = vec4(angle, custom, 0.0, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float atan(float y)" in crossgl
+    assert "float custom = atan(input.direction.y);" in crossgl
+    assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 
@@ -362,6 +471,30 @@ def test_codegen_resource_function_descriptors():
     assert converter.resource_function_descriptor("textureLod") == {
         "name": "textureLod",
         "function": "textureLod",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
+    assert converter.resource_function_descriptor("texture2DLod") == {
+        "name": "texture2DLod",
+        "function": "textureLod",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
+    assert converter.resource_function_descriptor("textureCubeLod") == {
+        "name": "textureCubeLod",
+        "function": "textureLod",
+        "resource": "texture",
+        "operation": "sample_lod",
+    }
+    assert converter.resource_function_descriptor("texture2DGrad") == {
+        "name": "texture2DGrad",
+        "function": "textureGrad",
+        "resource": "texture",
+        "operation": "sample_grad",
+    }
+    assert converter.resource_function_descriptor("texture2DLodOffset") == {
+        "name": "texture2DLodOffset",
+        "function": "textureLodOffset",
         "resource": "texture",
         "operation": "sample_lod",
     }
@@ -462,6 +595,67 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureLod(tex, uv, 1.0)" in glsl
     assert "textureGrad(tex, uv, vec2(1.0), vec2(1.0))" in glsl
     assert "textureGather(tex, uv)" in glsl
+
+
+def test_codegen_legacy_lod_grad_texture_intrinsics_from_bgfx_examples():
+    # Reduced from bkaradzic/bgfx@6e0d61bf examples that use texture2DLod,
+    # textureCubeLod, texture2DGrad, and texture2DLodOffset.
+    code = textwrap.dedent("""
+        #version 130
+        varying vec2 vUV;
+        uniform sampler2D s_texColor;
+        uniform samplerCube s_texCube;
+
+        void main() {
+            vec4 lod = texture2DLod(s_texColor, vUV, 0.0);
+            vec4 cube = textureCubeLod(s_texCube, vec3(1.0), 1.0);
+            vec4 grad = texture2DGrad(s_texColor, vUV, vec2(1.0), vec2(1.0));
+            vec4 offset = texture2DLodOffset(s_texColor, vUV, 0.0, ivec2(1));
+            gl_FragColor = lod + cube + grad + offset;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "textureLod(s_texColor, input.vUV, 0.0)" in crossgl
+    assert "textureLod(s_texCube, vec3(1.0), 1.0)" in crossgl
+    assert "textureGrad(s_texColor, input.vUV, vec2(1.0), vec2(1.0))" in crossgl
+    assert "textureLodOffset(s_texColor, input.vUV, 0.0, ivec2(1))" in crossgl
+    assert "texture2DLod(" not in crossgl
+    assert "textureCubeLod(" not in crossgl
+    assert "texture2DGrad(" not in crossgl
+    assert "texture2DLodOffset(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "textureLod(s_texColor, vUV, 0.0)" in glsl
+    assert "textureLod(s_texCube, vec3(1.0), 1.0)" in glsl
+    assert "textureGrad(s_texColor, vUV, vec2(1.0), vec2(1.0))" in glsl
+    assert "textureLodOffset(s_texColor, vUV, 0.0, ivec2(1))" in glsl
+
+
+def test_codegen_vertex_clip_distance_builtin_from_sascha_willems_offscreen():
+    # Reduced from SaschaWillems/Vulkan@180be3f9
+    # shaders/glsl/offscreen/phong.vert.
+    code = textwrap.dedent("""
+        #version 450
+        layout(location = 0) in vec3 inPos;
+
+        void main()
+        {
+            vec4 clipPlane = vec4(0.0, 0.0, 0.0, 0.0);
+            gl_Position = vec4(inPos, 1.0);
+            gl_ClipDistance[0] = dot(vec4(inPos, 1.0), clipPlane);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "float gl_ClipDistance[] @ gl_ClipDistance;" in crossgl
+    assert "output.gl_ClipDistance[0] = dot(" in crossgl
+    assert not any(
+        line.lstrip().startswith("gl_ClipDistance[0] =")
+        for line in crossgl.splitlines()
+    )
 
 
 def test_codegen_array_of_arrays_return_type_from_glslang_spv_aofa():
@@ -582,9 +776,92 @@ def test_codegen_vulkan_separate_texture_sampler_uniforms_are_resources():
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "texture2D Textures[] @binding(0);" in crossgl
-    assert "sampler ImmutableSampler @binding(0);" in crossgl
+    assert "texture2D Textures[] @set(0) @binding(0);" in crossgl
+    assert "sampler ImmutableSampler @set(1) @binding(0);" in crossgl
     assert "cbuffer Uniforms" not in crossgl
+
+
+def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.glsl.register.autoassign.frag, which samples separate texture and
+    # sampler resources through sampler1D(g_tTex1, g_sSamp1).
+    code = textwrap.dedent("""
+        #version 450
+
+        uniform layout(binding = 0) sampler g_sSamp1;
+        uniform layout(binding = 1) texture1D g_tTex1;
+        out vec4 FragColor;
+
+        void main()
+        {
+            FragColor = texture(sampler1D(g_tTex1, g_sSamp1), 0.1);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler g_sSamp1 @binding(0);" in crossgl
+    assert "texture1D g_tTex1 @binding(1);" in crossgl
+    assert "texture(g_tTex1, g_sSamp1, 0.1)" in crossgl
+    assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "texture(sampler1D(g_tTex1, g_sSamp1), 0.1)" in glsl
+
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.sampledImageBlock.frag, which fetches from sampler2D(tex0, samp0).
+    fetch_code = textwrap.dedent("""
+        #version 450
+
+        layout(binding = 0) uniform texture2D tex0;
+        layout(binding = 1) uniform sampler samp0;
+        layout(location = 0) out vec4 FragColor;
+
+        void main()
+        {
+            FragColor = texelFetch(sampler2D(tex0, samp0), ivec2(0), 0);
+        }
+    """).strip()
+
+    fetch_crossgl = assert_roundtrip(fetch_code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "texture2D tex0 @binding(0);" in fetch_crossgl
+    assert "sampler samp0 @binding(1);" in fetch_crossgl
+    assert "texelFetch(tex0, ivec2(0), 0)" in fetch_crossgl
+    assert "texelFetch(tex0, samp0" not in fetch_crossgl
+
+    fetch_glsl = GLSLCodeGen().generate(parse_crossgl(fetch_crossgl))
+    assert "texelFetch(tex0, ivec2(0), 0)" in fetch_glsl
+
+
+def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
+    # Reduced from Khronos Vulkan GLSL examples that use descriptor
+    # layout(set = <set-index>, binding = <binding-index>) on resources.
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_KHR_vulkan_glsl : enable
+
+        layout(set = 1, binding = 2) uniform sampler2D colorTex;
+        layout(set = 3, binding = 7, r32ui) coherent readonly uniform uimage2D counters;
+        layout(set = 4, binding = 8, rgba32f) writeonly uniform image2D outImage;
+
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(colorTex, vec2(0.5)) + vec4(imageLoad(counters, ivec2(0)));
+            imageStore(outImage, ivec2(0), fragColor);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "sampler2D colorTex @set(1) @binding(2);" in crossgl
+    assert (
+        "uimage2D counters @set(3) @binding(7) @r32ui @coherent @readonly;" in crossgl
+    )
+    assert "image2D outImage @set(4) @binding(8) @rgba32f @writeonly;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
@@ -610,6 +887,67 @@ def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     assert "cbuffer Uniforms" not in crossgl
     assert "texture(sExt, vec2(0.2))" in crossgl
     assert "texture(highExt, vec2(0.2))" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "uniform __samplerExternal2DY2YEXT sExt;" in glsl
+    assert "uniform __samplerExternal2DY2YEXT highExt;" in glsl
+    assert "texture(sExt, vec2(0.2))" in glsl
+    assert "texture(highExt, vec2(0.2))" in glsl
+
+
+def test_codegen_external_oes_sampler_roundtrips_to_glsl():
+    # Common in Android/OpenGL ES camera and video texture shaders.
+    code = textwrap.dedent("""
+        #version 300 es
+        #extension GL_OES_EGL_image_external_essl3 : require
+        precision mediump float;
+
+        uniform samplerExternalOES cameraTexture;
+        layout(location = 0) in vec2 vTexCoord;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(cameraTexture, vTexCoord);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "samplerExternalOES cameraTexture;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "texture(cameraTexture, input.vTexCoord)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "#extension GL_OES_EGL_image_external_essl3 : require" in glsl
+    assert "uniform samplerExternalOES cameraTexture;" in glsl
+    assert "texture(cameraTexture, vTexCoord)" in glsl
+
+
+def test_codegen_subroutine_metadata_from_khronos_shader_subroutine():
+    code = textwrap.dedent("""
+        #version 400 core
+        subroutine vec4 ColorFunc();
+        layout(index = 2) subroutine(ColorFunc) vec4 redColor()
+        {
+            return vec4(1.0, 0.0, 0.0, 1.0);
+        }
+        layout(location = 1) subroutine uniform ColorFunc materialColor;
+        out vec4 outColor;
+
+        void main()
+        {
+            outColor = materialColor();
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "@subroutine vec4 ColorFunc()" in crossgl
+    assert "@index(2) @subroutine(ColorFunc) vec4 redColor()" in crossgl
+    assert "ColorFunc materialColor @location(1) @subroutine;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "outColor = materialColor();" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_codegen_nonuniform_ext_qualifier_from_glslang_is_preserved():
@@ -662,8 +1000,14 @@ def test_codegen_vulkan_subpass_inputs_are_resources():
 
     crossgl = generate_crossgl(code, "fragment")
 
-    assert "subpassInput colorInput @binding(0) @input_attachment_index(0);" in crossgl
-    assert "usubpassInputMS idInput @binding(1) @input_attachment_index(1);" in crossgl
+    assert (
+        "subpassInput colorInput @set(0) @binding(0) @input_attachment_index(0);"
+        in crossgl
+    )
+    assert (
+        "usubpassInputMS idInput @set(0) @binding(1) @input_attachment_index(1);"
+        in crossgl
+    )
     assert "subpassLoad(colorInput)" in crossgl
     assert "subpassLoad(idInput, 0)" in crossgl
     assert "cbuffer Uniforms" not in crossgl
@@ -956,6 +1300,29 @@ def test_codegen_invariant_builtin_redeclaration_from_glslang_150_vert():
     assert "vec4 gl_Position @invariant @ gl_Position;" in crossgl
     assert " gl_Position @invariant;" not in crossgl
     assert "output.gl_Position = input.iv4;" in crossgl
+
+
+def test_codegen_vertex_builtin_point_size_write_from_glslang_150_vert():
+    # Reduced from KhronosGroup/glslang Test/150.vert, which writes gl_PointSize
+    # without a separate redeclaration.
+    code = textwrap.dedent("""
+        #version 150 core
+
+        in vec4 iv4;
+        uniform float ps;
+
+        void main()
+        {
+            gl_Position = iv4;
+            gl_PointSize = ps;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "float gl_PointSize @ gl_PointSize;" in crossgl
+    assert "output.gl_PointSize = ps;" in crossgl
+    assert "\n        gl_PointSize = ps;" not in crossgl
 
 
 def test_codegen_reserved_helper_name_from_glslang_struct_sample_roundtrip():

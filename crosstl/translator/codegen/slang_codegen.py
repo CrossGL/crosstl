@@ -261,10 +261,13 @@ class SlangCodeGen:
             "gl_Layer": "SV_RenderTargetArrayIndex",
             "gl_ViewportIndex": "SV_ViewportArrayIndex",
             "gl_FragCoord": "SV_Position",
+            "gl_PointCoord": "SV_PointCoord",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_FragDepth": "SV_Depth",
             "gl_FragColor": "SV_Target",
             "gl_SampleID": "SV_SampleIndex",
+            "gl_SampleMask": "SV_Coverage",
+            "gl_SampleMaskIn": "SV_Coverage",
             "gl_FragColor0": "SV_Target0",
             "gl_FragColor1": "SV_Target1",
             "gl_FragColor2": "SV_Target2",
@@ -282,7 +285,18 @@ class SlangCodeGen:
             "mix": "lerp",
             "mod": "fmod",
             "fract": "frac",
+            "dFdx": "ddx",
+            "dFdy": "ddy",
+            "dFdxCoarse": "ddx_coarse",
+            "dFdxFine": "ddx_fine",
+            "dFdyCoarse": "ddy_coarse",
+            "dFdyFine": "ddy_fine",
             "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
+            "floatBitsToInt": "asint",
+            "floatBitsToUint": "asuint",
+            "intBitsToFloat": "asfloat",
+            "uintBitsToFloat": "asfloat",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         }
 
@@ -3729,6 +3743,7 @@ class SlangCodeGen:
             "gl_localinvocationindex",
             "gl_pointcoord",
             "gl_sampleid",
+            "gl_samplemaskin",
             "gl_tesscoord",
             "gl_vertexid",
             "gl_workgroupid",
@@ -3742,6 +3757,8 @@ class SlangCodeGen:
             return "position"
         if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
             return "depth"
+        if lower_name == "gl_samplemask" or mapped_upper == "SV_COVERAGE":
+            return "coverage"
         if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
             return "tess_factor"
         if lower_name == "gl_tesslevelinner" or mapped_upper == "SV_INSIDETESSFACTOR":
@@ -3765,6 +3782,7 @@ class SlangCodeGen:
             "SV_INSTANCEID",
             "SV_ISFRONTFACE",
             "SV_OUTPUTCONTROLPOINTID",
+            "SV_POINTCOORD",
             "SV_SAMPLEINDEX",
             "SV_STARTINSTANCELOCATION",
             "SV_STARTVERTEXLOCATION",
@@ -3779,6 +3797,13 @@ class SlangCodeGen:
             return False
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         return not array_suffix and base_type == "float"
+
+    def is_slang_uint_scalar_type(self, type_name):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == "uint"
 
     def is_slang_float_vector_width(self, type_name, width):
         mapped_type = self.convert_type(type_name)
@@ -3808,6 +3833,12 @@ class SlangCodeGen:
                 "expected float type"
             )
 
+        if kind == "coverage" and not self.is_slang_uint_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected uint type"
+            )
+
     def validate_slang_output_semantic_stage(
         self, shader_type, semantic, context, stage_role=None
     ):
@@ -3834,6 +3865,7 @@ class SlangCodeGen:
         allowed_stages = {
             "position": {"domain", "geometry", "hull", "mesh", "vertex"},
             "color": {"fragment"},
+            "coverage": {"fragment"},
             "depth": {"fragment"},
         }[kind]
         if shader_stage not in allowed_stages:
@@ -3854,8 +3886,10 @@ class SlangCodeGen:
             },
             "fragment": {
                 "SV_POSITION": "float4",
+                "SV_POINTCOORD": "float2",
                 "SV_ISFRONTFACE": "bool",
                 "SV_PRIMITIVEID": "uint",
+                "SV_COVERAGE": "uint",
                 "SV_SAMPLEINDEX": "uint",
                 "SV_RENDERTARGETARRAYINDEX": "uint",
                 "SV_VIEWPORTARRAYINDEX": "uint",
@@ -3940,6 +3974,13 @@ class SlangCodeGen:
             ):
                 continue
 
+            if str(semantic).lower() == "gl_samplemask":
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Slang "
+                    f"{shader_type} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
             mapped_semantic = self.map_semantic(semantic, shader_type)
             mapped_upper = str(mapped_semantic).upper()
             expected_type = rules.get(mapped_upper)
@@ -3966,7 +4007,13 @@ class SlangCodeGen:
                 )
 
             kind = self.slang_semantic_output_kind(semantic)
-            if kind in {"color", "depth", "inside_tess_factor", "tess_factor"}:
+            if kind in {
+                "color",
+                "coverage",
+                "depth",
+                "inside_tess_factor",
+                "tess_factor",
+            }:
                 raise ValueError(
                     f"Unsupported {semantic} stage parameter semantic for Slang "
                     f"{shader_type} stage; output-only builtin semantics cannot "
@@ -4403,6 +4450,8 @@ class SlangCodeGen:
                 return f"{element_type}[{size}]"
             if element_type == "float":
                 return f"vec{type_node.size}"
+            if element_type == "f16":
+                return f"vec{type_node.size}<f16>"
             if element_type == "int":
                 return f"ivec{type_node.size}"
             if element_type == "uint":
@@ -7257,9 +7306,11 @@ class SlangCodeGen:
         if shader_stage == "fragment":
             return {
                 "gl_FragCoord": ("vec4", "SV_Position"),
+                "gl_PointCoord": ("vec2", "SV_PointCoord"),
                 "gl_FrontFacing": ("bool", "SV_IsFrontFace"),
                 "gl_PrimitiveID": ("uint", "SV_PrimitiveID"),
                 "gl_SampleID": ("uint", "SV_SampleIndex"),
+                "gl_SampleMaskIn": ("uint", "SV_Coverage"),
                 "gl_Layer": ("uint", "SV_RenderTargetArrayIndex"),
                 "gl_ViewportIndex": ("uint", "SV_ViewportArrayIndex"),
             }
@@ -7479,6 +7530,13 @@ class SlangCodeGen:
                         "non-negative literal render-target index"
                     )
                 return f"gl_FragColor{index}"
+            if array_name == "gl_SampleMask":
+                if index != 0:
+                    raise ValueError(
+                        "Slang fragment output gl_SampleMask requires literal "
+                        "index 0"
+                    )
+                return "gl_SampleMask"
 
         return None
 
@@ -7512,6 +7570,8 @@ class SlangCodeGen:
         if shader_type == "fragment":
             if target_name == "gl_FragDepth":
                 return "float"
+            if target_name == "gl_SampleMask":
+                return "uint"
             if target_name == "gl_FragColor" or (
                 target_name.startswith("gl_FragColor")
                 and target_name[len("gl_FragColor") :].isdigit()
@@ -7866,6 +7926,7 @@ class SlangCodeGen:
         if not type_name:
             return False
         return self.convert_type(type_name) in {
+            "half",
             "float",
             "double",
             "int",
@@ -7878,6 +7939,9 @@ class SlangCodeGen:
         if not type_name:
             return False
         return self.convert_type(type_name) in {
+            "half2",
+            "half3",
+            "half4",
             "float2",
             "float3",
             "float4",
@@ -7954,6 +8018,8 @@ class SlangCodeGen:
         mapped_type = self.convert_type(type_name)
         if mapped_type.startswith("double"):
             return "double"
+        if mapped_type.startswith("half"):
+            return "half"
         if mapped_type.startswith("float"):
             return "float"
         if mapped_type.startswith("uint"):
@@ -7968,7 +8034,7 @@ class SlangCodeGen:
         if type_name is None:
             return None
         mapped_type = self.convert_type(type_name)
-        for component_type in ("double", "float", "uint", "int", "bool"):
+        for component_type in ("double", "half", "float", "uint", "int", "bool"):
             if not mapped_type.startswith(component_type):
                 continue
             suffix = mapped_type[len(component_type) :]
@@ -8381,6 +8447,11 @@ class SlangCodeGen:
                 return str(func_name)
             if isinstance(func_name, str) and self.matrix_value_info(func_name):
                 return str(func_name)
+            alias_result_type = self.builtin_alias_call_result_type(
+                func_name, getattr(expr, "args", [])
+            )
+            if alias_result_type is not None:
+                return alias_result_type
             return self.user_function_return_types.get(func_name)
         return None
 
@@ -8423,6 +8494,58 @@ class SlangCodeGen:
                 continue
             generated_args.append(name)
         return ", ".join(generated_args)
+
+    def slang_bitcast_intrinsic_callee(self, callee):
+        if not isinstance(callee, str) or callee in self.user_function_names:
+            return None
+        mapped_callee = self.function_map.get(callee, callee)
+        if mapped_callee in {"asfloat", "asint", "asuint"}:
+            return mapped_callee
+        return None
+
+    def builtin_alias_call_result_type(self, func_name, args):
+        if not isinstance(func_name, str) or func_name in self.user_function_names:
+            return None
+
+        if func_name in {
+            "fract",
+            "dFdx",
+            "dFdy",
+            "dFdxCoarse",
+            "dFdxFine",
+            "dFdyCoarse",
+            "dFdyFine",
+            "fwidth",
+            "inversesqrt",
+            "inverseSqrt",
+        }:
+            return self.expression_result_type(args[0]) if args else None
+
+        if func_name in {"mix", "mod"}:
+            return self.expression_result_type(args[0]) if args else None
+
+        return self.glsl_bitcast_result_type(func_name, args)
+
+    def glsl_bitcast_result_type(self, func_name, args):
+        component_type = {
+            "floatBitsToInt": "int",
+            "floatBitsToUint": "uint",
+            "intBitsToFloat": "float",
+            "uintBitsToFloat": "float",
+        }.get(func_name)
+        if component_type is None or not args:
+            return None
+
+        arg_type = self.expression_result_type(args[0])
+        if arg_type is None:
+            return None
+
+        arg_info = self.vector_value_info(arg_type)
+        if arg_info is not None:
+            return f"{component_type}{arg_info['size']}"
+        if self.is_scalar_value_type(arg_type):
+            return component_type
+        return None
 
     def generate_call_arguments(self, args, expected_types):
         return ", ".join(self.generate_call_argument_list(args, expected_types))
@@ -8669,9 +8792,10 @@ class SlangCodeGen:
             ):
                 args = self.generate_struct_constructor_arguments(callee, node.args)
                 return f"{self.convert_type(callee)}({args})"
+            bitcast_callee = self.slang_bitcast_intrinsic_callee(callee)
             if isinstance(callee, str) and callee in self.user_function_names:
                 args = self.generate_user_function_arguments(callee, node.args)
-            elif isinstance(callee, str) and callee in {"asfloat", "asint", "asuint"}:
+            elif bitcast_callee is not None:
                 args = ", ".join(
                     [
                         self.generate_expression_without_expected(arg)
@@ -8687,6 +8811,12 @@ class SlangCodeGen:
                 and callee not in self.user_function_names
             ):
                 return f"clamp({args}, 0.0, 1.0)"
+            if (
+                callee == "atan"
+                and len(node.args) == 2
+                and callee not in self.user_function_names
+            ):
+                callee = "atan2"
             if callee not in self.user_function_names:
                 callee = self.function_map.get(callee, callee)
             return f"{callee}({args})"
@@ -9936,6 +10066,18 @@ class SlangCodeGen:
             return type_name
 
         type_map = {
+            "f16": "half",
+            "float16": "half",
+            "half": "half",
+            "half2": "half2",
+            "half3": "half3",
+            "half4": "half4",
+            "f16vec2": "half2",
+            "f16vec3": "half3",
+            "f16vec4": "half4",
+            "vec2<f16>": "half2",
+            "vec3<f16>": "half3",
+            "vec4<f16>": "half4",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",

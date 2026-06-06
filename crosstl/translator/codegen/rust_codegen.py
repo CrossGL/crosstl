@@ -384,7 +384,9 @@ class RustCodeGen:
             "degrees": "degrees",
             "radians": "radians",
             "sqrt": "sqrt",
+            "rcp": "rcp",
             "inversesqrt": "rsqrt",
+            "inverseSqrt": "rsqrt",
             "pow": "pow",
             "trunc": "trunc",
             "roundEven": "round_even",
@@ -457,6 +459,7 @@ class RustCodeGen:
             "frac": "fract",
             "fract": "fract",
             "mod": "modulo",
+            "fmod": "modulo",
             "barrier": "workgroup_barrier",
             "workgroupBarrier": "workgroup_barrier",
             "memoryBarrier": "memory_barrier",
@@ -3507,6 +3510,10 @@ class RustCodeGen:
 
     def map_type_to_rust(self, type_str):
         """Enhanced type mapping for Rust."""
+        matrix_alias = self.normalize_hlsl_matrix_type_name(type_str)
+        if matrix_alias != str(type_str):
+            return self.map_type(matrix_alias)
+
         if type_str.startswith("float") and len(type_str) > 5:
             size = type_str[5:]
             if size.isdigit():
@@ -3656,13 +3663,15 @@ class RustCodeGen:
             init_expr = self.rust_static_default_initializer(rust_type)
             lazy_lock = False
 
-        return self.rust_resource_metadata_comment(
-            node, var_type
-        ) + self.generate_static_declaration(
-            node.name,
-            rust_type,
-            init_expr,
-            lazy_lock=lazy_lock,
+        return (
+            self.rust_resource_metadata_comment(node, var_type)
+            + self.rust_resource_placeholder_diagnostic_comment(node, var_type)
+            + self.generate_static_declaration(
+                node.name,
+                rust_type,
+                init_expr,
+                lazy_lock=lazy_lock,
+            )
         )
 
     def generate_global_array_declaration(self, node):
@@ -3704,10 +3713,12 @@ class RustCodeGen:
                 lazy_lock = False
 
         self.register_variable_type(node.name, source_type, scope="static")
-        return self.rust_resource_metadata_comment(
-            node, source_type
-        ) + self.generate_static_declaration(
-            node.name, rust_type, initializer, lazy_lock=lazy_lock
+        return (
+            self.rust_resource_metadata_comment(node, source_type)
+            + self.rust_resource_placeholder_diagnostic_comment(node, source_type)
+            + self.generate_static_declaration(
+                node.name, rust_type, initializer, lazy_lock=lazy_lock
+            )
         )
 
     def register_constant_types(self, ast):
@@ -7240,6 +7251,98 @@ class RustCodeGen:
 
         return f"({left} {mapped_op} {right})"
 
+    def generate_scalar_mul_add_call(self, func_name, args):
+        if func_name != "fma" or len(args or []) != 3:
+            return None
+
+        arg_types = [self.expression_result_type(arg) for arg in args]
+        if any(
+            self.vector_type_info(arg_type) is not None
+            or self.matrix_type_info(arg_type) is not None
+            for arg_type in arg_types
+        ):
+            return None
+
+        if any(self.normalize_scalar_type(arg_type) is None for arg_type in arg_types):
+            return None
+
+        target_type = self.normalize_scalar_type(self.promoted_argument_type(arg_types))
+        if target_type not in {"f32", "f64"}:
+            return None
+
+        value = self.generate_mul_add_receiver(args[0], arg_types[0], target_type)
+        multiplier = self.generate_mul_add_scalar_operand(
+            args[1], arg_types[1], target_type
+        )
+        addend = self.generate_mul_add_scalar_operand(
+            args[2], arg_types[2], target_type
+        )
+        return f"{value}.mul_add({multiplier}, {addend})"
+
+    def generate_mul_add_receiver(self, expr, source_type, target_type):
+        value = self.generate_mul_add_scalar_operand(expr, source_type, target_type)
+        if self.is_numeric_literal_expression(expr):
+            return f"({value} as {target_type})"
+        return f"({value})"
+
+    def generate_mul_add_scalar_operand(self, expr, source_type, target_type):
+        generated = self.generate_expression(expr)
+        return self.normalize_binary_scalar_operand(
+            expr,
+            generated,
+            source_type,
+            target_type,
+        )
+
+    def generate_reciprocal_call(self, func_name, args):
+        if func_name != "rcp" or len(args or []) != 1:
+            return None
+
+        arg = args[0]
+        arg_type = self.expression_result_type(arg)
+        scalar_type = self.normalize_scalar_type(arg_type)
+        if scalar_type in {"f32", "f64"}:
+            return f"(1.0 / {self.generate_expression(arg)})"
+
+        vector_info = self.vector_type_info(arg_type)
+        if vector_info is not None:
+            component_type = self.normalize_scalar_type(vector_info["component_type"])
+            if component_type not in {"f32", "f64"}:
+                return None
+            temp_bindings = []
+            lanes = self.vector_argument_lane_expressions(
+                arg, vector_info, temp_bindings, component_type
+            )
+            lanes = [f"(1.0 / {lane})" for lane in lanes]
+            return self.generate_constructor_call(
+                self.map_type(arg_type), lanes, temp_bindings
+            )
+
+        matrix_info = self.matrix_type_info(arg_type)
+        if matrix_info is not None:
+            component_type = self.normalize_scalar_type(matrix_info["component_type"])
+            if component_type not in {"f32", "f64"}:
+                return None
+            temp_bindings = []
+            lanes = self.matrix_argument_lane_expressions(
+                arg, matrix_info, temp_bindings, component_type
+            )
+            lanes = [f"(1.0 / {lane})" for lane in lanes]
+            return self.generate_constructor_call(
+                self.map_type(arg_type), lanes, temp_bindings
+            )
+
+        return None
+
+    def is_numeric_literal_expression(self, expr):
+        if isinstance(expr, (int, float)) and not isinstance(expr, bool):
+            return True
+        return (
+            isinstance(expr, LiteralNode)
+            and isinstance(expr.value, (int, float))
+            and not isinstance(expr.value, bool)
+        )
+
     def generate_matrix_multiply_expression(
         self, left_expr, right_expr, left_type, right_type, operator
     ):
@@ -8429,6 +8532,14 @@ class RustCodeGen:
                 if bool_mix is not None:
                     return bool_mix
 
+            bitcast_alias = self.generate_bitcast_alias_call(func_name, args)
+            if bitcast_alias is not None:
+                return bitcast_alias
+
+            bitcast_intrinsic = self.generate_bitcast_intrinsic_call(func_name, args)
+            if bitcast_intrinsic is not None:
+                return bitcast_intrinsic
+
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
             cuda_shuffle_call = self.generate_cuda_shuffle_intrinsic_call(
@@ -8439,7 +8550,16 @@ class RustCodeGen:
             self.validate_rust_texture_helper_call(func_name, args)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
-                return f"clamp({arg}, 0.0, 1.0)"
+                clamp_name = self.rust_imported_math_callable_name("clamp")
+                return f"{clamp_name}({arg}, 0.0, 1.0)"
+
+            reciprocal_call = self.generate_reciprocal_call(func_name, args)
+            if reciprocal_call is not None:
+                return reciprocal_call
+
+            scalar_mul_add = self.generate_scalar_mul_add_call(func_name, args)
+            if scalar_mul_add is not None:
+                return scalar_mul_add
 
             dot_call = self.generate_inline_dot_call(func_name, args)
             if dot_call is not None:
@@ -8466,7 +8586,8 @@ class RustCodeGen:
                     func_name, vector_info, args
                 )
 
-            if func_name in [
+            matrix_func_name = self.normalize_hlsl_matrix_type_name(func_name)
+            if matrix_func_name in [
                 "mat2",
                 "mat3",
                 "mat4",
@@ -8492,10 +8613,11 @@ class RustCodeGen:
                 "dmat4x3",
                 "dmat4x4",
             ]:
-                return self.generate_matrix_constructor_call(func_name, args)
+                return self.generate_matrix_constructor_call(matrix_func_name, args)
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
-            return f"{self.rust_callable_name(func_name or callee)}({args_str})"
+            callable_name = self.rust_imported_math_callable_name(func_name or callee)
+            return f"{self.rust_callable_name(callable_name)}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
@@ -8616,6 +8738,284 @@ class RustCodeGen:
 
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
+
+    def generate_bitcast_alias_call(self, func_name, args):
+        if func_name not in {"asfloat", "asint", "asuint"} or len(args or []) != 1:
+            return None
+
+        arg = args[0]
+        arg_type = self.expression_result_type(arg)
+        target_component_type = {
+            "asfloat": "float",
+            "asint": "int",
+            "asuint": "uint",
+        }[func_name]
+        target_type = self.bitcast_value_type(arg_type, target_component_type)
+        if target_type is None:
+            return None
+        source_component_type = self.bitcast_argument_component_type(arg_type)
+        if source_component_type not in {"float", "int", "uint"}:
+            return None
+
+        helper_name = self.bitcast_alias_helper_name(func_name, arg_type)
+        vector_info = self.vector_type_info(arg_type)
+        if helper_name is not None:
+            return self.generate_bitcast_helper_call(
+                arg,
+                target_type,
+                vector_info,
+                helper_name,
+            )
+
+        if vector_info is not None:
+            temp_bindings = []
+            lanes = self.vector_argument_lane_expressions(
+                arg,
+                vector_info,
+                temp_bindings,
+                target_component_type,
+            )
+            return self.generate_constructor_call(
+                self.map_type(target_type),
+                lanes[: vector_info["size"]],
+                temp_bindings,
+            )
+
+        arg_expr = self.generate_expression(arg)
+        return self.normalize_scalar_assignment_value(
+            arg,
+            arg_expr,
+            arg_type,
+            target_component_type,
+        )
+
+    def bitcast_alias_helper_name(self, func_name, arg_type):
+        source_component_type = self.bitcast_argument_component_type(arg_type)
+        if func_name == "asfloat":
+            return {
+                "int": "int_bits_to_float",
+                "uint": "uint_bits_to_float",
+            }.get(source_component_type)
+        if func_name == "asint" and source_component_type == "float":
+            return "float_bits_to_int"
+        if func_name == "asuint" and source_component_type == "float":
+            return "float_bits_to_uint"
+        return None
+
+    def generate_bitcast_intrinsic_call(self, func_name, args):
+        if len(args or []) != 1:
+            return None
+
+        target_component_type = {
+            "floatBitsToInt": "int",
+            "floatBitsToUint": "uint",
+            "intBitsToFloat": "float",
+            "uintBitsToFloat": "float",
+        }.get(func_name)
+        if target_component_type is None:
+            return None
+
+        arg = args[0]
+        arg_type = self.expression_result_type(arg)
+        source_component_type = self.bitcast_argument_component_type(arg_type)
+        expected_source_component_type = {
+            "floatBitsToInt": "float",
+            "floatBitsToUint": "float",
+            "intBitsToFloat": "int",
+            "uintBitsToFloat": "uint",
+        }[func_name]
+        if source_component_type != expected_source_component_type:
+            return None
+
+        target_type = self.bitcast_value_type(arg_type, target_component_type)
+        if target_type is None:
+            return None
+
+        return self.generate_bitcast_helper_call(
+            arg,
+            target_type,
+            self.vector_type_info(arg_type),
+            self.function_map[func_name],
+        )
+
+    def generate_bitcast_helper_call(
+        self,
+        arg,
+        target_type,
+        vector_info,
+        helper_name,
+    ):
+        callee = self.rust_imported_math_callable_name(helper_name)
+        callable_name = self.rust_callable_name(callee)
+
+        # The standalone Rust contract has scalar and Vec3 bitcast helpers.
+        # Emit Vec2/Vec4 bitcasts lane-wise so those widths do not require
+        # additional runtime trait implementations.
+        if vector_info is None or vector_info["size"] == 3:
+            return f"{callable_name}({self.generate_expression(arg)})"
+
+        temp_bindings = []
+        lanes = self.bitcast_vector_helper_lane_expressions(
+            arg,
+            vector_info,
+            temp_bindings,
+            callable_name,
+        )
+        return self.generate_constructor_call(
+            self.map_type(target_type),
+            lanes,
+            temp_bindings,
+        )
+
+    def bitcast_vector_helper_lane_expressions(
+        self,
+        arg,
+        vector_info,
+        temp_bindings,
+        callable_name,
+    ):
+        swizzle_components = self.member_swizzle_components(arg)
+        if swizzle_components is not None:
+            object_expr = getattr(arg, "object_expr", getattr(arg, "object", None))
+            object_value = self.generate_vector_lane_source(
+                object_expr,
+                self.generate_expression(object_expr),
+                temp_bindings,
+            )
+            object_value = self.rust_member_base_expression(object_value)
+            return [
+                f"{callable_name}({object_value}.{component})"
+                for component in swizzle_components
+            ]
+
+        arg_expr = self.generate_expression(arg)
+        arg_expr = self.generate_vector_lane_source(arg, arg_expr, temp_bindings)
+        arg_expr = self.rust_member_base_expression(arg_expr)
+        components = ("x", "y", "z", "w")[: vector_info["size"]]
+        return [f"{callable_name}({arg_expr}.{component})" for component in components]
+
+    def bitcast_argument_component_type(self, type_name):
+        vector_info = self.vector_type_info(type_name)
+        if vector_info is not None:
+            return vector_info["component_type"]
+
+        scalar_type = self.normalize_scalar_type(type_name)
+        return self.scalar_type_for_type_constructor(scalar_type)
+
+    def rust_imported_math_callable_name(self, func_name):
+        helper_module = self.rust_imported_helper_module(func_name)
+        if (
+            isinstance(func_name, str)
+            and helper_module is not None
+            and self.rust_function_name_is_shadowed(func_name)
+        ):
+            return f"{helper_module}::{func_name}"
+        return func_name
+
+    def rust_imported_helper_module(self, func_name):
+        if func_name in self.rust_imported_math_function_names():
+            return "math"
+        if self.is_rust_texture_helper_name(func_name):
+            return "gpu"
+        if str(func_name).startswith(("image_", "buffer_", "subgroup_")):
+            return "gpu"
+        return None
+
+    def rust_function_name_is_shadowed(self, func_name):
+        return (
+            func_name in self.local_variable_names
+            or func_name in self.user_function_names
+        )
+
+    def rust_imported_math_function_names(self):
+        return {
+            "abs",
+            "acos",
+            "all",
+            "any",
+            "asin",
+            "atan",
+            "atan2",
+            "ceil",
+            "clamp",
+            "cos",
+            "cosh",
+            "cross",
+            "degrees",
+            "determinant",
+            "dfdx",
+            "dfdx_coarse",
+            "dfdx_fine",
+            "dfdy",
+            "dfdy_coarse",
+            "dfdy_fine",
+            "distance",
+            "dot",
+            "equal",
+            "exp",
+            "exp2",
+            "faceforward",
+            "find_lsb",
+            "find_msb",
+            "floor",
+            "float_bits_to_int",
+            "float_bits_to_uint",
+            "fract",
+            "fwidth",
+            "fwidth_coarse",
+            "fwidth_fine",
+            "greater_than",
+            "greater_than_equal",
+            "inverse",
+            "int_bits_to_float",
+            "isfinite",
+            "isinf",
+            "isnan",
+            "ldexp",
+            "length",
+            "lerp",
+            "less_than",
+            "less_than_equal",
+            "log",
+            "log2",
+            "matrix_comp_mult",
+            "max",
+            "min",
+            "modulo",
+            "normalize",
+            "not_equal",
+            "outer_product",
+            "pack_double_2x32",
+            "pack_half_2x16",
+            "pack_snorm_2x16",
+            "pack_snorm_4x8",
+            "pack_unorm_2x16",
+            "pack_unorm_4x8",
+            "pow",
+            "radians",
+            "reflect",
+            "refract",
+            "round",
+            "round_even",
+            "rsqrt",
+            "sign",
+            "sin",
+            "sinh",
+            "smoothstep",
+            "sqrt",
+            "step",
+            "tan",
+            "tanh",
+            "transpose",
+            "trunc",
+            "uint_bits_to_float",
+            "unpack_double_2x32",
+            "unpack_half_2x16",
+            "unpack_snorm_2x16",
+            "unpack_snorm_4x8",
+            "unpack_unorm_2x16",
+            "unpack_unorm_4x8",
+        }
 
     def generate_cuda_shuffle_intrinsic_call(self, func_name, args):
         if func_name != "__shfl_down_sync" or len(args or []) < 3:
@@ -8792,7 +9192,8 @@ class RustCodeGen:
     def generate_texture_helper_call(self, helper_name, args):
         self.validate_rust_texture_helper_call(helper_name, args)
         generated_args = ", ".join(self.generate_expression(arg) for arg in args or [])
-        return f"{helper_name}({generated_args})"
+        callable_name = self.rust_imported_math_callable_name(helper_name)
+        return f"{callable_name}({generated_args})"
 
     def rust_hlsl_texture_member_operations(self):
         return {
@@ -9034,7 +9435,9 @@ class RustCodeGen:
         if arguments is not None:
             arg_count = len(arguments)
         has_sampler = self.call_has_explicit_sampler_argument(arguments)
-        if func_name == "textureSize":
+        if func_name == "atan" and arg_count == 2:
+            return "atan2"
+        if func_name in {"textureSize", "textureDimensions"}:
             return "texture_size" if arg_count == 1 else "texture_size_lod"
         if func_name == "texture":
             if self.call_uses_shadow_texture(arguments):
@@ -10334,6 +10737,10 @@ class RustCodeGen:
             "gl_GlobalInvocationID": "global_invocation_id()",
             "gl_LocalInvocationIndex": "local_invocation_index()",
             "gl_NumWorkGroups": "num_workgroups()",
+            "gl_SubgroupInvocationID": "subgroup_invocation_id()",
+            "gl_SubgroupSize": "subgroup_size()",
+            "gl_SubgroupID": "subgroup_id()",
+            "gl_NumSubgroups": "num_subgroups()",
             "SV_GroupID": "workgroup_id()",
             "SV_GroupThreadID": "local_invocation_id()",
             "SV_DispatchThreadID": "global_invocation_id()",
@@ -10359,6 +10766,10 @@ class RustCodeGen:
             "gl_GlobalInvocationID": "uvec3",
             "gl_LocalInvocationIndex": "uint",
             "gl_NumWorkGroups": "uvec3",
+            "gl_SubgroupInvocationID": "uint",
+            "gl_SubgroupSize": "uint",
+            "gl_SubgroupID": "uint",
+            "gl_NumSubgroups": "uint",
             "SV_GroupID": "uvec3",
             "SV_GroupThreadID": "uvec3",
             "SV_DispatchThreadID": "uvec3",
@@ -11291,6 +11702,9 @@ class RustCodeGen:
                 return "int"
             if operation in {"GetDimensions"}:
                 return "void"
+            if operation in {"textureDimensions"}:
+                texture_type = self.expression_result_type(expr.texture_expr)
+                return self.texture_dimensions_result_type(texture_type)
             if operation in {"textureSize"}:
                 texture_type = self.expression_result_type(expr.texture_expr)
                 return self.texture_size_result_type(texture_type)
@@ -11462,6 +11876,20 @@ class RustCodeGen:
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
 
+        bitcast_alias_component_type = {
+            "asfloat": "float",
+            "asint": "int",
+            "asuint": "uint",
+        }.get(func_name)
+        if bitcast_alias_component_type is not None and arg_types:
+            source_component_type = self.bitcast_argument_component_type(arg_types[0])
+            if source_component_type not in {"float", "int", "uint"}:
+                return None
+            return self.bitcast_value_type(
+                arg_types[0],
+                bitcast_alias_component_type,
+            )
+
         wave_type = self.wave_helper_result_type(mapped_name, arg_types)
         if wave_type is not None:
             return wave_type
@@ -11520,6 +11948,8 @@ class RustCodeGen:
             return "float"
 
         if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
+            if func_name == "textureDimensions":
+                return self.texture_dimensions_result_type(arg_types[0])
             return self.texture_size_result_type(arg_types[0])
 
         if mapped_name in {"texture_query_levels", "texture_samples"}:
@@ -11602,6 +12032,7 @@ class RustCodeGen:
             mapped_name
             in {
                 "sqrt",
+                "rcp",
                 "rsqrt",
                 "abs",
                 "floor",
@@ -11769,6 +12200,15 @@ class RustCodeGen:
         }:
             return "ivec3"
         return "ivec2"
+
+    def texture_dimensions_result_type(self, texture_type):
+        size_type = self.texture_size_result_type(texture_type)
+        size_info = self.vector_type_info(size_type)
+        if size_info is not None:
+            return self.vector_type_for_components("uint", size_info["size"])
+        if self.normalize_scalar_type(size_type) is not None:
+            return "uint"
+        return size_type
 
     def storage_image_value_result_type(self, image_type):
         image_type = str(image_type or "")
@@ -12302,6 +12742,18 @@ class RustCodeGen:
             parts.append(f"register={register_metadata}")
         return " ".join(parts) + "\n"
 
+    def rust_resource_placeholder_diagnostic_comment(self, node, type_name):
+        name = getattr(node, "name", None)
+        resource_kind = self.rust_resource_kind(type_name, node=node)
+        if not name or resource_kind is None:
+            return ""
+        return (
+            f"// CrossGL Rust limitation: resource {name} is emitted as a "
+            "compile-only placeholder static, not a rust-gpu resource binding; "
+            "pass real spirv_std resources as #[spirv(...)] entry parameters "
+            "when targeting rust-gpu.\n"
+        )
+
     def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
         resource_kind = self.rust_resource_kind(type_name, node=node, forced_kind=kind)
@@ -12766,6 +13218,7 @@ class RustCodeGen:
             type_name = self.convert_type_node_to_string(type_name)
         else:
             type_name = str(type_name)
+        type_name = self.normalize_hlsl_matrix_type_name(type_name)
 
         matrix_details = {
             "mat2": (2, 2),
@@ -12799,6 +13252,26 @@ class RustCodeGen:
         columns, rows = details
         component_type = "double" if type_name.startswith("dmat") else "float"
         return {"columns": columns, "rows": rows, "component_type": component_type}
+
+    def normalize_hlsl_matrix_type_name(self, type_name):
+        if type_name is None:
+            return None
+
+        compact = re.sub(r"\s+", "", str(type_name))
+        match = re.fullmatch(
+            r"(float|double|half|min16float|float16_t)([234])x([234])",
+            compact,
+        )
+        if match is None:
+            return str(type_name)
+
+        component_type, rows, columns = match.groups()
+        prefix = "dmat" if component_type == "double" else "mat"
+        rows = int(rows)
+        columns = int(columns)
+        if rows == columns:
+            return f"{prefix}{columns}"
+        return f"{prefix}{columns}x{rows}"
 
     def scalar_type_for_type_constructor(self, scalar_type):
         scalar_type = self.normalize_scalar_type(scalar_type)
@@ -12892,6 +13365,10 @@ class RustCodeGen:
         patch_type = self.rust_tessellation_patch_mapped_type(vtype_str)
         if patch_type is not None:
             return patch_type
+
+        matrix_alias = self.normalize_hlsl_matrix_type_name(vtype_str)
+        if matrix_alias != vtype_str:
+            return self.map_type(matrix_alias)
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, sizes = self.c_array_type_parts(vtype_str)

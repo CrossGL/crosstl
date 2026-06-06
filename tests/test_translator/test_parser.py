@@ -10,9 +10,11 @@ from crosstl.translator.ast import (
     ConstructorPatternNode,
     DoWhileNode,
     ForInNode,
+    ForNode,
     FunctionCallNode,
     IdentifierNode,
     IdentifierPatternNode,
+    IfNode,
     LiteralNode,
     LoopNode,
     MatrixType,
@@ -27,6 +29,7 @@ from crosstl.translator.ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReferenceType,
+    ReturnNode,
     ShaderNode,
     ShaderStage,
     StructPatternNode,
@@ -284,6 +287,34 @@ def test_range_expression_preserves_assignment_rhs():
     assert not isinstance(assignment.target, RangeNode)
 
 
+def test_keyword_like_binding_identifiers_parse_in_declarations():
+    code = """
+    shader main {
+        const int alias = 2;
+
+        struct Payload {
+            return: int;
+            int fn;
+        };
+
+        int fn(int var, int loop) {
+            int struct = var + loop + alias;
+            return struct;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    payload = ast.structs[0]
+    function = ast.functions[0]
+    local = function.body.statements[0]
+
+    assert [member.name for member in payload.members] == ["return", "fn"]
+    assert function.name == "fn"
+    assert [param.name for param in function.parameters] == ["var", "loop"]
+    assert local.name == "struct"
+
+
 def test_preprocessor_and_precision_parsing():
     code = """
     #version 450 core
@@ -305,6 +336,29 @@ def test_preprocessor_and_precision_parsing():
     names = {pp.directive for pp in directives}
     assert "version" in names
     assert "precision" in names
+
+
+def test_multiline_preprocessor_directive_splices_before_parse():
+    # HLSL and GLSL allow directives to continue when a backslash precedes EOL.
+    code = """
+    #define SCALE(x) \\
+        ((x) * 2)
+    shader main {
+        compute {
+            void main() {
+                float scaled = SCALE(4.0);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+    directive = ast.preprocessors[0]
+    statement = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements[0]
+
+    assert isinstance(directive, PreprocessorNode)
+    assert directive.directive == "define"
+    assert directive.content == "SCALE(x)         ((x) * 2)"
+    assert statement.name == "scaled"
 
 
 def test_else_if_statement():
@@ -1250,6 +1304,52 @@ def test_square_bracket_stage_attributes_parse_to_function_metadata():
         3,
         "HSConst",
     ]
+
+
+def test_square_bracket_statement_attributes_preserve_control_flow_metadata():
+    code = """
+    shader StatementAttributes {
+        float shade(float value) {
+            [branch]
+            if (value > 0.0) {
+                value += 1.0;
+            }
+
+            [flatten]
+            if (value < 4.0) {
+                value += 2.0;
+            } else {
+                value -= 1.0;
+            }
+
+            [unroll(4)]
+            for (int i = 0; i < 4; i++) {
+                value += float(i);
+            }
+
+            return value;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    statements = ast.functions[0].body.statements
+
+    assert [type(statement) for statement in statements] == [
+        IfNode,
+        IfNode,
+        ForNode,
+        ReturnNode,
+    ]
+    assert [attr.name for attr in statements[0].attributes] == ["branch"]
+    assert [attr.name for attr in statements[1].attributes] == ["flatten"]
+    assert [attr.name for attr in statements[2].attributes] == ["unroll"]
+    assert statements[2].attributes[0].arguments[0].value == 4
+
+    ast.bind_parent_links()
+    assert statements[0].attributes[0].parent is statements[0]
+    assert statements[1].attributes[0].parent is statements[1]
+    assert statements[2].attributes[0].parent is statements[2]
 
 
 def test_compute_layout_does_not_consume_resource_layouts():
@@ -2925,6 +3025,65 @@ def test_literal_generic_type_arguments_parse():
     assert param_type.generic_args[0].name == "HSInput"
     assert isinstance(param_type.generic_args[1], LiteralNode)
     assert param_type.generic_args[1].value == 3
+
+
+def test_nested_generic_type_close_does_not_eat_shift_operator():
+    code = """
+    shader NestedGenericClosers {
+        void consume(InputPatch<vec2<f16>, 3> patch) { }
+
+        compute {
+            void main() {
+                array<vec2<f16>> values;
+                int shifted = 8 >> 1;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    assert any(token[0] == "BITWISE_SHIFT_RIGHT" for token in tokens)
+
+    ast = parse_code(tokens)
+
+    param_type = ast.functions[0].parameters[0].param_type
+    assert isinstance(param_type, NamedType)
+    assert param_type.name == "InputPatch"
+    assert isinstance(param_type.generic_args[0], VectorType)
+    assert param_type.generic_args[0].element_type.name == "f16"
+    assert isinstance(param_type.generic_args[1], LiteralNode)
+    assert param_type.generic_args[1].value == 3
+
+    values, shifted = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements
+    assert isinstance(values.var_type, NamedType)
+    assert values.var_type.name == "array"
+    assert isinstance(values.var_type.generic_args[0], VectorType)
+    assert values.var_type.generic_args[0].element_type.name == "f16"
+    assert getattr(shifted.initial_value, "operator", None) == ">>"
+
+
+def test_failed_generic_declaration_lookahead_preserves_shift_tokens():
+    code = """
+    shader LookaheadShift {
+        compute {
+            void main() {
+                foo < bar >> value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    original_tokens = list(tokens)
+
+    ast = parse_code(tokens)
+
+    assert tokens == original_tokens
+    statement = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements[0]
+    expression = statement.expression
+    assert expression.operator == "<"
+    assert expression.right.operator == ">>"
+    assert expression.right.right.name == "value"
 
 
 def test_hlsl_parameter_qualifiers_parse():

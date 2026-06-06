@@ -39,6 +39,77 @@ class MojoToCrossGLConverter:
         "i64": "int64_t",
         "index": "int",
     }
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        "as",
+        "async",
+        "await",
+        "bool",
+        "box",
+        "break",
+        "buffer",
+        "case",
+        "cbuffer",
+        "char",
+        "class",
+        "compute",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "elif",
+        "else",
+        "enum",
+        "extern",
+        "float",
+        "for",
+        "fragment",
+        "from",
+        "fn",
+        "geometry",
+        "global",
+        "half",
+        "if",
+        "impl",
+        "import",
+        "in",
+        "interface",
+        "internal",
+        "kernel",
+        "layout",
+        "let",
+        "local",
+        "loop",
+        "match",
+        "module",
+        "move",
+        "mut",
+        "namespace",
+        "priv",
+        "protected",
+        "pub",
+        "ref",
+        "return",
+        "safe",
+        "shader",
+        "shared",
+        "static",
+        "string",
+        "struct",
+        "switch",
+        "tessellation",
+        "threadgroup",
+        "trait",
+        "uniform",
+        "unsafe",
+        "use",
+        "var",
+        "vertex",
+        "void",
+        "while",
+        "workgroup",
+        "yield",
+    }
 
     def __init__(self):
         self.user_function_names = set()
@@ -68,6 +139,9 @@ class MojoToCrossGLConverter:
             "SIMD[DType.float32, 2]": "vec2",
             "SIMD[DType.float32, 3]": "vec3",
             "SIMD[DType.float32, 4]": "vec4",
+            "SIMD[DType.float64, 2]": "dvec2",
+            "SIMD[DType.float64, 3]": "dvec3",
+            "SIMD[DType.float64, 4]": "dvec4",
             "SIMD[DType.int32, 2]": "ivec2",
             "SIMD[DType.int32, 3]": "ivec3",
             "SIMD[DType.int32, 4]": "ivec4",
@@ -563,7 +637,7 @@ class MojoToCrossGLConverter:
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
         right = self.generate_expression(node.right)
-        op = node.operator if hasattr(node, "operator") else "="
+        op = self.map_operator(node.operator if hasattr(node, "operator") else "=")
         return f"{left} {op} {right}"
 
     def generate_nested_expression(self, expr):
@@ -830,7 +904,10 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, BinaryOpNode):
             left = self.generate_nested_expression(expr.left)
             right = self.generate_nested_expression(expr.right)
-            op = self.map_operator(expr.op if hasattr(expr, "op") else "+")
+            op = expr.op if hasattr(expr, "op") else "+"
+            if op == "not in":
+                return f"(!({left} in {right}))"
+            op = self.map_operator(op)
             return f"({left} {op} {right})"
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_nested_expression(expr.operand)
@@ -1020,9 +1097,15 @@ class MojoToCrossGLConverter:
     def sanitize_identifier(self, name):
         sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")
         if not sanitized:
-            return "metadata"
+            sanitized = "_".join(
+                f"u{ord(char):x}" for char in name if not char.isspace()
+            )
+            if not sanitized:
+                return "metadata"
         if sanitized[0].isdigit():
-            return f"_{sanitized}"
+            sanitized = f"_{sanitized}"
+        if sanitized.lower() in self.CROSSGL_RESERVED_IDENTIFIERS:
+            return f"{sanitized}_"
         return sanitized
 
     def map_semantic(self, attributes):
@@ -1077,4 +1160,10 @@ class MojoToCrossGLConverter:
             return "=="
         if op == "is not":
             return "!="
+        if op == "@":
+            return "*"
+        if op == "//":
+            return "/"
+        if op == "//=":
+            return "/="
         return op

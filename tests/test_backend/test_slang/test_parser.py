@@ -76,6 +76,38 @@ def test_struct_parsing():
         pytest.fail("Struct parsing not implemented.")
 
 
+def test_forward_struct_declaration_from_generated_conformance_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # docs/generated/tests/conformance/types-struct/struct-no-body-decl.slang
+    code = """
+    struct ForwardDeclared;
+
+    struct ForwardDeclared
+    {
+        int x;
+    }
+
+    void main()
+    {
+        ForwardDeclared fd;
+        fd.x = 55;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    forward, definition = ast.structs
+    assert forward.name == "ForwardDeclared"
+    assert forward.members == []
+    assert forward.is_forward_declaration is True
+    assert definition.name == "ForwardDeclared"
+    assert definition.is_forward_declaration is False
+    assert [(member.vtype, member.name) for member in definition.members] == [
+        ("int", "x")
+    ]
+
+
 def test_compound_import_parsing():
     code = "import MyApp.Shadowing;\n"
 
@@ -257,6 +289,28 @@ def test_visibility_qualified_struct_from_mlp_training_adam_sample():
         (["internal"], "NFloat", "mean"),
         (["internal"], "NFloat", "variance"),
         (["internal"], "int", "iteration"),
+    ]
+
+
+def test_static_const_struct_field_initializer_from_mlp_training_adam_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # examples/mlp-training/adam.slang
+    code = """
+    public struct AdamOptimizer
+    {
+        public static const NFloat beta1 = 0.9h;
+        public static const NFloat epsilon = 1e-7h;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    fields = ast.structs[0].members
+
+    assert [
+        (field.qualifiers, field.vtype, field.name, field.value) for field in fields
+    ] == [
+        (["public", "static", "const"], "NFloat", "beta1", "0.9h"),
+        (["public", "static", "const"], "NFloat", "epsilon", "1e-7h"),
     ]
 
 
@@ -1685,6 +1739,41 @@ def test_enum_declarations_from_gpu_printing_sample():
     assert isinstance(valued_enum.members[1][1], BinaryOpNode)
 
 
+def test_generic_enum_class_from_upstream_bug_tests():
+    # Reduced from shader-slang/slang tests/bugs/11042-generic-enum-scope-conflict.slang
+    # and tests/diagnostics/generic-enum-underlying-type.slang.
+    code = """
+    enum class GenericEnum<T>
+    {
+        A,
+        B,
+    }
+
+    enum class TestEnum<T : IArithmetic> : T
+    {
+        X = T(0),
+        Y = T(1),
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generic_enum, typed_enum = ast.enums
+
+    assert generic_enum.name == "GenericEnum"
+    assert generic_enum.kind == "class"
+    assert generic_enum.generic_parameters == "<T>"
+    assert generic_enum.underlying_type is None
+    assert generic_enum.members == [("A", None), ("B", None)]
+
+    assert typed_enum.name == "TestEnum"
+    assert typed_enum.kind == "class"
+    assert typed_enum.generic_parameters == "<T:IArithmetic>"
+    assert typed_enum.underlying_type == "T"
+    assert typed_enum.members[0][0] == "X"
+    assert isinstance(typed_enum.members[0][1], FunctionCallNode)
+
+
 def test_function_generic_where_conformance_constraint_parsing():
     code = """
     int useFoo<T>(T value) where T : IFoo {
@@ -2288,6 +2377,39 @@ def test_namespace_global_resource_array_parsing_from_current_slang_spirv_test()
     assert isinstance(assignment.left.array.array, MemberAccessNode)
     assert assignment.left.array.array.object.name == "test_namespace"
     assert assignment.left.array.array.member == "textureTable"
+
+
+def test_dotted_namespace_global_resource_parsing_from_namespace_import_sample():
+    # Source: shader-slang/slang tests/language-feature/namespaces/namespace-import/m.slang
+    # at 52339028a2aa703271533454c6b9528a534bac31.
+    code = """
+    namespace ns1.ns2
+    {
+        [[vk::binding(0, 0)]] RWTexture2D<float4> textureTable[];
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 pixel_i : SV_DispatchThreadID)
+    {
+        ns1.ns2.textureTable[0][pixel_i.xy] = float4(0,1,0,0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    namespaced_resource = ast.global_vars[0]
+    assert namespaced_resource.vtype == "RWTexture2D<float4>"
+    assert namespaced_resource.name == "ns1.ns2.textureTable"
+    assert namespaced_resource.array_sizes == [None]
+
+    assignment = find_function(ast, "main").body[0]
+    resource_access = assignment.left.array.array
+    assert isinstance(resource_access, MemberAccessNode)
+    assert resource_access.member == "textureTable"
+    assert isinstance(resource_access.object, MemberAccessNode)
+    assert resource_access.object.object.name == "ns1"
+    assert resource_access.object.member == "ns2"
 
 
 def test_local_and_parameter_array_declarator_parsing():
@@ -2928,6 +3050,23 @@ def test_numeric_literal_parsing():
     ]
 
 
+def test_binary_integer_literals_from_generated_conformance_sample_parse():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # expressions-literal/bin-prefix-lowercase.slang at d25453d.
+    code = """
+    void main() {
+        int x = 0b1010;
+        int y = 0B1111;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "main").body
+
+    assert [stmt.right for stmt in body] == ["0b1010", "0B1111"]
+
+
 def test_generic_struct_member_and_uniform_parameters_from_official_sample():
     code = """
     static const uint THREADGROUP_SIZE_X = 8;
@@ -3393,6 +3532,52 @@ def test_groupshared_global_and_pointer_dereference_member_access_parse():
     assert dereference.operand.member == "scale"
 
 
+def test_official_pointer_address_of_and_arrow_member_access_parse():
+    # Source: Slang User's Guide, Basic Convenience Features > Pointers (limited).
+    code = """
+    struct MyType
+    {
+        int a;
+    };
+
+    int test(MyType* pObj)
+    {
+        MyType* pNext = pObj + 1;
+        MyType* pNext2 = &pNext[1];
+        return pNext.a + pNext->a + (*pNext2).a + pNext2[0].a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    test_function = find_function(ast, "test")
+    address_of = test_function.body[1].right
+    expression = test_function.body[2].value
+
+    assert isinstance(address_of, UnaryOpNode)
+    assert address_of.op == "&"
+    assert isinstance(address_of.operand, ArrayAccessNode)
+
+    terms = []
+    while isinstance(expression, BinaryOpNode) and expression.op == "+":
+        terms.append(expression.right)
+        expression = expression.left
+    terms.append(expression)
+    terms.reverse()
+
+    assert len(terms) == 4
+    assert all(isinstance(term, MemberAccessNode) for term in terms)
+    assert terms[0].object.name == "pNext"
+    assert terms[0].member == "a"
+    assert terms[1].object.name == "pNext"
+    assert terms[1].member == "a"
+    assert isinstance(terms[2].object, UnaryOpNode)
+    assert terms[2].object.op == "*"
+    assert terms[2].member == "a"
+    assert isinstance(terms[3].object, ArrayAccessNode)
+    assert terms[3].member == "a"
+
+
 def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
     code = """
     struct VSOutput
@@ -3400,14 +3585,18 @@ def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
         float4 Pos : SV_POSITION;
         nointerpolation uint TextureIndex;
         nointerpolation float4 Color;
+        linear centroid float2 Uv : TEXCOORD0;
+        sample float4 CoverageColor : COLOR1;
     };
 
     [shader("fragment")]
     float4 main(
         VSOutput input,
-        noperspective float3 baryCoordsAffine : SV_Barycentrics)
+        noperspective float3 baryCoordsAffine : SV_Barycentrics,
+        centroid noperspective float2 baryCoordsNoPerspective : TEXCOORD1,
+        linear sample float4 perSampleColor : COLOR2)
     {
-        return input.Color + float4(baryCoordsAffine, 1.0);
+        return input.Color + perSampleColor + float4(baryCoordsAffine, 1.0);
     }
     """
 
@@ -3420,8 +3609,16 @@ def test_interpolation_modifiers_from_vulkan_samples_parse_as_qualifiers():
     assert output.members[1].vtype == "uint"
     assert output.members[2].qualifiers == ["nointerpolation"]
     assert output.members[2].vtype == "float4"
+    assert output.members[3].qualifiers == ["linear", "centroid"]
+    assert output.members[3].vtype == "float2"
+    assert output.members[4].qualifiers == ["sample"]
+    assert output.members[4].vtype == "float4"
     assert main.params[1].qualifiers == ["noperspective"]
     assert main.params[1].vtype == "float3"
+    assert main.params[2].qualifiers == ["centroid", "noperspective"]
+    assert main.params[2].vtype == "float2"
+    assert main.params[3].qualifiers == ["linear", "sample"]
+    assert main.params[3].vtype == "float4"
 
 
 def test_flat_interpolation_outputs_from_libretro_shaders_parse_as_qualifiers():

@@ -213,6 +213,31 @@ class TestHipParser:
         assert function.name == "add"
         assert "__device__" in function.qualifiers
 
+    def test_cuda_samples_style_const_dim3_constructor_global_parses(self):
+        code = """
+        const dim3 windowSize(512, 512);
+        const dim3 windowBlockSize(16, 16, 1);
+        const dim3 windowGridSize(windowSize.x / windowBlockSize.x,
+                                  windowSize.y / windowBlockSize.y);
+        """
+        ast = self.parse_code(code)
+
+        window_size = ast.statements[0]
+
+        assert isinstance(window_size, VariableNode)
+        assert window_size.vtype == "const dim3"
+        assert window_size.name == "windowSize"
+        assert isinstance(window_size.value, FunctionCallNode)
+        assert window_size.value.name == "dim3"
+        assert window_size.value.args == ["512", "512"]
+
+        window_grid_size = ast.statements[2]
+        assert isinstance(window_grid_size, VariableNode)
+        assert window_grid_size.name == "windowGridSize"
+        assert isinstance(window_grid_size.value, FunctionCallNode)
+        assert window_grid_size.value.name == "dim3"
+        assert len(window_grid_size.value.args) == 2
+
     def test_public_rocm_hipfft_complex_pointer_declarators_parse(self):
         code = """
         void host() {
@@ -914,6 +939,24 @@ class TestHipParser:
         assert call.name.object == "f"
         assert call.name.member == "operator()<float, float>"
         assert call.args == ["TensorLayout::NCHW"]
+
+    def test_public_gpu_template_scope_disambiguator_call_parse(self):
+        # Inspired by public CUDA/HIP template kernels using
+        # OPERATOR::template apply<T>(...) inside GPU wrappers.
+        code = """
+        template <typename OPERATOR>
+        __global__ void call_operator() {
+            OPERATOR::template apply<float>(threadIdx.x);
+        }
+        """
+        ast = self.parse_code(code)
+
+        call = ast.statements[0].body[0]
+
+        assert isinstance(call, FunctionCallNode)
+        assert call.name == "OPERATOR::apply<float>"
+        assert isinstance(call.args[0], HipBuiltinNode)
+        assert call.args[0].builtin_name == "threadIdx"
 
     def test_public_rocm_hiptensor_variable_template_condition_parse(self):
         # Upstream: ROCm/rocm-examples@cf369da, Common/hiptensor_utils.hpp.
@@ -1828,6 +1871,38 @@ class TestHipParser:
         assert isinstance(body[1].if_body, ReturnNode)
         assert body[2].value == "0"
 
+    def test_public_rocm_address_retrieval_multiline_if_initializer_parse(self):
+        code = """
+        void host() {
+            void* hipInitFunc;
+            int hipVersion = HIP_VERSION;
+            std::uint64_t flags = 0;
+            hipDriverProcAddressQueryResult symbolStatus;
+
+            if (auto err = hipGetProcAddress(
+                    "hipInit",
+                    reinterpret_cast<void**>(&hipInitFunc),
+                    hipVersion,
+                    flags,
+                    &symbolStatus);
+                err != hipSuccess) {
+                return;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[4], VariableNode)
+        assert body[4].vtype == "auto"
+        assert body[4].name == "err"
+        assert isinstance(body[4].value, FunctionCallNode)
+        assert body[4].value.name == "hipGetProcAddress"
+        assert isinstance(body[5], IfNode)
+        assert body[5].condition.left == "err"
+        assert body[5].condition.op == "!="
+        assert body[5].condition.right == "hipSuccess"
+
     def test_std_chrono_benchmark_expressions_parsing(self):
         code = """
         void bench() {
@@ -2566,6 +2641,31 @@ class TestHipParser:
         assert isinstance(body[0].value, CastNode)
         assert body[0].value.target_type == "LaneMask"
         assert body[0].value.expression == "x"
+
+    def test_cuda_samples_const_unknown_pointer_pointer_c_style_cast_parsing(self):
+        code = """
+        void compile_shader(char* data, int size) {
+            glShaderSource(shader, 1, (const GLchar **)&data, &size);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        call = ast.statements[0].body[0]
+        shader_source = call.args[2]
+        size_arg = call.args[3]
+
+        assert isinstance(call, FunctionCallNode)
+        assert isinstance(shader_source, CastNode)
+        assert shader_source.target_type == "const GLchar * *"
+        assert isinstance(shader_source.expression, UnaryOpNode)
+        assert shader_source.expression.op == "&"
+        assert shader_source.expression.operand == "data"
+        assert isinstance(size_arg, UnaryOpNode)
+        assert size_arg.op == "&"
+        assert size_arg.operand == "size"
 
     def test_auto_pointer_reference_local_declarations_parsing(self):
         code = """

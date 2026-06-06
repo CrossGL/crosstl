@@ -1,14 +1,23 @@
+import re
+import shutil
+import subprocess
+
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
+    ForNode,
     FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
     ReturnNode,
     SharedMemoryNode,
     StructNode,
     TypeAliasNode,
+    VariableNode,
 )
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -31,6 +40,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
             "cpp/3_CUDA_Features/cdpAdvancedQuicksort/cdpAdvancedQuicksort.cu",
+            "cpp/3_CUDA_Features/cdpQuadtree/cdpQuadtree.cu",
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
@@ -57,6 +67,11 @@ EXTERNAL_SAMPLES = [
             "examples/cute/tutorial/sgemm_1.cu",
             "test/unit/cute/ampere/tiled_cp_async.cu",
         ],
+    },
+    {
+        "repo": "https://github.com/NVlabs/tiny-cuda-nn",
+        "commit": "749dd70c5afc5a9dadb85e5652ed65d55e0ba187",
+        "paths": ["src/fully_fused_mlp.cu"],
     },
     {
         "repo": "https://github.com/NVIDIA/CUDALibrarySamples",
@@ -106,12 +121,105 @@ def assert_crossgl_reparse(source):
     CrossGLParser(CrossGLLexer(source).tokens).parse()
 
 
+def crossgl_to_cuda(source):
+    return CudaCodeGen().generate(CrossGLParser(CrossGLLexer(source).tokens).parse())
+
+
+def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        return False
+
+    source_path = tmp_path / "roundtrip.cu"
+    object_path = tmp_path / "roundtrip.o"
+    source_path.write_text(cuda_code, encoding="utf-8")
+
+    result = subprocess.run(
+        [nvcc, "-std=c++17", "-c", str(source_path), "-o", str(object_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr + "\n\n" + cuda_code
+    return True
+
+
 def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(
         sample["repo"].startswith("https://github.com/") for sample in EXTERNAL_SAMPLES
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_cuda_native_saxpy_round_trip_regenerates_native_cuda(tmp_path):
+    source = """
+    __global__ void saxpy(float* y, const float* x, float a, unsigned int n) {
+        unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            y[idx] = a * x[idx] + y[idx];
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+    regenerated_cuda = crossgl_to_cuda(crossgl)
+
+    assert "f32 a" in crossgl
+    assert "u32 n" in crossgl
+    assert "gl_WorkGroupID.x" in crossgl
+    assert "gl_WorkGroupSize.x" in crossgl
+    assert "gl_LocalInvocationID.x" in crossgl
+
+    assert 'extern "C" __global__ void saxpy(' in regenerated_cuda
+    assert re.search(r"\bfloat\s+a\b", regenerated_cuda)
+    assert re.search(r"\bunsigned\s+int\s+n\b", regenerated_cuda)
+    assert re.search(r"\bunsigned\s+int\s+idx\b", regenerated_cuda)
+    assert "threadIdx.x" in regenerated_cuda
+    assert "blockIdx.x" in regenerated_cuda
+    assert "blockDim.x" in regenerated_cuda
+    assert "gl_GlobalInvocationID" not in regenerated_cuda
+    assert "gl_WorkGroupID" not in regenerated_cuda
+    assert "gl_WorkGroupSize" not in regenerated_cuda
+    assert "gl_LocalInvocationID" not in regenerated_cuda
+    assert not re.search(r"\bf32\b", regenerated_cuda)
+    assert not re.search(r"\bu32\b", regenerated_cuda)
+
+    compile_cuda_if_nvcc_available(regenerated_cuda, tmp_path)
+
+
+def test_tiny_cuda_nn_unroll_macro_markers_before_for_loops_parse_and_codegen():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: src/fully_fused_mlp.cu
+    source = """
+    template <uint32_t N_ITERS>
+    __device__ void threadblock_load_input_static(float* out,
+                                                  const float* input) {
+        __syncthreads();
+
+        TCNN_PRAGMA_UNROLL
+        for (uint32_t i = 0; i < N_ITERS; ++i) {
+            out[i] = input[i];
+        }
+
+        _Pragma("unroll")
+        for (uint32_t j = 0; j < N_ITERS; ++j) {
+            out[j] = out[j];
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    loops = [stmt for stmt in body if isinstance(stmt, ForNode)]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert len(loops) == 2
+    assert body[0].sync_type == "__syncthreads"
+    assert "TCNN_PRAGMA_UNROLL" not in crossgl
+    assert "_Pragma" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse():
@@ -151,6 +259,40 @@ def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse()
     assert "__syncthreads_count(pred);" not in crossgl
     assert "__syncthreads_and(pred);" not in crossgl
     assert "__syncthreads_or(pred);" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_programming_guide_one_component_vectors_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Programming Guide v12.4, section 7.3.1 Built-in Vector Types.
+    source = """
+    struct Pair {
+        float x;
+    };
+
+    float unpack(Pair pair, float1 packed) {
+        float1 local = make_float1(2.0f);
+        int1 count(3);
+        return pair.x + packed.x + local.x + count.x;
+    }
+    """
+
+    ast = parse_cuda(source)
+    function = ast.functions[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert function.params[1].vtype == "float1"
+    assert isinstance(function.body[0], VariableNode)
+    assert function.body[0].vtype == "float1"
+    assert isinstance(function.body[0].value, FunctionCallNode)
+    assert function.body[0].value.name == "make_float1"
+    assert "f32 unpack(Pair pair, f32 packed)" in crossgl
+    assert "var local: f32 = f32(2.0f);" in crossgl
+    assert "var count: i32 = i32(3);" in crossgl
+    assert "pair.x" in crossgl
+    assert "packed.x" not in crossgl
+    assert "local.x" not in crossgl
+    assert "count.x" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -207,6 +349,28 @@ def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
     assert "__high2float" not in crossgl
 
 
+def test_cuda_math_api_floats2half2_rn_codegen_reparse():
+    # Source inspiration:
+    # NVIDIA CUDA Math API, Half Precision Conversion and Data Movement.
+    # cuda-samples fp16ScalarProduct covers half2 lane extraction; the CUDA
+    # Math API documents the related two-float half2 constructor.
+    source = """
+    __global__ void pack_half2(float *a, float *b, half2 *out) {
+        int idx = threadIdx.x;
+        out[idx] = __floats2half2_rn(a[idx], b[idx]);
+    }
+    """
+
+    ast = parse_cuda(source)
+    assignment = ast.kernels[0].body[1]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert assignment.right.name == "__floats2half2_rn"
+    assert "out[idx] = vec2<f16>(a[idx], b[idx]);" in crossgl
+    assert "__floats2half2_rn" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_tile_matmul_half2float_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples
@@ -235,6 +399,32 @@ def test_cuda_tile_matmul_half2float_codegen_reparse():
     assert body[1].right.right.name == "__half2float"
     assert "sum += (f32(A[((i * K) + k)]) * f32(B[((k * N) + j)]));" in crossgl
     assert "__half2float" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_tile_matmul_float2half_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/9_CUDA_Tile/tileMatmul/tileMatmul.cu
+    # Semantics source:
+    # NVIDIA CUDA Math API, Half Precision Conversion and Data Movement.
+    source = """
+    void init_half_inputs(half* h_A, float value) {
+        h_A[0] = __float2half(value - 0.5f);
+        h_A[1] = ::__float2half_rn(value + 0.5f);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].right.name == "__float2half"
+    assert body[1].right.name == "::__float2half_rn"
+    assert "h_A[0] = f16((value - 0.5f));" in crossgl
+    assert "h_A[1] = f16((value + 0.5f));" in crossgl
+    assert "__float2half" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -391,6 +581,44 @@ def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse():
     assert "atomicExchange(g_odata[2], tid);" in crossgl
     assert "atomicCompareExchange(g_odata[7], (tid - 1), tid);" in crossgl
     assert "atomicOr(g_odata[9], (1 << tid));" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Programming Guide, atomic functions section. CUDA samples
+    # simpleAtomicIntrinsics covers the unscoped atomic family; the programming
+    # guide documents _block and _system scoped variants.
+    source = """
+    __global__ void scopedAtomicKernel(int *g_odata, unsigned int *flags) {
+        int old = atomicAdd_system(&g_odata[0], 10);
+        atomicMax_block(&g_odata[threadIdx.x], old);
+        unsigned int exchanged = atomicCAS_system(flags, 0u, 1u);
+        flags[threadIdx.x] = exchanged;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[0].value, AtomicOperationNode)
+    assert body[0].value.operation == "atomicAdd_system"
+    assert isinstance(body[1], AtomicOperationNode)
+    assert body[1].operation == "atomicMax_block"
+    assert isinstance(body[2].value, AtomicOperationNode)
+    assert body[2].value.operation == "atomicCAS_system"
+    assert "cuda system-scope atomic atomicAdd_system lowered to atomicAdd" in crossgl
+    assert "cuda block-scope atomic atomicMax_block lowered to atomicMax" in crossgl
+    assert (
+        "cuda system-scope atomic atomicCAS_system lowered to " "atomicCompareExchange"
+    ) in crossgl
+    assert "atomicAdd(g_odata[0], 10)" in crossgl
+    assert "atomicMax(g_odata[gl_LocalInvocationID.x], old)" in crossgl
+    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
+    assert "atomicAdd_system(" not in crossgl
+    assert "atomicMax_block(" not in crossgl
+    assert "atomicCAS_system(" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -1085,6 +1313,55 @@ def test_cuda_samples_cdp_advanced_quicksort_popc_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_cdp_quadtree_tile_collectives_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/3_CUDA_Features/cdpQuadtree/cdpQuadtree.cu
+    source = """
+    namespace cg = cooperative_groups;
+
+    __global__ void qtree_warp(unsigned int *out,
+                               bool pred,
+                               unsigned int lane_mask_lt,
+                               int limit) {
+        cg::thread_block cta = cg::this_thread_block();
+        cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+
+        for (int range_it = threadIdx.x;
+             tile32.any(range_it < limit);
+             range_it += warpSize) {
+            unsigned int vote = tile32.ballot(pred);
+            unsigned int dest = __popc(vote & lane_mask_lt);
+            out[threadIdx.x] = tile32.shfl(dest, 0);
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    loop = ast.kernels[0].body[2]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.condition, FunctionCallNode)
+    assert isinstance(loop.condition.name, MemberAccessNode)
+    assert loop.condition.name.member == "any"
+    assert loop.body[0].value.name.member == "ballot"
+    assert loop.body[2].right.name.member == "shfl"
+    assert (
+        "for (var range_it: i32 = gl_LocalInvocationID.x; "
+        "WaveActiveAnyTrue(((range_it < limit) != 0)); range_it += 32)" in crossgl
+    )
+    assert "var vote: u32 = WaveActiveBallot((pred != 0)).x;" in crossgl
+    assert "var dest: u32 = bitCount((vote & lane_mask_lt));" in crossgl
+    assert "out[gl_LocalInvocationID.x] = WaveReadLaneAt(dest, 0);" in crossgl
+    assert "tile32.any" not in crossgl
+    assert "tile32.ballot" not in crossgl
+    assert "tile32.shfl" not in crossgl
+    assert "thread_block_tile.any not directly supported" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_sobol_qrng_ffs_codegen_reparse():
     source = """
     __global__ void sobol(unsigned int *v,
@@ -1478,3 +1755,38 @@ def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
         "cooperative_groups thread_block_tile.sync not directly supported"
         not in crossgl
     )
+
+
+def test_public_cuda_kernel_if_init_statement_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/InternLM/lmdeploy
+    # commit: 51334f09560a3432c434ad39c5ea67cc379ad995
+    # path: src/turbomind/kernels/quantization.cu
+    source = """
+    __global__ void guarded_store(int* out,
+                                  int num,
+                                  int dim,
+                                  int rows,
+                                  int row) {
+        int di = threadIdx.x;
+        int ti = blockIdx.x;
+        for (int s = 0; s < 2; ++s) {
+            if (auto r = ti + s * rows + row; r < num && di < dim) {
+                out[r] = di;
+            }
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    loop_body = ast.kernels[0].body[2].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(loop_body[0], VariableNode)
+    assert loop_body[0].name == "r"
+    assert loop_body[0].vtype == "auto"
+    assert isinstance(loop_body[1], IfNode)
+    assert "var r: auto = ((ti + (s * rows)) + row);" in crossgl
+    assert "if (((r < num) && (di < dim))) {" in crossgl
+    assert "out[r] = di;" in crossgl
+    assert_crossgl_reparse(crossgl)

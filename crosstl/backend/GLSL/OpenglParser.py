@@ -170,6 +170,9 @@ MESH_STORAGE_QUALIFIERS = {
     "taskPayloadSharedNV",
     "taskNV",
 }
+MESH_STORAGE_QUALIFIERS_LOWER = {
+    qualifier.lower() for qualifier in MESH_STORAGE_QUALIFIERS
+}
 
 VULKAN_MEMORY_MODEL_QUALIFIERS = {
     "workgroupcoherent",
@@ -223,6 +226,7 @@ BRACKETED_STAGE_MARKERS = {
     "tessellation_control",
     "tessellation_evaluation",
 }
+GODOT_METADATA_SECTION_MARKERS = {"versions", "modes", "specializations"}
 
 ASSIGNMENT_TOKENS = {
     "EQUALS": "=",
@@ -239,6 +243,44 @@ ASSIGNMENT_TOKENS = {
 }
 
 AUTO_SHADER_TYPES = {None, "", "auto", "infer", "inferred"}
+PRAGMA_SHADER_STAGE_TYPES = {
+    "vertex": "vertex",
+    "vert": "vertex",
+    "fragment": "fragment",
+    "frag": "fragment",
+    "compute": "compute",
+    "comp": "compute",
+    "geometry": "geometry",
+    "geom": "geometry",
+    "tesscontrol": "tessellation_control",
+    "tesc": "tessellation_control",
+    "tessellation_control": "tessellation_control",
+    "tesseval": "tessellation_evaluation",
+    "tese": "tessellation_evaluation",
+    "tessellation_evaluation": "tessellation_evaluation",
+    "mesh": "mesh",
+    "task": "task",
+    "rgen": "ray_generation",
+    "raygen": "ray_generation",
+    "ray_generation": "ray_generation",
+    "rint": "ray_intersection",
+    "intersection": "ray_intersection",
+    "ray_intersection": "ray_intersection",
+    "rahit": "ray_any_hit",
+    "anyhit": "ray_any_hit",
+    "any_hit": "ray_any_hit",
+    "ray_any_hit": "ray_any_hit",
+    "rchit": "ray_closest_hit",
+    "closesthit": "ray_closest_hit",
+    "closest_hit": "ray_closest_hit",
+    "ray_closest_hit": "ray_closest_hit",
+    "rmiss": "ray_miss",
+    "miss": "ray_miss",
+    "ray_miss": "ray_miss",
+    "rcall": "ray_callable",
+    "callable": "ray_callable",
+    "ray_callable": "ray_callable",
+}
 COMPUTE_LAYOUT_QUALIFIERS = {
     "local_size_x",
     "local_size_y",
@@ -310,6 +352,29 @@ FRAGMENT_BUILTINS = {
     "gl_SamplePosition",
     "gl_SampleMask",
     "gl_SampleMaskIn",
+}
+FRAGMENT_OUTPUT_LAYOUT_QUALIFIERS = {"location", "index", "component"}
+FRAGMENT_OUTPUT_TYPES = {
+    "float",
+    "double",
+    "int",
+    "uint",
+    "bool",
+    "vec2",
+    "vec3",
+    "vec4",
+    "ivec2",
+    "ivec3",
+    "ivec4",
+    "uvec2",
+    "uvec3",
+    "uvec4",
+    "bvec2",
+    "bvec3",
+    "bvec4",
+    "dvec2",
+    "dvec3",
+    "dvec4",
 }
 VERTEX_BUILTINS = {
     "gl_VertexID",
@@ -391,6 +456,14 @@ class GLSLParser:
 
             if self.is_bracketed_stage_marker():
                 self.skip_bracketed_stage_marker()
+                continue
+
+            if self.is_godot_metadata_section_marker():
+                self.skip_godot_metadata_section()
+                continue
+
+            if self.is_hash_bracketed_stage_marker():
+                self.skip_hash_bracketed_marker()
                 continue
 
             if self.current_token[0] == "HASH":
@@ -483,7 +556,9 @@ class GLSLParser:
                     and self.peek(1)[0] == "LPAREN"
                 ):
                     function = self.parse_function(
-                        self.type_name_with_array_suffixes(type_name, type_array_sizes)
+                        self.type_name_with_array_suffixes(type_name, type_array_sizes),
+                        qualifiers=qualifiers,
+                        layout=layout,
                     )
                     functions.append(function)
                     continue
@@ -541,11 +616,20 @@ class GLSLParser:
             function.qualifiers = qualifiers
 
     def infer_shader_type(self, shader):
+        pragma_shader_type = self.infer_shader_type_from_pragmas(
+            getattr(shader, "preprocessor", []) or []
+        )
+        if pragma_shader_type:
+            return pragma_shader_type
+
         layout_shader_type = self.infer_shader_type_from_layouts(
             getattr(shader, "layouts", []) or []
         )
         if layout_shader_type:
             return layout_shader_type
+
+        if self.has_shadertoy_main_image(shader):
+            return "fragment"
 
         identifiers = self.collect_shader_identifiers(shader)
         if identifiers & COMPUTE_BUILTINS:
@@ -560,7 +644,29 @@ class GLSLParser:
             return "fragment"
         if identifiers & VERTEX_BUILTINS or "gl_Position" in identifiers:
             return "vertex"
+
+        io_shader_type = self.infer_shader_type_from_io_variables(shader)
+        if io_shader_type:
+            return io_shader_type
         return "vertex"
+
+    def infer_shader_type_from_pragmas(self, preprocessor):
+        for directive in preprocessor:
+            match = re.match(
+                r"#\s*pragma\s+shader_stage\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+                str(directive),
+            )
+            if match:
+                shader_type = PRAGMA_SHADER_STAGE_TYPES.get(match.group(1).lower())
+                if shader_type:
+                    return shader_type
+        return None
+
+    def has_shadertoy_main_image(self, shader):
+        for function in getattr(shader, "functions", []) or []:
+            if getattr(function, "name", None) == "mainImage":
+                return True
+        return False
 
     def infer_shader_type_from_layouts(self, layouts):
         saw_geometry_input_layout = False
@@ -588,6 +694,29 @@ class GLSLParser:
         if saw_geometry_input_layout:
             return "geometry"
         return None
+
+    def infer_shader_type_from_io_variables(self, shader):
+        for var in getattr(shader, "io_variables", []) or []:
+            if self.is_fragment_output_candidate(var):
+                return "fragment"
+        return None
+
+    def is_fragment_output_candidate(self, var):
+        qualifiers = {str(qualifier).lower() for qualifier in var.qualifiers or []}
+        if "out" not in qualifiers:
+            return False
+        if qualifiers & (MESH_STORAGE_QUALIFIERS_LOWER | {"patch"}):
+            return False
+
+        layout = getattr(var, "layout", None) or {}
+        layout_keys = {str(key).lower() for key in layout}
+        if any(key.startswith("blend_support") for key in layout_keys):
+            return True
+        if not layout_keys & FRAGMENT_OUTPUT_LAYOUT_QUALIFIERS:
+            return False
+
+        vtype = str(getattr(var, "vtype", "")).lower()
+        return vtype in FRAGMENT_OUTPUT_TYPES
 
     def collect_shader_identifiers(self, shader):
         identifiers = set()
@@ -689,20 +818,57 @@ class GLSLParser:
         self.eat("IDENTIFIER")
         self.eat("RBRACKET")
 
+    def hash_bracketed_marker_name(self):
+        if (
+            self.current_token[0] == "HASH"
+            and self.peek()[0] == "LBRACKET"
+            and self.peek(2)[0] == "IDENTIFIER"
+            and self.peek(3)[0] == "RBRACKET"
+        ):
+            return self.peek(2)[1]
+        return None
+
+    def is_hash_bracketed_stage_marker(self):
+        return self.hash_bracketed_marker_name() in BRACKETED_STAGE_MARKERS
+
+    def is_godot_metadata_section_marker(self):
+        return self.hash_bracketed_marker_name() in GODOT_METADATA_SECTION_MARKERS
+
+    def skip_hash_bracketed_marker(self):
+        self.eat("HASH")
+        self.eat("LBRACKET")
+        self.eat("IDENTIFIER")
+        self.eat("RBRACKET")
+
+    def skip_godot_metadata_section(self):
+        self.skip_hash_bracketed_marker()
+        while self.current_token[0] != "EOF":
+            self.skip_newlines()
+            if self.is_hash_bracketed_stage_marker():
+                return
+            if self.is_godot_metadata_section_marker():
+                self.skip_hash_bracketed_marker()
+                continue
+            self.advance()
+
     def parse_layout_qualifier(self):
         qualifiers = {}
         self.eat("LAYOUT")
         self.eat("LPAREN")
+        self.skip_newlines()
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] in ("IDENTIFIER", "IN", "OUT") or (
                 self.current_token[0] in QUALIFIER_TOKENS
             ):
                 key = self.current_token[1]
                 self.advance()
+                self.skip_newlines()
                 value = None
                 if self.current_token[0] == "EQUALS":
                     self.eat("EQUALS")
+                    self.skip_newlines()
                     value = self.parse_layout_value()
+                    self.skip_newlines()
                 qualifiers[key] = value
             else:
                 raise SyntaxError(
@@ -710,6 +876,7 @@ class GLSLParser:
                 )
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+                self.skip_newlines()
         self.eat("RPAREN")
         return qualifiers
 
@@ -1207,7 +1374,7 @@ class GLSLParser:
             str(qualifier).lower() for qualifier in qualifiers or []
         }
 
-    def parse_function(self, return_type):
+    def parse_function(self, return_type, qualifiers=None, layout=None):
         name = self.current_token[1]
         qualifier = None
         if name == "main" and not self.should_infer_shader_type:
@@ -1218,14 +1385,30 @@ class GLSLParser:
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return FunctionNode(return_type, name, params, body=[])
+            return FunctionNode(
+                return_type,
+                name,
+                params,
+                body=[],
+                qualifiers=list(qualifiers or []),
+                layout=layout,
+            )
 
         self.eat("LBRACE")
         body = self.parse_block()
         self.eat("RBRACE")
 
-        qualifiers = [qualifier] if qualifier else []
-        return FunctionNode(return_type, name, params, body, qualifiers=qualifiers)
+        function_qualifiers = list(qualifiers or [])
+        if qualifier:
+            function_qualifiers.append(qualifier)
+        return FunctionNode(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers=function_qualifiers,
+            layout=layout,
+        )
 
     def parse_parameters(self):
         self.eat("LPAREN")

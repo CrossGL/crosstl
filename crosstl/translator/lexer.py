@@ -701,13 +701,17 @@ class Lexer:
     """Tokenizer for CrossGL Universal IR."""
 
     def __init__(self, code, defines=None):
-        self.code = code.lstrip("\ufeff")
+        self.code = self._splice_line_continuations(code.lstrip("\ufeff"))
         if defines is not None:
             self.code = _preprocess_code_with_defines(self.code, defines)
         self.tokens = []
         self.token_cache = {}
         self.regex_cache = self._compile_patterns()
         self.tokenize()
+
+    @staticmethod
+    def _splice_line_continuations(code):
+        return re.sub(r"\\(?:\r\n|\n|\r)", "", code)
 
     def _compile_patterns(self):
         combined_pattern = "|".join(

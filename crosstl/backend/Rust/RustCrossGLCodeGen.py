@@ -71,16 +71,31 @@ class RustToCrossGLConverter:
         "powf": "pow",
         "powi": "pow",
         "atan2": "atan2",
+        "rem_euclid": "mod",
+        "step": "step",
     }
     SCALAR_TWO_ARG_METHOD_MAP = {
         "clamp": "clamp",
         "lerp": "mix",
         "mul_add": "fma",
     }
+    RUST_GPU_DERIVATIVE_METHOD_MAP = {
+        "dfdx": "dFdx",
+        "dfdy": "dFdy",
+        "dfdx_fine": "dFdxFine",
+        "dfdy_fine": "dFdyFine",
+        "dfdx_coarse": "dFdxCoarse",
+        "dfdy_coarse": "dFdyCoarse",
+        "fwidth": "fwidth",
+        "fwidth_fine": "fwidthFine",
+        "fwidth_coarse": "fwidthCoarse",
+    }
+    RUST_GPU_ASSOCIATED_INTRINSIC_TYPES = {"Derivative"}
     RESOURCE_METHOD_PREFIXES = ("sample", "texture_", "image_", "buffer_")
     RESOURCE_METHOD_NAMES = {
         "fetch",
         "fetch_with",
+        "gather",
         "query_levels",
         "query_samples",
         "query_size",
@@ -101,6 +116,7 @@ class RustToCrossGLConverter:
         "RWByteAddressBuffer",
     )
     RUST_GPU_SAMPLE_METHOD_MAP = {
+        "gather": "textureGather",
         "sample_by_lod": "textureLod",
         "sample_by_gradient": "textureGrad",
         "sample_with_project_coordinate": "textureProj",
@@ -162,6 +178,23 @@ class RustToCrossGLConverter:
         "bvec3": 3,
         "bvec4": 4,
     }
+    SCALAR_ASSOCIATED_CONSTANTS = {
+        "u8::MAX": "255",
+        "u8::MIN": "0",
+        "u16::MAX": "65535",
+        "u16::MIN": "0",
+        "u32::MAX": "4294967295",
+        "u32::MIN": "0",
+        "i8::MAX": "127",
+        "i8::MIN": "(-128)",
+        "i16::MAX": "32767",
+        "i16::MIN": "(-32768)",
+        "i32::MAX": "2147483647",
+        "i32::MIN": "(-2147483648)",
+        "f32::EPSILON": "1.1920929e-7",
+        "f32::INFINITY": "1.0 / 0.0",
+        "f32::NEG_INFINITY": "-1.0 / 0.0",
+    }
     VECTOR_AXIS_CONSTANT_INDICES = {"X": 0, "Y": 1, "Z": 2, "W": 3}
 
     def __init__(self):
@@ -197,6 +230,7 @@ class RustToCrossGLConverter:
             # Simplified vector names
             "Vec2": "vec2",
             "Vec3": "vec3",
+            "Vec3A": "vec3",
             "Vec4": "vec4",
             "IVec2": "ivec2",
             "IVec3": "ivec3",
@@ -383,6 +417,7 @@ class RustToCrossGLConverter:
             # Ray tracing semantics
             "hit_kind": "gl_HitKindEXT",
             "incoming_ray_flags": "gl_IncomingRayFlagsEXT",
+            "incoming_ray_payload": "rayPayloadInEXT",
             "instance_custom_index": "gl_InstanceCustomIndexEXT",
             "launch_id": "gl_LaunchIDEXT",
             "launch_size": "gl_LaunchSizeEXT",
@@ -390,6 +425,7 @@ class RustToCrossGLConverter:
             "object_ray_origin": "gl_ObjectRayOriginEXT",
             "object_to_world": "gl_ObjectToWorldEXT",
             "ray_geometry_index": "gl_GeometryIndexEXT",
+            "ray_payload": "rayPayloadEXT",
             "ray_tmax": "gl_RayTmaxEXT",
             "ray_tmin": "gl_RayTminEXT",
             "world_ray_direction": "gl_WorldRayDirectionEXT",
@@ -416,7 +452,7 @@ class RustToCrossGLConverter:
             "ray_generation": "ray_generation",
             "intersection": "intersection",
             "closest_hit": "ray_closest_hit",
-            "miss": "miss",
+            "miss": "ray_miss",
             "any_hit": "ray_any_hit",
             "callable": "callable",
         }
@@ -502,6 +538,9 @@ class RustToCrossGLConverter:
             "tanh": "tanh",
             "degrees": "degrees",
             "radians": "radians",
+            "workgroup_memory_barrier_with_group_sync": (
+                "GroupMemoryBarrierWithGroupSync"
+            ),
             # Vector operations
             "dot": "dot",
             "cross": "cross",
@@ -947,7 +986,7 @@ class RustToCrossGLConverter:
             semantic = self.get_semantic_from_attributes(
                 getattr(param, "attributes", [])
             )
-            param_type = self.normalize_receiver_type(param.vtype, struct_name)
+            param_type = self.normalize_parameter_type(param.vtype, struct_name)
             declarations.append(
                 f"{self.format_typed_declarator(param_type, name)}{semantic}"
             )
@@ -1159,6 +1198,12 @@ class RustToCrossGLConverter:
         if type_name == "Self" and struct_name:
             return struct_name
         return type_name
+
+    def normalize_parameter_type(self, type_name, struct_name=None):
+        typed_buffer_type = self.map_typed_buffer_parameter_type(type_name)
+        if typed_buffer_type is not None:
+            return typed_buffer_type
+        return self.normalize_receiver_type(type_name, struct_name)
 
     def infer_value_type(self, expression):
         if isinstance(expression, StructInitializationNode):
@@ -3886,8 +3931,15 @@ class RustToCrossGLConverter:
         if method_name == "len" and not args:
             return f"{obj}.length"
 
+        derivative_method = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(method_name)
+        if derivative_method is not None and not args:
+            return f"{derivative_method}({obj})"
+
         if not args and method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
             return f"{self.SCALAR_ZERO_ARG_METHOD_MAP[method_name]}({obj})"
+
+        if method_name == "recip" and not args:
+            return f"(1.0 / {obj})"
 
         if len(args) == 1 and method_name in self.SCALAR_ONE_ARG_METHOD_MAP:
             return f"{self.SCALAR_ONE_ARG_METHOD_MAP[method_name]}({obj}, {args[0]})"
@@ -3909,11 +3961,54 @@ class RustToCrossGLConverter:
         if method_name == "length" and not args:
             return f"length({obj})"
 
+        if (
+            method_name == "length_squared"
+            and not args
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"dot({obj}, {obj})"
+
         if method_name == "normalize" and not args:
             return f"normalize({obj})"
 
         if method_name in {"dot", "cross"} and len(args) == 1:
             return f"{method_name}({obj}, {args[0]})"
+
+        if (
+            method_name == "distance"
+            and len(args) == 1
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"distance({obj}, {args[0]})"
+
+        if (
+            method_name == "distance_squared"
+            and len(args) == 1
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            delta = f"({obj} - {args[0]})"
+            return f"dot({delta}, {delta})"
+
+        if (
+            method_name == "reflect"
+            and len(args) == 1
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"reflect({obj}, {args[0]})"
+
+        if (
+            method_name == "refract"
+            and len(args) == 2
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"refract({obj}, {args[0]}, {args[1]})"
+
+        if (
+            method_name == "perp_dot"
+            and len(args) == 1
+            and self.map_type(receiver_type) == "vec2"
+        ):
+            return f"(({obj}.x * {args[0]}.y) - ({obj}.y * {args[0]}.x))"
 
         if (
             method_name in {"map", "filter", "for_each", "any", "all"}
@@ -4395,6 +4490,11 @@ class RustToCrossGLConverter:
         components = [zero] * count
         components[axis_index] = axis_value
         return components
+
+    def format_scalar_associated_constant(self, value):
+        if not isinstance(value, str):
+            return None
+        return self.SCALAR_ASSOCIATED_CONSTANTS.get(value)
 
     def vector_zero_one_literals(self, mapped_type):
         if mapped_type.startswith("bvec"):
@@ -7985,6 +8085,12 @@ class RustToCrossGLConverter:
             )
             if associated_call is not None:
                 return args_code, associated_call
+            expression_call = self.format_unary_expression_intrinsic_call(
+                expression.name,
+                args,
+            )
+            if expression_call is not None:
+                return args_code, expression_call
             func_name = self.map_function(expression.name)
             return args_code, f"{func_name}({', '.join(args)})"
 
@@ -7999,6 +8105,9 @@ class RustToCrossGLConverter:
         """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             value = self.resolve_imported_module_path(self.normalize_rust_literal(expr))
+            scalar_constant = self.format_scalar_associated_constant(value)
+            if scalar_constant is not None:
+                return scalar_constant
             vector_constant = self.format_vector_associated_constant(value)
             if vector_constant is not None:
                 return vector_constant
@@ -8026,17 +8135,24 @@ class RustToCrossGLConverter:
                 constructor = self.format_path_constructor_call(expr.name, expr.args)
                 if constructor is not None:
                     return constructor
+                arg_values = [self.generate_expression(arg) for arg in expr.args]
                 associated_call = self.format_associated_impl_function_call(
                     expr.name,
-                    [self.generate_expression(arg) for arg in expr.args],
+                    arg_values,
                 )
                 if associated_call is not None:
                     return associated_call
+                expression_call = self.format_unary_expression_intrinsic_call(
+                    expr.name,
+                    arg_values,
+                )
+                if expression_call is not None:
+                    return expression_call
                 func_name = self.map_function(expr.name)
+                args = ", ".join(arg_values)
             else:
                 func_name = self.generate_expression(expr.name)
-
-            args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object)
@@ -8998,6 +9114,33 @@ class RustToCrossGLConverter:
             receiver_type,
         )
 
+    def format_unary_expression_intrinsic_call(self, function_name, args):
+        if len(args) != 1 or not isinstance(function_name, str):
+            return None
+
+        resolved_name = self.resolve_imported_module_path(function_name)
+        if self.is_user_defined_function(resolved_name):
+            return None
+
+        current_module_function = self.current_module_user_function_name(resolved_name)
+        if current_module_function is not None:
+            return None
+
+        if resolved_name == "recip":
+            return f"(1.0 / {args[0]})"
+
+        if "::" not in resolved_name:
+            return None
+
+        qualifier, intrinsic_name = resolved_name.rsplit("::", 1)
+        if intrinsic_name != "recip":
+            return None
+
+        if self.is_module_qualified_function_path(qualifier.split("::")):
+            return f"(1.0 / {args[0]})"
+
+        return None
+
     def format_path_constructor_call(self, function_name, args):
         arg_values = [self.generate_expression(arg) for arg in args]
         return self.format_path_constructor_call_parts(function_name, arg_values)
@@ -9040,7 +9183,29 @@ class RustToCrossGLConverter:
         if builtin_type is not None:
             return builtin_type
 
+        crossgl_type = self.format_unmapped_crossgl_type(rust_type)
+        if crossgl_type is not None:
+            return crossgl_type
+
         return rust_type
+
+    def format_unmapped_crossgl_type(self, rust_type):
+        if not isinstance(rust_type, str) or "::" not in rust_type:
+            return None
+
+        generic = self.parse_generic_type(rust_type)
+        if generic is not None:
+            base_name, args = generic
+            mapped_args = [self.map_type(arg) for arg in args]
+            return (
+                f"{self.crossgl_type_path_identifier(base_name)}"
+                f"<{', '.join(mapped_args)}>"
+            )
+
+        return self.crossgl_type_path_identifier(rust_type)
+
+    def crossgl_type_path_identifier(self, type_name):
+        return self.crossgl_identifier(type_name.replace("::", "_"))
 
     def resolve_imported_type_alias(self, rust_type):
         generic = self.parse_generic_type(rust_type)
@@ -9066,6 +9231,8 @@ class RustToCrossGLConverter:
         mapped = self.map_type(target_type)
         if mapped == target_type:
             return None
+        if mapped == self.format_unmapped_crossgl_type(target_type):
+            return rust_type
         return mapped
 
     def resolve_imported_module_path(self, path):
@@ -9125,6 +9292,9 @@ class RustToCrossGLConverter:
         if base_name == "RuntimeArray":
             return f"{self.map_type(args[0])}[]"
 
+        if base_name == "TypedBuffer":
+            return self.format_typed_buffer_resource_type(args[0])
+
         sampled_texture_map = {
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
@@ -9177,6 +9347,53 @@ class RustToCrossGLConverter:
         if element_type.startswith("i"):
             return f"iimage{suffix}"
         return f"image{suffix}"
+
+    def map_typed_buffer_parameter_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+
+        rust_type = self.strip_lifetime_type_syntax(rust_type.strip())
+        if rust_type.startswith("&mut "):
+            return self.map_typed_buffer_reference_type(rust_type[5:].strip(), True)
+        if rust_type.startswith("&"):
+            return self.map_typed_buffer_reference_type(rust_type[1:].strip(), False)
+        return None
+
+    def map_typed_buffer_reference_type(self, rust_type, writable):
+        mapped_type = self.map_typed_buffer_type(rust_type, writable=writable)
+        if mapped_type is not None:
+            return mapped_type
+        return None
+
+    def map_typed_buffer_type(self, rust_type, writable=False):
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        if "TypedBuffer" not in self.type_lookup_names(base_name):
+            return None
+
+        buffer_kind = "RWStructuredBuffer" if writable else "StructuredBuffer"
+        return self.format_typed_buffer_resource_type(args[0], buffer_kind)
+
+    def format_typed_buffer_resource_type(
+        self,
+        element_type,
+        buffer_kind="StructuredBuffer",
+    ):
+        mapped_element_type = self.map_typed_buffer_element_type(element_type)
+        return f"{buffer_kind}<{mapped_element_type}>"
+
+    def map_typed_buffer_element_type(self, element_type):
+        element_type = element_type.strip()
+        if element_type.startswith("[") and element_type.endswith("]"):
+            body = element_type[1:-1].strip()
+            if ";" in body:
+                inner_type, size = body.split(";", 1)
+                return f"{self.map_type(inner_type.strip())}[{size.strip()}]"
+            return self.map_type(body)
+        return self.map_type(element_type)
 
     def map_sampled_image_generic_type(self, image_type):
         image_config = self.parse_image_macro_type(image_type)
@@ -9607,6 +9824,12 @@ class RustToCrossGLConverter:
             return rust_func
 
         segments = rust_func.split("::")
+        mapped = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(segments[-1])
+        if mapped is not None and self.is_rust_gpu_associated_intrinsic_path(
+            segments[:-1]
+        ):
+            return mapped
+
         mapped = self.function_map.get(segments[-1])
         if mapped is None:
             return rust_func
@@ -9614,6 +9837,19 @@ class RustToCrossGLConverter:
         if self.is_module_qualified_function_path(segments[:-1]):
             return mapped
         return rust_func
+
+    def is_rust_gpu_associated_intrinsic_path(self, qualifier_segments):
+        if not qualifier_segments:
+            return False
+
+        type_segment = qualifier_segments[-1].split("<", 1)[0]
+        if type_segment not in self.RUST_GPU_ASSOCIATED_INTRINSIC_TYPES:
+            return False
+
+        module_segments = qualifier_segments[:-1]
+        return not module_segments or self.is_module_qualified_function_path(
+            module_segments
+        )
 
     def current_module_user_function_name(self, rust_func):
         if not isinstance(rust_func, str) or "::" not in rust_func:

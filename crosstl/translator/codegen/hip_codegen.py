@@ -24,6 +24,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    PointerAccessNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
@@ -153,6 +154,31 @@ HIP_WARP_SYNC_BUILTIN_ARITIES = {
     "__shfl_down_sync": 3,
 }
 
+HIP_BITCAST_FUNCTION_TARGETS = {
+    "floatBitsToInt": "int",
+    "floatBitsToUint": "uint",
+    "intBitsToFloat": "float",
+    "uintBitsToFloat": "float",
+    "asfloat": "float",
+    "asint": "int",
+    "asuint": "uint",
+}
+
+HIP_UNSUPPORTED_FP16_VECTOR_TYPES = {
+    "vec3<f16>",
+    "vec4<f16>",
+    "vec3<float16>",
+    "vec4<float16>",
+    "vec3<half>",
+    "vec4<half>",
+    "f16vec3",
+    "f16vec4",
+    "float16vec3",
+    "float16vec4",
+    "half3",
+    "half4",
+}
+
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit HIP source from the shared CrossGL translator AST."""
@@ -252,12 +278,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "double": "double",
             "bool": "bool",
             "void": "void",
+            "i8": "char",
+            "u8": "unsigned char",
+            "i16": "short",
+            "u16": "unsigned short",
+            "i32": "int",
+            "u32": "unsigned int",
+            "i64": "long long",
+            "u64": "unsigned long long",
+            "f16": "half",
+            "f32": "float",
+            "f64": "double",
             "uint": "unsigned int",
+            "float16": "half",
+            "half": "half",
             "str": "int",
             # Vector types
             "vec2": "float2",
             "vec3": "float3",
             "vec4": "float4",
+            "vec2<f16>": "half2",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",
@@ -279,6 +319,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec2<f64>": "double2",
             "vec3<f64>": "double3",
             "vec4<f64>": "double4",
+            "f16vec2": "half2",
+            "half2": "half2",
             "bvec2": "uchar2",
             "bvec3": "uchar3",
             "bvec4": "uchar4",
@@ -387,7 +429,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "log2": "log2f",
             "sqrt": "sqrtf",
             "inversesqrt": "rsqrtf",
+            "inverseSqrt": "rsqrtf",
+            "rsqrt": "rsqrtf",
             "pow": "powf",
+            "fma": "fmaf",
+            "mad": "fmaf",
             "abs": "fabsf",
             "floor": "floorf",
             "ceil": "ceilf",
@@ -653,6 +699,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.insert_helper_functions()
 
         return "\n".join(self.code_lines)
+
+    def fused_multiply_add_result_type(self, raw_args):
+        if len(raw_args) != 3:
+            return None
+
+        scalar_result_type = None
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return arg_type
+            component_type = self.scalar_component_type(arg_type)
+            if component_type == "double":
+                scalar_result_type = "double"
+            elif component_type == "float" and scalar_result_type is None:
+                scalar_result_type = "float"
+        return scalar_result_type
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-compilable HIP code."""
@@ -1193,6 +1255,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "#include <hip/hip_runtime_api.h>",
                 "#include <hip/math_functions.h>",
                 "#include <hip/device_functions.h>",
+                "#include <hip/hip_fp16.h>",
                 "",
             ]
         )
@@ -1708,8 +1771,29 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.current_function_is_kernel_entry = False
 
         qualifiers = []
-        if hasattr(node, "qualifiers") and node.qualifiers:
-            for qualifier in node.qualifiers:
+        source_qualifiers = list(getattr(node, "qualifiers", []) or [])
+        stage_attribute_names = {
+            "compute",
+            "fragment",
+            "geometry",
+            "kernel",
+            "task",
+            "mesh",
+            "vertex",
+        } | self.hip_ray_stage_names()
+        source_qualifiers.extend(
+            attribute_name
+            for attribute_name in (
+                getattr(attribute, "name", None)
+                for attribute in getattr(node, "attributes", []) or []
+            )
+            if normalize_stage_name(attribute_name) in stage_attribute_names
+        )
+        source_qualifiers = [
+            qualifier for qualifier in source_qualifiers if qualifier is not None
+        ]
+        if source_qualifiers:
+            for qualifier in source_qualifiers:
                 qualifier_name = normalize_stage_name(qualifier)
                 if qualifier_name in {"kernel", "compute"}:
                     qualifiers.append("__global__")
@@ -2120,6 +2204,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         qualifier = getattr(node, "qualifier", None)
         if qualifier:
             qualifiers.append(qualifier)
+        qualifiers.extend(
+            getattr(attribute, "name", None)
+            for attribute in getattr(node, "attributes", []) or []
+        )
         supported_stage_names = (
             {
                 "compute",
@@ -2820,6 +2908,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if role is None:
             return None
         return self.hip_compute_builtin_expression(role, component)
+
+    def source_identifier_shadows_builtin(self, name):
+        """Return whether a source variable should block builtin-name lowering."""
+        return (
+            name is not None
+            and name in self.variable_types
+            and name not in self.stage_builtin_aliases
+        )
 
     def validate_hip_stage_parameter_semantic_type(
         self, param, semantic, expected_type
@@ -3572,6 +3668,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         positional_args = list(getattr(node, "arguments", []) or [])
         named_args = dict(getattr(node, "named_arguments", {}) or {})
         rendered_args = [self.visit(arg) for arg in positional_args]
+
+        vector_info = self.vector_type_info(constructor_type)
+        if vector_info:
+            positional_args, rendered_args = self.hip_vector_constructor_arguments(
+                vector_info,
+                positional_args,
+                rendered_args,
+                named_args,
+            )
+            splat_call = self.generate_vector_scalar_splat_call(
+                vector_info, positional_args, rendered_args
+            )
+            if splat_call is not None:
+                return splat_call
+            constructor_call = self.generate_vector_constructor_single_eval_call(
+                vector_info, positional_args, rendered_args
+            )
+            if constructor_call is not None:
+                return constructor_call
+            rendered_args = self.generate_vector_constructor_args(
+                vector_info, positional_args, rendered_args
+            )
+            return f"{vector_info['constructor']}({', '.join(rendered_args)})"
+
         if named_args and constructor_type:
             fields = list(self.struct_member_types.get(constructor_type, {}).items())
             consumed = set()
@@ -3589,10 +3709,71 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if field_name not in consumed:
                     rendered_args.append(self.visit(value))
 
+        half_constructor = self.hip_half_constructor_expression(
+            constructor_type, positional_args, rendered_args
+        )
+        if half_constructor is not None:
+            return half_constructor
+
         mapped_type = self.map_type(constructor_type) if constructor_type else ""
         if not mapped_type:
             return "{" + ", ".join(rendered_args) + "}"
         return f"{mapped_type}{{{', '.join(rendered_args)}}}"
+
+    def hip_half_constructor_expression(self, constructor_type, raw_args, args):
+        """Lower CrossGL FP16 constructors to HIP's documented half intrinsics."""
+        unsupported_type = self.hip_unsupported_fp16_vector_type(constructor_type)
+        if unsupported_type is not None:
+            self.raise_unsupported_hip_fp16_vector_type(unsupported_type)
+
+        if constructor_type in {"f16", "half", "float16"}:
+            if not args:
+                return "half{}"
+            return f"__float2half({args[0]})"
+
+        if constructor_type not in {"vec2<f16>", "half2", "f16vec2"}:
+            return None
+
+        if not args:
+            return "__float2half2_rn(0.0f)"
+
+        if len(args) == 1:
+            arg_type = self.type_name_string(self.expression_result_type(raw_args[0]))
+            if arg_type in {"vec2<f16>", "half2", "f16vec2"}:
+                return args[0]
+            return f"__float2half2_rn({args[0]})"
+
+        return f"__floats2half2_rn({args[0]}, {args[1]})"
+
+    def hip_vector_constructor_arguments(
+        self,
+        vector_info,
+        positional_args,
+        positional_exprs,
+        named_args,
+    ):
+        if not named_args:
+            return positional_args, positional_exprs
+
+        components = vector_info["components"]
+        if all(field_name in components for field_name in named_args):
+            ordered_named_args = [
+                named_args[component]
+                for component in components
+                if component in named_args
+            ]
+            ordered_named_exprs = [self.visit(arg) for arg in ordered_named_args]
+            return (
+                positional_args + ordered_named_args,
+                positional_exprs + ordered_named_exprs,
+            )
+
+        ordered_named_args = list(named_args.values())
+        ordered_named_exprs = [self.visit(arg) for arg in ordered_named_args]
+        return (
+            ordered_named_args + positional_args,
+            ordered_named_exprs + positional_exprs,
+        )
 
     def visit_FunctionCallNode(self, node) -> str:
         func_expr = (
@@ -3617,6 +3798,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return enum_constructor
 
         args = [self.visit(arg) for arg in raw_args]
+
+        half_constructor = self.hip_half_constructor_expression(
+            func_name, raw_args, args
+        )
+        if half_constructor is not None:
+            return half_constructor
 
         if func_name == "lambda":
             return self.generate_lambda_expression(raw_args)
@@ -3661,6 +3848,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if resource_call is not None:
                 return resource_call
 
+            bitcast_call = self.generate_hip_bitcast_call(func_name, raw_args, args)
+            if bitcast_call is not None:
+                return bitcast_call
+
         if is_user_function:
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
@@ -3703,6 +3894,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 atan2_call = self.generate_atan2_call(raw_args, args)
                 if atan2_call is not None:
                     return atan2_call
+        elif func_name in {"fma", "mad"}:
+            if len(args) == 3:
+                result_type = self.fused_multiply_add_result_type(raw_args)
+                fma_call = self.generate_fused_multiply_add_call(raw_args, args)
+                if fma_call is not None:
+                    if result_type is not None:
+                        node.expression_type = result_type
+                    return fma_call
         elif func_name in {"dot", "cross", "length", "normalize"}:
             geometric_call = self.generate_vector_geometric_call(
                 func_name,
@@ -3714,7 +3913,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         elif func_name == "clamp":
             if len(args) == 3:
                 return self.generate_clamp_call(raw_args, args)
-        elif func_name == "mix":
+        elif func_name in {"mix", "lerp"}:
             if len(args) == 3:
                 mix_call = self.generate_mix_call(raw_args, args)
                 if mix_call is not None:
@@ -3724,6 +3923,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 saturate_call = self.generate_saturate_call(raw_args, args)
                 if saturate_call is not None:
                     return saturate_call
+        elif func_name == "step":
+            if len(args) == 2:
+                step_call = self.generate_step_call(raw_args, args)
+                if step_call is not None:
+                    return step_call
         elif func_name == "smoothstep":
             if len(args) == 3:
                 smoothstep_call = self.generate_smoothstep_call(raw_args, args)
@@ -3737,8 +3941,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(args[1], 'y')})"
                 )
 
+        math_func_name = self.hip_math_function_name(func_name)
         vector_math_call = self.generate_vector_scalar_math_call(
-            func_name,
+            math_func_name,
             raw_args,
             args,
         )
@@ -3759,13 +3964,109 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
-        scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
+        scalar_math_call = self.generate_scalar_math_call(
+            math_func_name, raw_args, args
+        )
         if scalar_math_call is not None:
             return scalar_math_call
 
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def hip_math_function_name(self, func_name):
+        return {"inverseSqrt": "inversesqrt", "rsqrt": "inversesqrt"}.get(
+            func_name, func_name
+        )
+
+    def hip_bitcast_result_type(self, func_name, raw_args):
+        target_component = HIP_BITCAST_FUNCTION_TARGETS.get(func_name)
+        if (
+            target_component is None
+            or self.is_user_defined_function(func_name)
+            or len(raw_args or []) != 1
+        ):
+            return None
+
+        source_type = self.expression_result_type(raw_args[0])
+        source_info = self.vector_type_info(source_type)
+        if source_info is not None:
+            if source_info["component_type"] not in {"float", "int", "uint"}:
+                return None
+            return self.vector_type_for_components(
+                target_component,
+                len(source_info["components"]),
+            )
+
+        source_component = self.scalar_component_type(source_type)
+        if source_component in {"float", "int", "uint"}:
+            return target_component
+        return None
+
+    def generate_hip_bitcast_call(self, func_name, raw_args, args):
+        result_type = self.hip_bitcast_result_type(func_name, raw_args)
+        if result_type is None:
+            return None
+
+        source_type = self.expression_result_type(raw_args[0])
+        source_info = self.vector_type_info(source_type)
+        result_info = self.vector_type_info(result_type)
+        if source_info is not None and result_info is not None:
+            helper_name = self.require_hip_vector_bitcast_helper(
+                source_info,
+                result_info,
+            )
+            return f"{helper_name}({args[0]})"
+
+        target_component = HIP_BITCAST_FUNCTION_TARGETS[func_name]
+        source_component = self.scalar_component_type(source_type)
+        return self.format_hip_scalar_bitcast(
+            source_component,
+            target_component,
+            args[0],
+        )
+
+    def require_hip_vector_bitcast_helper(self, source_info, result_info):
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{source_info['type']}_to_{result_info['type']}_bitcast"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        components = [
+            self.format_hip_scalar_bitcast(
+                source_info["component_type"],
+                result_info["component_type"],
+                f"value.{component}",
+            )
+            for component in source_info["components"]
+        ]
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({source_info['type']} value)\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_hip_scalar_bitcast(self, source_component, target_component, value):
+        if source_component == target_component:
+            return value
+        if source_component == "float" and target_component == "int":
+            return f"__float_as_int({value})"
+        if source_component == "float" and target_component == "uint":
+            return f"__float_as_uint({value})"
+        if source_component == "int" and target_component == "float":
+            return f"__int_as_float({value})"
+        if source_component == "uint" and target_component == "float":
+            return f"__uint_as_float({value})"
+        if source_component == "int" and target_component == "uint":
+            return f"static_cast<unsigned int>({value})"
+        if source_component == "uint" and target_component == "int":
+            return f"static_cast<int>({value})"
+        return value
 
     def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
         expected_count = HIP_WARP_SYNC_BUILTIN_ARITIES.get(func_name)
@@ -4245,6 +4546,86 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         return components
 
+    def generate_mod_call(self, raw_args, args):
+        """Lower CrossGL/GLSL mod with GLSL floor semantics."""
+        if len(raw_args) != 2 or len(args) != 2:
+            return None
+
+        vector_call = self.lower_vector_binary_operation(
+            raw_args[0],
+            args[0],
+            raw_args[1],
+            args[1],
+            "%",
+        )
+        if vector_call is not None:
+            return vector_call
+
+        return self.lower_scalar_modulo_operation(
+            raw_args[0],
+            args[0],
+            raw_args[1],
+            args[1],
+        )
+
+    def lower_scalar_modulo_operation(
+        self,
+        left_node,
+        left_expr,
+        right_node,
+        right_expr,
+    ):
+        """Lower floating-point scalar modulo with GLSL floor semantics."""
+        scalar_type = self.hip_mod_scalar_type(left_node, right_node)
+        if scalar_type is None:
+            return None
+
+        helper_name = self.require_hip_scalar_mod_helper(scalar_type)
+        return f"{helper_name}({left_expr}, {right_expr})"
+
+    def format_vector_binary_component(self, component_type, operator, left, right):
+        if operator == "%" and component_type in {"float", "double"}:
+            helper_name = self.require_hip_scalar_mod_helper(component_type)
+            return f"{helper_name}({left}, {right})"
+        return super().format_vector_binary_component(
+            component_type,
+            operator,
+            left,
+            right,
+        )
+
+    def hip_mod_scalar_type(self, left_node, right_node):
+        component_types = []
+        for node in (left_node, right_node):
+            arg_type = self.expression_result_type(node)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type is not None:
+                component_types.append(component_type)
+
+        if "double" in component_types:
+            return "double"
+        if "float" in component_types:
+            return "float"
+        return None
+
+    def require_hip_scalar_mod_helper(self, scalar_type):
+        helper_name = f"cgl_mod_{scalar_type}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        floor_name = "floor" if scalar_type == "double" else "floorf"
+        helper = (
+            f"__device__ inline {scalar_type} {helper_name}"
+            f"({scalar_type} lhs, {scalar_type} rhs)\n"
+            "{\n"
+            f"    return lhs - rhs * {floor_name}(lhs / rhs);\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
     def generate_fract_call(self, raw_args, args):
         arg_type = self.expression_result_type(raw_args[0])
         vector_info = self.vector_type_info(arg_type)
@@ -4360,6 +4741,99 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             [args[0], "0.0", "1.0"],
         )
 
+    def generate_step_call(self, raw_args, args):
+        edge_type = self.expression_result_type(raw_args[0])
+        value_type = self.expression_result_type(raw_args[1])
+        edge_info = self.vector_type_info(edge_type)
+        value_info = self.vector_type_info(value_type)
+
+        if edge_info is None and value_info is None:
+            scalar_type = self.step_scalar_type(raw_args)
+            if scalar_type is None:
+                return None
+            return self.format_step_component(scalar_type, args[0], args[1])
+
+        result_info = value_info or edge_info
+        if result_info["component_type"] not in {"float", "double"}:
+            return None
+        if not self.compatible_step_operand(edge_info, result_info):
+            return None
+        if not self.compatible_step_operand(value_info, result_info):
+            return None
+        if edge_info is None and not self.compatible_step_scalar(edge_type):
+            return None
+        if value_info is None and not self.compatible_step_scalar(value_type):
+            return None
+
+        helper_name = self.require_vector_step_helper(
+            result_info,
+            edge_is_vector=edge_info is not None,
+            value_is_vector=value_info is not None,
+        )
+        return f"{helper_name}({args[0]}, {args[1]})"
+
+    def step_scalar_type(self, raw_args):
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+        return "double" if "double" in component_types else "float"
+
+    def compatible_step_operand(self, operand_info, result_info):
+        if operand_info is None:
+            return True
+        return operand_info["component_type"] == result_info["component_type"] and len(
+            operand_info["components"]
+        ) == len(result_info["components"])
+
+    def compatible_step_scalar(self, type_name):
+        component_type = self.scalar_component_type(type_name)
+        return component_type in {"float", "double", None}
+
+    def require_vector_step_helper(self, result_info, edge_is_vector, value_is_vector):
+        edge_shape = "vector" if edge_is_vector else "scalar"
+        value_shape = "vector" if value_is_vector else "scalar"
+        helper_name = (
+            f"cgl_{result_info['type']}_step_{edge_shape}_edge_{value_shape}_value"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        scalar_type = self.vector_scalar_parameter_type(result_info)
+        edge_type = result_info["type"] if edge_is_vector else scalar_type
+        value_type = result_info["type"] if value_is_vector else scalar_type
+        components = []
+        for component in result_info["components"]:
+            edge = f"edge.{component}" if edge_is_vector else "edge"
+            value = f"value.{component}" if value_is_vector else "value"
+            components.append(
+                self.format_step_component(result_info["component_type"], edge, value)
+            )
+
+        helper = (
+            f"__device__ inline {result_info['type']} {helper_name}"
+            f"({edge_type} edge, {value_type} value)\n"
+            "{\n"
+            f"    return {result_info['constructor']}({', '.join(components)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_step_component(self, scalar_type, edge, value):
+        if scalar_type == "double":
+            zero = "0.0"
+            one = "1.0"
+        else:
+            zero = "0.0f"
+            one = "1.0f"
+        return f"(({value}) < ({edge}) ? {zero} : {one})"
+
     def generate_mix_call(self, raw_args, args):
         left_type = self.expression_result_type(raw_args[0])
         right_type = self.expression_result_type(raw_args[1])
@@ -4462,6 +4936,124 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def format_mix_component(self, left, right, factor):
         return f"({left} + (({right} - {left}) * {factor}))"
+
+    def generate_fused_multiply_add_call(self, raw_args, args):
+        vector_infos = [
+            self.vector_type_info(self.expression_result_type(raw_arg))
+            for raw_arg in raw_args
+        ]
+        vector_info = next((info for info in vector_infos if info is not None), None)
+        if vector_info is None:
+            scalar_type = self.fused_multiply_add_scalar_type(raw_args)
+            if scalar_type is None:
+                return None
+            return self.format_fused_multiply_add_component(
+                scalar_type,
+                args[0],
+                args[1],
+                args[2],
+            )
+
+        if vector_info["component_type"] not in {"float", "double"}:
+            return None
+        for info in vector_infos:
+            if info is None:
+                continue
+            if (
+                len(info["components"]) != len(vector_info["components"])
+                or info["component_type"] != vector_info["component_type"]
+            ):
+                return None
+
+        component_count = len(vector_info["components"])
+        pieces = []
+        for raw_arg, arg_expr, info in zip(raw_args, args, vector_infos):
+            if info is None and not self.compatible_fma_scalar(
+                raw_arg, vector_info["component_type"]
+            ):
+                return None
+            pieces.append(
+                self.vector_operation_piece(
+                    raw_arg,
+                    arg_expr,
+                    info,
+                    component_count,
+                    vector_info["component_type"],
+                )
+            )
+
+        helper_name = self.require_vector_fused_multiply_add_helper(
+            vector_info,
+            pieces,
+        )
+        return f"{helper_name}({', '.join(piece['arg_expr'] for piece in pieces)})"
+
+    def fused_multiply_add_scalar_type(self, raw_args):
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+        return "double" if "double" in component_types else "float"
+
+    def compatible_fma_scalar(self, raw_arg, vector_component_type):
+        component_type = self.scalar_component_type(
+            self.expression_result_type(raw_arg)
+        )
+        if component_type is None:
+            return True
+        if component_type in {"int", "uint"}:
+            return True
+        return component_type == vector_component_type
+
+    def require_vector_fused_multiply_add_helper(self, vector_info, pieces):
+        signature = "_".join(
+            self.vector_constructor_piece_signature(piece) for piece in pieces
+        )
+        helper_name = self.sanitize_helper_name(
+            f"cgl_{vector_info['type']}_fma_{signature}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        params = [
+            f"{piece['param_type']} arg{index}" for index, piece in enumerate(pieces)
+        ]
+        component_args = []
+        for component in vector_info["components"]:
+            multiply_left = self.vector_operation_piece_param_expr(
+                pieces[0], 0, component
+            )
+            multiply_right = self.vector_operation_piece_param_expr(
+                pieces[1], 1, component
+            )
+            addend = self.vector_operation_piece_param_expr(pieces[2], 2, component)
+            component_args.append(
+                self.format_fused_multiply_add_component(
+                    vector_info["component_type"],
+                    multiply_left,
+                    multiply_right,
+                    addend,
+                )
+            )
+
+        helper = (
+            f"__device__ inline {vector_info['type']} {helper_name}"
+            f"({', '.join(params)})\n"
+            "{\n"
+            f"    return {vector_info['constructor']}({', '.join(component_args)});\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def format_fused_multiply_add_component(self, scalar_type, left, right, addend):
+        target = "fma" if scalar_type == "double" else "fmaf"
+        return f"{target}({left}, {right}, {addend})"
 
     def generate_atan2_call(self, raw_args, args):
         y_type = self.expression_result_type(raw_args[0])
@@ -4881,6 +5473,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def map_vector_arithmetic_type(self, type_name):
         return self.map_type(type_name)
+
+    def hip_unsupported_fp16_vector_type(self, type_name):
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+        compact_type = "".join(str(type_text).split())
+        if compact_type in HIP_UNSUPPORTED_FP16_VECTOR_TYPES:
+            return compact_type
+        return None
+
+    def raise_unsupported_hip_fp16_vector_type(self, type_name):
+        raise ValueError(
+            "HIP does not support FP16 vector type "
+            f"{type_name}; supported FP16 HIP aliases are f16/half "
+            "and vec2<f16>/half2"
+        )
 
     def require_surface_read_helper(self, helper_name):
         helpers = {
@@ -6571,7 +7179,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def is_plain_atomic_lvalue(self, expr):
         """Return whether an expression can be addressed for a HIP atomic."""
-        return isinstance(expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode))
+        return isinstance(
+            expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        )
 
     def hip_indirect_type_info(self, type_name):
         """Return pointer/reference metadata for HIP indirect type spellings."""
@@ -7475,7 +8085,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if diagnostic is not None:
                 return diagnostic
         raw_object_name = getattr(node.object, "name", None)
-        if raw_object_name is not None:
+        raw_object_shadows_builtin = self.source_identifier_shadows_builtin(
+            raw_object_name
+        )
+        if raw_object_name is not None and not raw_object_shadows_builtin:
             alias_component = self.hip_stage_builtin_alias_expression(
                 raw_object_name, node.member
             )
@@ -7495,7 +8108,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         object_expr = self.visit(node.object)
         member_access = f"{object_expr}.{node.member}"
-        if member_access in self.builtin_map:
+        if not raw_object_shadows_builtin and member_access in self.builtin_map:
             return self.builtin_map[member_access]
 
         swizzle = self.generate_vector_swizzle(node, object_expr)
@@ -7503,6 +8116,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return swizzle
 
         return member_access
+
+    def visit_PointerAccessNode(self, node) -> str:
+        pointer_expr = self.visit(getattr(node, "pointer_expr", None))
+        return f"{pointer_expr}->{node.member}"
 
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
@@ -7616,10 +8233,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         builtin_alias = self.hip_stage_builtin_alias_expression(name)
         if builtin_alias is not None:
             return builtin_alias
-        ray_builtin = self.hip_ray_builtin_expression(name)
-        if ray_builtin is not None and name not in self.variable_types:
-            return ray_builtin
-        return self.builtin_map.get(name, name)
+        if not self.source_identifier_shadows_builtin(name):
+            ray_builtin = self.hip_ray_builtin_expression(name)
+            if ray_builtin is not None:
+                return ray_builtin
+            return self.builtin_map.get(name, name)
+        return name
 
     def hip_ray_builtin_expression(self, name):
         helper_name = {
@@ -7761,6 +8380,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 size = type_node.size
                 if element_type == "float":
                     return f"float{size}"
+                elif element_type == "f16":
+                    return f"vec{size}<f16>"
                 elif element_type == "int":
                     return f"int{size}"
                 else:
@@ -7779,6 +8400,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
+
+        unsupported_type = self.hip_unsupported_fp16_vector_type(type_str)
+        if unsupported_type is not None:
+            self.raise_unsupported_hip_fp16_vector_type(unsupported_type)
 
         generic_enum_type = generic_enum_specialized_type_name(self, type_str)
         if generic_enum_type is not None:
@@ -8308,8 +8933,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             )
         return None
 
-    def resource_type_with_access(self, type_name, node):
+    def apply_readonly_qualifier_to_type(self, type_name, node):
+        """Apply readonly declaration qualifiers to pointer/reference types."""
         type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name
+
+        if self.hip_pointer_or_reference_type_info(type_name) is None:
+            return type_name
+
+        if not (
+            self.declaration_qualifier_names(node) & {"const", "readonly", "constant"}
+        ):
+            return type_name
+
+        if type_name.startswith("const "):
+            return type_name
+        return f"const {type_name}"
+
+    def resource_type_with_access(self, type_name, node):
+        type_name = self.apply_readonly_qualifier_to_type(type_name, node)
         if not type_name:
             return type_name
 
@@ -8451,6 +9094,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if array_element_type is not None:
             return array_element_type
 
+        indirect_info = self.hip_indirect_type_info(type_name)
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            return indirect_info["pointee_type"]
+
         parts = self.structured_buffer_type_parts(type_name)
         if parts is not None:
             return parts[1]
@@ -8476,9 +9123,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     def expression_result_type(self, node):
         """Infer expression result types with HIP buffer operations."""
         if isinstance(node, (IdentifierNode, VariableNode)):
-            builtin_type = self.hip_compute_builtin_type(getattr(node, "name", None))
-            if builtin_type is not None:
-                return builtin_type
+            name = getattr(node, "name", None)
+            if not self.source_identifier_shadows_builtin(name):
+                builtin_type = self.hip_compute_builtin_type(name)
+                if builtin_type is not None:
+                    return builtin_type
         if isinstance(node, WaveOpNode):
             return self.wave_result_type(
                 getattr(node, "operation", ""), getattr(node, "arguments", []) or []
@@ -8497,6 +9146,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node, FunctionCallNode):
             function_expr = getattr(node, "function", getattr(node, "name", None))
             func_name = getattr(function_expr, "name", function_expr)
+            if self.is_user_defined_function(func_name):
+                return self.function_return_types.get(func_name)
             if func_name in HIP_WAVE_OP_ARITIES:
                 return self.wave_result_type(
                     func_name,
@@ -8504,6 +9155,35 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 )
             if func_name == "ReportHit":
                 return "bool"
+            raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if (
+                func_name in {"inverseSqrt", "rsqrt"}
+                and raw_args
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.expression_result_type(raw_args[0])
+            bitcast_result_type = self.hip_bitcast_result_type(func_name, raw_args)
+            if bitcast_result_type is not None:
+                return bitcast_result_type
+            if func_name in {"fma", "mad"}:
+                cached_type = getattr(node, "expression_type", None) or getattr(
+                    node, "vtype", None
+                )
+                if cached_type is not None:
+                    return cached_type
+                return self.fused_multiply_add_result_type(raw_args)
+            if (
+                func_name == "lerp"
+                and len(raw_args) == 3
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.expression_result_type(raw_args[0]) or (
+                    self.expression_result_type(raw_args[1])
+                    if len(raw_args) > 1
+                    else None
+                )
+            if func_name == "step" and len(raw_args) == 2:
+                return self.step_result_type(raw_args)
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
@@ -8513,12 +9193,21 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "object_expr",
                 getattr(node, "object", None),
             )
-            builtin_member_type = self.hip_compute_builtin_member_type(
-                getattr(object_node, "name", None),
-                getattr(node, "member", ""),
-            )
-            if builtin_member_type is not None:
-                return builtin_member_type
+            object_name = getattr(object_node, "name", None)
+            if not self.source_identifier_shadows_builtin(object_name):
+                builtin_member_type = self.hip_compute_builtin_member_type(
+                    object_name,
+                    getattr(node, "member", ""),
+                )
+                if builtin_member_type is not None:
+                    return builtin_member_type
+            member_type = self.member_access_member_type(node)
+            if member_type is not None:
+                return member_type
+        if isinstance(node, PointerAccessNode):
+            member_type = self.pointer_access_member_type(node)
+            if member_type is not None:
+                return member_type
         if isinstance(node, ConstructorNode):
             return infer_enum_constructor_type(
                 self, node
@@ -8526,6 +9215,55 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if isinstance(node, MatchNode):
             return infer_match_expression_result_type(self, node)
         return super().expression_result_type(node)
+
+    def step_result_type(self, raw_args):
+        edge_type = self.expression_result_type(raw_args[0])
+        value_type = self.expression_result_type(raw_args[1])
+        value_info = self.vector_type_info(value_type)
+        if value_info is not None:
+            return value_type
+        edge_info = self.vector_type_info(edge_type)
+        if edge_info is not None:
+            return edge_type
+        return self.step_scalar_type(raw_args)
+
+    def struct_member_lookup_type(self, type_name):
+        """Return the struct key after HIP pointer/reference wrappers."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        indirect_info = self.hip_indirect_type_info(type_name)
+        if indirect_info is not None:
+            return indirect_info["pointee_type"]
+        return type_name
+
+    def member_access_member_type(self, node):
+        """Return the member type for object.field expressions."""
+        object_node = getattr(
+            node,
+            "object_expr",
+            getattr(node, "object", None),
+        )
+        object_type = self.struct_member_lookup_type(
+            self.expression_result_type(object_node)
+        )
+        return self.struct_member_types.get(object_type, {}).get(
+            getattr(node, "member", "")
+        )
+
+    def pointer_access_member_type(self, node):
+        """Return the member type for ptr->field expressions."""
+        pointer_expr = getattr(node, "pointer_expr", None)
+        pointer_info = self.hip_indirect_type_info(
+            self.expression_result_type(pointer_expr)
+        )
+        if pointer_info is None:
+            return None
+
+        struct_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
+        return self.struct_member_types.get(struct_type, {}).get(
+            getattr(node, "member", "")
+        )
 
     def buffer_call_result_type(self, node):
         """Infer result type for structured and byte-address buffer read calls."""

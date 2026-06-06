@@ -97,6 +97,8 @@ class HipParser:
         "ATOMICAND",
         "ATOMICOR",
         "ATOMICXOR",
+        "ATOMICINC",
+        "ATOMICDEC",
     }
     FLAT_BUILTIN_TOKEN_MAP = {
         "HIPTHREADIDX": "threadIdx",
@@ -180,23 +182,38 @@ class HipParser:
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
+        "atomicAdd_system",
         "hipAtomicAdd",
         "atomicSub",
+        "atomicSub_system",
         "hipAtomicSub",
         "atomicMax",
+        "atomicMax_system",
         "hipAtomicMax",
         "atomicMin",
+        "atomicMin_system",
         "hipAtomicMin",
         "atomicExch",
+        "atomicExch_system",
         "hipAtomicExch",
         "atomicCAS",
+        "atomicCAS_system",
         "hipAtomicCAS",
         "atomicAnd",
+        "atomicAnd_system",
         "hipAtomicAnd",
         "atomicOr",
+        "atomicOr_system",
         "hipAtomicOr",
         "atomicXor",
+        "atomicXor_system",
         "hipAtomicXor",
+        "atomicInc",
+        "atomicInc_system",
+        "hipAtomicInc",
+        "atomicDec",
+        "atomicDec_system",
+        "hipAtomicDec",
     }
     PACK_EXPANSION_FUNCTION_NAME = "__hip_pack_expand__"
     TEMPLATE_SUFFIX_FOLLOW_TOKENS = {
@@ -1817,7 +1834,10 @@ class HipParser:
             self.advance()
             value = self.parse_expression()
         elif self.match("LPAREN"):
-            value = FunctionCallNode(var_type, self.parse_parenthesized_argument_list())
+            value = FunctionCallNode(
+                self.constructor_initializer_name(var_type),
+                self.parse_parenthesized_argument_list(),
+            )
         elif self.match("LBRACE"):
             value = self.parse_initializer_list()
 
@@ -2001,10 +2021,29 @@ class HipParser:
             self.skip_newlines()
             return self.parse_expression()
         if self.match("LPAREN"):
-            return FunctionCallNode(var_type, self.parse_parenthesized_argument_list())
+            return FunctionCallNode(
+                self.constructor_initializer_name(var_type),
+                self.parse_parenthesized_argument_list(),
+            )
         if self.match("LBRACE"):
             return self.parse_initializer_list()
         return None
+
+    def constructor_initializer_name(self, var_type):
+        return " ".join(
+            part
+            for part in str(var_type).split()
+            if part
+            not in {
+                "const",
+                "volatile",
+                "__restrict__",
+                "__restrict",
+                "restrict",
+                "&",
+                "&&",
+            }
+        )
 
     def strip_declarator_markers(self, var_type):
         parts = str(var_type).split()
@@ -2351,6 +2390,7 @@ class HipParser:
         if self.match("SEMICOLON"):
             self.advance()
             init = condition_or_init
+            self.skip_newlines()
             condition = self.parse_expression()
         else:
             condition = condition_or_init
@@ -2931,6 +2971,7 @@ class HipParser:
             "MINUS",
             "NOT",
             "BITWISE_NOT",
+            "TILDE",
             "INCREMENT",
             "DECREMENT",
             "STAR",
@@ -3005,6 +3046,9 @@ class HipParser:
         self.error("Expected member name")
 
     def consume_qualified_name_member(self):
+        if self.match("TEMPLATE"):
+            self.advance()
+            return self.consume_function_name()
         if self.match("IDENTIFIER") or self.is_type_token(allow_identifier=False):
             member = self.current_token.value
             self.advance()
@@ -3970,10 +4014,96 @@ class HipParser:
             ) and self.is_identifier_function_specifier_token(self.tokens[index]):
                 index += 1
                 index = self.skip_newlines_at_pos(index)
-            if self.skip_function_name_at(index) is not None:
+            parameter_list_start = self.skip_function_name_at(index)
+            if (
+                parameter_list_start is not None
+                and self.is_plausible_function_parameter_list_at_pos(
+                    parameter_list_start
+                )
+            ):
                 return True
 
         return False
+
+    def is_plausible_function_parameter_list_at_pos(self, index):
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        index += 1
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_cpp_attributes_at_pos(index)
+        if index >= len(self.tokens):
+            return False
+
+        token_type = self.tokens[index].type
+        if token_type == "RPAREN":
+            return True
+        if (
+            token_type == "VOID"
+            and index + 1 < len(self.tokens)
+            and self.tokens[index + 1].type == "RPAREN"
+        ):
+            return True
+        if token_type == "ELLIPSIS":
+            return True
+        if self.is_function_pointer_parameter_start_at_pos(index):
+            return True
+
+        return self.is_plausible_function_parameter_at_pos(index)
+
+    def is_plausible_function_parameter_at_pos(self, index):
+        type_end = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
+        if type_end is None:
+            return False
+
+        index = self.skip_newlines_at_pos(type_end)
+        index = self.skip_cpp_attributes_at_pos(index)
+        while index < len(self.tokens) and self.tokens[index].type in {
+            "ASTERISK",
+            "STAR",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+            index = self.skip_postfix_type_qualifiers_at_pos(index)
+            index = self.skip_newlines_at_pos(index)
+
+        if index < len(self.tokens) and self.tokens[index].type == "ELLIPSIS":
+            index += 1
+            index = self.skip_newlines_at_pos(index)
+
+        if index >= len(self.tokens):
+            return False
+
+        if self.tokens[index].type in {"COMMA", "RPAREN", "ASSIGN"}:
+            return True
+
+        if self.is_declarator_name_token_at(index):
+            index = self.skip_variable_declarator_name_at_pos(index)
+            if index is None:
+                return False
+            index = self.skip_newlines_at_pos(index)
+            index = self.skip_cpp_attributes_at_pos(index)
+            index = self.skip_array_suffix_at_pos(index)
+            index = self.skip_newlines_at_pos(index)
+            return index < len(self.tokens) and self.tokens[index].type in {
+                "COMMA",
+                "RPAREN",
+                "ASSIGN",
+            }
+
+        return False
+
+    def is_function_pointer_parameter_start_at_pos(self, index):
+        type_end = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
+        return (
+            type_end is not None
+            and type_end + 2 < len(self.tokens)
+            and self.tokens[type_end].type == "LPAREN"
+            and self.tokens[type_end + 1].type
+            in {"ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS}
+            and self.is_declarator_name_token_at(type_end + 2)
+        )
 
     def skip_function_name_at(self, index):
         if index >= len(self.tokens) or not self.is_function_name_token(

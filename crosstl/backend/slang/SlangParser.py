@@ -24,6 +24,9 @@ class SlangParser:
         "groupshared",
         "globallycoherent",
         "flat",
+        "linear",
+        "centroid",
+        "sample",
         "highp",
         "mediump",
         "lowp",
@@ -349,12 +352,32 @@ class SlangParser:
         return current_pos
 
     def is_namespace_declaration_start(self):
-        return (
-            self.current_token == ("IDENTIFIER", "namespace")
-            and self.pos + 2 < len(self.tokens)
-            and self.tokens[self.pos + 1][0] == "IDENTIFIER"
-            and self.tokens[self.pos + 2][0] == "LBRACE"
-        )
+        body_pos = self.namespace_declaration_body_index(self.pos)
+        return body_pos is not None and self.tokens[body_pos][0] == "LBRACE"
+
+    def namespace_declaration_body_index(self, index):
+        if index >= len(self.tokens) or self.tokens[index] != (
+            "IDENTIFIER",
+            "namespace",
+        ):
+            return None
+
+        current_pos = index + 1
+        if (
+            current_pos >= len(self.tokens)
+            or self.tokens[current_pos][0] != "IDENTIFIER"
+        ):
+            return None
+
+        current_pos += 1
+        while (
+            current_pos + 1 < len(self.tokens)
+            and self.tokens[current_pos][0] == "DOT"
+            and self.tokens[current_pos + 1][0] == "IDENTIFIER"
+        ):
+            current_pos += 2
+
+        return current_pos
 
     def parse_namespace_declaration(self):
         self.eat("IDENTIFIER")
@@ -1283,6 +1306,22 @@ class SlangParser:
                     self.parse_property_member(attributes=pending_attributes)
                 )
                 continue
+            if self.is_constructor():
+                methods.append(
+                    self.parse_constructor(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
+            if self.is_subscript_declaration():
+                methods.append(
+                    self.parse_subscript_declaration(
+                        attributes=pending_attributes,
+                        allow_signature=True,
+                    )
+                )
+                continue
             if self.is_function():
                 if self.is_func_keyword_declaration_start():
                     methods.append(
@@ -1330,6 +1369,20 @@ class SlangParser:
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
         generic_constraints = self.parse_generic_constraint_clauses()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            node = StructNode(name, [])
+            node.methods = []
+            node.typedefs = []
+            node.enums = []
+            node.structs = []
+            node.generic_parameters = generic_parameters
+            node.generic_constraints = generic_constraints
+            node.conformances = conformances
+            node.qualifiers = qualifiers
+            node.is_forward_declaration = True
+            return node
+
         self.eat("LBRACE")
         members = []
         methods = []
@@ -1410,6 +1463,7 @@ class SlangParser:
         node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
+        node.is_forward_declaration = False
         return node
 
     def parse_struct_field_members(self, attributes=None):
@@ -1546,6 +1600,9 @@ class SlangParser:
         generic_constraints = self.parse_generic_constraint_clauses()
         accessors = self.parse_accessor_block("subscript accessor")
         body = accessors.get("get", [])
+        is_declaration = allow_signature and all(
+            not accessor_body for accessor_body in accessors.values()
+        )
 
         node = FunctionNode(
             return_type,
@@ -1555,7 +1612,7 @@ class SlangParser:
             qualifiers=qualifiers,
             is_generic=is_generic,
             generic_constraints=generic_constraints,
-            is_declaration=False,
+            is_declaration=is_declaration,
             attributes=attributes,
         )
         node.slang_name = slang_name
@@ -1852,6 +1909,9 @@ class SlangParser:
             self.eat("IDENTIFIER")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
         underlying_type = None
         if self.current_token[0] == "COLON":
             self.eat("COLON")
@@ -1880,6 +1940,7 @@ class SlangParser:
             self.eat("SEMICOLON")
         enum = EnumNode(name, members)
         enum.kind = enum_kind
+        enum.generic_parameters = generic_parameters
         enum.underlying_type = underlying_type
         enum.qualifiers = qualifiers
         return enum
@@ -2283,6 +2344,7 @@ class SlangParser:
             "IDENTIFIER",
             "LBRACKET",
             "LESS_THAN",
+            "MULTIPLY",
             "DOT",
             "COLON",
         }:
@@ -2706,7 +2768,13 @@ class SlangParser:
         if self.current_token[0] == "DECREMENT":
             self.eat("DECREMENT")
             return UnaryOpNode("PRE_DECREMENT", self.parse_unary())
-        if self.current_token[0] in ["PLUS", "MINUS", "BITWISE_NOT", "NOT"]:
+        if self.current_token[0] in [
+            "PLUS",
+            "MINUS",
+            "BITWISE_NOT",
+            "BITWISE_AND",
+            "NOT",
+        ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             operand = self.parse_unary()
@@ -3159,6 +3227,24 @@ class SlangParser:
                 node = MemberAccessNode(node, member)
                 continue
 
+            if self.is_pointer_member_access_operator():
+                self.eat("MINUS")
+                self.eat("GREATER_THAN")
+                if self.current_token[0] != "IDENTIFIER":
+                    raise SyntaxError(
+                        "Expected identifier after pointer member access, "
+                        f"got {self.current_token[0]}"
+                    )
+                member = self.current_token[1]
+                self.eat("IDENTIFIER")
+                if (
+                    self.current_token[0] == "LESS_THAN"
+                    and self.is_generic_expression_suffix()
+                ):
+                    member += self.parse_generic_type_suffix()
+                node = MemberAccessNode(node, member)
+                continue
+
             if self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
                 index = self.parse_subscript_index()
@@ -3175,6 +3261,13 @@ class SlangParser:
                 return UnaryOpNode("POST_DECREMENT", self.valid_postfix_update(node))
 
             return node
+
+    def is_pointer_member_access_operator(self):
+        return (
+            self.current_token[0] == "MINUS"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "GREATER_THAN"
+        )
 
     def parse_subscript_index(self):
         if self.current_token[0] == "RBRACKET":

@@ -260,6 +260,28 @@ def test_backtick_local_identifier_codegen_from_modular_base64_stdlib_reparses_c
     parse_crossgl(generated_code)
 
 
+def test_backtick_keyword_function_name_codegen_from_official_docs_reparses_crossgl():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-function-declarations/
+    # "Function names" escaped keyword identifier example.
+    code = """
+    def `import`() -> Int:
+        return 1
+
+    def main() -> Int:
+        return `import`()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+    reparsed = parse_crossgl(generated_code)
+
+    assert "int import_()" in generated_code
+    assert "return import_();" in generated_code
+    assert "int import()" not in generated_code
+    assert "`" not in generated_code
+    assert reparsed.functions[0].name == "import_"
+    assert reparsed.functions[1].body.statements[0].value.function.name == "import_"
+
+
 def test_comptime_expression_prefix_codegen_drops_mojo_marker():
     code = """
     def main():
@@ -536,6 +558,21 @@ def test_multiline_parenthesized_boolean_condition_codegen_from_layout_tensor_do
     ) in generated_code
 
 
+def test_matrix_multiplication_operator_codegen_from_official_docs_reparses_crossgl():
+    # Reduced from https://docs.modular.com/mojo/manual/operators/
+    # "Matrix multiplication" documents @ as Mojo's matrix multiplication operator.
+    code = """
+    fn main(lhs: Matrix[DType.float32, 4, 4], rhs: Matrix[DType.float32, 4, 4]):
+        var result = lhs @ rhs
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var result = (lhs * rhs);" in generated_code
+    assert " @ rhs" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_modular_image_pipeline_blur_chained_bounds_codegen():
     # Reduced from modularml/mojo commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
@@ -757,6 +794,55 @@ def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     ) in generated_code
     assert "ctx.synchronize();" in generated_code
     assert "comptime" not in generated_code
+
+
+def test_backtick_comptime_names_codegen_from_official_gpu_notebook_example():
+    # Reduced from https://docs.modular.com/mojo/tools/notebooks/
+    # "Example: Hello writing" uses escaped emoji comptime constants in a GPU
+    # kernel and host-side fill.
+    code = """
+    comptime `✅`: Int32 = 1
+    comptime `❌`: Int32 = 0
+
+    def kernel(value: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
+        value[0] = `✅`
+
+    def main():
+        out.enqueue_fill(`❌`)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int u2705 = 1;" in generated_code
+    assert "int u274c = 0;" in generated_code
+    assert "value[0] = u2705;" in generated_code
+    assert "out.enqueue_fill(u274c);" in generated_code
+    assert "metadata" not in generated_code
+    assert "`" not in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
+def test_not_in_membership_condition_codegen_from_mojo_gpu_puzzles_dispatch():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p13/p13.mojo main command-dispatch guard.
+    code = """
+    def main():
+        if len(argv()) != 2 or argv()[1] not in [
+            "--simple",
+            "--block-boundary",
+        ]:
+            raise Error("Expected mode")
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'if (((len(argv()) != 2) || (!(argv()[1] in ["--simple", "--block-boundary"]))))'
+        in generated_code
+    )
+    assert " not in " not in generated_code
+    assert "Unhandled expression" not in generated_code
 
 
 def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
@@ -1045,6 +1131,26 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     assert "async_copy_wait_all();" in generated_code
     assert "barrier();" in generated_code
     assert "Unhandled statement type: VectorConstructorNode" not in generated_code
+
+
+def test_floor_divide_assignment_codegen_from_mojo_gpu_puzzles_reparses_crossgl():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # solutions/p15/p15.mojo axis_sum reduction loop.
+    code = """
+    def axis_sum():
+        var stride = TPB // 2
+        while stride > 0:
+            stride //= 2
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var stride = (TPB / 2);" in generated_code
+    assert "stride /= 2;" in generated_code
+    assert "//=" not in generated_code
+    assert "TPB // 2" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_modular_top_k_type_of_parameter_type_codegen():
@@ -2228,6 +2334,23 @@ def test_generic_simd_constructor_codegen():
     assert "let color = vec4(1.0, 2.0, 3.0, 4.0);" in generated_code
 
 
+def test_float64_simd_constructor_from_modular_docs_reparses_crossgl():
+    code = """
+    fn reduce_example() -> SIMD[DType.float64, 4]:
+        var data = SIMD[DType.float64, 4](10.5, 20.3, 30.1, 40.7)
+        return data
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "dvec4 reduce_example()" in generated_code
+    assert "var data = dvec4(10.5, 20.3, 30.1, 40.7);" in generated_code
+    assert "SIMD[DType.float64, 4]" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_generic_inline_array_constructor_codegen():
     code = """
     fn main():
@@ -2356,6 +2479,27 @@ def test_ternary_operator_codegen():
         assert "let native_result = ((x > 0.0) ? 1.0 : 0.0);" in generated_code
     except SyntaxError:
         pytest.fail("Ternary operator parsing or code generation not implemented.")
+
+
+def test_multiline_parenthesized_inline_if_codegen_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p31/p31.mojo sophisticated_kernel cached_correction.
+    code = """
+    def sophisticated_kernel():
+        var cached_correction = (
+            shared_cache[local_i + 3072] if local_i
+            < 1024 else series_correction
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "var cached_correction = ((local_i < 1024) ? "
+        "shared_cache[(local_i + 3072)] : series_correction);"
+    ) in generated_code
+    assert "Unhandled expression" not in generated_code
 
 
 def test_import_codegen():

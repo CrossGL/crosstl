@@ -4684,6 +4684,12 @@ class HipToCrossGLConverter:
         if self.is_user_defined_function(func_name):
             return f"{func_name}({args_str})"
 
+        load_cache_intrinsic = self.format_hip_load_cache_intrinsic_call(
+            func_name, raw_args, args
+        )
+        if load_cache_intrinsic is not None:
+            return load_cache_intrinsic
+
         runtime_expression = self.format_hip_runtime_expression_call(node, args)
         if runtime_expression is not None:
             return runtime_expression
@@ -4721,9 +4727,46 @@ class HipToCrossGLConverter:
 
         return None
 
+    def format_hip_load_cache_intrinsic_call(
+        self, function_name, raw_args, formatted_args
+    ):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name not in {
+            "__ldca",
+            "__ldcg",
+            "__ldcs",
+            "__ldcv",
+            "__ldg",
+            "__ldlu",
+        }:
+            return None
+
+        if (
+            len(raw_args) == 1
+            and isinstance(raw_args[0], UnaryOpNode)
+            and raw_args[0].op == "&"
+        ):
+            return self.visit(raw_args[0].operand)
+
+        args_text = ", ".join(formatted_args)
+        return (
+            f"(/* hip load cache intrinsic {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
+
     def format_hip_warp_intrinsic_call(self, function_name, args):
         if function_name in {"__activemask", "__ballot_sync"}:
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+
+        if function_name in {"__any", "__all"}:
+            if len(args) != 1:
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            predicate = self.format_wave_predicate(args[0])
+            if function_name == "__any":
+                return f"(WaveActiveAnyTrue({predicate}) ? 1 : 0)"
+            return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
 
         if function_name in {"__any_sync", "__all_sync"}:
             if len(args) != 2 or not self.is_full_or_active_warp_mask(args[0]):
@@ -4753,8 +4796,6 @@ class HipToCrossGLConverter:
 
         if function_name in {
             "__ballot",
-            "__any",
-            "__all",
             "__shfl",
             "__shfl_up",
             "__shfl_down",
@@ -4965,8 +5006,12 @@ class HipToCrossGLConverter:
             return f"f16({args[0]})"
         if function_name == "__float2half2_rn" and len(args) == 1:
             return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__floats2half2_rn" and len(args) == 2:
+            return self.format_vector_constructor("vec2", args, "f16")
         if function_name == "__low2float" and len(args) == 1:
             return f"f32({self.format_vector_component_access(args[0], 'x')})"
+        if function_name == "__high2float" and len(args) == 1:
+            return f"f32({self.format_vector_component_access(args[0], 'y')})"
         if function_name == "__hadd2" and len(args) == 2:
             return f"({args[0]} + {args[1]})"
         if function_name == "__hmul2" and len(args) == 2:
@@ -5030,7 +5075,9 @@ class HipToCrossGLConverter:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__byte_perm" and len(args) == 3:
             return self.format_hip_byte_perm(args[0], args[1], args[2])
-        if function_name == "__ffs" and len(args) == 1:
+        if function_name == "__bitextract_u32" and len(args) == 3:
+            return self.format_hip_unsigned_bit_extract(args[0], args[1], args[2])
+        if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
             return f"countLeadingZeros({args[0]})"
@@ -5059,6 +5106,19 @@ class HipToCrossGLConverter:
 
     def format_hip_signed_24_bit_operand(self, arg):
         return f"(({arg} << 8) >> 8)"
+
+    def format_hip_unsigned_bit_extract(self, value, offset, width):
+        width_value = self.parse_hip_integer_literal(width)
+        if width_value is not None:
+            if width_value <= 0:
+                mask = "0u"
+            elif width_value >= 32:
+                mask = "0xffffffffu"
+            else:
+                mask = f"0x{(1 << width_value) - 1:x}u"
+        else:
+            mask = f"((1u << {width}) - 1u)"
+        return f"(({value} >> {offset}) & {mask})"
 
     def format_hip_byte_perm(self, left, right, selector):
         selector_value = self.parse_hip_integer_literal(selector)
@@ -5608,11 +5668,30 @@ class HipToCrossGLConverter:
             return arg
         return self.visit(arg)
 
+    def format_atomic_argument(self, arg, index):
+        if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
+
     def visit_AtomicOperationNode(self, node):
-        args = [self.visit(arg) for arg in node.args]
+        args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]
         args_str = ", ".join(args)
-        crossgl_func = self.convert_hip_builtin_function(node.operation)
-        return f"{crossgl_func}({args_str})"
+        operation = node.operation
+        scope = None
+        for suffix, scope_name in (("_block", "block"), ("_system", "system")):
+            if operation.endswith(suffix):
+                operation = operation[: -len(suffix)]
+                scope = scope_name
+                break
+
+        crossgl_func = self.convert_hip_builtin_function(operation)
+        expression = f"{crossgl_func}({args_str})"
+        if scope is not None:
+            return (
+                f"(/* hip {scope}-scope atomic {node.operation} lowered to "
+                f"{crossgl_func}; scope not preserved */ {expression})"
+            )
+        return expression
 
     def is_get_method_call(self, node):
         return (
@@ -6373,6 +6452,9 @@ class HipToCrossGLConverter:
             "roundf": "round",
             "truncf": "trunc",
             "atan2f": "atan2",
+            "fmaf": "fma",
+            "__fmaf_rn": "fma",
+            "__fma_rn": "fma",
             "fmodf": "mod",
             "fminf": "min",
             "fmaxf": "max",
@@ -6400,6 +6482,15 @@ class HipToCrossGLConverter:
             "int": "i32",
             "uint": "u32",
             "long": "i64",
+            "__int64": "i64",
+            "int8_t": "i8",
+            "uint8_t": "u8",
+            "int16_t": "i16",
+            "uint16_t": "u16",
+            "int32_t": "i32",
+            "uint32_t": "u32",
+            "int64_t": "i64",
+            "uint64_t": "u64",
             "half": "f16",
             "__half": "f16",
             "__half2": "vec2<f16>",
@@ -6440,6 +6531,10 @@ class HipToCrossGLConverter:
             "hipAtomicOr": "atomicOr",
             "atomicXor": "atomicXor",
             "hipAtomicXor": "atomicXor",
+            "atomicInc": "atomicInc",
+            "hipAtomicInc": "atomicInc",
+            "atomicDec": "atomicDec",
+            "hipAtomicDec": "atomicDec",
         }
 
         return function_mapping.get(func_name, func_name)

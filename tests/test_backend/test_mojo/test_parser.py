@@ -339,6 +339,24 @@ def test_backtick_local_identifier_parse_from_modular_base64_stdlib():
     assert function.body[1].value.args[0].name == "`6bit`"
 
 
+def test_backtick_keyword_function_name_parse_from_official_docs():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-function-declarations/
+    # "Function names" escaped keyword identifier example.
+    code = """
+    def `import`() -> Int:
+        return 1
+
+    def main() -> Int:
+        return `import`()
+    """
+    ast = parse_code(tokenize_code(code))
+    imported = find_function(ast, "`import`")
+    main = find_function(ast, "main")
+
+    assert imported.return_type == "Int"
+    assert main.body[0].value.name == "`import`"
+
+
 def test_struct_parsing():
     code = """
     struct VSInput:
@@ -656,6 +674,31 @@ def test_for_in_range_parsing_preserves_range_call():
     assert isinstance(loop.iterable.args[2], UnaryOpNode)
     assert loop.iterable.args[2].op == "-"
     assert loop.iterable.args[2].operand == "1"
+
+
+def test_floor_divide_assignment_parse_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # solutions/p15/p15.mojo axis_sum reduction loop.
+    code = """
+    def axis_sum():
+        var stride = TPB // 2
+        while stride > 0:
+            stride //= 2
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "axis_sum")
+    declaration = function.body[0]
+    loop = function.body[1]
+    update = loop.body[0]
+
+    assert isinstance(declaration.initial_value, BinaryOpNode)
+    assert declaration.initial_value.op == "//"
+    assert isinstance(loop, WhileNode)
+    assert isinstance(update, AssignmentNode)
+    assert update.operator == "//="
+    assert update.left.name == "stride"
+    assert update.right == "2"
 
 
 def test_comptime_for_parsing_preserves_loop_shape():
@@ -1439,6 +1482,31 @@ def test_ternary_operator_parsing():
         assert native_ternary.false_expr.name == "no"
     except SyntaxError:
         pytest.fail("Ternary operator parsing not implemented.")
+
+
+def test_multiline_parenthesized_inline_if_parsing_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p31/p31.mojo sophisticated_kernel cached_correction.
+    code = """
+    def sophisticated_kernel():
+        var cached_correction = (
+            shared_cache[local_i + 3072] if local_i
+            < 1024 else series_correction
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "sophisticated_kernel").body[0]
+    inline_if = declaration.initial_value
+
+    assert isinstance(inline_if, TernaryOpNode)
+    assert isinstance(inline_if.condition, BinaryOpNode)
+    assert inline_if.condition.op == "<"
+    assert inline_if.condition.left.name == "local_i"
+    assert inline_if.condition.right == "1024"
+    assert isinstance(inline_if.true_expr, ArrayAccessNode)
+    assert inline_if.true_expr.array.name == "shared_cache"
+    assert inline_if.false_expr.name == "series_correction"
 
 
 def test_at_attributes_attach_to_declarations():
@@ -2392,6 +2460,40 @@ def test_keyword_style_comptime_assert_statement_parse():
     assert size_assert.args[1] == '"bad size"'
 
 
+def test_backtick_comptime_names_parse_from_official_gpu_notebook_example():
+    # Reduced from https://docs.modular.com/mojo/tools/notebooks/
+    # "Example: Hello writing" uses escaped emoji comptime constants in a GPU
+    # kernel and host-side fill.
+    code = """
+    comptime `✅`: Int32 = 1
+    comptime `❌`: Int32 = 0
+
+    def kernel(value: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
+        value[0] = `✅`
+
+    def main():
+        out.enqueue_fill(`❌`)
+    """
+
+    ast = parse_code(tokenize_code(code))
+    success, failure = ast.global_variables
+    kernel = find_function(ast, "kernel")
+    main = find_function(ast, "main")
+
+    assert success.name == "`✅`"
+    assert success.vtype == "Int32"
+    assert success.initial_value == "1"
+    assert getattr(success, "is_comptime", False)
+
+    assert failure.name == "`❌`"
+    assert failure.vtype == "Int32"
+    assert failure.initial_value == "0"
+    assert getattr(failure, "is_comptime", False)
+
+    assert kernel.body[0].right.name == "`✅`"
+    assert main.body[0].args[0].name == "`❌`"
+
+
 def test_keyword_style_runtime_assert_statement_parse_from_modular_packing_kernel():
     # Reduced from modular/modular commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
@@ -2441,6 +2543,31 @@ def test_comptime_in_expression_and_parameterized_declaration_parse():
     assert isinstance(assertion.args[0], BinaryOpNode)
     assert assertion.args[0].op == "in"
     assert assertion.args[1] == '"MmaOpSM100 only supports cta_group 1 or 2"'
+
+
+def test_not_in_membership_condition_parse_from_mojo_gpu_puzzles_dispatch():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # 87de51ac93bea662eba6f09d19e8744e56161027,
+    # problems/p13/p13.mojo main command-dispatch guard.
+    code = """
+    def main():
+        if len(argv()) != 2 or argv()[1] not in [
+            "--simple",
+            "--block-boundary",
+        ]:
+            pass
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    condition = function.body[0].condition
+
+    assert isinstance(condition, BinaryOpNode)
+    assert condition.op == "||"
+    assert isinstance(condition.right, BinaryOpNode)
+    assert condition.right.op == "not in"
+    assert isinstance(condition.right.right, ListLiteralNode)
+    assert condition.right.right.elements == ['"--simple"', '"--block-boundary"']
 
 
 def test_gpu_fundamentals_launch_keyword_tuple_args_parse():
@@ -2782,6 +2909,24 @@ def test_nested_expressions_parsing():
         parse_code(tokens)
     except SyntaxError:
         pytest.fail("Nested expressions parsing not implemented.")
+
+
+def test_matrix_multiplication_operator_parsing_from_official_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/operators/
+    # "Matrix multiplication" documents @ as Mojo's matrix multiplication operator.
+    code = """
+    fn main(lhs: Matrix[DType.float32, 4, 4], rhs: Matrix[DType.float32, 4, 4]):
+        var result = lhs @ rhs
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration.initial_value, BinaryOpNode)
+    assert declaration.initial_value.op == "@"
+    assert declaration.initial_value.left.name == "lhs"
+    assert declaration.initial_value.right.name == "rhs"
+    assert declaration.attributes == []
 
 
 def test_mod_parsing():

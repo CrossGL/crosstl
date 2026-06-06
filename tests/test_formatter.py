@@ -34,13 +34,27 @@ class TestCodeFormatter:
         formatter = CodeFormatter()
 
         assert formatter.detect_language("shader.hlsl") == ShaderLanguage.HLSL
+        assert formatter.detect_language("shader.hlsli") == ShaderLanguage.HLSL
         assert formatter.detect_language("shader.fx") == ShaderLanguage.HLSL
+        assert formatter.detect_language("shader.fxh") == ShaderLanguage.HLSL
         assert formatter.detect_language("shader.glsl") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.vert") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.vsh") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.vertex") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.frag") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.fsh") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.fragment") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.csh") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.compute") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.gsh") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.geometry") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.metal") == ShaderLanguage.METAL
         assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.vulkan") == ShaderLanguage.SPIRV
+        assert formatter.detect_language("shader.slangh") == ShaderLanguage.SLANG
+        assert formatter.detect_language("shader.cuh") == ShaderLanguage.CUDA
+        assert formatter.detect_language("shader.cuda") == ShaderLanguage.CUDA
+        assert formatter.detect_language("shader.rust") == ShaderLanguage.RUST
         assert formatter.detect_language("shader.txt") == ShaderLanguage.UNKNOWN
 
     def test_format_code_language_detection(self):

@@ -96,6 +96,39 @@ def test_struct_array_member_codegen():
     assert "vec4 colors[2][3]" in generated_code
 
 
+def test_forward_struct_declaration_codegen_from_generated_conformance_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # docs/generated/tests/conformance/types-struct/struct-no-body-decl.slang
+    code = """
+    struct ForwardDeclared;
+
+    struct ForwardDeclared
+    {
+        int x;
+    }
+
+    RWStructuredBuffer<int> output;
+
+    [numthreads(1,1,1)]
+    void main()
+    {
+        ForwardDeclared fd;
+        fd.x = 55;
+        output[0] = fd.x;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert generated_code.count("struct ForwardDeclared") == 1
+    assert "int x;" in generated_code
+    assert "ForwardDeclared fd;" in generated_code
+    assert "output[0] = fd.x;" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_name_first_property_codegen_from_generated_interface_sample():
     code = """
     struct IntProperty
@@ -163,6 +196,26 @@ def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     assert "int iteration;" in generated_code
     assert "public" not in generated_code
     assert "internal" not in generated_code
+
+
+def test_static_const_struct_field_initializer_codegen_from_mlp_training_adam_sample():
+    # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
+    # examples/mlp-training/adam.slang
+    code = """
+    public struct AdamOptimizer
+    {
+        public static const NFloat beta1 = 0.9h;
+        public static const NFloat epsilon = 1e-7h;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const NFloat beta1 = 0.9;" in generated_code
+    assert "static const NFloat epsilon = 0.0000001;" in generated_code
+    assert "public" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_reserved_crossgl_names_are_sanitized_from_reflection_api_sample():
@@ -261,6 +314,217 @@ def test_entry_point_parameter_block_parameter_unwraps_to_struct_codegen():
     assert "vec4 main(vec2 uv, Params params)" in generated_code
     assert "ParameterBlock<Params> params" not in generated_code
     assert "return texture(params.tex, uv);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_uppercase_hlsl_system_semantics_codegen_from_vireo_fixture():
+    # Source style: HenriMichelon/vireo_samples src/shaders/deferred_lighting.frag.slang.
+    code = """
+    struct VertexOutput {
+        float4 position : SV_POSITION;
+        float2 uv : TEXCOORD;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input) : SV_TARGET
+    {
+        return input.position;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 position @ Out_Position;" in generated_code
+    assert "vec4 fragmentMain(VertexOutput input) @ Out_Color" in generated_code
+    assert "@ SV_POSITION" not in generated_code
+    assert "@ SV_TARGET" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_texcoord7_semantic_codegen_matches_directx_common_semantics():
+    code = """
+    struct VertexOutput {
+        float2 uv7 : TEXCOORD7;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input, float2 fallbackUV : TEXCOORD7) : SV_Target0
+    {
+        return float4(input.uv7 + fallbackUV, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec2 uv7 @ TexCoord7;" in generated_code
+    assert "vec2 fallbackUV @ TexCoord7" in generated_code
+    assert "@ TEXCOORD7" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_high_texcoord_semantic_codegen_matches_hlsl_varying_packing():
+    code = """
+    struct VertexOutput {
+        float2 uv9 : TEXCOORD9;
+        float3 detailWeights : TEXCOORD12;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input, float2 fallbackUV : TEXCOORD10) : SV_Target0
+    {
+        return float4(input.uv9 + fallbackUV, input.detailWeights.x, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec2 uv9 @ TexCoord9;" in generated_code
+    assert "vec3 detailWeights @ TexCoord12;" in generated_code
+    assert "vec2 fallbackUV @ TexCoord10" in generated_code
+    assert "@ TEXCOORD9" not in generated_code
+    assert "@ TEXCOORD10" not in generated_code
+    assert "@ TEXCOORD12" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_high_color_semantic_codegen_matches_hlsl_varying_packing():
+    code = """
+    struct VertexOutput {
+        float4 debugAlbedo : COLOR8;
+        uint materialId : COLOR11;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input, float4 fallbackColor : COLOR9) : SV_Target0
+    {
+        return input.debugAlbedo + fallbackColor;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 debugAlbedo @ Color8;" in generated_code
+    assert "uint materialId @ Color11;" in generated_code
+    assert "vec4 fallbackColor @ Color9" in generated_code
+    assert "@ COLOR8" not in generated_code
+    assert "@ COLOR9" not in generated_code
+    assert "@ COLOR11" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_high_index_vertex_stream_semantics_codegen_matches_hlsl_mesh_layouts():
+    code = """
+    struct VertexInput {
+        float3 normal : NORMAL8;
+        float4 tangent : TANGENT9;
+        float3 binormal : BINORMAL10;
+        uint4 blendIndices : BLENDINDICES11;
+        float4 blendWeight : BLENDWEIGHT12;
+    };
+
+    [shader("vertex")]
+    float4 vertexMain(VertexInput input, float4 fallbackWeight : BLENDWEIGHT13) : SV_Position
+    {
+        return float4(input.normal, 1.0) + fallbackWeight;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec3 normal @ in_Normal8;" in generated_code
+    assert "vec4 tangent @ in_Tangent9;" in generated_code
+    assert "vec3 binormal @ in_Binormal10;" in generated_code
+    assert "uvec4 blendIndices @ in_BlendIndices11;" in generated_code
+    assert "vec4 blendWeight @ in_BlendWeight12;" in generated_code
+    assert "vec4 fallbackWeight @ in_BlendWeight13" in generated_code
+    assert "@ NORMAL8" not in generated_code
+    assert "@ TANGENT9" not in generated_code
+    assert "@ BINORMAL10" not in generated_code
+    assert "@ BLENDINDICES11" not in generated_code
+    assert "@ BLENDWEIGHT12" not in generated_code
+    assert "@ BLENDWEIGHT13" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names():
+    code = """
+    [shader("compute")]
+    void main(uint3 tid : SV_DISPATCHTHREADID, uint gid : SV_GROUPINDEX)
+    {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uvec3 tid @ SV_DispatchThreadID" in generated_code
+    assert "uint gid @ SV_GroupIndex" in generated_code
+    assert "@ SV_DISPATCHTHREADID" not in generated_code
+    assert "@ SV_GROUPINDEX" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_interpolation_qualifiers_codegen_remains_parseable_crossgl():
+    code = """
+    struct VSOutput
+    {
+        float4 Pos : SV_POSITION;
+        nointerpolation uint TextureIndex;
+        linear centroid float2 Uv : TEXCOORD0;
+        sample float4 CoverageColor : COLOR1;
+    };
+
+    [shader("fragment")]
+    float4 main(centroid noperspective float2 uv : TEXCOORD1,
+                linear sample float4 color : COLOR2) : SV_TARGET
+    {
+        return color;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "nointerpolation uint TextureIndex;" in generated_code
+    assert "linear centroid vec2 Uv @ TexCoord0;" in generated_code
+    assert "sample vec4 CoverageColor @ Color1;" in generated_code
+    assert "centroid noperspective vec2 uv @ TexCoord1" in generated_code
+    assert "linear sample vec4 color @ Color2" in generated_code
+    assert "@ SV_POSITION" not in generated_code
+    assert "@ SV_TARGET" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_shape():
+    code = """
+    [shader("fragment")]
+    void fragmentMain(in float2 uv : TEXCOORD0, out float4 color : SV_Target0)
+    {
+        color = float4(uv, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "void fragmentMain(in vec2 uv @ TexCoord0, out vec4 color @ Out_Color0)"
+        in generated_code
+    )
     cgl_translator.parse(generated_code)
 
 
@@ -660,6 +924,27 @@ def test_enum_declarations_codegen_from_gpu_printing_sample():
     assert "enum PrintingOp" in generated_code
     assert "PrintLine," in generated_code
     assert "PrintF = 2 + 1," in generated_code
+
+
+def test_generic_enum_class_codegen_reparse_from_upstream_bug_test():
+    # Reduced from shader-slang/slang tests/bugs/11042-generic-enum-scope-conflict.slang.
+    code = """
+    enum class GenericEnum<T>
+    {
+        A,
+        B,
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "enum GenericEnum" in generated_code
+    assert "GenericEnum<" not in generated_code
+    assert "A," in generated_code
+    assert "B," in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_reverse_codegen_rejects_interface_and_conformance_constructs():
@@ -1324,6 +1609,32 @@ def test_namespace_global_resource_array_codegen_from_current_slang_spirv_test()
     cgl_translator.parse(generated_code)
 
 
+def test_dotted_namespace_global_resource_codegen_from_namespace_import_sample():
+    # Source: shader-slang/slang tests/language-feature/namespaces/namespace-import/m.slang
+    # at 52339028a2aa703271533454c6b9528a534bac31.
+    code = """
+    namespace ns1.ns2
+    {
+        [[vk::binding(0, 0)]] RWTexture2D<float4> textureTable[];
+    }
+
+    [shader("compute")]
+    [numthreads(8, 8, 1)]
+    void main(uint3 pixel_i : SV_DispatchThreadID)
+    {
+        ns1.ns2.textureTable[0][pixel_i.xy] = float4(0,1,0,0);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "image2D ns1_ns2_textureTable[] @set(0) @binding(0);" in generated_code
+    assert "ns1_ns2_textureTable[0][pixel_i.xy] = vec4(0, 1, 0, 0);" in generated_code
+    assert "ns1.ns2.textureTable" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_local_and_parameter_array_declarator_codegen():
     code = """
     float bump(float values[2], int idx) {
@@ -1685,6 +1996,45 @@ def test_structured_buffer_load_method_codegen_from_core_module_docs():
     assert "float b = output[i];" in generated_code
     assert "output[i] = a + b;" in generated_code
     assert ".Load(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_byte_address_buffer_load_store_methods_codegen_from_upstream_compute_test():
+    # Source: shader-slang/slang@fbf41e87a3493bfe4417b3b3a92c814dde391960
+    # tests/compute/byte-address-buffer.slang
+    code = """
+    ByteAddressBuffer inputBuffer;
+    RWByteAddressBuffer outputBuffer;
+
+    void test(uint val)
+    {
+        uint tmp = inputBuffer.Load<uint>(uint(val * 4));
+        uint2 pair = inputBuffer.Load2(uint(tmp * 4));
+        uint3 triple = inputBuffer.Load3(0);
+        uint4 quad = inputBuffer.Load4(16);
+
+        outputBuffer.Store(val * 4, tmp);
+        outputBuffer.Store2(8, pair);
+        outputBuffer.Store3(12, triple);
+        outputBuffer.Store4(16, quad);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "ByteAddressBuffer inputBuffer;" in generated_code
+    assert "RWByteAddressBuffer outputBuffer;" in generated_code
+    assert "uint tmp = buffer_load(inputBuffer, uint(val * 4));" in generated_code
+    assert "uvec2 pair = buffer_load2(inputBuffer, uint(tmp * 4));" in generated_code
+    assert "uvec3 triple = buffer_load3(inputBuffer, 0);" in generated_code
+    assert "uvec4 quad = buffer_load4(inputBuffer, 16);" in generated_code
+    assert "buffer_store(outputBuffer, val * 4, tmp);" in generated_code
+    assert "buffer_store2(outputBuffer, 8, pair);" in generated_code
+    assert "buffer_store3(outputBuffer, 12, triple);" in generated_code
+    assert "buffer_store4(outputBuffer, 16, quad);" in generated_code
+    assert ".Load" not in generated_code
+    assert ".Store" not in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -2101,6 +2451,47 @@ def test_user_defined_mul_function_is_not_lowered_to_binary_operator():
     assert "return (1.0 * 2.0);" not in generated_code
 
 
+def test_slang_mad_builtin_from_core_module_reference_lowers_to_arithmetic():
+    # Source: Slang core module reference for mad.
+    # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/mad.html
+    code = """
+    void main() {
+        float value = mad(x + 1.0, scale, bias);
+        float3 color = mad(float3(0.5, 0.6, 0.7), tint, offset);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float value = (((x + 1.0) * scale) + bias);" in generated_code
+    assert "vec3 color = ((vec3(0.5, 0.6, 0.7) * tint) + offset);" in generated_code
+    assert "mad(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_user_defined_mad_function_is_not_lowered_to_arithmetic():
+    code = """
+    float mad(float a, float b, float c) {
+        return a + b + c;
+    }
+
+    float main() {
+        return mad(1.0, 2.0, 3.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float mad(float a, float b, float c)" in generated_code
+    assert "return mad(1.0, 2.0, 3.0);" in generated_code
+    assert "return ((1.0 * 2.0) + 3.0);" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():
     code = """
     void main() {
@@ -2118,6 +2509,26 @@ def test_slang_rsqrt_builtin_lowers_to_crossgl_inversesqrt():
     assert "rsqrt(" not in generated_code
 
 
+def test_slang_rcp_builtin_from_stdlib_reference_lowers_to_reciprocal_expression():
+    # Source: shader-slang stdlib rcp reference.
+    # URL: https://shader-slang.org/stdlib-reference/global-decls/rcp
+    code = """
+    void main() {
+        float inv = rcp(x + 1.0);
+        float2 invVec = rcp(float2(4.0, 8.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float inv = (1.0 / (x + 1.0));" in generated_code
+    assert "vec2 invVec = (1.0 / vec2(4.0, 8.0));" in generated_code
+    assert "rcp(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_slang_saturate_builtin_lowers_to_crossgl_clamp():
     code = """
     void main() {
@@ -2133,6 +2544,52 @@ def test_slang_saturate_builtin_lowers_to_crossgl_clamp():
     assert "float saturated = clamp(1.25, 0.0, 1.0);" in generated_code
     assert "vec2 saturatedVec = clamp(vec2(-1.0, 2.0), 0.0, 1.0);" in generated_code
     assert "saturate(" not in generated_code
+
+
+def test_slang_atan2_builtin_from_stdlib_reference_lowers_to_crossgl_atan():
+    # Source: Slang core module reference for atan2.
+    # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/atan2.html
+    code = """
+    void main() {
+        float angle = atan2(y, x);
+        float2 angleVec = atan2(float2(1.0, 2.0), float2(3.0, 4.0));
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float angle = atan(y, x);" in generated_code
+    assert "vec2 angleVec = atan(vec2(1.0, 2.0), vec2(3.0, 4.0));" in generated_code
+    assert "atan2(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():
+    # Source: Slang core module reference for sincos.
+    # URL: https://docs.shader-slang.org/en/latest/external/core-module-reference/global-decls/sincos.html
+    code = """
+    void main() {
+        float s;
+        float c;
+        sincos(1.0, s, c);
+        if (c > 0.0) {
+            sincos(c, s, c);
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "s = sin(1.0);" in generated_code
+    assert "c = cos(1.0);" in generated_code
+    assert "        s = sin(c);" in generated_code
+    assert "        c = cos(c);" in generated_code
+    assert "sincos(" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_derivative_intrinsics_codegen_from_official_fragment_derivative_tests():
@@ -2218,6 +2675,26 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
     assert "1e-3f" not in generated_code
     assert ".5f" not in generated_code
     assert "1f" not in generated_code
+
+
+def test_binary_integer_literals_codegen_from_generated_conformance_sample():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # expressions-literal/bin-prefix-lowercase.slang at d25453d.
+    code = """
+    void main() {
+        int x = 0b1010;
+        int y = 0B1111;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int x = 0b1010;" in generated_code
+    assert "int y = 0B1111;" in generated_code
+    assert "b1010" not in generated_code.replace("0b1010", "")
+    cgl_translator.parse(generated_code)
 
 
 def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sample():
@@ -2382,6 +2859,30 @@ def test_pointer_declarator_codegen_from_mlp_training_samples():
     assert "MyNetwork* network" in generated_code
     assert "Atomic<uint32_t>* lossBuffer" in generated_code
     assert "vec2* inputs" in generated_code
+
+
+def test_official_pointer_address_of_and_arrow_member_codegen():
+    # Source: Slang User's Guide, Basic Convenience Features > Pointers (limited).
+    code = """
+    struct MyType
+    {
+        int a;
+    };
+
+    int test(MyType* pObj)
+    {
+        MyType* pNext = pObj + 1;
+        MyType* pNext2 = &pNext[1];
+        return pNext.a + pNext->a + (*pNext2).a + pNext2[0].a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "MyType* pNext2 = &pNext[1];" in generated_code
+    assert "return pNext.a + pNext.a + (*pNext2).a + pNext2[0].a;" in generated_code
 
 
 if __name__ == "__main__":

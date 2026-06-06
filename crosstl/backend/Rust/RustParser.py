@@ -94,6 +94,7 @@ class RustParser:
         "USIZE",
         "ISIZE",
     }
+    NAME_TOKENS |= PRIMITIVE_PATH_SEGMENT_TOKENS
     PATH_SEGMENT_TOKENS = (
         NAME_TOKENS
         | PRIMITIVE_PATH_SEGMENT_TOKENS

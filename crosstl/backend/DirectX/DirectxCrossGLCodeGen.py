@@ -42,12 +42,15 @@ class HLSLToCrossGLConverter:
             "int1": "int",
             "uint": "uint",
             "uint1": "uint",
+            "UINT": "uint",
             "dword": "uint",
             "float": "float",
             "float1": "float",
             "float32_t": "float",
             "half": "float16",
             "half1": "float16",
+            "fixed": "float",
+            "fixed1": "float",
             "float16_t": "float16",
             "double": "double",
             "double1": "double",
@@ -75,6 +78,10 @@ class HLSLToCrossGLConverter:
             "half2": "f16vec2",
             "half3": "f16vec3",
             "half4": "f16vec4",
+            # Unity fixed precision aliases lower to regular float CrossGL types.
+            "fixed2": "vec2",
+            "fixed3": "vec3",
+            "fixed4": "vec4",
             # Vector Types - double
             "double2": "dvec2",
             "double3": "dvec3",
@@ -111,6 +118,15 @@ class HLSLToCrossGLConverter:
             "half4x2": "f16mat4x2",
             "half4x3": "f16mat4x3",
             "half4x4": "f16mat4",
+            "fixed2x2": "mat2",
+            "fixed2x3": "mat2x3",
+            "fixed2x4": "mat2x4",
+            "fixed3x2": "mat3x2",
+            "fixed3x3": "mat3",
+            "fixed3x4": "mat3x4",
+            "fixed4x2": "mat4x2",
+            "fixed4x3": "mat4x3",
+            "fixed4x4": "mat4",
             # Matrix Types - double
             "double2x2": "dmat2",
             "double2x3": "dmat2x3",
@@ -125,6 +141,8 @@ class HLSLToCrossGLConverter:
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
             "Texture2D": "sampler2D",
+            "sampler2D_half": "sampler2D",
+            "sampler2D_float": "sampler2D",
             "Texture3D": "sampler3D",
             "TextureCube": "samplerCube",
             "Texture2DArray": "sampler2DArray",
@@ -166,6 +184,7 @@ class HLSLToCrossGLConverter:
             "LineStream": "lineStream",
             "TriangleStream": "triangleStream",
             # Sampler Types
+            "Sampler": "sampler",
             "SamplerState": "sampler",
             "SamplerComparisonState": "sampler",
         }
@@ -187,9 +206,11 @@ class HLSLToCrossGLConverter:
             "firstbithigh": "findMSB",
             "firstbitlow": "findLSB",
             "frac": "fract",
+            "fmod": "mod",
             "lerp": "mix",
             "reversebits": "reverseBits",
             "rsqrt": "inverseSqrt",
+            "atan2": "atan",
             "EvaluateAttributeAtSample": "interpolateAtSample",
             "EvaluateAttributeSnapped": "interpolateAtOffset",
             "EvaluateAttributeCentroid": "interpolateAtCentroid",
@@ -250,6 +271,12 @@ class HLSLToCrossGLConverter:
             "GatherCmpGreen": "1",
             "GatherCmpBlue": "2",
             "GatherCmpAlpha": "3",
+        }
+        self.legacy_texture_function_sampler_types = {
+            "tex2D": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex2Dlod": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex2Dbias": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex2Dgrad": {"sampler2D", "sampler2D_half", "sampler2D_float"},
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
@@ -1068,6 +1095,77 @@ class HLSLToCrossGLConverter:
             f"dropped {parameters} */"
         )
 
+    def legacy_texture_function_call(
+        self, func_name, raw_args, rendered_args, is_main=False
+    ):
+        expected_sampler_types = self.legacy_texture_function_sampler_types.get(
+            func_name
+        )
+        if expected_sampler_types is None or not raw_args:
+            return None
+
+        sampler_type = self.raw_type_base(self.expression_raw_type(raw_args[0]))
+        if sampler_type not in expected_sampler_types:
+            return None
+
+        if func_name == "tex2D" and len(raw_args) == 2:
+            return f"texture({', '.join(rendered_args)})"
+
+        if func_name in {"tex2Dlod", "tex2Dbias"} and len(raw_args) == 2:
+            coord, explicit_lod = self.legacy_texture_packed_2d_coord_and_w(
+                raw_args[1], rendered_args[1], is_main
+            )
+            helper = "textureLod" if func_name == "tex2Dlod" else "texture"
+            return f"{helper}({rendered_args[0]}, {coord}, {explicit_lod})"
+
+        if func_name == "tex2Dgrad" and len(raw_args) == 4:
+            return f"textureGrad({', '.join(rendered_args)})"
+
+        return None
+
+    def legacy_texture_packed_2d_coord_and_w(
+        self, coord_arg, rendered_coord, is_main=False
+    ):
+        if isinstance(coord_arg, VectorConstructorNode):
+            ctor_args = getattr(coord_arg, "args", []) or []
+            if (
+                len(ctor_args) >= 3
+                and self.numeric_vector_component_count(
+                    self.expression_value_raw_type(ctor_args[0])
+                )
+                == 2
+            ):
+                coord = self.generate_expression(ctor_args[0], is_main)
+                explicit_lod = self.generate_expression(ctor_args[2], is_main)
+                return coord, explicit_lod
+            if len(ctor_args) >= 4:
+                x = self.generate_expression(ctor_args[0], is_main)
+                y = self.generate_expression(ctor_args[1], is_main)
+                explicit_lod = self.generate_expression(ctor_args[3], is_main)
+                return f"vec2({x}, {y})", explicit_lod
+
+        return (
+            self.swizzle_rendered_expression(rendered_coord, "xy"),
+            self.swizzle_rendered_expression(rendered_coord, "w"),
+        )
+
+    def numeric_vector_component_count(self, type_name):
+        base = self.canonical_composite_type(str(type_name or "").strip())
+        match = re.fullmatch(
+            r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
+            r"uint16_t|int16_t|double|float|half|fixed|uint|int|bool)([1-4])",
+            base,
+        )
+        return int(match.group(2)) if match else None
+
+    def swizzle_rendered_expression(self, rendered, swizzle):
+        if re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*",
+            rendered,
+        ):
+            return f"{rendered}.{swizzle}"
+        return f"({rendered}).{swizzle}"
+
     def get_indent(self):
         return "    " * self.indentation
 
@@ -1128,6 +1226,34 @@ class HLSLToCrossGLConverter:
             else:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
+
+    def collect_cbuffer_reserved_names(self, ast):
+        names = set()
+        for collection in (
+            getattr(ast, "structs", []) or [],
+            getattr(ast, "global_variables", []) or [],
+            getattr(ast, "functions", []) or [],
+            getattr(ast, "typedefs", []) or [],
+            getattr(ast, "enums", []) or [],
+        ):
+            for node in collection:
+                name = getattr(node, "name", None)
+                if isinstance(name, str) and name:
+                    if isinstance(node, FunctionNode):
+                        name = self.render_function_identifier(name)
+                    names.add(name)
+        return names
+
+    def unique_cbuffer_name(self, name, used_names):
+        base = name if isinstance(name, str) and name else "CBuffer"
+        candidate = base
+        if candidate not in used_names:
+            return candidate
+
+        index = 1
+        while f"{base}_{index}" in used_names:
+            index += 1
+        return f"{base}_{index}"
 
     def format_attributes(self, attributes, indent, skip_names=None):
         if not attributes:
@@ -1266,6 +1392,20 @@ class HLSLToCrossGLConverter:
                 rendered.append(f"@ {attr_name}")
         return " ".join(rendered)
 
+    def format_inline_resource_qualifier_attributes(self, parameter):
+        if not self.is_uav_resource_type(getattr(parameter, "vtype", None)):
+            return ""
+
+        qualifiers = {
+            str(q).lower() for q in getattr(parameter, "qualifiers", []) or []
+        }
+        rendered = []
+        if "globallycoherent" in qualifiers:
+            rendered.append("@ globallycoherent")
+        if "reordercoherent" in qualifiers:
+            rendered.append("@ reordercoherent")
+        return " ".join(rendered)
+
     def format_geometry_primitive_parameter_qualifier(self, parameter):
         for attr in getattr(parameter, "attributes", []) or []:
             if str(getattr(attr, "name", "")).lower() != "primitive":
@@ -1303,6 +1443,11 @@ class HLSLToCrossGLConverter:
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
             prefixes.append(attributes)
+        resource_attributes = self.format_inline_resource_qualifier_attributes(
+            parameter
+        )
+        if resource_attributes:
+            prefixes.append(resource_attributes)
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()
@@ -1360,6 +1505,8 @@ class HLSLToCrossGLConverter:
         member_types = {}
         for struct in structs or []:
             if not isinstance(struct, StructNode):
+                continue
+            if getattr(struct, "is_forward_declaration", False):
                 continue
             member_types[struct.name] = {
                 member.name: getattr(member, "vtype", None)
@@ -1460,16 +1607,101 @@ class HLSLToCrossGLConverter:
             return "uint"
         if base.startswith(("int", "min16int", "min12int")):
             return "int"
-        if base.startswith(("float", "half", "min16float", "min10float")):
+        if base.startswith(("float", "half", "fixed", "min16float", "min10float")):
             return "float"
         return None
+
+    def resource_element_raw_type(self, type_name):
+        base = self.raw_type_base(type_name)
+        if not base:
+            return None
+        if not (
+            self.is_buffer_resource_type(type_name)
+            or base in self.structured_buffer_types
+            or base.startswith(
+                ("Texture", "RWTexture", "RasterizerOrderedTexture", "FeedbackTexture")
+            )
+        ):
+            return None
+        return self.first_template_argument(type_name)
+
+    def first_template_argument(self, type_name):
+        if not type_name:
+            return None
+        text = str(type_name).strip()
+        if "<" not in text or not text.endswith(">"):
+            return None
+        generic_type = text.split("<", 1)[1][:-1].strip()
+        args = self.split_generic_arguments(generic_type)
+        if not args:
+            return None
+        return self.canonical_composite_type(args[0])
+
+    def vector_element_raw_type(self, type_name):
+        base = self.canonical_composite_type(str(type_name or "").strip())
+        match = re.fullmatch(
+            r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
+            r"uint16_t|int16_t|double|float|half|fixed|uint|int|bool)[2-4]",
+            base,
+        )
+        if match:
+            return match.group(1)
+        return None
+
+    def indexed_value_raw_type(self, type_name):
+        return self.resource_element_raw_type(
+            type_name
+        ) or self.vector_element_raw_type(type_name)
+
+    def byte_address_load_raw_type(self, member):
+        templated_type = self.first_template_argument(member)
+        if templated_type is not None:
+            return templated_type
+        return {
+            "Load": "uint",
+            "Load2": "uint2",
+            "Load3": "uint3",
+            "Load4": "uint4",
+        }.get(member)
+
+    def function_call_value_raw_type(self, expr):
+        if not isinstance(expr.name, MemberAccessNode):
+            return None
+
+        member = self.templated_method_base(expr.name.member)
+        resource_type = self.expression_raw_type(expr.name.object)
+        resource_base = self.raw_type_base(resource_type)
+        if member in {"Load", "Load2", "Load3", "Load4"}:
+            if resource_base in {
+                "ByteAddressBuffer",
+                "RWByteAddressBuffer",
+                "RasterizerOrderedByteAddressBuffer",
+            }:
+                return self.byte_address_load_raw_type(expr.name.member)
+            return self.resource_element_raw_type(resource_type)
+        if member == "Consume":
+            return self.resource_element_raw_type(resource_type)
+        return None
+
+    def expression_value_raw_type(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_value_raw_type(expr.object)
+            member_type = self.member_access_raw_type(object_type, expr.member)
+            return member_type if member_type is not None else object_type
+        if isinstance(expr, ArrayAccessNode):
+            array_type = self.expression_value_raw_type(expr.array)
+            value_type = self.indexed_value_raw_type(array_type)
+            return value_type if value_type is not None else array_type
+        if isinstance(expr, FunctionCallNode):
+            return self.function_call_value_raw_type(expr)
+        return self.expression_raw_type(expr)
 
     def bitcast_intrinsic_expression(self, func_name, original_args, rendered_args):
         if len(original_args) != 1 or func_name not in {"asfloat", "asint", "asuint"}:
             return None
 
         source_family = self.numeric_type_family(
-            self.expression_raw_type(original_args[0])
+            self.expression_value_raw_type(original_args[0])
         )
         if func_name == "asfloat":
             if source_family == "uint":
@@ -1612,7 +1844,7 @@ class HLSLToCrossGLConverter:
             return None
         if re.fullmatch(
             r"(?:min16float|min10float|min16uint|min16int|min12int|float16_t|"
-            r"uint16_t|int16_t|float|half|double|uint|int|bool)[2-4]",
+            r"uint16_t|int16_t|float|half|fixed|double|uint|int|bool)[2-4]",
             component_type,
         ):
             return int(component_type[-1])
@@ -1627,6 +1859,7 @@ class HLSLToCrossGLConverter:
             "int16_t",
             "float",
             "half",
+            "fixed",
             "double",
             "uint",
             "int",
@@ -2247,6 +2480,8 @@ class HLSLToCrossGLConverter:
                     code += "    }\n"
         # Generate structs
         for node in ast.structs:
+            if getattr(node, "is_forward_declaration", False):
+                continue
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
@@ -2324,14 +2559,17 @@ class HLSLToCrossGLConverter:
 
     def generate_cbuffers(self, ast):
         code = ""
+        used_names = self.collect_cbuffer_reserved_names(ast)
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
+                cbuffer_name = self.unique_cbuffer_name(node.name, used_names)
+                used_names.add(cbuffer_name)
                 attributes = list(getattr(node, "attributes", []) or [])
                 if getattr(node, "is_tbuffer", False):
                     attributes = [AttributeNode("tbuffer")] + attributes
                 code += self.format_attributes(attributes, 1)
                 code += self.format_binding_attributes(node, 1)
-                code += f"    cbuffer {node.name} {{\n"
+                code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
                     for qualifier in getattr(member, "qualifiers", []) or []:
                         if qualifier in {"row_major", "column_major"}:
@@ -2444,6 +2682,9 @@ class HLSLToCrossGLConverter:
         clip_statement = self.generate_clip_statement(stmt, indent, is_main)
         if clip_statement is not None:
             return clip_statement
+        sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
+        if sincos_statement is not None:
+            return sincos_statement
         lowered_sequence = self.generate_function_call_statement_sequence(stmt, indent)
         if lowered_sequence is not None:
             return lowered_sequence
@@ -2463,6 +2704,20 @@ class HLSLToCrossGLConverter:
             f"{indent_text}if ({condition}) {{\n"
             f"{indent_text}    discard;\n"
             f"{indent_text}}}\n"
+        )
+
+    def generate_sincos_statement(self, stmt, indent=0, is_main=False):
+        if not isinstance(stmt.name, str) or stmt.name != "sincos":
+            return None
+        if len(stmt.args) != 3:
+            return None
+        value = self.generate_expression(stmt.args[0], is_main)
+        sine_target = self.generate_expression(stmt.args[1], is_main)
+        cosine_target = self.generate_expression(stmt.args[2], is_main)
+        indent_text = "    " * indent
+        return (
+            f"{indent_text}{sine_target} = sin({value});\n"
+            f"{indent_text}{cosine_target} = cos({value});\n"
         )
 
     def generate_clip_condition(self, operand_expr, is_main=False):
@@ -2766,7 +3021,7 @@ class HLSLToCrossGLConverter:
             return None
 
         matrix_match = re.fullmatch(
-            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"(float|half|fixed|double|min16float|min10float|float16_t|int|uint|bool|"
             r"min16int|min12int|int16_t|min16uint|uint16_t|int64_t|uint64_t)"
             r"([1-4])x([1-4])",
             type_name,
@@ -2779,7 +3034,7 @@ class HLSLToCrossGLConverter:
             return scalar_size * int(rows_text) * int(cols_text)
 
         vector_match = re.fullmatch(
-            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"(float|half|fixed|double|min16float|min10float|float16_t|int|uint|bool|"
             r"min16int|min12int|int16_t|min16uint|uint16_t|int64_t|uint64_t)"
             r"([1-4])",
             type_name,
@@ -2819,6 +3074,7 @@ class HLSLToCrossGLConverter:
             "dword": 4,
             "float": 4,
             "float32_t": 4,
+            "fixed": 4,
             "int32_t": 4,
             "uint32_t": 4,
             "half": 2,
@@ -3068,6 +3324,11 @@ class HLSLToCrossGLConverter:
                 rendered_args = [
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
+            legacy_texture_call = self.legacy_texture_function_call(
+                func_name, expr.args, rendered_args, is_main
+            )
+            if legacy_texture_call is not None:
+                return legacy_texture_call
             bitcast_call = self.bitcast_intrinsic_expression(
                 func_name, expr.args, rendered_args
             )
@@ -3078,10 +3339,22 @@ class HLSLToCrossGLConverter:
                 left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
                 right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
                 return f"({left} * {right})"
+            if func_name == "mad" and len(expr.args) == 3:
+                left = self.maybe_parenthesize(expr.args[0], rendered_args[0])
+                right = self.maybe_parenthesize(expr.args[1], rendered_args[1])
+                addend = self.maybe_parenthesize(expr.args[2], rendered_args[2])
+                return f"(({left} * {right}) + {addend})"
+            if func_name == "dst" and len(expr.args) == 2:
+                src0 = self.maybe_parenthesize(expr.args[0], rendered_args[0])
+                src1 = self.maybe_parenthesize(expr.args[1], rendered_args[1])
+                return f"vec4(1.0, {src0}.y * {src1}.y, {src0}.z, {src1}.w)"
             if func_name == "saturate":
                 if expr.args:
                     return f"clamp({self.generate_expression(expr.args[0], is_main)}, 0.0, 1.0)"
                 return "clamp(0.0, 0.0, 1.0)"
+            if func_name == "rcp" and len(expr.args) == 1:
+                value = self.maybe_parenthesize(expr.args[0], rendered_args[0])
+                return f"(1.0 / {value})"
             func_name = self.function_map.get(func_name, func_name)
             func_name = self.interlocked_map.get(func_name, func_name)
             func_name = self.render_function_identifier(func_name)
@@ -3211,6 +3484,8 @@ class HLSLToCrossGLConverter:
         if signedness == "unsigned":
             if base == "int":
                 return "uint"
+            if base == "int1":
+                return "uint1"
             if re.fullmatch(r"int[2-4]", base):
                 return "u" + base
             int_matrix_match = re.fullmatch(r"int([1-4])x([1-4])", base)
@@ -3225,6 +3500,7 @@ class HLSLToCrossGLConverter:
         if signedness == "signed":
             if (
                 base == "int"
+                or base == "int1"
                 or re.fullmatch(r"int[2-4]", base)
                 or re.fullmatch(r"int[1-4]x[1-4]", base)
             ):
@@ -3234,7 +3510,7 @@ class HLSLToCrossGLConverter:
 
     def map_hlsl_matrix_alias_type(self, type_name):
         matrix_match = re.fullmatch(
-            r"(float|half|double|min16float|min10float|float16_t|int|uint|bool|"
+            r"(float|half|fixed|double|min16float|min10float|float16_t|int|uint|bool|"
             r"min16int|min12int|int16_t|min16uint|uint16_t)([1-4])x([1-4])",
             str(type_name).strip(),
         )
@@ -3302,6 +3578,7 @@ class HLSLToCrossGLConverter:
         prefixes = {
             "float": "vec",
             "half": "f16vec",
+            "fixed": "vec",
             "min16float": "f16vec",
             "min10float": "f16vec",
             "float16_t": "f16vec",
@@ -3333,6 +3610,7 @@ class HLSLToCrossGLConverter:
         prefixes = {
             "float": "mat",
             "half": "f16mat",
+            "fixed": "mat",
             "min16float": "f16mat",
             "min10float": "f16mat",
             "float16_t": "f16mat",
@@ -3410,6 +3688,26 @@ class HLSLToCrossGLConverter:
             mapped = self.semantic_map.get(semantic_upper)
             if mapped is None:
                 mapped = self.semantic_map_upper.get(semantic_upper)
+            if mapped is None:
+                texcoord_match = re.fullmatch(r"TEXCOORD(\d+)", semantic_upper)
+                if texcoord_match:
+                    mapped = f"TexCoord{texcoord_match.group(1)}"
+            if mapped is None:
+                color_match = re.fullmatch(r"COLOR(\d+)", semantic_upper)
+                if color_match:
+                    mapped = f"Color{color_match.group(1)}"
+            if mapped is None:
+                for hlsl_prefix, crossgl_prefix in (
+                    ("NORMAL", "Normal"),
+                    ("TANGENT", "Tangent"),
+                    ("BINORMAL", "Binormal"),
+                    ("BLENDINDICES", "BlendIndices"),
+                    ("BLENDWEIGHT", "BlendWeight"),
+                ):
+                    indexed_match = re.fullmatch(rf"{hlsl_prefix}(\d+)", semantic_upper)
+                    if indexed_match:
+                        mapped = f"{crossgl_prefix}{indexed_match.group(1)}"
+                        break
             if mapped is None:
                 for hlsl_prefix, crossgl_semantic in (
                     ("SV_CLIPDISTANCE", "gl_ClipDistance"),
@@ -3527,6 +3825,8 @@ class HLSLToCrossGLConverter:
         return self.visit_CaseNode(node)
 
     def visit_StructNode(self, node):
+        if getattr(node, "is_forward_declaration", False):
+            return ""
         code = f"struct {node.name} {{\n"
         self.indentation += 1
 

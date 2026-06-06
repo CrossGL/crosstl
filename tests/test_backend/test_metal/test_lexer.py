@@ -277,6 +277,26 @@ def test_tokenizes_numeric_literals_and_suffixes():
     assert_literal_present(values, ".25h")
 
 
+def test_tokenizes_cxx14_digit_separator_numeric_literals_from_msl_spec():
+    # The Metal Shading Language Specification defines MSL as C++14 based.
+    code = """
+    void main() {
+        uint count = 1'024u;
+        uint mask = 0xFF'00u;
+        uint bits = 0b1010'0011u;
+        float coeff = 1.602'176e-19f;
+        float whole = 12'345.f;
+    }
+    """
+    values = token_values(tokenize_code(code))
+
+    assert_literal_present(values, "1'024u")
+    assert_literal_present(values, "0xFF'00u")
+    assert_literal_present(values, "0b1010'0011u")
+    assert_literal_present(values, "1.602'176e-19f")
+    assert_literal_present(values, "12'345.f")
+
+
 def test_tokenizes_char_literals_from_public_metal_samples():
     code = "constant char pattern[] = { 'M', '\\n' };"
 

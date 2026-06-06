@@ -15,7 +15,11 @@ from .translator.codegen import (
     normalize_backend_name,
 )
 from .translator.plugin_loader import discover_backend_plugins
-from .translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from .translator.source_registry import (
+    BINARY_SPIRV_UNSUPPORTED_MESSAGE,
+    SOURCE_REGISTRY,
+    register_default_sources,
+)
 
 try:
     from .formatter import format_shader_code
@@ -23,6 +27,19 @@ try:
     FORMATTER_AVAILABLE = True
 except ImportError:
     FORMATTER_AVAILABLE = False
+
+
+SPIRV_BINARY_MAGIC_PREFIXES = (b"\x03\x02\x23\x07", b"\x07\x23\x02\x03")
+
+
+def _read_shader_source(file_path: str, source_name: str) -> str:
+    with open(file_path, "rb") as file:
+        shader_bytes = file.read()
+
+    if source_name == "vulkan" and shader_bytes.startswith(SPIRV_BINARY_MAGIC_PREFIXES):
+        raise ValueError(BINARY_SPIRV_UNSUPPORTED_MESSAGE)
+
+    return shader_bytes.decode("utf-8", errors="replace")
 
 
 def translate(
@@ -72,8 +89,7 @@ def translate(
             f"Unsupported shader file type: {file_path}. Supported: {supported}"
         )
 
-    with open(file_path, encoding="utf-8", errors="replace") as file:
-        shader_code = file.read()
+    shader_code = _read_shader_source(file_path, source_spec.name)
 
     ast = source_spec.parse(
         shader_code,

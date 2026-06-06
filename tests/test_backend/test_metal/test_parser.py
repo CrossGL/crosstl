@@ -8,6 +8,7 @@ from crosstl.backend.common_ast import (
     BinaryOpNode,
     CastNode,
     DiscardNode,
+    DoWhileNode,
     ForNode,
     FunctionCallNode,
     IfNode,
@@ -18,6 +19,7 @@ from crosstl.backend.common_ast import (
     TextureSampleNode,
     UnaryOpNode,
     VectorConstructorNode,
+    WhileNode,
 )
 from crosstl.backend.Metal.MetalAst import BlockNode, LambdaNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
@@ -135,6 +137,25 @@ def test_parse_control_flow_constructs():
     parse_ok(code)
 
 
+def test_parse_static_branch_attribute_after_if_condition_from_blender_shader():
+    # Reduced from:
+    # Repo: https://github.com/blender/blender
+    # Commit: e5fc656cdab0e682296f8dd024b942b548e788f4
+    # Path: source/blender/gpu/shaders/gpu_shader_2D_widget_base.bsl.hh
+    code = """
+    void draw_widget(bool instanced) {
+        if (instanced) [[static_branch]] {
+            return;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    if_node = ast.functions[0].body[0]
+
+    assert isinstance(if_node, IfNode)
+    assert if_node.if_chain[0][0].name == "instanced"
+
+
 def test_parse_nested_unbraced_for_loops_from_public_msl_example():
     code = """
     fragment float4 shader_day53(float4 pixPos [[position]]) {
@@ -151,6 +172,39 @@ def test_parse_nested_unbraced_for_loops_from_public_msl_example():
 
     assert len(loops) == 2
     assert isinstance(loops[0].body[0], ForNode)
+
+
+def test_parse_unbraced_while_body_from_msl_cxx14_statement_grammar():
+    code = """
+    kernel void normalize(device float* values [[buffer(0)]], uint count) {
+        uint i = 0;
+        while (i < count)
+            values[i++] = 0.0f;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[1], WhileNode)
+    assert len(body[1].body) == 1
+    assert isinstance(body[1].body[0], AssignmentNode)
+
+
+def test_parse_unbraced_do_while_body_from_msl_cxx14_statement_grammar():
+    code = """
+    kernel void normalize(device float* values [[buffer(0)]], uint count) {
+        uint i = 0;
+        do
+            values[i++] = 0.0f;
+        while (i < count);
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[1], DoWhileNode)
+    assert len(body[1].body) == 1
+    assert isinstance(body[1].body[0], AssignmentNode)
 
 
 def test_parse_resource_bindings_and_address_spaces():
@@ -283,6 +337,22 @@ def test_parse_block_scope_using_decltype_alias_from_mlx_steel_attention():
     assert body[2].right.name == "stile_t::kRowsPerThread"
 
 
+def test_parse_block_scope_decltype_variable_declaration():
+    code = """
+    void prepare_shape() {
+        int lane_count = 4;
+        decltype(lane_count) active_lanes = lane_count;
+    }
+    """
+    ast = parse_ok(code)
+
+    decl = ast.functions[0].body[1]
+    assert isinstance(decl, AssignmentNode)
+    assert decl.left.vtype == "decltype(lane_count)"
+    assert decl.left.name == "active_lanes"
+    assert decl.right.name == "lane_count"
+
+
 def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
@@ -340,6 +410,26 @@ def test_parse_gnu_attribute_after_function_return_type():
     assert function.return_type == "float4"
     assert function.attributes[0].name == "unused"
     assert function.attributes[0].args == []
+
+
+def test_parse_gnu_attribute_between_function_qualifiers_and_return_type_from_spirv_cross():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Path: reference/shaders-ue4/asm/vert/texture-buffer.asm.vert
+    code = """
+    static inline __attribute__((always_inline))
+    uint2 spvTexelBufferCoord(uint tc) {
+        return uint2(tc % 4096, tc / 4096);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.name == "spvTexelBufferCoord"
+    assert function.return_type == "uint2"
+    assert function.attributes[0].name == "always_inline"
+    assert function.attributes[0].args == []
+    assert function.body[0].value.type_name == "uint2"
 
 
 def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
@@ -805,6 +895,38 @@ def test_parse_packed_and_simd_types():
     parse_ok(code)
 
 
+def test_parse_common_vector_type_aliases():
+    code = """
+    using Half2 = half2;
+    using Float4 = float4;
+    typedef packed_float3 PackedFloat3;
+
+    struct AliasedTypes {
+        Half2 uv;
+        Float4 color;
+        PackedFloat3 position;
+    };
+    """
+    ast = parse_ok(code)
+    members = ast.structs[0].members
+
+    assert [alias.name for alias in ast.typedefs] == [
+        "Half2",
+        "Float4",
+        "PackedFloat3",
+    ]
+    assert [alias.alias_type for alias in ast.typedefs] == [
+        "half2",
+        "float4",
+        "packed_float3",
+    ]
+    assert [member.vtype for member in members] == [
+        "Half2",
+        "Float4",
+        "PackedFloat3",
+    ]
+
+
 def test_parse_ms_and_depth_textures():
     code = """
     fragment float4 fragment_main(texture2d_ms<float> msTex [[texture(0)]],
@@ -1209,6 +1331,50 @@ def test_parse_using_alias():
     parse_ok(code)
 
 
+def test_parse_metal_namespace_using_declarations_from_chromium_hdr_shader():
+    # Reduced from:
+    # Repo: https://chromium.googlesource.com/chromium/src
+    # Commit: 137.0.7151.119
+    # Path: components/metal_util/hdr_copier_layer.mm
+    code = """
+    #include <metal_stdlib>
+    #include <simd/simd.h>
+    using metal::float2;
+    using metal::float3;
+    using metal::float4;
+    using metal::sampler;
+    using metal::texture2d;
+    using metal::abs;
+    using metal::max;
+    using metal::pow;
+    using metal::sign;
+
+    typedef struct {
+        float4 clipSpacePosition [[position]];
+        float2 texcoord;
+    } RasterizerData;
+
+    float ToLinearPQ(float v) {
+        v = max(0.0f, v);
+        float p = pow(v, 0.5f);
+        return sign(p) * abs(p);
+    }
+
+    fragment float4 fragmentShader(RasterizerData in [[stage_in]],
+                                   texture2d<float> plane0 [[texture(0)]]) {
+        constexpr sampler s(metal::mag_filter::nearest,
+                            metal::min_filter::nearest);
+        float4 color = plane0.sample(s, in.texcoord);
+        color.xyz = float3(ToLinearPQ(color.x));
+        return color;
+    }
+    """
+    ast = parse_ok(code)
+
+    assert ast.structs[0].name == "RasterizerData"
+    assert [func.name for func in ast.functions] == ["ToLinearPQ", "fragmentShader"]
+
+
 def test_parse_gpuimage_typedef_struct_and_parenthesized_identifier_expression():
     code = """
     #include <metal_stdlib>
@@ -1297,6 +1463,31 @@ def test_parse_function_prototypes_macro_expanded_empty_statements_and_comma_upd
     parse_ok(code)
 
 
+def test_parse_multi_declarator_for_header_from_mlx_conv_loader():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Path: mlx/backend/metal/kernels/steel/conv/loaders/loader_general.h
+    code = """
+    void load_unsafe(short n_rows, short TROWS) {
+        for (short i = 0, is = 0; i < n_rows; ++i, is += TROWS) {
+            short row = is;
+        }
+    }
+    """
+    ast = parse_ok(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.init, list)
+    assert len(loop.init) == 2
+    assert loop.init[0].left.name == "i"
+    assert loop.init[0].left.vtype == "short"
+    assert loop.init[1].left.name == "is"
+    assert isinstance(loop.update, BinaryOpNode)
+    assert loop.update.op == ","
+
+
 def test_parse_metalpetal_namespace_macro_qualifier_and_unsigned_int():
     code = """
     #include <metal_stdlib>
@@ -1323,6 +1514,43 @@ def test_parse_metalpetal_namespace_macro_qualifier_and_unsigned_int():
     }
     """
     parse_ok(code)
+
+
+def test_parse_gnu_inline_unsigned_helpers_from_strelka_random_shader():
+    # Reduced from:
+    # Repo: https://github.com/arhix52/Strelka
+    # Commit: 3eec7fa260e7d598911053f9e0f38054ce1c4f60
+    # Path: src/render/metal/shaders/random.h
+    code = """
+    inline unsigned pcg_hash(unsigned seed) {
+        unsigned state = seed * 747796405u + 2891336453u;
+        return state;
+    }
+
+    template<unsigned int N>
+    static __inline__ unsigned int tea(unsigned int val0, unsigned int val1) {
+        unsigned int v0 = val0;
+        return v0;
+    }
+
+    static __inline__ unsigned int lcg(thread unsigned int &prev) {
+        prev = prev * 1664525u + 1013904223u;
+        return prev & 0x00FFFFFF;
+    }
+    """
+    ast = parse_ok(code)
+    pcg_hash, tea, lcg = ast.functions
+
+    assert pcg_hash.return_type == "uint"
+    assert pcg_hash.name == "pcg_hash"
+    assert pcg_hash.body[0].left.vtype == "uint"
+    assert tea.return_type == "uint"
+    assert tea.name == "tea"
+    assert tea.template_parameters == [("value", "N")]
+    assert tea.params[0].vtype == "uint"
+    assert lcg.return_type == "uint"
+    assert lcg.params[0].vtype == "uint&"
+    assert lcg.params[0].qualifiers == ["thread"]
 
 
 def test_parse_function_table_call_and_icb_methods():
@@ -1429,6 +1657,26 @@ def test_parse_leading_decimal_float_literals_in_constexpr_arrays():
     constexpr constant static float kvalues_mxfp4_f[4] = {0, .5f, 1.f, -.5f};
     """
     parse_ok(code)
+
+
+def test_parse_cxx14_digit_separator_numeric_literals_from_msl_spec():
+    # The Metal Shading Language Specification defines MSL as C++14 based.
+    code = """
+    kernel void main(device uint* out [[buffer(0)]]) {
+        uint count = 1'024u;
+        uint mask = 0xFF'00u;
+        uint bits = 0b1010'0011u;
+        float coeff = 1.602'176e-19f;
+        out[0] = count + mask + bits + uint(coeff);
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[0].right == "1'024u"
+    assert body[1].right == "0xFF'00u"
+    assert body[2].right == "0b1010'0011u"
+    assert body[3].right == "1.602'176e-19f"
 
 
 def test_parse_as_type_template_call():
@@ -1698,6 +1946,39 @@ def test_parse_standalone_scoped_block_from_llama_cpp():
     assert isinstance(block.statements[2], AssignmentNode)
 
 
+def test_parse_statement_expression_block_from_angle_generated_shader():
+    # Reduced from:
+    # Repo: https://android.googlesource.com/platform/external/angle
+    # Commit: 282a5fb4ad
+    # Path: src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+    code = """
+    void outputPrimitive(bool use16,
+                         bool use32,
+                         device ushort* out16,
+                         device uint* out32,
+                         thread uint& onOutIndex,
+                         uint tmpIndex) {
+        ({
+            if (use16) {
+                out16[(onOutIndex)] = tmpIndex;
+            }
+            if (use32) {
+                out32[(onOutIndex)] = tmpIndex;
+            }
+            onOutIndex++;
+        });
+    }
+    """
+    ast = parse_ok(code)
+    block = ast.functions[0].body[0]
+
+    assert isinstance(block, BlockNode)
+    assert len(block.statements) == 2
+    assert isinstance(block.statements[0], IfNode)
+    assert len(block.statements[0].if_chain) == 2
+    assert getattr(block.statements[1], "op", None) == "++"
+
+
 def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_cpp():
     code = """
     template [[host_name("kernel_unary_f32_f32")]]
@@ -1715,6 +1996,25 @@ def test_parse_decltype_template_typedef_and_explicit_instantiations_from_llama_
     assert ast.typedefs[0].alias_type == "decltype(kernel_unary_impl<float>)"
     assert len(ast.functions) == 1
     assert ast.functions[0].name == "kernel_unary_impl"
+
+
+def test_parse_decltype_kernel_template_id_instantiation_from_mlx_jit_indexing():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = """
+    template <typename T>
+    [[kernel]] void slice_update_op_impl(device T* out [[buffer(0)]]) {
+        out[0] = T(0);
+    }
+
+    [[kernel]] decltype(slice_update_op_impl<float>) slice_update_op_impl<float>;
+    """
+    ast = parse_ok(code)
+
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "slice_update_op_impl"
+    assert ast.global_variables == []
 
 
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
@@ -1836,6 +2136,33 @@ def test_parse_template_struct_base_clause_from_mlx_type_traits():
     assert ast.structs[2].base_types == [
         "metal::bool_constant<is_empty<remove_cv_t<T>>::value>"
     ]
+
+
+def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Path: mlx/backend/metal/kernels/steel/utils/integral_constant.h
+    code = """
+    template <typename T, typename... Us>
+    METAL_FUNC constexpr auto sum(T x, Us... us) {
+        return x + sum(us...);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+    returned = function.body[0].value
+    pack_call = returned.right
+
+    assert function.template_parameters == [("typename", "T"), ("typename...", "Us")]
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("T", "x"),
+        ("Us...", "us"),
+    ]
+    assert isinstance(pack_call, FunctionCallNode)
+    assert isinstance(pack_call.args[0], UnaryOpNode)
+    assert pack_call.args[0].op == "post..."
+    assert pack_call.args[0].operand.name == "us"
 
 
 def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
