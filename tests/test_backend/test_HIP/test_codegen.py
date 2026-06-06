@@ -1183,6 +1183,48 @@ class TestHipCodeGen:
         assert "__shfl_xor_sync" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_rocm_docs_full_warp_shfl_up_down_sync_codegen_reparse(self):
+        # Source: ROCm HIP C++ language extensions, warp shuffle functions.
+        # The sync shuffle family documents full-width shuffles with width
+        # defaulting to warpSize.
+        code = """
+        __global__ void warp_shuffle(int* out, int value, int delta) {
+            int up = __shfl_up_sync(0xffffffffffffffff, value, delta);
+            int default_down = __shfl_down_sync(0xffffffffffffffff, value, delta);
+            int down = __shfl_down_sync(0xffffffffffffffff, value, delta, warpSize);
+            int narrow = __shfl_down_sync(0xffffffff, value, 1, 32);
+            out[threadIdx.x] = up + default_down + down + narrow;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "(WaveGetLaneIndex() >= (delta)) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
+        ) in result
+        assert (
+            "((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+        ) in result
+        assert (
+            "((WaveGetLaneIndex() + (delta)) < 32) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+        ) in result
+        assert (
+            "((WaveGetLaneIndex() + (1)) < 32) ? "
+            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value"
+        ) in result
+        assert "hip warp intrinsic __shfl_up_sync" not in result
+        assert "hip warp intrinsic __shfl_down_sync" not in result
+        assert "__shfl_up_sync" not in result
+        assert "__shfl_down_sync" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cooperative_groups_thread_block_sync_rank_and_size_convert(self):
         code = """
         #include <hip/hip_cooperative_groups.h>

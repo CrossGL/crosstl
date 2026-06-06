@@ -10120,6 +10120,10 @@ class SlangCodeGen:
         type_map = {
             "f16": "half",
             "float16": "half",
+            "f32": "float",
+            "f64": "double",
+            "i32": "int",
+            "u32": "uint",
             "half": "half",
             "half2": "half2",
             "half3": "half3",

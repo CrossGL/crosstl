@@ -10626,6 +10626,37 @@ def test_generic_vector_constructors_emit_slang_names():
     assert "vec4<" not in generated_code
 
 
+def test_scalar_aliases_emit_slang_fundamental_type_names():
+    # Slang's fundamental scalar type names are float/int/uint/double
+    # (with *_t aliases), not CrossGL's f32/i32/u32/f64 spellings.
+    # https://shader-slang.org/slang/language-reference/types-fundamental.html
+    code = """
+    shader ScalarAliases {
+        f32 gain(f32 value, i32 signedScale, u32 unsignedScale, f64 precise) {
+            f32 weights[2];
+            weights[0] = f32(signedScale);
+            weights[1] = f32(unsignedScale) + f32(precise);
+            return value + weights[0] + weights[1];
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float gain(float value, int signedScale, uint unsignedScale, double precise)"
+        in generated_code
+    )
+    assert "float weights[2];" in generated_code
+    assert "weights[0] = float(signedScale);" in generated_code
+    assert "weights[1] = float(unsignedScale) + float(precise);" in generated_code
+    assert " f32 " not in generated_code
+    assert " i32 " not in generated_code
+    assert " u32 " not in generated_code
+    assert " f64 " not in generated_code
+    assert "f32(" not in generated_code
+
+
 def test_resource_types_emit_slang_texture_names():
     code = """
     shader Resources {

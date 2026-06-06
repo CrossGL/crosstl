@@ -11616,6 +11616,7 @@ class RustCodeGen:
 
     def rust_reserved_identifiers(self):
         return {
+            "abstract",
             "as",
             "async",
             "await",
@@ -11633,6 +11634,7 @@ class RustCodeGen:
             "final",
             "fn",
             "for",
+            "gen",
             "if",
             "impl",
             "in",

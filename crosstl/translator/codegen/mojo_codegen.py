@@ -1210,6 +1210,7 @@ class MojoCodeGen:
         self.dimension_query_counter = 0
         self.scalar_atomic_counter = 0
         self.swizzle_assignment_counter = 0
+        self.increment_expression_counter = 0
         self.expression_prelude_stack = []
         self.type_mapping = {
             # Scalar Types
@@ -1459,6 +1460,7 @@ class MojoCodeGen:
         self.dimension_query_counter = 0
         self.scalar_atomic_counter = 0
         self.swizzle_assignment_counter = 0
+        self.increment_expression_counter = 0
         self.expression_prelude_stack = []
 
         header = "# Generated Mojo Shader Code\n"
@@ -6326,6 +6328,57 @@ class MojoCodeGen:
         self.swizzle_assignment_counter += 1
         return name
 
+    def next_increment_expression_temp_name(self):
+        name = f"__cgl_increment_{self.increment_expression_counter}"
+        self.increment_expression_counter += 1
+        return name
+
+    def is_increment_or_decrement_node(self, node):
+        return isinstance(node, UnaryOpNode) and self.map_operator(
+            getattr(node, "operator", getattr(node, "op", ""))
+        ) in {"++", "--"}
+
+    def increment_assignment_operator(self, node):
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "")))
+        return "+=" if op == "++" else "-="
+
+    def generate_increment_statement(self, node, indent):
+        indent_str = "    " * indent
+        operand = getattr(node, "operand", "")
+        self.validate_resource_write_access(operand, "increment/decrement")
+        target = self.generate_expression(operand)
+        return f"{indent_str}{target} {self.increment_assignment_operator(node)} 1\n"
+
+    def generate_increment_expression(self, expr):
+        if not self.expression_prelude_stack:
+            raise ValueError(
+                "Unsupported increment/decrement expression for Mojo codegen; "
+                "statement prelude context is required"
+            )
+
+        operand = getattr(expr, "operand", "")
+        self.validate_resource_write_access(operand, "increment/decrement")
+        target = self.generate_expression(operand)
+        assignment_op = self.increment_assignment_operator(expr)
+        context = self.expression_prelude_stack[-1]
+        indent_str = "    " * context["indent"]
+        temp_name = self.next_increment_expression_temp_name()
+        target_type = self.expression_result_type(operand) or "int"
+
+        if getattr(expr, "is_postfix", False):
+            context["lines"].append(
+                f"{indent_str}var {temp_name}: {self.map_type(target_type)} = "
+                f"{target}\n"
+            )
+            context["lines"].append(f"{indent_str}{target} {assignment_op} 1\n")
+            return temp_name
+
+        context["lines"].append(f"{indent_str}{target} {assignment_op} 1\n")
+        context["lines"].append(
+            f"{indent_str}var {temp_name}: {self.map_type(target_type)} = {target}\n"
+        )
+        return temp_name
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL statement as Mojo code."""
         indent_str = "    " * indent
@@ -6462,6 +6515,8 @@ class MojoCodeGen:
             return f"{indent_str}continue\n"
         elif isinstance(stmt, SyncNode):
             return self.generate_sync_node(stmt, indent)
+        elif self.is_increment_or_decrement_node(stmt):
+            return self.generate_increment_statement(stmt, indent)
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
             # Try to handle it gracefully
@@ -6470,6 +6525,8 @@ class MojoCodeGen:
             expr = getattr(stmt, "expression", None)
             if isinstance(expr, AssignmentNode):
                 return self.generate_assignment_statement(expr, indent)
+            if self.is_increment_or_decrement_node(expr):
+                return self.generate_increment_statement(expr, indent)
 
             prelude, expr_result = self.generate_expression_with_prelude(expr, indent)
             if expr_result.strip():
@@ -7753,6 +7810,9 @@ class MojoCodeGen:
         if isinstance(update, AssignmentNode):
             return self.generate_assignment_statement(update, indent)
 
+        if self.is_increment_or_decrement_node(update):
+            return self.generate_increment_statement(update, indent)
+
         indent_str = "    " * indent
         prelude, expression = self.generate_expression_with_prelude(update, indent)
         if expression.strip():
@@ -8202,11 +8262,10 @@ class MojoCodeGen:
         elif isinstance(expr, BufferOpNode):
             return self.generate_buffer_op_node(expr)
         elif isinstance(expr, UnaryOpNode):
-            operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
             if op in ["++", "--"]:
-                assignment_op = "+=" if op == "++" else "-="
-                return f"{operand} {assignment_op} 1"
+                return self.generate_increment_expression(expr)
+            operand = self.generate_expression(expr.operand)
             if op == "not":
                 return f"(not {operand})"
             return f"({op}{operand})"

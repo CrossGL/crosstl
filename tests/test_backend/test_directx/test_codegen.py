@@ -2389,6 +2389,24 @@ def test_codegen_wave_size_attribute_passthrough():
     assert "@ numthreads(8, 1, 1)" in output
 
 
+def test_codegen_is_helper_lane_intrinsic_from_sm66_imports_fragment_builtin():
+    # Source: Microsoft DirectX-Specs HLSL Shader Model 6.6, IsHelperLane().
+    # URL: https://microsoft.github.io/DirectX-Specs/d3d/HLSL_ShaderModel6_6.html
+    crossgl = generate_crossgl("""
+        float4 main(float4 color : COLOR0) : SV_Target0 {
+            bool helper = IsHelperLane();
+            return helper ? float4(0.0) : color;
+        }
+    """)
+
+    assert "bool helper = gl_HelperInvocation;" in crossgl
+    assert "IsHelperLane(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "bool helper = gl_HelperInvocation;" in glsl
+    assert "IsHelperLane(" not in glsl
+
+
 def test_codegen_interlocked_mapping():
     output = generate_crossgl(INTERLOCKED_HLSL)
     assert "atomicAdd" in output

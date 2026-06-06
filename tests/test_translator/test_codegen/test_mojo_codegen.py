@@ -17269,6 +17269,113 @@ def test_increment_and_decrement_initializers_preserve_mojo_value_order():
     assert "var post_dec: Int32 = i -= 1" not in generated_code
 
 
+def test_increment_and_decrement_expressions_emit_mojo_preludes():
+    code = """
+    int prefixReturn(int x) {
+        return ++x;
+    }
+
+    int postfixReturn(int x) {
+        return x++;
+    }
+
+    int mixedReturn(int x) {
+        return (++x) + (x++);
+    }
+
+    int callPostfix(int x) {
+        return abs(x++);
+    }
+
+    int decrementReturn(int x) {
+        return (--x) + (x--);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn prefixReturn(owned x: Int32) -> Int32:\n"
+        "    x += 1\n"
+        "    var __cgl_increment_0: Int32 = x\n"
+        "    return __cgl_increment_0\n"
+    ) in generated_code
+    assert (
+        "fn postfixReturn(owned x: Int32) -> Int32:\n"
+        "    var __cgl_increment_1: Int32 = x\n"
+        "    x += 1\n"
+        "    return __cgl_increment_1\n"
+    ) in generated_code
+    assert (
+        "fn mixedReturn(owned x: Int32) -> Int32:\n"
+        "    x += 1\n"
+        "    var __cgl_increment_2: Int32 = x\n"
+        "    var __cgl_increment_3: Int32 = x\n"
+        "    x += 1\n"
+        "    return (__cgl_increment_2 + __cgl_increment_3)\n"
+    ) in generated_code
+    assert "return abs(__cgl_increment_4)" in generated_code
+    assert (
+        "x -= 1\n"
+        "    var __cgl_increment_5: Int32 = x\n"
+        "    var __cgl_increment_6: Int32 = x\n"
+        "    x -= 1"
+    ) in generated_code
+    assert "return x += 1" not in generated_code
+    assert "return x -= 1" not in generated_code
+    assert "abs(x += 1)" not in generated_code
+    assert "++x" not in generated_code
+    assert "x++" not in generated_code
+
+
+def test_increment_and_decrement_expressions_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    int prefixReturn(int x) {
+        return ++x;
+    }
+
+    int postfixReturn(int x) {
+        return x++;
+    }
+
+    int mixedReturn(int x) {
+        return (++x) + (x++);
+    }
+
+    int callPostfix(int x) {
+        return abs(x++);
+    }
+
+    int decrementReturn(int x) {
+        return (--x) + (x--);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(prefixReturn(1))
+    print(postfixReturn(1))
+    print(mixedReturn(1))
+    print(callPostfix(3))
+    print(decrementReturn(3))
+"""
+
+    source_path = tmp_path / "increment_expressions.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert ["2", "1", "4", "3", "4"] == [
+        line.strip() for line in result.stdout.splitlines() if line.strip()
+    ]
+
+
 def test_do_while_statement_lowers_to_mojo_loop_with_condition_after_body():
     code = """
     shader main {

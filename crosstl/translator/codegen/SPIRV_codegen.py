@@ -2322,6 +2322,15 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return spirv_id
 
+    def any_bool_vector_operation(self, vector: SpirvId) -> SpirvId:
+        """Reduce a SPIR-V bool vector to a scalar bool using OpAny."""
+        bool_type = self.register_primitive_type("bool")
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpAny %{bool_type.id} %{vector.id}")
+        spirv_id = SpirvId(id_value, bool_type.type)
+        self.value_types[id_value] = bool_type
+        return spirv_id
+
     def is_select_result_type(self, result_type: SpirvId) -> bool:
         """Return whether OpSelect can directly produce this result type."""
         base_type = result_type.type.base_type
@@ -12973,11 +12982,15 @@ class VulkanSPIRVCodeGen:
         elif isinstance(stmt, ContinueNode):
             self.process_continue(stmt)
         elif isinstance(stmt, FunctionCallNode):
+            if self.process_fragment_discard_statement(stmt):
+                return
             self.process_expression(stmt)  # Just evaluate and discard result
         elif isinstance(stmt, (UnaryOpNode, BinaryOpNode)):
             self.process_expression(stmt)
         elif hasattr(stmt, "expression"):
             expression = stmt.expression
+            if self.process_fragment_discard_statement(expression):
+                return
             if isinstance(expression, AssignmentNode):
                 self.process_assignment(expression)
             elif (
@@ -12994,6 +13007,118 @@ class VulkanSPIRVCodeGen:
                     self.create_return()
             else:
                 self.process_expression(expression)
+
+    def process_fragment_discard_statement(self, expr) -> bool:
+        """Lower CrossGL/GLSL/HLSL fragment discard statements to SPIR-V."""
+        if isinstance(expr, IdentifierNode) and expr.name == "discard":
+            return self.emit_fragment_discard("discard")
+        if isinstance(expr, str) and expr == "discard":
+            return self.emit_fragment_discard("discard")
+        if not isinstance(expr, FunctionCallNode):
+            return False
+
+        callee_name = self.function_call_name(expr)
+        if not isinstance(callee_name, str):
+            return False
+
+        args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        if (
+            callee_name == "discard"
+            and not args
+            and not self.has_function_reference(callee_name)
+        ):
+            return self.emit_fragment_discard("discard")
+
+        if callee_name != "clip" or self.has_function_reference(callee_name):
+            return False
+        if len(args) != 1:
+            self.emit("; WARNING: SPIR-V clip discard requires exactly one operand")
+            return True
+
+        return self.process_clip_discard_statement(args[0])
+
+    def emit_fragment_discard(self, source_name: str) -> bool:
+        """Emit OpKill for fragment discard, preserving SPIR-V stage validity."""
+        if self.current_execution_model != "Fragment":
+            self.emit(
+                f"; WARNING: SPIR-V {source_name} lowers to OpKill, which is "
+                "only valid in the Fragment execution model"
+            )
+            return True
+
+        self.emit("OpKill")
+        return True
+
+    def process_clip_discard_statement(self, value_expr) -> bool:
+        """Lower HLSL-style clip(x) to conditional fragment discard."""
+        if self.current_execution_model != "Fragment":
+            self.emit(
+                "; WARNING: SPIR-V clip lowers to OpKill, which is only valid "
+                "in the Fragment execution model"
+            )
+            return True
+
+        value = self.process_expression(value_expr)
+        if value is None:
+            self.emit("; WARNING: SPIR-V clip operand could not be evaluated")
+            return True
+
+        condition = self.clip_discard_condition(value)
+        if condition is None:
+            self.emit(
+                "; WARNING: SPIR-V clip requires a numeric scalar or vector operand"
+            )
+            return True
+
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+        kill_label = SpirvId(self.get_id(), SpirvType("label"))
+        self.create_selection_merge(merge_label)
+        self.create_conditional_branch(condition, kill_label, merge_label)
+
+        self.emit(f"%{kill_label.id} = OpLabel")
+        self.current_label = kill_label.id
+        self.emit("OpKill")
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
+        return True
+
+    def clip_discard_condition(self, value: SpirvId) -> Optional[SpirvId]:
+        """Return the scalar bool condition for HLSL clip discard semantics."""
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        type_name = value_type.type.base_type
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is not None:
+            component_type_name, component_count = vector_info
+            if component_type_name == "bool":
+                return None
+            component_type = self.register_primitive_type(component_type_name)
+            zero = self.clip_zero_value(component_type_name, component_type)
+            zero_vector = self.splat_scalar_to_vector(zero, value_type)
+            bool_type = self.register_primitive_type("bool")
+            bool_vector_type = self.register_vector_type(bool_type, component_count)
+            condition_vector = self.binary_operation(
+                "<", bool_vector_type, value, zero_vector
+            )
+            return self.any_bool_vector_operation(condition_vector)
+
+        scalar_type_name = self.normalize_primitive_name(type_name)
+        if scalar_type_name not in {"float", "double", "int", "uint"}:
+            return None
+
+        scalar_type = self.register_primitive_type(scalar_type_name)
+        value = self.convert_value_to_type(value, scalar_type)
+        zero = self.clip_zero_value(scalar_type_name, scalar_type)
+        bool_type = self.register_primitive_type("bool")
+        return self.binary_operation("<", bool_type, value, zero)
+
+    def clip_zero_value(self, type_name: str, type_id: SpirvId) -> SpirvId:
+        """Return a zero constant compatible with a clip operand component."""
+        if type_name in {"float", "double"}:
+            return self.register_constant(0.0, type_id)
+        return self.register_constant(0, type_id)
 
     def infer_expression_result_type(self, expr) -> Optional[SpirvId]:
         if expr is None:
