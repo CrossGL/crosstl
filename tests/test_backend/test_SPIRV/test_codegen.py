@@ -1618,6 +1618,31 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_VULKAN_SUBPASS_INPUT_ATTACHMENT_ASSEMBLY = """
+; Source: Vulkan GLSL/SPIR-V mappings for subpass inputs.
+; layout(input_attachment_index=i, set=m, binding=n) uniform subpassInput
+; maps to DescriptorSet, Binding, and InputAttachmentIndex decorations.
+OpCapability Shader
+OpCapability InputAttachment
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpExecutionMode %main OriginUpperLeft
+OpName %scene_input "sceneInput"
+OpDecorate %scene_input DescriptorSet 1
+OpDecorate %scene_input Binding 2
+OpDecorate %scene_input InputAttachmentIndex 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%image = OpTypeImage %float SubpassData 0 0 0 2 Unknown
+%ptr_input_attachment = OpTypePointer UniformConstant %image
+%scene_input = OpVariable %ptr_input_attachment UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_RAY_TRACING_ACCELERATION_STRUCTURE_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source extension: https://github.khronos.org/SPIRV-Registry/extensions/KHR/SPV_KHR_ray_tracing.html
@@ -5250,6 +5275,20 @@ def test_translate_api_accepts_spirv_assembly_uniform_constant_resources(tmp_pat
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
 
 
+def test_spirv_assembly_subpass_input_attachment_index_codegen_reparse():
+    tokens = tokenize_code(SPIRV_VULKAN_SUBPASS_INPUT_ATTACHMENT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert (
+        "subpassInput sceneInput @set(1) @binding(2) @input_attachment_index(3);"
+        in generated_code
+    )
+    assert "Texture2D sceneInput" not in generated_code
+    assert "InputAttachmentIndex" not in generated_code
+
+
 def test_translate_api_accepts_spirv_assembly_specialization_constants(tmp_path):
     import crosstl
 
@@ -6128,10 +6167,16 @@ def test_vulkan_subpass_input_uniforms_emit_crossgl_resources():
     assert ast.global_variables[0].variable_name == "colorInput"
     assert ast.global_variables[1].data_type == "subpassInputMS"
     assert ast.global_variables[1].variable_name == "msColorInput"
-    assert "Texture2D colorInput;" in generated_code
-    assert "Texture2DMS msColorInput;" in generated_code
-    assert "subpassInput colorInput;" not in generated_code
-    assert "subpassInputMS msColorInput;" not in generated_code
+    assert (
+        "subpassInput colorInput @set(0) @binding(0) @input_attachment_index(0);"
+        in generated_code
+    )
+    assert (
+        "subpassInputMS msColorInput @set(0) @binding(1) @input_attachment_index(1);"
+        in generated_code
+    )
+    assert "Texture2D colorInput" not in generated_code
+    assert "Texture2DMS msColorInput" not in generated_code
 
 
 def test_vulkan_atomic_uint_uniform_emits_crossgl_resource():

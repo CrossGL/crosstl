@@ -4586,8 +4586,10 @@ class VulkanSPIRVCodeGen:
 
             sampled_image_id = args[0]
             coord_id = args[1]
+            sampler_id = None
             sampler_metadata = self.resource_metadata_for_value(args[1])
             if sampler_metadata and sampler_metadata.get("kind") == "sampler":
+                sampler_id = args[1]
                 if len(args) < 3:
                     self.emit(
                         "; WARNING: textureQueryLod requires a coordinate operand "
@@ -4609,6 +4611,20 @@ class VulkanSPIRVCodeGen:
                 return self.resource_query_lod_default_value()
 
             metadata = self.resource_metadata_for_value(sampled_image_id)
+            if metadata and metadata.get("kind") == "texture":
+                if sampler_id is None:
+                    self.emit(
+                        "; WARNING: textureQueryLod requires a sampler for separate "
+                        "texture operands"
+                    )
+                    return self.resource_query_lod_default_value()
+                sampled_image_id = self.combine_texture_and_sampler(
+                    function_name, sampled_image_id, sampler_id, metadata
+                )
+                if sampled_image_id is None:
+                    return self.resource_query_lod_default_value()
+                metadata = self.resource_metadata_for_value(sampled_image_id)
+
             if not metadata or metadata.get("kind") != "sampled_image":
                 self.emit("; WARNING: textureQueryLod requires a sampled image operand")
                 return self.resource_query_lod_default_value()

@@ -481,6 +481,26 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     assert "uint values[] @ set(0) @ binding(0)" in result
 
 
+def test_rust_gpu_uniform_descriptor_parameter_keeps_storage_class_from_dev_guide():
+    # Reduced from the Rust GPU Dev Guide attribute syntax example:
+    # https://rust-gpu.github.io/rust-gpu/book/attributes.html#descriptor-set-and-binding
+    code = """
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    fn main(
+        #[spirv(uniform, descriptor_set = 2, binding = 5)] var: &mut Vec4,
+    ) {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment {" in result
+    assert "void main(uniform vec4 var_ @ set(2) @ binding(5))" in result
+    assert "void main(vec4 var_ @ set(2) @ binding(5))" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
     code = """
     use spirv_std::spirv;

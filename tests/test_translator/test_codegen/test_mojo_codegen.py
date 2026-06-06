@@ -18955,6 +18955,35 @@ def test_angle_conversion_builtins_lower_to_mojo_arithmetic():
     assert "degrees(" not in generated_code
 
 
+def test_two_argument_atan_builtin_lowers_to_mojo_atan2():
+    code = """
+    shader NumericAliases {
+        compute {
+            void main() {
+                float x = 1.0;
+                float y = 0.5;
+                float angle = atan(y, x);
+                float unary = atan(y);
+                vec3 direction = vec3(0.5, 1.0, -0.5);
+                vec3 reference = vec3(1.0, 1.0, 1.0);
+                vec3 vectorAngle = atan(direction, reference);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var angle: Float32 = atan2(y, x)" in generated_code
+    assert "var unary: Float32 = atan(y)" in generated_code
+    assert (
+        "var vectorAngle: SIMD[DType.float32, 4] = "
+        "atan2(direction, reference)" in generated_code
+    )
+    assert "atan(y, x)" not in generated_code
+    assert "atan(direction, reference)" not in generated_code
+
+
 def test_user_defined_angle_conversion_functions_are_not_lowered():
     code = """
     shader NumericAliases {

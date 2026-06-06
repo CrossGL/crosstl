@@ -3076,6 +3076,31 @@ def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     assert ".Load(" not in generated_code
 
 
+def test_rwtexture_store_codegen_from_slang_stdlib_texture_store_docs():
+    # Source: Slang stdlib reference for _Texture.Store documents writable
+    # non-multisample texture Store(location, newValue) overloads.
+    code = """
+    RWTexture2D<float4> texHandle;
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void computeMain(uint2 pixel, float4 color)
+    {
+        texHandle.Store(pixel, color);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "image2D texHandle;" in generated_code
+    assert "imageStore(texHandle, pixel, color);" in generated_code
+    assert "RWTexture2D<float4> texHandle;" not in generated_code
+    assert ".Store(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_parenthesized_expression_swizzle_codegen_from_autodiff_texture_learnmip_sample():
     code = """
     RWTexture2D dstTexture;

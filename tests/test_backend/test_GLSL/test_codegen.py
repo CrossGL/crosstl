@@ -709,6 +709,51 @@ def test_codegen_native_shadow_texture_imports_compare_helpers():
     assert "textureCompareLodOffset(" not in glsl
 
 
+def test_codegen_native_cube_array_shadow_texture_imports_separate_compare_reference():
+    # GLSL 4.60.8 declares the cube-array shadow overload as
+    # texture(samplerCubeArrayShadow, vec4 P, float compare), unlike the packed
+    # coordinate/reference forms used by 2D and cube shadow samplers.
+    code = textwrap.dedent("""
+        #version 460 core
+        layout(location = 0) in vec4 cubeLayer;
+        layout(location = 0) out vec4 fragColor;
+        uniform samplerCubeArrayShadow shadowCubeArray;
+
+        void main() {
+            float lit = texture(shadowCubeArray, cubeLayer, 0.5);
+            fragColor = vec4(lit);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert (
+        "float lit = textureCompare(shadowCubeArray, input.cubeLayer, 0.5);" in crossgl
+    )
+    assert "texture(shadowCubeArray" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    assert (
+        "shadowCubeArray.SampleCmp(shadowCubeArraySampler, input.cubeLayer, 0.5)"
+        in hlsl
+    )
+    assert "shadowCubeArray.Sample(" not in hlsl
+
+    metal = MetalCodeGen().generate(shader_ast)
+    assert (
+        "shadowCubeArray.sample_compare("
+        "sampler(mag_filter::linear, min_filter::linear), "
+        "input.cubeLayer.xyz, uint(input.cubeLayer.w), 0.5)" in metal
+    )
+    assert "shadowCubeArray.sample(" not in metal
+
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "texture(shadowCubeArray, cubeLayer, 0.5)" in glsl
+    assert "textureCompare(" not in glsl
+
+
 def test_codegen_legacy_lod_grad_texture_intrinsics_from_bgfx_examples():
     # Reduced from bkaradzic/bgfx@6e0d61bf examples that use texture2DLod,
     # textureCubeLod, texture2DGrad, and texture2DLodOffset.

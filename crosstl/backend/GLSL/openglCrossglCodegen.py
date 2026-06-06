@@ -247,6 +247,7 @@ class GLSLToCrossGLConverter:
         "sampler2DRectShadow": ("xy", "z"),
         "samplerCubeShadow": ("xyz", "w"),
     }
+    SHADOW_SAMPLER_SEPARATE_COMPARE_TYPES = {"samplerCubeArrayShadow"}
     VERTEX_BUILTIN_OUTPUT_TYPES = {
         "gl_Position": "vec4",
         "gl_PointSize": "float",
@@ -687,6 +688,13 @@ class GLSLToCrossGLConverter:
             return None
 
         sampler_type = self.expression_shadow_sampler_type(args[0])
+        if sampler_type in self.SHADOW_SAMPLER_SEPARATE_COMPARE_TYPES:
+            if name == "texture" and len(args) == 3:
+                return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], [
+                    self.generate_expression(arg) for arg in args
+                ]
+            return None
+
         if sampler_type not in self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES:
             return None
 
