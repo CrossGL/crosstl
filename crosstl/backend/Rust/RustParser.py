@@ -1152,20 +1152,30 @@ class RustParser:
         functions = []
         type_aliases = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            item_attrs = []
+            if self.current_token[0] == "POUND":
+                item_attrs = self.parse_attributes()
+
             if self.current_starts_function():
-                f = self.parse_function_with_qualifiers()
+                f = self.parse_function_with_qualifiers(attributes=item_attrs)
                 functions.append(f)
             elif self.current_token[0] == "TYPE":
-                type_aliases.append(self.parse_type_alias())
+                type_aliases.append(self.parse_type_alias(attributes=item_attrs))
             elif self.current_token[0] == "PUB":
                 visibility = self.parse_visibility()
                 if self.current_starts_function():
                     f = self.parse_function_with_qualifiers(
+                        attributes=item_attrs,
                         visibility=visibility,
                     )
                     functions.append(f)
                 elif self.current_token[0] == "TYPE":
-                    type_aliases.append(self.parse_type_alias(visibility=visibility))
+                    type_aliases.append(
+                        self.parse_type_alias(
+                            attributes=item_attrs,
+                            visibility=visibility,
+                        )
+                    )
                 else:
                     if self.current_token[0] == "EOF":
                         break

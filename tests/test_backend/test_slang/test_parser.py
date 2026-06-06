@@ -3210,6 +3210,32 @@ def test_c_style_user_type_zero_initialization_from_public_samples():
     assert cast.expression == "0"
 
 
+def test_c_style_user_type_identifier_cast_from_enum_sample():
+    code = """
+    enum class Mode : uint
+    {
+        Off,
+        On,
+    };
+
+    Mode decode(uint raw)
+    {
+        Mode mode = (Mode)raw;
+        return mode;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    decode = find_function(ast, "decode")
+    assignment = decode.body[0]
+    cast = assignment.right
+
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "Mode"
+    assert cast.expression.name == "raw"
+
+
 def test_parenthesized_relational_expression_is_not_generic_cast():
     code = """
     bool lessThanLimit(float t, float resT)

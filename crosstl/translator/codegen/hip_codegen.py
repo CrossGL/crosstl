@@ -3926,11 +3926,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 min_max_call = self.generate_min_max_call(func_name, raw_args, args)
                 if min_max_call is not None:
                     return min_max_call
-        elif func_name == "atan2":
+        elif func_name in {"atan", "atan2"}:
             if len(args) == 2:
                 atan2_call = self.generate_atan2_call(raw_args, args)
                 if atan2_call is not None:
                     return atan2_call
+                if func_name == "atan":
+                    scalar_atan2_call = self.generate_scalar_atan2_call(raw_args, args)
+                    if scalar_atan2_call is not None:
+                        return scalar_atan2_call
         elif func_name in {"fma", "mad"}:
             if len(args) == 3:
                 result_type = self.fused_multiply_add_result_type(raw_args)
@@ -5112,6 +5116,20 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if helper_name is None:
             return None
         return f"{helper_name}({args[0]}, {args[1]})"
+
+    def generate_scalar_atan2_call(self, raw_args, args):
+        component_types = []
+        for raw_arg in raw_args:
+            arg_type = self.expression_result_type(raw_arg)
+            if self.vector_type_info(arg_type) is not None:
+                return None
+            component_type = self.scalar_component_type(arg_type)
+            if component_type not in {"float", "double", None}:
+                return None
+            component_types.append(component_type)
+
+        target = "atan2" if "double" in component_types else "atan2f"
+        return f"{target}({', '.join(args)})"
 
     def require_vector_atan2_helper(self, vector_info):
         component_type = vector_info["component_type"]

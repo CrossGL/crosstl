@@ -253,6 +253,32 @@ def test_variadic_parameter_without_convention_parse_from_real_world_mojo():
     ]
 
 
+def test_variadic_keyword_parameter_parse_from_current_docs():
+    code = """
+    def print_nicely(**kwargs: Int):
+        for item in kwargs.items():
+            print(item.key, "=", item.value)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "print_nicely")
+    loop = function.body[0]
+
+    assert [
+        (
+            param.name,
+            param.vtype,
+            getattr(param, "is_variadic", False),
+            getattr(param, "is_variadic_keyword", False),
+        )
+        for param in function.params
+    ] == [("kwargs", "Int", True, True)]
+    assert isinstance(loop, RangeForNode)
+    assert loop.name == "item"
+    assert isinstance(loop.iterable, MethodCallNode)
+    assert loop.iterable.object.name == "kwargs"
+    assert loop.iterable.method == "items"
+
+
 def test_function_parameter_separator_markers_parse_from_official_docs():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:

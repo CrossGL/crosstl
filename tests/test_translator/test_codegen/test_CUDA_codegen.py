@@ -3936,6 +3936,63 @@ class TestCudaCodeGen:
         assert "float3 a = atan2f(" not in cuda_code
         assert "double2 da = atan2f(" not in cuda_code
 
+    def test_two_argument_atan_builtin_lowers_to_cuda_atan2(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    vec3 y = vec3(1.0, 2.0, 3.0);
+                    vec3 x = vec3(4.0, 5.0, 6.0);
+                    vec3 a = atan(y, x);
+                    float s = atan(1.0, 2.0);
+                    double dy = 1.0;
+                    double dx = 2.0;
+                    double ds = atan(dy, dx);
+                    float slope = atan(1.0 / 2.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float3 a = cgl_float3_atan2(y, x);" in cuda_code
+        assert "float s = atan2f(1.0, 2.0);" in cuda_code
+        assert "double ds = atan2(dy, dx);" in cuda_code
+        assert "float slope = atanf((1.0 / 2.0));" in cuda_code
+        assert "atanf(y, x)" not in cuda_code
+        assert "atanf(1.0, 2.0)" not in cuda_code
+        assert "atan(dy, dx)" not in cuda_code
+
+    def test_user_defined_two_argument_atan_is_not_lowered_to_cuda_atan2(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                float atan(float y, float x) {
+                    return y + x;
+                }
+
+                void main() {
+                    float angle = atan(1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ float atan(float y, float x)" in cuda_code
+        assert "float angle = atan(1.0, 2.0);" in cuda_code
+        assert "atan2f(1.0, 2.0)" not in cuda_code
+
     def test_sign_builtin_lowers_to_cuda_expressions(self):
         source_code = """
         shader TestShader {

@@ -2804,7 +2804,8 @@ class SlangParser:
             is_builtin_identifier_type = token_value in self.BUILTIN_IDENTIFIER_TYPES
             is_generic_identifier_type = self.tokens[type_pos + 1][0] == "LESS_THAN"
             if not is_builtin_identifier_type and not is_generic_identifier_type:
-                close_pos = self.skip_pointer_declarator_tokens(type_pos + 1)
+                close_pos = self.skip_qualified_type_suffix_tokens(type_pos + 1)
+                close_pos = self.skip_pointer_declarator_tokens(close_pos)
                 if (
                     close_pos >= len(self.tokens)
                     or self.tokens[close_pos][0] != "RPAREN"
@@ -2813,7 +2814,7 @@ class SlangParser:
                 operand_pos = close_pos + 1
                 if operand_pos >= len(self.tokens):
                     return False
-                return self.tokens[operand_pos][0] in {"NUMBER", "LBRACE"}
+                return self.is_cast_operand_start_token(self.tokens[operand_pos][0])
         elif token_type not in (
             self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS | {"VOID"}
         ):
@@ -2831,7 +2832,10 @@ class SlangParser:
         if operand_pos >= len(self.tokens):
             return False
 
-        return self.tokens[operand_pos][0] in {
+        return self.is_cast_operand_start_token(self.tokens[operand_pos][0])
+
+    def is_cast_operand_start_token(self, token_type):
+        return token_type in {
             "IDENTIFIER",
             "NUMBER",
             "LPAREN",

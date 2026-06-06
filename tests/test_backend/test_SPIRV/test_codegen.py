@@ -2600,6 +2600,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_COPY_LOGICAL_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Reduced from the core OpCopyLogical instruction definition for logical objects.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %flag_in %flag_out
+OpExecutionMode %main OriginUpperLeft
+OpName %flag_in "flagIn"
+OpName %flag_out "flagOut"
+OpDecorate %flag_in Location 0
+OpDecorate %flag_out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%ptr_input_bool = OpTypePointer Input %bool
+%ptr_output_bool = OpTypePointer Output %bool
+%flag_in = OpVariable %ptr_input_bool Input
+%flag_out = OpVariable %ptr_output_bool Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %bool %flag_in
+%copy = OpCopyLogical %bool %loaded
+OpStore %flag_out %copy
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_QUANTIZE_TO_F16_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
@@ -4771,6 +4798,20 @@ def test_spirv_tools_copy_object_codegen_reparse():
     assert "float color @output @location(0);" in generated_code
     assert "color = inputValue;" in generated_code
     assert "color = copy;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_copy_logical_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_COPY_LOGICAL_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "bool flagIn @input @location(0);" in generated_code
+    assert "bool flagOut @output @location(0);" in generated_code
+    assert "flagOut = flagIn;" in generated_code
+    assert "flagOut = copy;" not in generated_code
+    assert "OpCopyLogical" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
