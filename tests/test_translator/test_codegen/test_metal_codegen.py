@@ -229,6 +229,32 @@ def test_metal_hlsl_lerp_alias_qualifies_mix_when_local_name_shadows_it():
     assert "float3 color = mix(cool, warm, phase);" not in generated_code
 
 
+def test_metal_hlsl_frac_alias_qualifies_fract_when_local_name_shadows_it():
+    shader = """
+    shader MetalFracAliasLocalFractShadow {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float fract = float(tid.x);
+                float phase = frac(fract * 0.25);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "float fract = float(tid.x);" in generated_code
+    assert (
+        "__attribute__((unused)) float phase = metal::fract(fract * 0.25);"
+        in generated_code
+    )
+    assert "__attribute__((unused)) float phase = fract(fract * 0.25);" not in (
+        generated_code
+    )
+
+
 def test_metal_direct_stdlib_builtins_qualify_when_local_names_shadow_them():
     shader = """
     shader MetalDirectStdlibTargetShadow {

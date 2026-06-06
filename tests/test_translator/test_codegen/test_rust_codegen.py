@@ -20380,6 +20380,57 @@ def test_bitcast_alias_targets_qualify_shadowed_rust_helpers_and_smoke_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_vec2_vec4_bitcasts_emit_lane_helpers_and_smoke_compile(tmp_path):
+    code = """
+    shader BitReinterpretVec2Vec4 {
+        fragment {
+            vec4 main(vec2 value2, vec4 value4, ivec2 signed2, uvec4 unsigned4) {
+                float float_bits_to_int = 1.0;
+                float int_bits_to_float = 2.0;
+                let signedFromVec2 = floatBitsToInt(value2);
+                let unsignedFromVec4 = asuint(value4);
+                let floatFromSignedVec2 = asfloat(signed2);
+                let floatFromUnsignedVec4 = uintBitsToFloat(unsigned4);
+                return vec4(
+                    floatFromSignedVec2.x + float_bits_to_int,
+                    floatFromSignedVec2.y + int_bits_to_float,
+                    floatFromUnsignedVec4.x + float(signedFromVec2.x),
+                    floatFromUnsignedVec4.w + float(unsignedFromVec4.w)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let signedFromVec2: Vec2<i32> = Vec2::<i32>::new("
+        "math::float_bits_to_int(value2.x), math::float_bits_to_int(value2.y));"
+    ) in generated_code
+    assert (
+        "let unsignedFromVec4: Vec4<u32> = Vec4::<u32>::new("
+        "float_bits_to_uint(value4.x), float_bits_to_uint(value4.y), "
+        "float_bits_to_uint(value4.z), float_bits_to_uint(value4.w));"
+    ) in generated_code
+    assert (
+        "let floatFromSignedVec2: Vec2<f32> = Vec2::<f32>::new("
+        "math::int_bits_to_float(signed2.x), math::int_bits_to_float(signed2.y));"
+    ) in generated_code
+    assert (
+        "let floatFromUnsignedVec4: Vec4<f32> = Vec4::<f32>::new("
+        "uint_bits_to_float(unsigned4.x), uint_bits_to_float(unsigned4.y), "
+        "uint_bits_to_float(unsigned4.z), uint_bits_to_float(unsigned4.w));"
+    ) in generated_code
+    assert "let signedFromVec2: Vec2<i32> = float_bits_to_int(value2);" not in (
+        generated_code
+    )
+    assert "let unsignedFromVec4: Vec4<u32> = float_bits_to_uint(value4);" not in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_pack_unpack_intrinsics_infer_result_types_and_smoke_compile(tmp_path):
     code = """
     shader PackUnpackIntrinsicInference {

@@ -8532,6 +8532,10 @@ class RustCodeGen:
             if bitcast_alias is not None:
                 return bitcast_alias
 
+            bitcast_intrinsic = self.generate_bitcast_intrinsic_call(func_name, args)
+            if bitcast_intrinsic is not None:
+                return bitcast_intrinsic
+
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
             cuda_shuffle_call = self.generate_cuda_shuffle_intrinsic_call(
@@ -8749,11 +8753,15 @@ class RustCodeGen:
             return None
 
         helper_name = self.bitcast_alias_helper_name(func_name, arg_type)
-        if helper_name is not None:
-            callee = self.rust_imported_math_callable_name(helper_name)
-            return f"{self.rust_callable_name(callee)}({self.generate_expression(arg)})"
-
         vector_info = self.vector_type_info(arg_type)
+        if helper_name is not None:
+            return self.generate_bitcast_helper_call(
+                arg,
+                target_type,
+                vector_info,
+                helper_name,
+            )
+
         if vector_info is not None:
             temp_bindings = []
             lanes = self.vector_argument_lane_expressions(
@@ -8788,6 +8796,98 @@ class RustCodeGen:
         if func_name == "asuint" and source_component_type == "float":
             return "float_bits_to_uint"
         return None
+
+    def generate_bitcast_intrinsic_call(self, func_name, args):
+        if len(args or []) != 1:
+            return None
+
+        target_component_type = {
+            "floatBitsToInt": "int",
+            "floatBitsToUint": "uint",
+            "intBitsToFloat": "float",
+            "uintBitsToFloat": "float",
+        }.get(func_name)
+        if target_component_type is None:
+            return None
+
+        arg = args[0]
+        arg_type = self.expression_result_type(arg)
+        source_component_type = self.bitcast_argument_component_type(arg_type)
+        expected_source_component_type = {
+            "floatBitsToInt": "float",
+            "floatBitsToUint": "float",
+            "intBitsToFloat": "int",
+            "uintBitsToFloat": "uint",
+        }[func_name]
+        if source_component_type != expected_source_component_type:
+            return None
+
+        target_type = self.bitcast_value_type(arg_type, target_component_type)
+        if target_type is None:
+            return None
+
+        return self.generate_bitcast_helper_call(
+            arg,
+            target_type,
+            self.vector_type_info(arg_type),
+            self.function_map[func_name],
+        )
+
+    def generate_bitcast_helper_call(
+        self,
+        arg,
+        target_type,
+        vector_info,
+        helper_name,
+    ):
+        callee = self.rust_imported_math_callable_name(helper_name)
+        callable_name = self.rust_callable_name(callee)
+
+        # The standalone Rust contract has scalar and Vec3 bitcast helpers.
+        # Emit Vec2/Vec4 bitcasts lane-wise so those widths do not require
+        # additional runtime trait implementations.
+        if vector_info is None or vector_info["size"] == 3:
+            return f"{callable_name}({self.generate_expression(arg)})"
+
+        temp_bindings = []
+        lanes = self.bitcast_vector_helper_lane_expressions(
+            arg,
+            vector_info,
+            temp_bindings,
+            callable_name,
+        )
+        return self.generate_constructor_call(
+            self.map_type(target_type),
+            lanes,
+            temp_bindings,
+        )
+
+    def bitcast_vector_helper_lane_expressions(
+        self,
+        arg,
+        vector_info,
+        temp_bindings,
+        callable_name,
+    ):
+        swizzle_components = self.member_swizzle_components(arg)
+        if swizzle_components is not None:
+            object_expr = getattr(arg, "object_expr", getattr(arg, "object", None))
+            object_value = self.generate_vector_lane_source(
+                object_expr,
+                self.generate_expression(object_expr),
+                temp_bindings,
+            )
+            object_value = self.rust_member_base_expression(object_value)
+            return [
+                f"{callable_name}({object_value}.{component})"
+                for component in swizzle_components
+            ]
+
+        arg_expr = self.generate_expression(arg)
+        arg_expr = self.generate_vector_lane_source(arg, arg_expr, temp_bindings)
+        arg_expr = self.rust_member_base_expression(arg_expr)
+        components = ("x", "y", "z", "w")[: vector_info["size"]]
+        return [f"{callable_name}({arg_expr}.{component})" for component in components]
 
     def bitcast_argument_component_type(self, type_name):
         vector_info = self.vector_type_info(type_name)

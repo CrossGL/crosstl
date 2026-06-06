@@ -17,6 +17,7 @@ from crosstl.backend.common_ast import (
 from crosstl.backend.DirectX.DirectxAst import (
     ForNode,
     IfNode,
+    PragmaNode,
     StructNode,
     VariableNode,
     WhileNode,
@@ -1542,6 +1543,67 @@ def test_parse_template_specialized_struct_declarations_from_dxc_sfinae():
     assert ast.structs[0].members[0].value is False
     assert ast.structs[1].members[0].name == "value"
     assert ast.structs[1].members[0].value is True
+
+
+def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
+    ast = parse_code("""
+    Shader "Custom/ExtractedProgram"
+    {
+        Properties
+        {
+            _Color("Color", Color) = (1, 1, 1, 1)
+        }
+
+        SubShader
+        {
+            HLSLINCLUDE
+            struct appdata {
+                float4 vertex : POSITION;
+            };
+
+            struct v2f {
+                float4 position : SV_POSITION;
+            };
+
+            float4 ApplyTint(float4 color) {
+                return color;
+            }
+            ENDHLSL
+
+            Pass
+            {
+                HLSLPROGRAM
+                #pragma vertex vert
+                #pragma fragment frag
+
+                v2f vert(appdata v) {
+                    v2f o;
+                    o.position = v.vertex;
+                    return o;
+                }
+
+                float4 frag(v2f i) : SV_Target {
+                    return ApplyTint(float4(1, 1, 1, 1));
+                }
+                ENDHLSL
+            }
+        }
+    }
+    """)
+
+    struct_names = [node.name for node in ast.structs if isinstance(node, StructNode)]
+    pragmas = [node for node in ast.structs if isinstance(node, PragmaNode)]
+
+    assert struct_names == ["appdata", "v2f"]
+    assert [(pragma.directive, pragma.value) for pragma in pragmas] == [
+        ("vertex", "vert"),
+        ("fragment", "frag"),
+    ]
+    assert [function.name for function in ast.functions] == [
+        "ApplyTint",
+        "vert",
+        "frag",
+    ]
 
 
 def test_skip_top_level_raw_text_from_public_raytracing_samples():

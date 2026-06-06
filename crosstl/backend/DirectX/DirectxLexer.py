@@ -10,6 +10,10 @@ from .preprocessor import HLSLPreprocessor
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 DEFAULT_PREPROCESSOR_DEFINES = {"HLSL": "1"}
+SHADERLAB_PROGRAM_OPEN_MARKERS = frozenset(
+    {"CGINCLUDE", "CGPROGRAM", "HLSLINCLUDE", "HLSLPROGRAM"}
+)
+SHADERLAB_PROGRAM_CLOSE_MARKERS = frozenset({"ENDCG", "ENDHLSL"})
 
 # Token definitions - order matters! More specific patterns should come first
 TOKENS = tuple(
@@ -555,6 +559,7 @@ class HLSLLexer:
         strict_preprocessor: bool = False,
     ):
         code = code.lstrip("\ufeff")
+        code = self._extract_shaderlab_program_blocks(code)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.file_path = file_path
         self.include_paths = include_paths or []
@@ -570,6 +575,34 @@ class HLSLLexer:
             code = preprocessor.preprocess(code, file_path=file_path)
         self.code = code
         self._length = len(code)
+
+    def _extract_shaderlab_program_blocks(self, code: str) -> str:
+        """Return embedded HLSL/CG blocks from Unity ShaderLab source."""
+        lines = code.splitlines()
+        extracted_lines = []
+        found_program_block = False
+        in_program_block = False
+
+        for line in lines:
+            stripped = line.strip()
+            marker = stripped.split(None, 1)[0].upper() if stripped else ""
+
+            if not in_program_block:
+                if marker in SHADERLAB_PROGRAM_OPEN_MARKERS:
+                    found_program_block = True
+                    in_program_block = True
+                continue
+
+            if marker in SHADERLAB_PROGRAM_CLOSE_MARKERS:
+                in_program_block = False
+                extracted_lines.append("")
+                continue
+
+            extracted_lines.append(line)
+
+        if not found_program_block:
+            return code
+        return "\n".join(extracted_lines)
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""

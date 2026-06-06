@@ -7286,7 +7286,12 @@ class MetalCodeGen:
                 and func_name not in self.user_function_names
             ):
                 arg = self.generate_expression(expr.args[0])
-                return f"fract({arg})"
+                fract_name = (
+                    "metal::fract"
+                    if self.metal_function_name_is_shadowed("fract")
+                    else "fract"
+                )
+                return f"{fract_name}({arg})"
             if (
                 func_name == "lerp"
                 and len(expr.args) == 3

@@ -173,6 +173,47 @@ def reverse_plain_glsl(source: str):
         ),
         pytest.param(
             """
+            #version 460 core
+            #extension GL_EXT_ray_tracing : require
+            #pragma shader_stage(rgen)
+
+            void main() {
+            }
+            """,
+            "ray_generation",
+            ShaderStage.RAY_GENERATION,
+            [
+                "ray_generation {",
+                "#pragma shader_stage ( rgen )",
+                "void main()",
+            ],
+            id="glslc-pragma-shader-stage-ray-generation",
+        ),
+        pytest.param(
+            """
+            #version 450 core
+            #extension GL_EXT_mesh_shader : require
+            #pragma shader_stage(mesh)
+
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(points, max_vertices = 1, max_primitives = 1) out;
+
+            void main() {
+                SetMeshOutputsEXT(1, 1);
+            }
+            """,
+            "mesh",
+            ShaderStage.MESH,
+            [
+                "mesh {",
+                "#pragma shader_stage ( mesh )",
+                "layout(points, max_vertices = 1, max_primitives = 1) out;",
+                "SetMeshOutputCounts(1, 1);",
+            ],
+            id="glslc-pragma-shader-stage-mesh",
+        ),
+        pytest.param(
+            """
             #version 450
             #extension GL_ARB_separate_shader_objects : enable
             layout(location = 0) in vec2 uv;
