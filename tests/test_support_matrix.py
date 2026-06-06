@@ -370,6 +370,9 @@ def test_project_include_resolution_documents_status_reporting():
             "include-path processing summary rollup mismatches including variant rollups"
             in backend_support["notes"]
         )
+        assert "missing include-path processing variant rollups" in (
+            backend_support["notes"]
+        )
         assert "text inspection identifies inactive include directories by path" in (
             backend_support["notes"]
         )
@@ -434,6 +437,10 @@ def test_project_include_resolution_documents_status_reporting():
             "mismatches"
         ) in backend_support["evidence"]
         assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_processing_variant_rollups"
+        ) in backend_support["evidence"]
+        assert (
             "tests/test_translator/test_translation_pipeline.py::def "
             "test_source_registry_reports_lexer_option_support"
         ) in backend_support["evidence"]
@@ -491,6 +498,7 @@ def test_project_macro_variants_document_artifact_define_maps():
             "define-processing summary rollup mismatches including variant rollups"
             in backend_support["notes"]
         )
+        assert "missing define-processing variant rollups" in (backend_support["notes"])
         assert "object-like define expansion" in backend_support["notes"]
         assert "#if/#ifdef/#ifndef/#elif/#else/#endif branch selection" in (
             backend_support["notes"]
@@ -506,6 +514,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_define_processing_summary_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_processing_variant_rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_translation_pipeline.py::def "

@@ -8431,15 +8431,14 @@ def _summary_contract_reasons(
                 "artifact define processing",
             )
         )
-        if "defineProcessingByVariant" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.defineProcessingByVariant",
-                    summary.get("defineProcessingByVariant"),
-                    define_processing_rollups["defineProcessingByVariant"],
-                    "artifact define processing",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.defineProcessingByVariant",
+                summary.get("defineProcessingByVariant"),
+                define_processing_rollups["defineProcessingByVariant"],
+                "artifact define processing",
             )
+        )
         include_path_processing_rollups = _include_path_processing_rollups(
             artifact_records
         )
@@ -8459,15 +8458,14 @@ def _summary_contract_reasons(
                 "artifact include path processing",
             )
         )
-        if "includePathProcessingByVariant" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.includePathProcessingByVariant",
-                    summary.get("includePathProcessingByVariant"),
-                    include_path_processing_rollups["includePathProcessingByVariant"],
-                    "artifact include path processing",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includePathProcessingByVariant",
+                summary.get("includePathProcessingByVariant"),
+                include_path_processing_rollups["includePathProcessingByVariant"],
+                "artifact include path processing",
             )
+        )
         source_map_rollups = _source_map_rollups(artifact_records)
         reasons.extend(
             _count_field_contract_reasons(
