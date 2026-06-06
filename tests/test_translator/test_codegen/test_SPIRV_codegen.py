@@ -668,6 +668,39 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_bool_vector_logical_not_returns_bool_vector_type(self, tmp_path):
+        source_code = """
+        shader BoolVectorLogicalNot {
+            compute {
+                void main() {
+                    bvec2 flags = bvec2(true, false);
+                    bvec2 inverted = !flags;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        assert bool_type is not None
+        bool_type_id = bool_type.group(1)
+        bool_vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(bool_type_id)} 2", spv_code
+        )
+        assert bool_vec2_type is not None
+        bool_vec2_id = bool_vec2_type.group(1)
+
+        assert re.search(rf"OpLogicalNot {re.escape(bool_vec2_id)} %\d+\b", spv_code)
+        assert not re.search(
+            rf"OpLogicalNot {re.escape(bool_type_id)} %\d+\b", spv_code
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_bool_vector_constructors_flatten_bool_vectors_and_comparisons(self):
         source_code = """
         shader BoolVectorConstructors {

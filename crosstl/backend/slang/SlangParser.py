@@ -1768,7 +1768,12 @@ class SlangParser:
             while self.current_token[0] == "LBRACKET":
                 attributes.extend(self.parse_attribute_list())
             qualifiers = self.parse_parameter_qualifiers()
-            vtype, name = self.parse_func_keyword_parameter_declarator()
+            (
+                vtype,
+                name,
+                name_first_qualifiers,
+            ) = self.parse_func_keyword_parameter_declarator()
+            qualifiers.extend(name_first_qualifiers)
             array_sizes = self.parse_array_suffixes()
             default_value = None
             if self.current_token[0] == "EQUALS":
@@ -1800,9 +1805,10 @@ class SlangParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("COLON")
+            qualifiers = self.parse_parameter_qualifiers()
             vtype = self.parse_type_name(allow_array_suffix=True)
             vtype += self.parse_pointer_suffix()
-            return vtype, name
+            return vtype, name, qualifiers
 
         vtype = self.parse_type_name(allow_array_suffix=True)
         vtype += self.parse_pointer_suffix()
@@ -1813,7 +1819,7 @@ class SlangParser:
         if name and self.current_token[0] == "IDENTIFIER":
             vtype += f" {self.current_token[1]}"
             self.eat("IDENTIFIER")
-        return vtype, name
+        return vtype, name, []
 
     def is_func_keyword_name_first_parameter_start(self):
         return (

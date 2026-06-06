@@ -6,6 +6,7 @@ from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     BinaryOpNode,
     CastNode,
+    ConstantMemoryNode,
     CudaAsmNode,
     CudaBuiltinNode,
     DeleteNode,
@@ -831,6 +832,24 @@ class TestCudaParser:
         assert all(var.qualifiers == ["__device__"] for var in ast.global_variables)
         assert len(ast.functions) == 1
         assert ast.functions[0].name == "add"
+
+    def test_cuda_constant_memory_optional_device_qualifier_parse_as_globals(self):
+        # CUDA C++ Programming Guide 7.2.2 documents __constant__ with optional
+        # __device__ as a variable memory space specifier.
+        code = """
+        __device__ __constant__ float stencil[4];
+        __constant__ __device__ int offsets[4];
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert [var.name for var in ast.global_variables] == ["stencil", "offsets"]
+        assert [var.vtype for var in ast.global_variables] == ["float[4]", "int[4]"]
+        assert all(isinstance(var, ConstantMemoryNode) for var in ast.global_variables)
+        assert ast.global_variables[0].qualifiers == ["__device__", "__constant__"]
+        assert ast.global_variables[1].qualifiers == ["__constant__", "__device__"]
 
     def test_fixed_width_pointer_declaration_lists_parse_as_variables(self):
         code = """

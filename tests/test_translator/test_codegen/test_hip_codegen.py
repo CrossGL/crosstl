@@ -11712,6 +11712,54 @@ class TestHipCodeGen:
             "(4294967295, partial, 16);" in hip_code
         )
 
+    def test_direct_shfl_down_sync_width_lowers_to_guarded_hip_helper(self):
+        # ROCm HIP documents __shfl_down_sync with optional width=warpSize.
+        # Source: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.1/reference/kernel_language.html#warp-shuffle-functions
+        source_code = """
+        shader HipDirectShuffleWidth {
+            compute {
+                void main() {
+                    uint partial = 7u;
+                    uint reduced = __shfl_down_sync(0xffffffffffffffff, partial, 1, 32);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "__device__ inline unsigned int "
+            "cgl_hip_shfl_down_sync_width_uint(unsigned long long mask, "
+            "unsigned int value, int offset, int width)" in hip_code
+        )
+        assert "return __shfl_down_sync(mask, value, offset, width);" in hip_code
+        assert "(void)width;" in hip_code
+        assert (
+            "unsigned int reduced = cgl_hip_shfl_down_sync_width_uint"
+            "(18446744073709551615, partial, 1, 32);" in hip_code
+        )
+
+    def test_direct_shfl_down_sync_rejects_invalid_arity(self):
+        source_code = """
+        shader HipBadDirectShuffle {
+            compute {
+                void main() {
+                    uint partial = __shfl_down_sync(0xffffffff, 1u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=r"HIP warp sync builtin __shfl_down_sync requires 3 or 4 "
+            r"arguments, got 2",
+        ):
+            HipCodeGen().generate(ast)
+
     def test_wave_match_count_quad_and_multi_prefix_lower_to_hip_helpers(self):
         source_code = """
         shader HipWaveExtended {

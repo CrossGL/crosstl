@@ -23869,6 +23869,89 @@ def test_opengl_user_defined_rcp_function_is_preserved():
     assert "1.0 / value" not in generated_code
 
 
+def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
+    # Khronos GLSL 4.60 section 8.3 defines bit-preserving float/int
+    # conversion built-ins:
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#common-functions
+    shader = """
+    shader BitcastAlias {
+        fragment {
+            vec4 main(float value, uint bits, vec2 pair) @ gl_FragColor {
+                uint packed = asuint(value);
+                int signedBits = asint(value);
+                float restored = asfloat(bits);
+                uvec2 pairBits = asuint(pair);
+                vec2 restoredPair = asfloat(pairBits);
+                float roundTrip = asfloat(asuint(value));
+                return vec4(
+                    restored + roundTrip + float(packed) + float(signedBits),
+                    restoredPair
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint packed = floatBitsToUint(value);" in generated_code
+    assert "int signedBits = floatBitsToInt(value);" in generated_code
+    assert "float restored = uintBitsToFloat(bits);" in generated_code
+    assert "uvec2 pairBits = floatBitsToUint(pair);" in generated_code
+    assert "vec2 restoredPair = uintBitsToFloat(pairBits);" in generated_code
+    assert (
+        "float roundTrip = uintBitsToFloat(floatBitsToUint(value));" in generated_code
+    )
+    assert "asuint(" not in generated_code
+    assert "asint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
+def test_opengl_hlsl_bitcast_alias_renames_local_target_shadow():
+    shader = """
+    shader BitcastAliasLocalShadow {
+        fragment {
+            vec4 main(float value) @ gl_FragColor {
+                uint floatBitsToUint = 1u;
+                uint packed = asuint(value);
+                return vec4(float(floatBitsToUint + packed));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint floatBitsToUint_ = 1u;" in generated_code
+    assert "uint packed = floatBitsToUint(value);" in generated_code
+    assert "float((floatBitsToUint_ + packed))" in generated_code
+    assert "uint floatBitsToUint = 1u;" not in generated_code
+    assert "asuint(" not in generated_code
+
+
+def test_opengl_user_defined_bitcast_alias_function_is_preserved():
+    shader = """
+    shader UserBitcastAlias {
+        uint asuint(float value) {
+            return uint(value);
+        }
+
+        fragment {
+            vec4 main(float value) @ gl_FragColor {
+                uint packed = asuint(value);
+                return vec4(float(packed));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint asuint(float value)" in generated_code
+    assert "uint packed = asuint(value);" in generated_code
+    assert "floatBitsToUint" not in generated_code
+
+
 def test_opengl_hlsl_clip_alias_emits_discard_guards():
     # Microsoft HLSL clip discards the current pixel if any component is
     # less than zero:

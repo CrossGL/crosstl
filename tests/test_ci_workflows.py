@@ -141,6 +141,7 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
     assert "shader-validators-failure-summary.json" in full_suite
     assert "compiler-smoke-linux-failure-summary.json" in full_suite
     assert "compiler-smoke-macos-failure-summary.json" in full_suite
+    assert full_suite.count("continue-on-error: true") >= 4
     assert "--retry 5 --retry-all-errors --retry-delay 10" in full_suite
     assert 'Write-Warning "DXC download failed on attempt $attempt; retrying."' in (
         full_suite
@@ -783,6 +784,9 @@ def test_ci_coverage_reports_missing_compiler_smoke_tooling():
     report["workflows"]["full_tests"]["failure_summaries"]["shader_validators"][
         "run_shell_bash"
     ] = False
+    report["workflows"]["full_tests"]["failure_summaries"]["shader_validators"][
+        "upload_nonfatal"
+    ] = False
 
     errors = module.validation_errors(report)
 
@@ -799,6 +803,10 @@ def test_ci_coverage_reports_missing_compiler_smoke_tooling():
     assert (
         "full-tests.yml missing pytest failure summary for shader_validators: "
         "run_shell_bash"
+    ) in errors
+    assert (
+        "full-tests.yml missing pytest failure summary for shader_validators: "
+        "upload_nonfatal"
     ) in errors
 
 

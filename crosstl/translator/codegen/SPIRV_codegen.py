@@ -2277,8 +2277,23 @@ class VulkanSPIRVCodeGen:
             component_type = self.scalar_or_vector_component_type(result_type.type)
             spv_op = "OpSNegate" if component_type in {"int", "uint"} else "OpFNegate"
         elif op == "!":
-            operand = self.ensure_bool_value(operand)
-            result_type = self.register_primitive_type("bool")
+            bool_type = self.register_primitive_type("bool")
+            operand_vector = self.vector_component_type_and_count(
+                operand.type.base_type
+            )
+            if operand_vector is not None:
+                _, component_count = operand_vector
+                result_type = self.register_vector_type(bool_type, component_count)
+                operand = self.convert_value_to_type(operand, result_type)
+                if not self.value_has_type(operand, result_type):
+                    self.emit(
+                        "; WARNING: logical not requires a bool scalar or vector "
+                        "operand; using default value"
+                    )
+                    return self.default_value_for_type(result_type)
+            else:
+                operand = self.ensure_bool_value(operand)
+                result_type = bool_type
             spv_op = "OpLogicalNot"
         else:
             spv_op = {
