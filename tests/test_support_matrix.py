@@ -395,7 +395,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "inspection summaries expose variant names without define values" in (
             backend_support["notes"]
         )
-        assert "define-processing rollups" in backend_support["notes"]
+        assert (
+            "define-processing status, source-backend, and variant rollups"
+            in backend_support["notes"]
+        )
         assert "not-supported define-processing artifact samples" in (
             backend_support["notes"]
         )
@@ -408,8 +411,9 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "forged artifact define-processing metadata" in (
             backend_support["notes"]
         )
-        assert "define-processing summary rollup mismatches" in (
-            backend_support["notes"]
+        assert (
+            "define-processing summary rollup mismatches including variant rollups"
+            in backend_support["notes"]
         )
         assert "object-like define expansion" in backend_support["notes"]
         assert "#if/#ifdef/#ifndef/#elif/#else/#endif branch selection" in (

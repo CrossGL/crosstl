@@ -365,6 +365,43 @@ def _format_count_rollup(label, counts, *, include_zero=True):
     return f"{label}: " + ", ".join(f"{name}={count}" for name, count in entries)
 
 
+def _format_nested_count_rollup(label, counts, *, include_zero=True):
+    if not isinstance(counts, Mapping):
+        return None
+
+    entries = []
+    for name, row in counts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(row, Mapping):
+            continue
+        row_entries = []
+        for status, count in row.items():
+            if not isinstance(status, str) or not status.strip():
+                continue
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                continue
+            if not include_zero and count == 0:
+                continue
+            row_entries.append((status, count))
+        if not row_entries:
+            continue
+        row_entries.sort(key=lambda item: (-item[1], item[0]))
+        entries.append((name, sum(count for _, count in row_entries), row_entries))
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: (-item[1], item[0]))
+    return f"{label}: " + ", ".join(
+        (
+            f"{name}=("
+            + ", ".join(f"{status}={count}" for status, count in row_entries)
+            + ")"
+        )
+        for name, _, row_entries in entries
+    )
+
+
 def _format_artifact_rollup(label, counts):
     if not isinstance(counts, Mapping):
         return None
@@ -1309,6 +1346,13 @@ def _format_project_report_inspection(payload):
     )
     if define_processing:
         lines.append(define_processing)
+    define_processing_by_variant = _format_nested_count_rollup(
+        "Define processing by variant",
+        summary.get("defineProcessingByVariant"),
+        include_zero=False,
+    )
+    if define_processing_by_variant:
+        lines.append(define_processing_by_variant)
     lines.extend(_format_define_processing_issue_lines(payload.get("defineProcessing")))
     include_path_processing = _format_count_rollup(
         "Include path processing",

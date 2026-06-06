@@ -1491,6 +1491,22 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     report_path = repo / "translated" / "portability-report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     assert validation["success"] is True
     assert payload["summary"]["artifactCount"] == 2
@@ -1538,6 +1554,18 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     assert payload["summary"]["defineProcessingBySourceBackend"] == {
         "cgl": {"forwarded": 2}
     }
+    assert payload["summary"]["defineProcessingByVariant"] == {
+        "debug": {"forwarded": 1},
+        "release": {"forwarded": 1},
+    }
+    assert inspection["defineProcessing"]["byVariant"] == {
+        "debug": {"forwarded": 1},
+        "release": {"forwarded": 1},
+    }
+    assert result.returncode == 0
+    assert (
+        "Define processing by variant: debug=(forwarded=1), release=(forwarded=1)"
+    ) in result.stdout
     assert [artifact["path"] for artifact in payload["artifacts"]] == [
         "translated/opengl/debug/simple.glsl",
         "translated/opengl/release/simple.glsl",
@@ -1709,10 +1737,12 @@ def test_translate_project_records_define_processing_without_frontend_support(
     assert payload["summary"]["defineProcessingBySourceBackend"] == {
         "rust": {"not-supported": 1}
     }
+    assert payload["summary"]["defineProcessingByVariant"] == {}
     assert inspection["defineProcessing"] == {
         "available": True,
         "byStatus": {"not-supported": 1},
         "bySourceBackend": {"rust": {"not-supported": 1}},
+        "byVariant": {},
         "notSupportedArtifactCount": 1,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [
@@ -2247,6 +2277,7 @@ def test_validate_project_report_rejects_define_processing_summary_mismatches(
     payload = report.to_json()
     payload["summary"]["defineProcessingByStatus"] = {"forwarded": 1}
     payload["summary"]["defineProcessingBySourceBackend"] = {"cgl": {"forwarded": 1}}
+    payload["summary"]["defineProcessingByVariant"] = {"debug": {"forwarded": 1}}
     report_path = repo / "out" / "portability-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -2264,6 +2295,10 @@ def test_validate_project_report_rejects_define_processing_summary_mismatches(
         "summary.defineProcessingBySourceBackend must match "
         "artifact define processing"
     ) in diagnostic["message"]
+    assert (
+        "summary.defineProcessingByVariant must match artifact define processing"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_artifact_include_path_processing_mismatches(
@@ -8419,6 +8454,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byVariant": {},
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],
