@@ -38,6 +38,19 @@ SOURCE_MAP_SPAN_FIELDS = (
     "endColumn",
     "endOffset",
 )
+SOURCE_MAP_PAYLOAD_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "mappingGranularity",
+        "target",
+        "source",
+        "generated",
+        "mappings",
+    )
+)
+SOURCE_MAP_MAPPING_FIELDS = frozenset(("source", "generated"))
+SOURCE_MAP_SPAN_FIELD_SET = frozenset(SOURCE_MAP_SPAN_FIELDS)
 COMPILER_SOURCE_REMAP_PAYLOAD_FIELDS = frozenset(
     ("schemaVersion", "generatedFile", "mappings")
 )
@@ -8596,7 +8609,9 @@ def _source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = _unsupported_mapping_field_reasons(
+        prefix, value, SOURCE_MAP_SPAN_FIELD_SET
+    )
     if not _is_non_empty_string(value.get("file")):
         reasons.append(f"{prefix}.file must be a string")
     for field_name in SOURCE_MAP_SPAN_FIELDS[1:]:
@@ -8664,7 +8679,9 @@ def _source_map_contract_reasons(
     if not isinstance(source_map, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = _unsupported_mapping_field_reasons(
+        prefix, source_map, SOURCE_MAP_PAYLOAD_FIELDS
+    )
     if source_map.get("schemaVersion") != 1:
         reasons.append(f"{prefix}.schemaVersion must be 1")
     if source_map.get("kind") != "crosstl-artifact-source-map":
@@ -8698,6 +8715,11 @@ def _source_map_contract_reasons(
             if not isinstance(mapping, Mapping):
                 reasons.append(f"{mapping_prefix} must be an object")
                 continue
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    mapping_prefix, mapping, SOURCE_MAP_MAPPING_FIELDS
+                )
+            )
             reasons.extend(
                 _source_map_span_reasons(
                     f"{mapping_prefix}.source", mapping.get("source")
