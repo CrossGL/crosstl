@@ -610,6 +610,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
+        assert "compiler-compatible source-remap sidecar semantics" in (
+            backend_support["notes"]
+        )
         assert "unit and skipped source override rollups" in (backend_support["notes"])
         assert "source-relative target/variant layout" in backend_support["notes"]
         assert (
@@ -655,6 +658,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_path_source_layout_"
             "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_compiler_incompatible_source_"
+            "remap_sidecar"
         ) in backend_support["evidence"]
 
 

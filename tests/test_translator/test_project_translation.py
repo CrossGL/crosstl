@@ -6316,7 +6316,7 @@ def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_pat
     artifact = payload["artifacts"][0]
     source_remap_path = repo / artifact["sourceRemap"]["path"]
     source_remap_payload = json.loads(source_remap_path.read_text(encoding="utf-8"))
-    source_remap_payload["generatedFile"] = "out/cgl/other.cgl"
+    source_remap_payload["mappings"][0]["original"]["file"] = "other.cgl"
     source_remap_path.write_text(
         json.dumps(source_remap_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -6332,6 +6332,54 @@ def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_pat
     assert validation["diagnosticsByCode"] == {
         "project.validate.source-remap-mismatch": 1,
     }
+
+
+def test_validate_project_report_rejects_compiler_incompatible_source_remap_sidecar(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    for span in (source_map["source"], source_map["generated"]):
+        span["length"] = 0
+        span["endOffset"] = span["offset"]
+        span["endLine"] = span["line"]
+        span["endColumn"] = span["column"]
+    source_map["mappings"][0]["source"] = dict(source_map["source"])
+    source_map["mappings"][0]["generated"] = dict(source_map["generated"])
+    source_remap_path = repo / artifact["sourceRemap"]["path"]
+    source_remap_path.write_text(
+        json.dumps(
+            project_pipeline._source_remap_payload(source_map),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    report_path = repo / "out" / "compiler-incompatible-source-remap-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-remap-invalid": 1,
+    }
+    diagnostic = validation["diagnostics"][0]
+    assert "Source remap sidecar is not compiler-compatible" in diagnostic["message"]
+    assert "$.mappings[0].generated.length must be greater than zero" in (
+        diagnostic["message"]
+    )
+    assert "$.mappings[0].original.length must be greater than zero" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):

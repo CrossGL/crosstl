@@ -233,6 +233,17 @@ def _is_repository_relative_report_path(path: str) -> bool:
     )
 
 
+def _is_stable_relative_posix_path(path: str) -> bool:
+    parts = path.split("/")
+    return (
+        bool(path)
+        and "\\" not in path
+        and not path.startswith("/")
+        and not PureWindowsPath(path).drive
+        and all(part not in {"", ".", ".."} for part in parts)
+    )
+
+
 def _repository_relative_globs(patterns: Sequence[str]) -> list[str]:
     return [pattern for pattern in patterns if _is_repository_relative_glob(pattern)]
 
@@ -2373,6 +2384,77 @@ def _artifact_source_remap(
     }
 
 
+def _compiler_source_remap_span_reasons(prefix: str, value: Any) -> list[str]:
+    reasons = _source_map_span_reasons(prefix, value)
+    if reasons:
+        return reasons
+
+    if not isinstance(value, Mapping):
+        return reasons
+
+    file_path = value["file"]
+    if not _is_stable_relative_posix_path(file_path):
+        reasons.append(f"{prefix}.file must be a stable relative POSIX source path")
+    for field_name in ("line", "column", "length", "endLine", "endColumn"):
+        if value[field_name] <= 0:
+            reasons.append(f"{prefix}.{field_name} must be greater than zero")
+    if (
+        value["length"] > 0
+        and value["endLine"] == value["line"]
+        and value["endColumn"] <= value["column"]
+    ):
+        reasons.append(f"{prefix}.endColumn must be greater than column")
+    return reasons
+
+
+def _compiler_source_remap_payload_reasons(payload: Any) -> list[str]:
+    if not isinstance(payload, Mapping):
+        return ["$ must be an object"]
+
+    reasons = []
+    if payload.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
+        reasons.append("$.schemaVersion must be 1")
+
+    generated_file = payload.get("generatedFile")
+    if not _is_non_empty_string(generated_file):
+        reasons.append("$.generatedFile must be a string")
+    elif not _is_stable_relative_posix_path(generated_file):
+        reasons.append("$.generatedFile must be a stable relative POSIX source path")
+
+    mappings = payload.get("mappings")
+    if not isinstance(mappings, list):
+        reasons.append("$.mappings must be a list")
+        return reasons
+    if not mappings:
+        reasons.append("$.mappings must not be empty")
+
+    for mapping_index, mapping in enumerate(mappings):
+        mapping_prefix = f"$.mappings[{mapping_index}]"
+        if not isinstance(mapping, Mapping):
+            reasons.append(f"{mapping_prefix} must be an object")
+            continue
+        generated = mapping.get("generated")
+        original = mapping.get("original")
+        reasons.extend(
+            _compiler_source_remap_span_reasons(
+                f"{mapping_prefix}.generated", generated
+            )
+        )
+        reasons.extend(
+            _compiler_source_remap_span_reasons(f"{mapping_prefix}.original", original)
+        )
+        if (
+            isinstance(generated, Mapping)
+            and _is_non_empty_string(generated.get("file"))
+            and _is_non_empty_string(generated_file)
+            and generated["file"] != generated_file
+        ):
+            reasons.append(
+                f"{mapping_prefix}.generated.file must match $.generatedFile"
+            )
+    return reasons
+
+
 def _runtime_migration_targets(
     units: Sequence[ProjectTranslationUnit],
     targets: Sequence[str],
@@ -2790,7 +2872,10 @@ def _source_remap_validation_diagnostics(
         ]
 
     diagnostics = []
-    if not _hash_matches_report(_source_hash(remap_path), source_remap["hash"]):
+    source_remap_hash_matches = _hash_matches_report(
+        _source_hash(remap_path), source_remap["hash"]
+    )
+    if not source_remap_hash_matches:
         diagnostics.append(
             ProjectDiagnostic(
                 severity="error",
@@ -2822,6 +2907,23 @@ def _source_remap_validation_diagnostics(
             )
         )
         return diagnostics
+
+    if source_remap_hash_matches:
+        semantic_reasons = _compiler_source_remap_payload_reasons(remap_payload)
+        if semantic_reasons:
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.validate.source-remap-invalid",
+                    message=(
+                        "Source remap sidecar is not compiler-compatible: "
+                        f"{source_remap['path']}: {'; '.join(semantic_reasons)}"
+                    ),
+                    location=SourceLocation(file=str(artifact["source"])),
+                    target=str(artifact["target"]),
+                    missing_capabilities=["source.provenance"],
+                )
+            )
 
     source_map = artifact.get("sourceMap")
     if isinstance(source_map, Mapping):
