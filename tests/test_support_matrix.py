@@ -135,14 +135,27 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_derives_missing_artifact_matrix_gaps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_derives_malformed_artifact_matrix_gaps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_derives_missing_artifact_matrix_gaps"
+        ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert (
             "source-map count, source-map artifact samples, source-remap artifact "
             "samples, and provenance rollups"
         ) in backend_support["notes"]
-        assert "sampled missing and extra artifact identities" in (
-            backend_support["notes"]
-        )
+        assert (
+            "report-or-derived metadata source plus sampled missing and extra "
+            "artifact identities"
+        ) in backend_support["notes"]
         assert (
             "validation status, diagnostic-code, missing-capability, "
             "toolchain-status, toolchain-run target, source-backend, and variant "
@@ -327,6 +340,7 @@ def test_project_include_resolution_documents_status_reporting():
         assert "only active existing repository-contained resolved paths" in (
             backend_support["notes"]
         )
+        assert "applies CLI include-directory overrides" in backend_support["notes"]
         assert "include-path processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
         assert "warning diagnostics and missing-capability rollups" in (
@@ -407,6 +421,10 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_translation_pipeline.py::def "
             "test_source_registry_reports_lexer_option_support"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_report_records_include_dir_and_define_overrides"
+        ) in backend_support["evidence"]
 
 
 def test_project_macro_variants_document_artifact_define_maps():
@@ -422,6 +440,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert backend_support["status"] == "partial"
         assert "records each artifact applied define map" in backend_support["notes"]
         assert "define-processing status" in backend_support["notes"]
+        assert "applies CLI define overrides" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
         assert "warning diagnostics and missing-capability rollups" in (
             backend_support["notes"]
@@ -475,6 +494,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_project_config_counts"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_report_records_include_dir_and_define_overrides"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_lexer.py::def "

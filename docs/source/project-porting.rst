@@ -195,8 +195,8 @@ directories that resolve outside the repository are reported as non-blocking
 configuration diagnostics so reports retain portability and provenance context.
 Existing include directories that remain inside the repository, plus configured
 defines, are passed to source frontends that expose preprocessor options. CLI
-include and define overrides are merged with this configuration before scan or
-translation. Translation artifacts record ``defineProcessing`` metadata so
+include and define overrides are merged with this configuration before scan,
+report, or translation. Translation artifacts record ``defineProcessing`` metadata so
 reports distinguish define maps that were forwarded to the source lexer from
 define maps that were not requested or could not be consumed by that frontend.
 When configured defines cannot be forwarded, translation reports emit a
@@ -361,8 +361,9 @@ Project reports are JSON documents with:
   variant completion rollups for the unit, target, and variant matrix.
   Scan-only reports omit this object because they intentionally contain no
   translated or failed artifacts. Report inspection also includes sampled
-  missing and extra artifact identities when report metadata is sufficient, so
-  incomplete batch outputs are visible without opening every artifact record.
+  missing and extra artifact identities from report-provided or derived matrix
+  metadata, so incomplete batch outputs are visible without opening every
+  artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact

@@ -4238,26 +4238,29 @@ def _inspection_artifact_matrix_summary(
     project: Any = None,
     units: Any = None,
 ) -> dict[str, Any]:
-    if not isinstance(artifact_matrix, Mapping):
-        return {"available": False}
-
-    fields = {
-        field_name: artifact_matrix.get(field_name)
-        for field_name in (
-            "unitCount",
-            "targetCount",
-            "variantCount",
-            "expectedArtifactCount",
-        )
-    }
-    if not all(
-        isinstance(value, int) and not isinstance(value, bool) and value >= 0
-        for value in fields.values()
-    ):
-        return {"available": False}
-
-    variant_mode = artifact_matrix.get("variantMode")
-    if variant_mode not in {"none", "named"}:
+    matrix_source = "report"
+    for _attempt in range(2):
+        if isinstance(artifact_matrix, Mapping):
+            fields = {
+                field_name: artifact_matrix.get(field_name)
+                for field_name in (
+                    "unitCount",
+                    "targetCount",
+                    "variantCount",
+                    "expectedArtifactCount",
+                )
+            }
+            variant_mode = artifact_matrix.get("variantMode")
+            if all(
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                for value in fields.values()
+            ) and variant_mode in {"none", "named"}:
+                break
+        if matrix_source == "derived" or not isinstance(project, Mapping):
+            return {"available": False}
+        artifact_matrix = _expected_artifact_matrix_metadata(project, units)
+        matrix_source = "derived"
+    else:  # pragma: no cover - loop always returns or breaks within two attempts
         return {"available": False}
 
     artifact_records = _record_sequence(artifacts)
@@ -4318,6 +4321,7 @@ def _inspection_artifact_matrix_summary(
     ]
     return {
         "available": True,
+        "source": matrix_source,
         **fields,
         "variantMode": variant_mode,
         "emittedArtifactCount": emitted_count,
