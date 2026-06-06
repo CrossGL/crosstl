@@ -3127,6 +3127,30 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_FRAGMENT_HELPER_INVOCATION_BUILTIN_ASSEMBLY = """
+; Reduced from a fragment shader interface that reads gl_HelperInvocation.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %helper %out_flag
+OpExecutionMode %main OriginUpperLeft
+OpName %out_flag "outFlag"
+OpDecorate %helper BuiltIn HelperInvocation
+OpDecorate %out_flag Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%ptr_input_bool = OpTypePointer Input %bool
+%ptr_output_bool = OpTypePointer Output %bool
+%helper = OpVariable %ptr_input_bool Input
+%out_flag = OpVariable %ptr_output_bool Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %bool %helper
+OpStore %out_flag %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_FRAGMENT_BARYCENTRIC_ASSEMBLY = """
 ; Source repo: https://chromium.googlesource.com/external/github.com/KhronosGroup/glslang.git
 ; Source ref: refs/heads/vulkan-sdk-1.3.275
@@ -4885,6 +4909,20 @@ def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
     assert "@builtin(sampleid)" not in generated_code
     assert "@builtin(samplemask)" not in generated_code
     assert "@builtin(layer)" not in generated_code
+
+
+def test_spirv_assembly_fragment_helper_invocation_builtin_codegen_reparse():
+    tokens = tokenize_code(SPIRV_FRAGMENT_HELPER_INVOCATION_BUILTIN_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "bool gl_HelperInvocation @input @gl_HelperInvocation;" in generated_code
+    assert "bool outFlag @output @location(0);" in generated_code
+    assert "outFlag = gl_HelperInvocation;" in generated_code
+    assert "@builtin(helperinvocation)" not in generated_code
+    assert "bool HelperInvocation @input" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_glslang_fragment_barycentric_interface_codegen_reparse():

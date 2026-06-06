@@ -408,6 +408,9 @@ class SlangToCrossGLConverter:
             "PRIMITIVE_ID": "gl_PrimitiveID",
             "INSTANCE_ID": "gl_InstanceID",
             "VERTEX_ID": "gl_VertexID",
+            "SV_VertexID": "gl_VertexID",
+            "SV_InstanceID": "gl_InstanceID",
+            "SV_PrimitiveID": "gl_PrimitiveID",
             # Vertex outputs
             "SV_Position": "Out_Position",
             "SV_Position0": "Out_Position0",
@@ -419,6 +422,10 @@ class SlangToCrossGLConverter:
             "SV_Position6": "Out_Position6",
             "SV_Position7": "Out_Position7",
             # Fragment inputs
+            "SV_IsFrontFace": "gl_FrontFacing",
+            "SV_SampleIndex": "gl_SampleID",
+            "SV_Coverage": "gl_SampleMask",
+            # Fragment outputs
             "SV_Target": "Out_Color",
             "SV_Target0": "Out_Color0",
             "SV_Target1": "Out_Color1",
@@ -442,6 +449,11 @@ class SlangToCrossGLConverter:
             "SV_ViewportArrayIndex": "gl_ViewportIndex",
             "SV_ClipDistance": "gl_ClipDistance",
             "SV_CullDistance": "gl_CullDistance",
+            # Compute shader
+            "SV_GroupID": "gl_WorkGroupID",
+            "SV_GroupThreadID": "gl_LocalInvocationID",
+            "SV_DispatchThreadID": "gl_GlobalInvocationID",
+            "SV_GroupIndex": "gl_LocalInvocationIndex",
         }
         self.hlsl_system_semantic_map = {
             semantic.lower(): mapped
@@ -449,20 +461,7 @@ class SlangToCrossGLConverter:
             if semantic.lower().startswith("sv_")
         }
         self.hlsl_passthrough_system_semantic_map = {
-            semantic.lower(): semantic
-            for semantic in (
-                "SV_Barycentrics",
-                "SV_Coverage",
-                "SV_DispatchThreadID",
-                "SV_GroupID",
-                "SV_GroupIndex",
-                "SV_GroupThreadID",
-                "SV_InstanceID",
-                "SV_IsFrontFace",
-                "SV_PrimitiveID",
-                "SV_SampleIndex",
-                "SV_VertexID",
-            )
+            semantic.lower(): semantic for semantic in ("SV_Barycentrics",)
         }
         self.interpolation_qualifiers = {
             "centroid",

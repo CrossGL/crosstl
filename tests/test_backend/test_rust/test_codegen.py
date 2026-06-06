@@ -1363,6 +1363,21 @@ def test_rust_gpu_glam_normalize_or_zero_method_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_glam_dot_into_vec_method_codegen_reparse():
+    # glam exposes a vector splat of dot product for method-chain shader math.
+    code = """
+    fn dot_vector(normal: Vec3<f32>, tangent: Vec3<f32>) -> Vec3<f32> {
+        normal.dot_into_vec(tangent)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return vec3(dot(normal, tangent));" in result
+    assert ".dot_into_vec(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

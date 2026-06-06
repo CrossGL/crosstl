@@ -127,6 +127,7 @@ class VulkanParser:
         "FrontFacing": "gl_FrontFacing",
         "FragStencilRefEXT": "gl_FragStencilRefEXT",
         "GlobalInvocationId": "gl_GlobalInvocationID",
+        "HelperInvocation": "gl_HelperInvocation",
         "InstanceIndex": "gl_InstanceID",
         "InvocationId": "gl_InvocationID",
         "Layer": "gl_Layer",

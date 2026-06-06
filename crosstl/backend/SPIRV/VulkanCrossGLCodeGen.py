@@ -679,6 +679,7 @@ class VulkanToCrossGLConverter:
             "FragStencilRefEXT": "gl_FragStencilRefEXT",
             "FrontFacing": "gl_FrontFacing",
             "GlobalInvocationId": "gl_GlobalInvocationID",
+            "HelperInvocation": "gl_HelperInvocation",
             "InstanceIndex": "gl_InstanceID",
             "InvocationId": "gl_InvocationID",
             "Layer": "gl_Layer",

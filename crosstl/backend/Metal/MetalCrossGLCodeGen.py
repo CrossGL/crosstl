@@ -460,7 +460,7 @@ class MetalToCrossGLConverter:
             "position": "gl_Position",
             "point_size": "gl_PointSize",
             "clip_distance": "gl_ClipDistance",
-            "front_facing": "gl_IsFrontFace",
+            "front_facing": "gl_FrontFacing",
             "point_coord": "gl_PointCoord",
             "color(0)": "gl_FragColor",
             "color(1)": "gl_FragColor1",

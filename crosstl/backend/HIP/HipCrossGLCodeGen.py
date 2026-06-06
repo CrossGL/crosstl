@@ -5162,6 +5162,30 @@ class HipToCrossGLConverter:
         ):
             return f"({args[0]} / {args[1]})"
 
+        if (
+            function_name in {"__fadd_rd", "__fadd_rn", "__fadd_ru", "__fadd_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} + {args[1]})"
+
+        if (
+            function_name in {"__fsub_rd", "__fsub_rn", "__fsub_ru", "__fsub_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} - {args[1]})"
+
+        if (
+            function_name in {"__fmul_rd", "__fmul_rn", "__fmul_ru", "__fmul_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} * {args[1]})"
+
+        if (
+            function_name in {"__frcp_rd", "__frcp_rn", "__frcp_ru", "__frcp_rz"}
+            and len(args) == 1
+        ):
+            return f"(1.0f / {args[0]})"
+
         return None
 
     def format_hip_byte_perm(self, left, right, selector):
