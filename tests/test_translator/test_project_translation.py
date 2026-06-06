@@ -5638,6 +5638,48 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_arti
     )
 
 
+def test_validate_project_report_rejects_validation_source_backend_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out", validate=True)
+    payload = report.to_json()
+    validation_artifact = payload["validation"]["artifacts"][0]
+    validation_artifact["sourceBackend"] = "opengl"
+    payload["validation"]["toolchainRuns"] = [
+        {
+            "source": validation_artifact["source"],
+            "target": validation_artifact["target"],
+            "path": validation_artifact["path"],
+            "sourceBackend": "opengl",
+            "command": ["crosstl-validate"],
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+        }
+    ]
+    report_path = repo / "out" / "validation-source-backend-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.artifacts[0].sourceBackend must match "
+        "report.artifacts[0].sourceBackend"
+    ) in diagnostic["message"]
+    assert (
+        "validation.toolchainRuns[0].sourceBackend must match "
+        "report.artifacts[0].sourceBackend"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_validation_summary_missing_artifact_checks(
     tmp_path,
 ):

@@ -7501,6 +7501,17 @@ def _validation_artifact_contract_reasons(
     referenced_artifact: DeclaredArtifact | None = None
     if identity is not None and declared_artifacts_by_identity is not None:
         referenced_artifact = declared_artifacts_by_identity.get(identity)
+    if (
+        "sourceBackend" in artifact
+        and referenced_artifact is not None
+        and _is_non_empty_string(artifact.get("sourceBackend"))
+        and _is_non_empty_string(referenced_artifact[1].get("sourceBackend"))
+        and artifact.get("sourceBackend") != referenced_artifact[1].get("sourceBackend")
+    ):
+        reasons.append(
+            f"{prefix}.sourceBackend must match "
+            f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
+        )
     source_hash_status = artifact.get("sourceHashStatus")
     if require_status_fields and "sourceHashStatus" not in artifact:
         reasons.append(
@@ -7633,6 +7644,9 @@ def _toolchain_run_contract_reasons(
     declared_targets: set[str] | None = None,
     declared_variants: set[str] | None = None,
     declared_artifact_identities: set[ArtifactIdentity] | None = None,
+    declared_artifacts_by_identity: (
+        Mapping[ArtifactIdentity, DeclaredArtifact] | None
+    ) = None,
 ) -> list[str]:
     prefix = f"validation.toolchainRuns[{index}]"
     if not isinstance(run, Mapping):
@@ -7674,6 +7688,20 @@ def _toolchain_run_contract_reasons(
         and identity not in declared_artifact_identities
     ):
         reasons.append(f"{prefix} must reference an artifact in report.artifacts")
+    referenced_artifact: DeclaredArtifact | None = None
+    if identity is not None and declared_artifacts_by_identity is not None:
+        referenced_artifact = declared_artifacts_by_identity.get(identity)
+    if (
+        "sourceBackend" in run
+        and referenced_artifact is not None
+        and _is_non_empty_string(run.get("sourceBackend"))
+        and _is_non_empty_string(referenced_artifact[1].get("sourceBackend"))
+        and run.get("sourceBackend") != referenced_artifact[1].get("sourceBackend")
+    ):
+        reasons.append(
+            f"{prefix}.sourceBackend must match "
+            f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
+        )
 
     command = run.get("command")
     if not isinstance(command, list) or any(
@@ -7819,6 +7847,7 @@ def _validation_contract_reasons(
                         declared_targets=declared_targets,
                         declared_variants=declared_variants,
                         declared_artifact_identities=declared_artifact_identities,
+                        declared_artifacts_by_identity=declared_artifacts_by_identity,
                     )
                 )
             reasons.extend(
