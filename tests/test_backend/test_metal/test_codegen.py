@@ -955,6 +955,40 @@ def test_codegen_msl_relational_namespace_intrinsics_import_to_crossgl():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_msl_relational_reductions_and_ordering_import_to_crossgl():
+    # Apple Metal Shading Language Specification, relational functions:
+    # all/any, isnormal, isordered, and isunordered are defined in <metal_relational>.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    bool classify(float3 left, float3 right, bool3 mask) {
+        bool everyMask = metal::all(mask);
+        bool anyMask = metal::any(mask);
+        bool3 normalMask = metal::isnormal(left);
+        bool3 orderedMask = metal::isordered(left, right);
+        bool3 unorderedMask = metal::isunordered(left, right);
+        return everyMask
+            || anyMask
+            || metal::any(normalMask)
+            || metal::all(orderedMask)
+            || metal::any(unorderedMask);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "bool everyMask = all(mask);" in crossgl
+    assert "bool anyMask = any(mask);" in crossgl
+    assert "bvec3 normalMask = isnormal(left);" in crossgl
+    assert "bvec3 orderedMask = isordered(left, right);" in crossgl
+    assert "bvec3 unorderedMask = isunordered(left, right);" in crossgl
+    assert "|| any(normalMask)" in crossgl
+    assert "|| all(orderedMask)" in crossgl
+    assert "|| any(unorderedMask)" in crossgl
+    assert "metal_u3a_u3a" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_multi_declarator_struct_members_from_cxx_msl_headers():
     code = """
     struct KernelParams {

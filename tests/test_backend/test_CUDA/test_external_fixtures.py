@@ -1668,11 +1668,15 @@ def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
     """
 
     crossgl = cuda_to_crossgl(source)
+    regenerated_cuda = crossgl_to_cuda(crossgl)
 
     assert_crossgl_reparse(crossgl)
-    assert "var i_rand: u32 = reverseBits(i);" in crossgl
-    assert "var j_rand: u32 = reverseBits(j);" in crossgl
+    assert "var i_rand: u32 = bitfieldReverse(i);" in crossgl
+    assert "var j_rand: u32 = bitfieldReverse(j);" in crossgl
     assert "__brev" not in crossgl
+    assert "unsigned int i_rand = __brev(i);" in regenerated_cuda
+    assert "unsigned int j_rand = __brev(j);" in regenerated_cuda
+    assert "reverseBits(" not in regenerated_cuda
 
 
 def test_nvidia_hpcg_cuda_kernels_ldcs_cached_load_codegen_reparse():
@@ -1715,10 +1719,13 @@ def test_external_cccl_bit_reverse_brevll_codegen_reparse():
     """
 
     crossgl = cuda_to_crossgl(source)
+    regenerated_cuda = crossgl_to_cuda(crossgl)
 
     assert_crossgl_reparse(crossgl)
-    assert "return reverseBits(value);" in crossgl
+    assert "return bitfieldReverse(value);" in crossgl
     assert "__brevll" not in crossgl
+    assert "return __brevll(value);" in regenerated_cuda
+    assert "reverseBits(" not in regenerated_cuda
 
 
 def test_external_cccl_bit_reverse_macro_block_is_skipped():

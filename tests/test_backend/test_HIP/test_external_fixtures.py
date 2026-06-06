@@ -11,6 +11,7 @@ from crosstl.backend.HIP.HipAst import (
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -83,6 +84,11 @@ def assert_crossgl_reparses(source):
     ast, crossgl = generate_crossgl_from_hip(source)
     CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
     return ast, crossgl
+
+
+def generate_hip_from_crossgl(source):
+    crossgl_ast = CrossGLParser(CrossGLLexer(source).tokens).parse()
+    return HipCodeGen().generate(crossgl_ast)
 
 
 def test_external_rocm_device_globals_symbol_api_codegen_reparse():
@@ -829,10 +835,17 @@ def test_external_rocm_hip_tests_brev_intrinsics_codegen_reparse():
     assert body[0].right.name == "__brev"
     assert isinstance(body[1].right, FunctionCallNode)
     assert body[1].right.name == "__brevll"
-    assert "out32[0] = reverseBits(x);" in crossgl
-    assert "out64[0] = reverseBits(y);" in crossgl
+    assert "out32[0] = bitfieldReverse(x);" in crossgl
+    assert "out64[0] = bitfieldReverse(y);" in crossgl
     assert "__brev" not in crossgl
     assert "__brevll" not in crossgl
+    assert "reverseBits" not in crossgl
+
+    roundtrip_hip = generate_hip_from_crossgl(crossgl)
+    assert "out32[0] = __brev(x);" in roundtrip_hip
+    assert "out64[0] = __brevll(y);" in roundtrip_hip
+    assert "bitfieldReverse" not in roundtrip_hip
+    assert "reverseBits" not in roundtrip_hip
 
 
 def test_rocm_hip_math_api_bit_reinterpret_intrinsics_codegen_reparse():

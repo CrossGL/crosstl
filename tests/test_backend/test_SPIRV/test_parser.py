@@ -1805,6 +1805,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSL_STD450_STRUCT_EXTINST_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/GLSL.std.450.html
+; Reduced from GLSL.std.450 ModfStruct and FrexpStruct extended instructions.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %output_value
+OpExecutionMode %main OriginUpperLeft
+OpName %ModfResult "ModfResult"
+OpMemberName %ModfResult 0 "fractional"
+OpMemberName %ModfResult 1 "whole"
+OpName %FrexpResult "FrexpResult"
+OpMemberName %FrexpResult 0 "significand"
+OpMemberName %FrexpResult 1 "exponent"
+OpName %input_value "inputValue"
+OpName %output_value "outputValue"
+OpDecorate %input_value Location 0
+OpDecorate %output_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%ModfResult = OpTypeStruct %float %float
+%FrexpResult = OpTypeStruct %float %int
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%output_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%modf_parts = OpExtInst %ModfResult %std450 ModfStruct %loaded
+%fractional = OpCompositeExtract %float %modf_parts 0
+%frexp_parts = OpExtInst %FrexpResult %std450 52 %loaded
+%significand = OpCompositeExtract %float %frexp_parts 0
+%combined = OpFAdd %float %fractional %significand
+OpStore %output_value %combined
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_spirv_assembly_location_decorated_interfaces_parse():
     tokens = tokenize_code(SPIRV_TOOLS_BASIC_INTERFACE_ASSEMBLY)
@@ -2136,6 +2177,26 @@ def test_numeric_glsl_std450_extinst_imports_parse_to_builtin():
     assert isinstance(body[0].right, FunctionCallNode)
     assert body[0].right.name == "sqrt"
     assert body[0].right.args[0].name == "inputValue"
+
+
+def test_glsl_std450_struct_extinst_imports_parse_to_builtins():
+    tokens = tokenize_code(SPIRV_GLSL_STD450_STRUCT_EXTINST_ASSEMBLY)
+    ast = parse_code(tokens)
+    assignment = ast.functions[0].body[0]
+
+    assert ast.spirv_assembly is True
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.right, BinaryOpNode)
+    assert isinstance(assignment.right.left, MemberAccessNode)
+    assert isinstance(assignment.right.left.object, FunctionCallNode)
+    assert assignment.right.left.object.name == "modf"
+    assert assignment.right.left.object.args[0].name == "inputValue"
+    assert assignment.right.left.member == "fractional"
+    assert isinstance(assignment.right.right, MemberAccessNode)
+    assert isinstance(assignment.right.right.object, FunctionCallNode)
+    assert assignment.right.right.object.name == "frexp"
+    assert assignment.right.right.object.args[0].name == "inputValue"
+    assert assignment.right.right.member == "significand"
 
 
 def test_spirv_subgroup_broadcast_and_reduce_parse():

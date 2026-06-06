@@ -2879,6 +2879,58 @@ def test_user_defined_integer_bit_method_names_are_preserved():
     assert "bitfieldReverse(mask)" not in result
 
 
+def test_rust_std_float_bit_methods_convert_to_crossgl_intrinsics():
+    code = """
+    fn bitcast_round_trip(value: f32, raw_bits: u32) -> f32 {
+        let encoded = value.to_bits();
+        let decoded = f32::from_bits(raw_bits);
+        let round_tripped = f32::from_bits(value.to_bits());
+        return decoded + round_tripped + uint_bits_to_float(encoded);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "encoded = floatBitsToUint(value);" in result
+    assert "decoded = uintBitsToFloat(raw_bits);" in result
+    assert "round_tripped = uintBitsToFloat(floatBitsToUint(value));" in result
+    assert "uint_bits_to_float(encoded)" not in result
+    assert ".to_bits(" not in result
+    assert "f32::from_bits(" not in result
+    crosstl.translator.parse(result)
+
+
+def test_user_defined_float_bit_method_names_are_preserved():
+    code = """
+    struct Bits {
+        value: u32,
+    }
+
+    impl Bits {
+        fn to_bits(&self) -> u32 {
+            return self.value;
+        }
+
+        fn from_bits(value: u32) -> u32 {
+            return value;
+        }
+    }
+
+    fn use_bits(bits: Bits) -> u32 {
+        let encoded = bits.to_bits();
+        let decoded = Bits::from_bits(encoded);
+        return decoded;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "encoded = Bits_to_bits(bits);" in result
+    assert "decoded = Bits_from_bits(encoded);" in result
+    assert "floatBitsToUint(" not in result
+    assert "uintBitsToFloat(" not in result
+
+
 def test_bit_reinterpret_intrinsic_calls_convert_to_crossgl_intrinsics():
     code = """
     fn reinterpret_ops(value: Vec3<f32>, scalar: f32, signed_bits: Vec3<i32>, unsigned_bits: Vec3<u32>) -> Vec3<f32> {
