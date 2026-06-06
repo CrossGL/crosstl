@@ -540,6 +540,7 @@ class HLSLCodeGen:
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_names = {}
         self.function_parameter_types = {}
+        self.hlsl_function_name_aliases = {}
         self.function_stage_parameter_dependencies = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
@@ -863,6 +864,7 @@ class HLSLCodeGen:
         self.regular_sampler_parameters = {}
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_types = {}
+        self.hlsl_function_name_aliases = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
         self.hlsl_synchronization_function_names = {}
@@ -963,6 +965,9 @@ class HLSLCodeGen:
         self.global_variable_types = self.collect_global_variable_types(global_vars)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
+        self.hlsl_function_name_aliases = self.collect_hlsl_function_name_aliases(
+            functions
+        )
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
@@ -3275,7 +3280,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         body = getattr(func, "body", None)
         if effective_shader_type is None and body is None:
-            function_name = entry_name or func.name
+            function_name = self.hlsl_function_declaration_name(func, entry_name)
             return_semantic_attr = self.map_semantic(return_semantic)
             code += (
                 f"{return_type} {function_name}({params_str})"
@@ -3346,7 +3351,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += waveops_helper_lanes_attribute
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
-            function_name = entry_name or func.name
+            function_name = self.hlsl_function_declaration_name(func, entry_name)
             return_semantic_attr = self.map_semantic(return_semantic)
             code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
 
@@ -4833,10 +4838,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             func_name = None
             if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
                 func_name = func_expr.name
-                callee = func_name
+                callee = self.hlsl_function_call_name(func_name)
             elif isinstance(func_expr, str):
                 func_name = func_expr
-                callee = func_expr
+                callee = self.hlsl_function_call_name(func_expr)
             else:
                 callee = self.generate_expression(func_expr)
 
@@ -12456,6 +12461,38 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if hasattr(node, "body") and hasattr(node, "parameters"):
                 functions.append(node)
         return functions
+
+    def collect_hlsl_function_name_aliases(self, functions):
+        names = {
+            getattr(func, "name", None)
+            for func in functions or []
+            if getattr(func, "name", None)
+        }
+        used_names = set(names)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.structs_by_name)
+        used_names.update(getattr(self, "enum_type_names", set()))
+        used_names.update(getattr(self, "enum_struct_type_names", set()))
+        aliases = {}
+        for name in sorted(names & self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES):
+            alias = f"{name}_"
+            while (
+                alias in used_names
+                or alias in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+            ):
+                alias += "_"
+            aliases[name] = alias
+            used_names.add(alias)
+        return aliases
+
+    def hlsl_function_declaration_name(self, func, entry_name=None):
+        if entry_name:
+            return entry_name
+        name = getattr(func, "name", None)
+        return self.hlsl_function_name_aliases.get(name, name)
+
+    def hlsl_function_call_name(self, name):
+        return self.hlsl_function_name_aliases.get(name, name)
 
     def collect_function_parameters(self, functions):
         parameters = []

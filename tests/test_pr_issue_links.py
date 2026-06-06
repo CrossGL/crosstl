@@ -85,6 +85,7 @@ def test_extract_closing_issue_numbers_supports_keywords_and_same_repo_refs():
 Fixes #10 and #11
 Resolved: CrossGL/crosstl#12
 Closes https://github.com/CrossGL/crosstl/issues/13
+Fixes #19, and #20
 Related to #99
 Fixes other/repo#14
 `Fixes #15`
@@ -101,7 +102,7 @@ Closes #16
         "Fixed GH-18", body, "CrossGL/crosstl"
     )
 
-    assert numbers == [18, 10, 11, 12, 13]
+    assert numbers == [18, 10, 11, 12, 13, 19, 20]
 
 
 def test_extract_closing_issue_numbers_ignores_html_comments():
@@ -229,6 +230,23 @@ def test_sync_deduplicates_manual_closing_lines_into_managed_section():
             ),
         )
     ]
+
+
+def test_sync_strips_unmanaged_reference_lines_with_oxford_comma():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve matrix sync",
+        body="Support matrix update.\n\nRefs #10, and #11",
+        author="alice",
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(client, pr, "CrossGL/crosstl")
+
+    assert summary["linked"] == 0
+    assert summary["body_updated"] == 1
+    assert client.updated_bodies == [(5, "Support matrix update.")]
 
 
 def test_sync_adds_support_matrix_closures_from_removed_backlog_rows(

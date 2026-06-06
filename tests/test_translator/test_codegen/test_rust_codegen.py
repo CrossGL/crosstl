@@ -21859,6 +21859,30 @@ def test_bool_vector_unary_not_emits_boolean_lanes(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_scalar_numeric_unary_not_emits_boolean_comparisons(tmp_path):
+    code = """
+    bool probe(float weight, uint count) {
+        bool zeroWeight = !weight;
+        bool zeroCount = !count;
+        bool nonZeroCount = !!count;
+        return zeroWeight || zeroCount || nonZeroCount;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let zeroWeight: bool = (weight == 0.0);" in generated_code
+    assert "let zeroCount: bool = (count == 0);" in generated_code
+    assert "let nonZeroCount: bool = (!(count == 0));" in generated_code
+    assert "!weight" not in generated_code
+    assert "!count" not in generated_code
+    assert "(!weight) != 0.0" not in generated_code
+    assert "(!count) != 0" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_inferred_scalar_constructor_bindings_use_cast_types():
     code = """
     void probe() {

@@ -342,12 +342,39 @@ class MetalCodeGen:
         "dFdy": "dfdy",
     }
     METAL_STDLIB_BUILTIN_FUNCTIONS = {
+        "abs",
+        "acos",
+        "asin",
+        "atan",
+        "ceil",
         "clamp",
+        "cos",
         "cross",
+        "distance",
         "dot",
+        "exp",
+        "exp2",
+        "floor",
+        "fract",
+        "length",
+        "log",
+        "log2",
+        "max",
+        "min",
         "mix",
+        "normalize",
+        "pow",
+        "reflect",
+        "refract",
+        "round",
+        "rsqrt",
+        "sign",
+        "sin",
         "smoothstep",
+        "sqrt",
         "step",
+        "tan",
+        "trunc",
     }
     METAL_BITCAST_FUNCTION_TARGETS = {
         "asfloat": "float",
@@ -7287,9 +7314,14 @@ class MetalCodeGen:
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
-            if func_name == "normalize":
+            if func_name == "normalize" and func_name not in self.user_function_names:
                 args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"normalize({args})"
+                call_name = (
+                    "metal::normalize"
+                    if self.metal_function_name_is_shadowed("normalize")
+                    else "normalize"
+                )
+                return f"{call_name}({args})"
             if func_name == "inverse" and len(expr.args) == 1:
                 arg_type = self.map_type(self.expression_result_type(expr.args[0]))
                 if arg_type in {"float3x3", "float4x4"}:

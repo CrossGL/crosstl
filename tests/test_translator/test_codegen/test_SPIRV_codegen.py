@@ -474,6 +474,50 @@ class TestVulkanSPIRVCodeGen:
         assert "OpReturn" in spv_code
         assert "OpFunctionEnd" in spv_code
 
+    def test_bare_return_in_non_void_helper_emits_typed_default_return(self, tmp_path):
+        source_code = """
+        shader NonVoidBareReturn {
+            compute {
+                float fallback() {
+                    return;
+                }
+
+                void main() {
+                    float value = fallback();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32\b", spv_code)
+        assert float_type is not None
+        helper = re.search(
+            rf"(?P<function>%\d+) = OpFunction {re.escape(float_type.group(1))} "
+            r"None %\d+\n(?P<body>.*?)OpFunctionEnd",
+            spv_code,
+            re.DOTALL,
+        )
+        assert helper is not None
+
+        helper_body_lines = helper.group("body").splitlines()
+        assert any(
+            "Bare return in non-void function fallback" in line
+            for line in helper_body_lines
+        )
+        assert any(line.startswith("OpReturnValue ") for line in helper_body_lines)
+        assert "OpReturn" not in helper_body_lines
+        assert re.search(
+            rf"%\d+ = OpFunctionCall {re.escape(float_type.group(1))} "
+            rf"{re.escape(helper.group('function'))}\s*$",
+            spv_code,
+            re.MULTILINE,
+        )
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_shader_generation_ignores_frontend_enum_declarations_in_structs(self):
         source_code = """
         shader EnumDeclarations {

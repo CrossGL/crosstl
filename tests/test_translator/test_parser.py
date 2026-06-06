@@ -9,6 +9,7 @@ from crosstl.translator.ast import (
     ConstructorNode,
     ConstructorPatternNode,
     DoWhileNode,
+    ExpressionStatementNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
@@ -285,6 +286,80 @@ def test_range_expression_preserves_assignment_rhs():
     assert assignment.value.start.value == 2
     assert assignment.value.end.value == 5
     assert not isinstance(assignment.target, RangeNode)
+
+
+def test_comma_separated_variable_declarations_parse_as_separate_nodes():
+    code = """
+    shader main {
+        float roughness = 0.5, metallic = 1.0;
+
+        void helper() {
+            float localRoughness = roughness, localMetallic = metallic;
+            localRoughness = localMetallic;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+
+    assert [variable.name for variable in ast.global_variables] == [
+        "roughness",
+        "metallic",
+    ]
+    assert [statement.name for statement in helper.body.statements[:2]] == [
+        "localRoughness",
+        "localMetallic",
+    ]
+    assert isinstance(helper.body.statements[2], ExpressionStatementNode)
+
+
+def test_comma_separated_struct_and_cbuffer_members_parse_as_separate_nodes():
+    code = """
+    shader main {
+        struct Material {
+            float roughness, metallic;
+            vec4 color : COLOR0, emissive : COLOR1;
+        };
+
+        cbuffer Constants {
+            float weights[4], offsets[2];
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    material = ast.structs[0]
+    constants = ast.cbuffers[0]
+
+    assert [member.name for member in material.members] == [
+        "roughness",
+        "metallic",
+        "color",
+        "emissive",
+    ]
+    assert [attr.name for attr in material.members[2].attributes] == ["COLOR0"]
+    assert [attr.name for attr in material.members[3].attributes] == ["COLOR1"]
+    assert [member.name for member in constants.members] == ["weights", "offsets"]
+    assert constants.members[0].member_type.size.value == 4
+    assert constants.members[1].member_type.size.value == 2
+
+
+def test_statement_attributes_apply_to_comma_separated_declarations():
+    code = """
+    shader main {
+        void helper() {
+            @precise float roughness = 0.5, metallic = 1.0;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    helper = ast.functions[0]
+    roughness, metallic = helper.body.statements
+
+    assert [attr.name for attr in roughness.attributes] == ["precise"]
+    assert [attr.name for attr in metallic.attributes] == ["precise"]
 
 
 def test_keyword_like_binding_identifiers_parse_in_declarations():

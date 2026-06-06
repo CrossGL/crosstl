@@ -5997,6 +5997,32 @@ def test_hlsl_two_argument_atan_renames_shadowed_atan2_locals():
     assert "float atan2 = direction.x;" not in generated_code
 
 
+def test_hlsl_two_argument_atan_renames_shadowed_global_atan2_function():
+    shader = """
+    shader HlslAtan2GlobalTargetShadowing {
+        float atan2(float x) {
+            return x + 1.0;
+        }
+
+        fragment {
+            vec4 main(vec2 direction @ TEXCOORD0) @ gl_FragColor {
+                float helper = atan2(direction.x);
+                float angle = atan(direction.y, direction.x) + helper;
+                return vec4(angle, helper, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float atan2_(float x)" in generated_code
+    assert "float helper = atan2_(direction.x);" in generated_code
+    assert "float angle = (atan2(direction.y, direction.x) + helper);" in generated_code
+    assert "float atan2(float x)" not in generated_code
+    assert "atan2(direction.x)" not in generated_code
+
+
 def test_hlsl_inversesqrt_lowers_to_rsqrt_intrinsic():
     shader = """
     shader HlslInverseSqrtBuiltinLowering {
