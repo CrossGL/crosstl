@@ -104,10 +104,10 @@ the repository. Each smoke check is bounded by a short subprocess timeout, and
 timeouts are reported as failed toolchain runs. Validation reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, hash-status, toolchain status,
-toolchain-run status, toolchain-run target, and toolchain-run variant rollups
-for validation results. The default output is JSON; ``--format text`` prints a
-concise validation summary with the same rollups, and ``--format sarif`` emits
-validation diagnostics as SARIF.
+toolchain-run status, toolchain-run target, toolchain-run source backend, and
+toolchain-run variant rollups for validation results. The default output is
+JSON; ``--format text`` prints a concise validation summary with the same
+rollups, and ``--format sarif`` emits validation diagnostics as SARIF.
 
 Inspect an existing report as a concise JSON, text, or SARIF summary:
 
@@ -382,8 +382,8 @@ Project reports are JSON documents with:
   target declaration checks, scan-scope count consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact coverage,
-  toolchain-run target and variant rollups, toolchain target coverage and
-  status consistency checks,
+  toolchain-run target, source-backend, and variant rollups, toolchain target
+  coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,
   current include dependency status, resolved-path, resolved-hash,
   source-backend status rollup, and resolution-source checks, resolved and

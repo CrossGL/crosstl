@@ -2998,6 +2998,12 @@ def _validation_toolchain_run_status_by_target(
     return _validation_run_status_rollup(runs, "target")
 
 
+def _validation_toolchain_run_status_by_source_backend(
+    runs: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    return _validation_run_status_rollup(runs, "sourceBackend")
+
+
 def _validation_toolchain_run_status_by_variant(
     runs: Sequence[Any],
 ) -> dict[str, dict[str, int]]:
@@ -3523,6 +3529,9 @@ def inspect_project_report(
     toolchain_status_counts = validation_report.get("toolchainStatusCounts")
     toolchain_run_status_counts = validation_report.get("toolchainRunStatusCounts")
     toolchain_run_status_by_target = validation_report.get("toolchainRunStatusByTarget")
+    toolchain_run_status_by_source_backend = validation_report.get(
+        "toolchainRunStatusBySourceBackend"
+    )
     toolchain_run_status_by_variant = validation_report.get(
         "toolchainRunStatusByVariant"
     )
@@ -3584,6 +3593,13 @@ def inspect_project_report(
                 dict(toolchain_run_status_by_target)
                 if isinstance(toolchain_run_status_by_target, Mapping)
                 else _validation_toolchain_run_status_by_target(
+                    _record_sequence(validation_toolchain_runs)
+                )
+            ),
+            "toolchainRunStatusBySourceBackend": (
+                dict(toolchain_run_status_by_source_backend)
+                if isinstance(toolchain_run_status_by_source_backend, Mapping)
+                else _validation_toolchain_run_status_by_source_backend(
                     _record_sequence(validation_toolchain_runs)
                 )
             ),
@@ -4445,6 +4461,11 @@ def _validation_report_payload(
         ),
         "toolchainRunStatusByTarget": _validation_toolchain_run_status_by_target(
             validation_toolchain_runs
+        ),
+        "toolchainRunStatusBySourceBackend": (
+            _validation_toolchain_run_status_by_source_backend(
+                validation_toolchain_runs
+            )
         ),
         "toolchainRunStatusByVariant": _validation_toolchain_run_status_by_variant(
             validation_toolchain_runs
@@ -6629,6 +6650,14 @@ def _toolchain_run_contract_reasons(
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
             reasons.append(f"{prefix}.variant must be listed in project.variants")
+    if "sourceBackend" in run:
+        reasons.extend(
+            _source_backend_contract_reasons(
+                f"{prefix}.sourceBackend",
+                run.get("sourceBackend"),
+                require_registered=True,
+            )
+        )
     identity = _artifact_identity(run)
     if (
         identity is not None
@@ -8219,6 +8248,8 @@ def _run_toolchain_smoke(
             "stdout": stdout[-4000:],
             "stderr": stderr[-4000:],
         }
+        if _is_non_empty_string(artifact.get("sourceBackend")):
+            run["sourceBackend"] = artifact["sourceBackend"]
         if artifact.get("variant") is not None:
             run["variant"] = artifact["variant"]
         runs.append(run)

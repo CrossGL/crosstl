@@ -142,8 +142,9 @@ def test_project_report_inspection_is_first_class_support_feature():
         )
         assert (
             "validation hash-status, diagnostic-code, missing-capability, "
-            "toolchain-status, toolchain-run, and artifact target and variant "
-            "rollups" in (backend_support["notes"])
+            "toolchain-status, toolchain-run target, source-backend, and variant "
+            "rollups plus artifact target and variant rollups"
+            in (backend_support["notes"])
         )
         assert "configurable diagnostic and failed-artifact truncation" in (
             backend_support["notes"]

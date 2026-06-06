@@ -3149,6 +3149,7 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     }
     assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 0}
     assert payload["toolchainRunStatusByTarget"] == {}
+    assert payload["toolchainRunStatusBySourceBackend"] == {}
     assert payload["toolchainRunStatusByVariant"] == {}
 
 
@@ -4303,6 +4304,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                     "toolchainRuns": [
                         {
                             "source": "",
+                            "sourceBackend": "",
                             "target": "",
                             "path": "",
                             "variant": "",
@@ -4390,6 +4392,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].source must be a string" in (
+        diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].sourceBackend must be a string" in (
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].target must be a string" in (
@@ -7399,6 +7404,7 @@ def _write_opengl_toolchain_report(repo, *, variant=None):
         project["variantDefineCounts"] = {variant: 0}
     artifact_record = {
         "source": "simple.cgl",
+        "sourceBackend": "cgl",
         "target": "opengl",
         "path": artifact.relative_to(repo).as_posix(),
         "status": "translated",
@@ -7449,6 +7455,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["diagnostics"][0]["target"] == "opengl"
     assert payload["diagnostics"][0]["location"]["file"] == ("out/opengl/simple.glsl")
     assert payload["validation"]["toolchainRuns"][0]["status"] == "failed"
+    assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "cgl"
     assert payload["validation"]["toolchainRuns"][0]["returncode"] == 2
     assert payload["validation"]["toolchainRuns"][0]["stderr"] == (
         "shader validation failed"
@@ -7461,6 +7468,9 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["toolchainRunStatusCounts"] == {"failed": 1, "ok": 0}
     assert payload["toolchainRunStatusByTarget"] == {
         "opengl": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["toolchainRunStatusBySourceBackend"] == {
+        "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
     assert payload["toolchainRunStatusByVariant"] == {}
 
@@ -7477,6 +7487,10 @@ def test_validate_project_report_records_toolchain_failures(
     stdout = capsys.readouterr().out
     assert (
         "Validation toolchain runs by target: opengl=1 run (0 ok, 1 failed)" in stdout
+    )
+    assert (
+        "Validation toolchain runs by source backend: cgl=1 run (0 ok, 1 failed)"
+        in stdout
     )
 
 
@@ -7505,9 +7519,13 @@ def test_validate_project_report_records_toolchain_run_variant_rollups(
 
     assert payload["success"] is True
     assert payload["validation"]["toolchainRuns"][0]["variant"] == "debug"
+    assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "cgl"
     assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 1}
     assert payload["toolchainRunStatusByTarget"] == {
         "opengl": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert payload["toolchainRunStatusBySourceBackend"] == {
+        "cgl": {"runCount": 1, "okCount": 1, "failedCount": 0}
     }
     assert payload["toolchainRunStatusByVariant"] == {
         "debug": {"runCount": 1, "okCount": 1, "failedCount": 0}
@@ -7543,6 +7561,7 @@ def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatc
     assert "timed out after" in payload["diagnostics"][0]["message"]
     run = payload["validation"]["toolchainRuns"][0]
     assert run["status"] == "failed"
+    assert run["sourceBackend"] == "cgl"
     assert run["returncode"] == project_pipeline.TOOLCHAIN_TIMEOUT_RETURNCODE
     assert run["stdout"] == "partial stdout"
     assert run["stderr"] == (
@@ -7553,6 +7572,9 @@ def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatc
     assert payload["toolchainRunStatusCounts"] == {"failed": 1, "ok": 0}
     assert payload["toolchainRunStatusByTarget"] == {
         "opengl": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["toolchainRunStatusBySourceBackend"] == {
+        "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
     assert payload["toolchainRunStatusByVariant"] == {}
 
@@ -7587,6 +7609,9 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
     assert inspection["validation"]["toolchainRunStatusByTarget"] == {
         "opengl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
+    assert inspection["validation"]["toolchainRunStatusBySourceBackend"] == {
+        "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
     assert inspection["validation"]["toolchainRunStatusByVariant"] == {}
 
     exit_code = crosstl_cli.main(
@@ -7603,6 +7628,10 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
     assert "Validation toolchain runs: failed=1" in stdout
     assert (
         "Validation toolchain runs by target: opengl=1 run (0 ok, 1 failed)" in stdout
+    )
+    assert (
+        "Validation toolchain runs by source backend: cgl=1 run (0 ok, 1 failed)"
+        in stdout
     )
 
 
@@ -8696,6 +8725,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "ok": 0,
     }
     assert payload["validation"]["toolchainRunStatusByTarget"] == {}
+    assert payload["validation"]["toolchainRunStatusBySourceBackend"] == {}
     assert payload["validation"]["toolchainRunStatusByVariant"] == {}
     assert payload["validation"]["artifactStatusByTarget"] == {
         "cgl": {
