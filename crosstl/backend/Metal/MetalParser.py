@@ -1610,6 +1610,11 @@ class MetalParser:
     def apply_declarator_type_suffix(self, vtype, type_suffix):
         return f"{vtype}{type_suffix}" if type_suffix else vtype
 
+    def base_type_for_remaining_declarators(self, vtype):
+        while vtype.endswith(("*", "&")):
+            vtype = vtype[:-1]
+        return vtype
+
     def apply_declarator_metadata(self, var_node, type_suffix, grouped_suffix):
         if not type_suffix:
             return
@@ -2375,6 +2380,7 @@ class MetalParser:
         alignas_specs = self.parse_alignas_specifiers()
         attributes.extend(self.parse_attributes())
         vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
+        base_vtype = self.base_type_for_remaining_declarators(vtype)
         name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         attributes.extend(self.parse_attributes())
@@ -2394,7 +2400,7 @@ class MetalParser:
             return var_node
         if self.current_token[0] == "COMMA":
             return self.parse_remaining_variable_declarations(
-                vtype, qualifiers, [var_node]
+                base_vtype, qualifiers, [var_node]
             )
 
         if self.current_token[0] in [
@@ -2416,7 +2422,7 @@ class MetalParser:
             node = AssignmentNode(var_node, value, op)
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_variable_declarations(
-                    vtype, qualifiers, [node]
+                    base_vtype, qualifiers, [node]
                 )
             self.eat("SEMICOLON")
             return node
@@ -2426,7 +2432,7 @@ class MetalParser:
             node = AssignmentNode(var_node, VectorConstructorNode(vtype, args))
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_variable_declarations(
-                    vtype, qualifiers, [node]
+                    base_vtype, qualifiers, [node]
                 )
             self.eat("SEMICOLON")
             return node
@@ -2435,7 +2441,7 @@ class MetalParser:
             node = AssignmentNode(var_node, self.parse_initializer_list())
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_variable_declarations(
-                    vtype, qualifiers, [node]
+                    base_vtype, qualifiers, [node]
                 )
             self.eat("SEMICOLON")
             return node

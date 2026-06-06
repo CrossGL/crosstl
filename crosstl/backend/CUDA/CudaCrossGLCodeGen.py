@@ -5249,7 +5249,10 @@ class CudaToCrossGLConverter:
 
     def visit_TypeAliasNode(self, node):
         self.register_type_alias(node.name, node.alias_type)
-        alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
+        if self.is_decltype_type_name(node.alias_type):
+            alias_type = node.alias_type
+        else:
+            alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
 
     def format_atomic_argument(self, arg, index):
@@ -5672,7 +5675,13 @@ class CudaToCrossGLConverter:
         if "*" in cuda_type:
             return self.convert_cuda_pointer_type(cuda_type)
 
+        if self.is_decltype_type_name(cuda_type):
+            return "auto"
+
         return type_mapping.get(cuda_type, cuda_type)
+
+    def is_decltype_type_name(self, type_name):
+        return isinstance(type_name, str) and type_name.strip().startswith("decltype(")
 
     def convert_cooperative_group_type(self, cuda_type):
         metadata = self.cooperative_group_metadata_from_type(cuda_type)

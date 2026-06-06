@@ -81,6 +81,33 @@ def test_imports_emit_as_parseable_crossgl_unit_preamble():
     cgl_translator.parse(generated_code)
 
 
+def test_numthreads_without_shader_attribute_codegen_emits_compute_layout():
+    code = """
+    Texture2D<uint> gStatsRayCount;
+    RWTexture2D<uint> gStatsRayCountTotal;
+
+    [numthreads(16, 16, 1)]
+    void main(uint3 dispatchThreadId : SV_DispatchThreadID)
+    {
+        uint totalRays = gStatsRayCount[dispatchThreadId.xy];
+        gStatsRayCountTotal[dispatchThreadId.xy] = totalRays;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert (
+        "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "uvec3 dispatchThreadId @ gl_GlobalInvocationID" in generated_code
+    assert "gStatsRayCountTotal[dispatchThreadId.xy] = totalRays;" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_array_member_codegen():
     code = """
     struct Cluster {

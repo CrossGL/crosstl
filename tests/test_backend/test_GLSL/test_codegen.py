@@ -165,6 +165,35 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+def test_codegen_fragment_output_array_roundtrip_uses_direct_declaration():
+    # Fragment output arrays are a common MRT pattern; they cannot be modeled as
+    # a scalar fragment return value without corrupting indexed writes.
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) out vec4 fragColor[2];
+
+        void main() {
+            fragColor[0] = vec4(1.0);
+            fragColor[1] = vec4(0.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "out vec4 fragColor[2] @location(0);" in crossgl
+    assert "void main()" in crossgl
+    assert "vec4 main()" not in crossgl
+    assert "vec4 fragColor;" not in crossgl
+    assert "return fragColor;" not in crossgl
+    assert "fragColor[0] = vec4(1.0);" in crossgl
+    assert "fragColor[1] = vec4(0.0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "layout(location = 0) out vec4 fragColor[2];" in glsl
+    assert "fragColor[0] = vec4(1.0);" in glsl
+    assert "fragColor[1] = vec4(0.0);" in glsl
+
+
 def test_codegen_shadertoy_main_image_synthesizes_fragment_entrypoint():
     # Shadertoy-style fragments provide mainImage instead of GLSL main.
     code = textwrap.dedent("""

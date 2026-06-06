@@ -5821,7 +5821,10 @@ class HipToCrossGLConverter:
 
     def visit_TypeAliasNode(self, node):
         self.register_type_alias(node.name, node.alias_type)
-        alias_type = self.convert_hip_type_to_crossgl(node.alias_type)
+        if self.is_decltype_type_name(node.alias_type):
+            alias_type = node.alias_type
+        else:
+            alias_type = self.convert_hip_type_to_crossgl(node.alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
 
     def visit_MemberAccessNode(self, node):
@@ -6335,7 +6338,13 @@ class HipToCrossGLConverter:
         if pointer_depth:
             return self.convert_hip_pointer_type(hip_type)
 
+        if self.is_decltype_type_name(hip_type):
+            return "auto"
+
         return type_mapping.get(hip_type, hip_type)
+
+    def is_decltype_type_name(self, type_name):
+        return isinstance(type_name, str) and type_name.strip().startswith("decltype(")
 
     def strip_union_type_keyword(self, hip_type):
         if not isinstance(hip_type, str) or not hip_type.startswith("union "):

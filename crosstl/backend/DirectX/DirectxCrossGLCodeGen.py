@@ -3171,16 +3171,20 @@ class HLSLToCrossGLConverter:
         return rendered
 
     def generate_for_loop(self, node, indent, is_main):
-        def render_initializer(initializer):
+        def render_initializer(initializer, include_type=True):
             if isinstance(initializer, VariableNode):
                 array_suffix = self.format_array_suffixes(initializer, is_main)
                 qualifier_prefix = self.format_local_storage_qualifier_prefix(
                     initializer
                 ) + self.format_precise_qualifier_prefix(initializer)
-                text = (
-                    f"{qualifier_prefix}{self.map_variable_type(initializer)} "
-                    f"{self.render_identifier(initializer.name)}{array_suffix}"
-                )
+                declarator = f"{self.render_identifier(initializer.name)}{array_suffix}"
+                if include_type:
+                    text = (
+                        f"{qualifier_prefix}{self.map_variable_type(initializer)} "
+                        f"{declarator}"
+                    )
+                else:
+                    text = declarator
                 if initializer.value is not None:
                     text += f" = {self.generate_expression(initializer.value, is_main)}"
                 self.record_variable_type(initializer)
@@ -3188,7 +3192,13 @@ class HLSLToCrossGLConverter:
             return self.generate_expression(initializer, is_main)
 
         if isinstance(node.init, list):
-            init = ", ".join(render_initializer(item) for item in node.init)
+            declaration_list = all(isinstance(item, VariableNode) for item in node.init)
+            init = ", ".join(
+                render_initializer(
+                    item, include_type=not declaration_list or index == 0
+                )
+                for index, item in enumerate(node.init)
+            )
         elif isinstance(node.init, VariableNode):
             init = render_initializer(node.init)
         elif node.init is None:

@@ -595,7 +595,7 @@ class SlangToCrossGLConverter:
             code += self.generate_cbuffers(ast)
 
         for func in ast.functions:
-            qualifier = normalize_stage_name(func.qualifier)
+            qualifier = self.effective_function_qualifier(func)
             if qualifier == "vertex":
                 code += "    vertex {\n"
                 code += self.generate_function(func)
@@ -675,6 +675,14 @@ class SlangToCrossGLConverter:
         return isinstance(node, StructNode) and getattr(
             node, "is_forward_declaration", False
         )
+
+    def effective_function_qualifier(self, func):
+        qualifier = normalize_stage_name(getattr(func, "qualifier", None))
+        if qualifier:
+            return qualifier
+        if getattr(func, "numthreads", None):
+            return "compute"
+        return qualifier
 
     def format_import_path(self, path):
         path = str(path)
@@ -890,7 +898,7 @@ class SlangToCrossGLConverter:
 
     def is_entry_like_function(self, func):
         return bool(
-            normalize_stage_name(getattr(func, "qualifier", None))
+            self.effective_function_qualifier(func)
             or getattr(func, "semantic", None)
             or getattr(func, "name", None) == "main"
         )

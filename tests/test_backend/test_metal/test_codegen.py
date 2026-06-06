@@ -1145,6 +1145,24 @@ def test_codegen_multi_declarator_for_header_from_mlx_conv_loader():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_comma_separated_pointer_declarators_keep_own_suffixes():
+    code = """
+    void main() {
+        thread float *a, *b;
+        thread float *c, d;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "thread float* a;" in crossgl
+    assert "thread float* b;" in crossgl
+    assert "thread float* c;" in crossgl
+    assert "thread float d;" in crossgl
+    assert "thread float** b;" not in crossgl
+    assert "thread float* d;" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_range_for_loop_from_mlx_random():
     code = """
     void mix_values() {
