@@ -2147,6 +2147,7 @@ class MetalToCrossGLConverter:
                 "texture1d_array",
                 "texture2d",
                 "texture2d_array",
+                "texture_buffer",
                 "texture3d",
             }
         )
@@ -2210,6 +2211,7 @@ class MetalToCrossGLConverter:
             "texture1d_array": "image1DArray",
             "texture2d": "image2D",
             "texture2d_array": "image2DArray",
+            "texture_buffer": "imageBuffer",
             "texture3d": "image3D",
         }.get(base_name)
         if image_type is None:

@@ -292,10 +292,15 @@ def test_plain_glsl_registry_infers_vulkan_stage_from_glslang_suffix(
         (".vert.glsl", "vertex", ShaderStage.VERTEX),
         (".frag.glsl", "fragment", ShaderStage.FRAGMENT),
         (".comp.glsl", "compute", ShaderStage.COMPUTE),
+        ("_vert.glsl", "vertex", ShaderStage.VERTEX),
+        ("_frag.glsl", "fragment", ShaderStage.FRAGMENT),
+        ("_comp.glsl", "compute", ShaderStage.COMPUTE),
+        ("_geom.glsl", "geometry", ShaderStage.GEOMETRY),
         (".rgen.glsl", "ray_generation", ShaderStage.RAY_GENERATION),
         (".rchit.glsl", "ray_closest_hit", ShaderStage.RAY_CLOSEST_HIT),
         (".mesh.glsl", "mesh", ShaderStage.MESH),
         (".FRAG.GLSL", "fragment", ShaderStage.FRAGMENT),
+        ("_FRAG.GLSL", "fragment", ShaderStage.FRAGMENT),
     ],
 )
 def test_plain_glsl_registry_infers_vulkan_stage_from_compound_suffix(
@@ -323,11 +328,20 @@ def test_plain_glsl_registry_infers_vulkan_stage_from_compound_suffix(
 @pytest.mark.parametrize(
     ("extension", "expected_shader_type"),
     [
+        (".vertex", "vertex"),
+        (".fragment", "fragment"),
+        (".compute", "compute"),
+        (".geometry", "geometry"),
         (".vert.glsl", "vertex"),
         (".frag.glsl", "fragment"),
         (".comp.glsl", "compute"),
+        ("eevee_film_vert.glsl", "vertex"),
+        ("eevee_film_frag.glsl", "fragment"),
+        ("eevee_film_comp.glsl", "compute"),
+        ("eevee_film_geom.glsl", "geometry"),
         (".rgen.glsl", "ray_generation"),
         (".FRAG.GLSL", "fragment"),
+        ("EEVEE_FILM_FRAG.GLSL", "fragment"),
     ],
 )
 def test_plain_glsl_registry_infers_stage_from_explicit_compound_extension_string(

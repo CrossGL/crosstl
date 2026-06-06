@@ -52,7 +52,19 @@ class CodeFormatter:
 
         if ext in [".hlsl", ".hlsli", ".fx", ".fxh"]:
             return ShaderLanguage.HLSL
-        elif ext in [".glsl", ".vert", ".frag", ".comp", ".geom", ".tese", ".tesc"]:
+        elif ext in [
+            ".glsl",
+            ".vert",
+            ".vertex",
+            ".frag",
+            ".fragment",
+            ".comp",
+            ".compute",
+            ".geom",
+            ".geometry",
+            ".tese",
+            ".tesc",
+        ]:
             return ShaderLanguage.GLSL
         elif ext in [".metal"]:
             return ShaderLanguage.METAL

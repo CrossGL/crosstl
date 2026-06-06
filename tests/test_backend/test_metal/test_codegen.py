@@ -391,6 +391,42 @@ def test_codegen_storage_texture_alias_uses_image_read_write():
     parse_crossgl(crossgl)
 
 
+def test_codegen_access_qualified_texture_buffer_uses_image_buffer():
+    code = """
+    typedef texture_buffer<uint, access::read_write> RWCounterBuffer;
+
+    float4 readLine(texture_buffer<float, access::read> line, uint index) {
+        return line.read(index);
+    }
+
+    void writeSigned(texture_buffer<int, access::write> outLine,
+                     uint index,
+                     int4 value) {
+        outLine.write(value, index);
+    }
+
+    uint4 updateCounter(RWCounterBuffer counters, uint index, uint4 value) {
+        counters.write(value, index);
+        return counters.read(index);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef uimageBuffer RWCounterBuffer;" not in crossgl
+    assert "vec4 readLine(imageBuffer line @readonly, uint index)" in crossgl
+    assert "void writeSigned(iimageBuffer outLine @writeonly" in crossgl
+    assert (
+        "uvec4 updateCounter(uimageBuffer counters @readwrite, "
+        "uint index, uvec4 value)"
+    ) in crossgl
+    assert "return imageLoad(line, index);" in crossgl
+    assert "imageStore(outLine, index, value);" in crossgl
+    assert "imageStore(counters, index, value);" in crossgl
+    assert "return imageLoad(counters, index);" in crossgl
+    assert "unsupported Metal sampled texture write" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     code = """
     #include <metal_stdlib>

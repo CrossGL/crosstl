@@ -289,10 +289,14 @@ _GLSL_EXTENSION_SHADER_TYPES = {
     ".glsl": "auto",
     ".vs": "vertex",
     ".vert": "vertex",
+    ".vertex": "vertex",
     ".fs": "fragment",
     ".frag": "fragment",
+    ".fragment": "fragment",
     ".comp": "compute",
+    ".compute": "compute",
     ".geom": "geometry",
+    ".geometry": "geometry",
     ".tesc": "tessellation_control",
     ".tese": "tessellation_evaluation",
     ".mesh": "mesh",
@@ -305,10 +309,37 @@ _GLSL_EXTENSION_SHADER_TYPES = {
     ".rcall": "ray_callable",
 }
 
+_GLSL_FILENAME_STAGE_SUFFIX_TYPES = {
+    "_vs": "vertex",
+    "_vert": "vertex",
+    "_vertex": "vertex",
+    "_fs": "fragment",
+    "_frag": "fragment",
+    "_fragment": "fragment",
+    "_comp": "compute",
+    "_compute": "compute",
+    "_geom": "geometry",
+    "_geometry": "geometry",
+    "_tesc": "tessellation_control",
+    "_tese": "tessellation_evaluation",
+    "_mesh": "mesh",
+    "_task": "task",
+    "_rgen": "ray_generation",
+    "_rint": "ray_intersection",
+    "_rahit": "ray_any_hit",
+    "_rchit": "ray_closest_hit",
+    "_rmiss": "ray_miss",
+    "_rcall": "ray_callable",
+}
+
 
 def _glsl_shader_type_from_path(file_path: str) -> str | None:
     stem, ext = os.path.splitext(os.path.basename(file_path))
     ext = _normalize_extension(ext)
+    if not ext:
+        shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(stem))
+        if shader_type and shader_type != "auto":
+            return shader_type
     if ext == ".glsl":
         _, stage_ext = os.path.splitext(stem)
         shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(stage_ext))
@@ -319,6 +350,10 @@ def _glsl_shader_type_from_path(file_path: str) -> str | None:
         )
         if shader_type and shader_type != "auto":
             return shader_type
+        normalized_stem = stem.lower()
+        for suffix, shader_type in _GLSL_FILENAME_STAGE_SUFFIX_TYPES.items():
+            if normalized_stem.endswith(suffix):
+                return shader_type
     return _GLSL_EXTENSION_SHADER_TYPES.get(ext)
 
 
@@ -407,9 +442,13 @@ def register_default_sources() -> None:
                 ".vs",
                 ".fs",
                 ".vert",
+                ".vertex",
                 ".frag",
+                ".fragment",
                 ".comp",
+                ".compute",
                 ".geom",
+                ".geometry",
                 ".tesc",
                 ".tese",
                 ".mesh",

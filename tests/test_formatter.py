@@ -39,7 +39,11 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.fxh") == ShaderLanguage.HLSL
         assert formatter.detect_language("shader.glsl") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.vert") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.vertex") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.frag") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.fragment") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.compute") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.geometry") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.metal") == ShaderLanguage.METAL
         assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.vulkan") == ShaderLanguage.SPIRV

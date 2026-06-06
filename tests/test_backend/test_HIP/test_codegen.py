@@ -943,6 +943,46 @@ class TestHipCodeGen:
         assert "__syncthreads_or((idx < n))" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_rocm_hip_ldg_address_load_codegen_reparse(self):
+        # Reduced from ROCm hip-tests catch/unit/deviceLib/ldg.cc read-only loads.
+        code = """
+        __global__ void read_only(const float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldg(&input[idx]);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[idx] = input[idx];" in result
+        assert "__ldg" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_ldg_non_address_operand_emits_expression_safe_diagnostic(self):
+        code = """
+        __global__ void read_only(float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldg(input + idx);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "/* hip load cache intrinsic __ldg((input + idx)) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert "__ldg(input + idx)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
         code = """
         __global__ void warp(unsigned long long mask, int pred, int value, int lane, unsigned int* out) {

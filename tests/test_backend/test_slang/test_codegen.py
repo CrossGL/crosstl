@@ -366,6 +366,33 @@ def test_texcoord7_semantic_codegen_matches_directx_common_semantics():
     cgl_translator.parse(generated_code)
 
 
+def test_high_texcoord_semantic_codegen_matches_hlsl_varying_packing():
+    code = """
+    struct VertexOutput {
+        float2 uv9 : TEXCOORD9;
+        float3 detailWeights : TEXCOORD12;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input, float2 fallbackUV : TEXCOORD10) : SV_Target0
+    {
+        return float4(input.uv9 + fallbackUV, input.detailWeights.x, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec2 uv9 @ TexCoord9;" in generated_code
+    assert "vec3 detailWeights @ TexCoord12;" in generated_code
+    assert "vec2 fallbackUV @ TexCoord10" in generated_code
+    assert "@ TEXCOORD9" not in generated_code
+    assert "@ TEXCOORD10" not in generated_code
+    assert "@ TEXCOORD12" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names():
     code = """
     [shader("compute")]

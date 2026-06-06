@@ -888,6 +888,40 @@ def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     assert "texture(sExt, vec2(0.2))" in crossgl
     assert "texture(highExt, vec2(0.2))" in crossgl
 
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "uniform __samplerExternal2DY2YEXT sExt;" in glsl
+    assert "uniform __samplerExternal2DY2YEXT highExt;" in glsl
+    assert "texture(sExt, vec2(0.2))" in glsl
+    assert "texture(highExt, vec2(0.2))" in glsl
+
+
+def test_codegen_external_oes_sampler_roundtrips_to_glsl():
+    # Common in Android/OpenGL ES camera and video texture shaders.
+    code = textwrap.dedent("""
+        #version 300 es
+        #extension GL_OES_EGL_image_external_essl3 : require
+        precision mediump float;
+
+        uniform samplerExternalOES cameraTexture;
+        layout(location = 0) in vec2 vTexCoord;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(cameraTexture, vTexCoord);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "samplerExternalOES cameraTexture;" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "texture(cameraTexture, input.vTexCoord)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "#extension GL_OES_EGL_image_external_essl3 : require" in glsl
+    assert "uniform samplerExternalOES cameraTexture;" in glsl
+    assert "texture(cameraTexture, vTexCoord)" in glsl
+
 
 def test_codegen_subroutine_metadata_from_khronos_shader_subroutine():
     code = textwrap.dedent("""

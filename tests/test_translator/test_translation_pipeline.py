@@ -173,6 +173,49 @@ def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     assert "gl_Position" not in generated
 
 
+@pytest.mark.parametrize(
+    ("filename", "source", "stage", "expected_crossgl"),
+    (
+        (
+            "shader.vertex",
+            """
+            #version 450 core
+            layout(location = 0) in vec2 position;
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+            }
+            """,
+            ShaderStage.VERTEX,
+            "VertexOutput main(VertexInput input)",
+        ),
+        (
+            "eevee_film_frag.glsl",
+            """
+            #version 450 core
+            layout(location = 0) in vec2 vUV;
+            layout(location = 0) out vec4 fragColor;
+            void main() {
+                fragColor = vec4(vUV, 0.0, 1.0);
+            }
+            """,
+            ShaderStage.FRAGMENT,
+            "fragment {",
+        ),
+    ),
+)
+def test_glsl_real_world_stage_filename_conventions_translate_to_crossgl(
+    tmp_path, filename, source, stage, expected_crossgl
+):
+    source_path = _write_source(tmp_path, filename, source)
+
+    generated = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    shader_ast = crosstl.translator.parse(generated)
+    assert stage in shader_ast.stages
+    assert expected_crossgl in generated
+
+
 UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS = {
     "shader.spv": "Binary SPIR-V input files",
     "shader.spirv": "Binary SPIR-V input files",
