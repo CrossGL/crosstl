@@ -42,6 +42,7 @@ class SlangToCrossGLConverter:
     RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
     HLSL_NAMESPACE_PREFIX = "hlsl::"
     HLSL_NAMESPACE_SPECIAL_BUILTINS = {"mad", "mul", "rcp", "saturate", "sincos"}
+    HLSL_NAMESPACE_BITCAST_BUILTINS = {"asfloat", "asint", "asuint"}
     HLSL_NAMESPACE_PASSTHROUGH_BUILTINS = {
         "abs",
         "acos",
@@ -1367,9 +1368,18 @@ class SlangToCrossGLConverter:
             mad_call = self.generate_mad_call(expr, is_main, function_name)
             if mad_call is not None:
                 return mad_call
-            args = ", ".join(
+            rendered_args = [
                 self.generate_expression(arg, is_main) for arg in expr.args
+            ]
+            bitcast_call = self.generate_bitcast_intrinsic_call(
+                function_name,
+                expr.args,
+                rendered_args,
+                is_hlsl_namespace_builtin or expr.name not in self.user_function_names,
             )
+            if bitcast_call is not None:
+                return bitcast_call
+            args = ", ".join(rendered_args)
             if (
                 function_name == "saturate"
                 and len(expr.args) == 1
@@ -1602,9 +1612,34 @@ class SlangToCrossGLConverter:
     def is_known_hlsl_namespace_builtin(self, name):
         return (
             name in self.HLSL_NAMESPACE_SPECIAL_BUILTINS
+            or name in self.HLSL_NAMESPACE_BITCAST_BUILTINS
             or name in self.HLSL_NAMESPACE_PASSTHROUGH_BUILTINS
             or name in self.function_map
         )
+
+    def generate_bitcast_intrinsic_call(
+        self, function_name, original_args, rendered_args, allow_builtin_lowering
+    ):
+        if (
+            not allow_builtin_lowering
+            or function_name not in self.HLSL_NAMESPACE_BITCAST_BUILTINS
+            or len(original_args) != 1
+        ):
+            return None
+
+        source_family = self.numeric_type_family(self.expression_type(original_args[0]))
+        if function_name == "asfloat":
+            if source_family == "uint":
+                return f"uintBitsToFloat({rendered_args[0]})"
+            if source_family == "int":
+                return f"intBitsToFloat({rendered_args[0]})"
+            if source_family == "float":
+                return rendered_args[0]
+        elif function_name == "asint" and source_family == "float":
+            return f"floatBitsToInt({rendered_args[0]})"
+        elif function_name == "asuint" and source_family == "float":
+            return f"floatBitsToUint({rendered_args[0]})"
+        return None
 
     def collect_sampleable_resource_types(self, ast):
         resources = {}
@@ -1768,9 +1803,59 @@ class SlangToCrossGLConverter:
             if not struct_type:
                 return None
             members = self.struct_member_types.get(struct_type)
-            if members is None:
-                return None
-            return members.get(expr.member)
+            if members is not None:
+                member_type = members.get(expr.member)
+                if member_type:
+                    return member_type
+            return self.vector_swizzle_type(object_type, expr.member)
+        return None
+
+    def vector_swizzle_type(self, type_name, swizzle):
+        scalar_type = self.vector_scalar_type(type_name)
+        if scalar_type is None:
+            return None
+        if not re.fullmatch(r"[xyzwrgba]{1,4}", str(swizzle)):
+            return None
+        if len(swizzle) == 1:
+            return scalar_type
+        return f"{scalar_type}{len(swizzle)}"
+
+    def vector_scalar_type(self, type_name):
+        if not type_name:
+            return None
+
+        generic_type = self.map_generic_vector_type(type_name)
+        if generic_type:
+            return self.vector_scalar_type(generic_type)
+
+        base_type = self.resource_type_base(type_name)
+        match = re.fullmatch(r"(float|half|double|int|uint|bool)([1-4])", base_type)
+        if match:
+            return match.group(1)
+
+        crossgl_vectors = {
+            "vec": "float",
+            "dvec": "double",
+            "ivec": "int",
+            "uvec": "uint",
+            "bvec": "bool",
+        }
+        for prefix, scalar_type in crossgl_vectors.items():
+            if re.fullmatch(rf"{prefix}[2-4]", base_type):
+                return scalar_type
+        return None
+
+    def numeric_type_family(self, type_name):
+        if not type_name:
+            return None
+        scalar_type = self.vector_scalar_type(type_name)
+        base_type = scalar_type or self.resource_type_base(type_name)
+        if base_type.startswith(("uint", "uvec")):
+            return "uint"
+        if base_type.startswith(("int", "ivec")):
+            return "int"
+        if base_type.startswith(("float", "vec")):
+            return "float"
         return None
 
     def lookup_variable_type(self, name):

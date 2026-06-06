@@ -240,6 +240,10 @@ class GLSLToCrossGLConverter:
         "textureGradOffset": 5,
         "textureOffset": 3,
     }
+    LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS = {
+        "shadow2D": "textureCompare",
+        "shadow2DLod": "textureCompareLod",
+    }
     SHADOW_SAMPLER_PACKED_COORD_SWIZZLES = {
         "sampler1DArrayShadow": ("xy", "z"),
         "sampler2DShadow": ("xy", "z"),
@@ -713,6 +717,31 @@ class GLSLToCrossGLConverter:
             *[self.generate_expression(arg) for arg in args[2:]],
         ]
         return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], call_args
+
+    def legacy_shadow_texture_compare_call(self, name, args):
+        compare_name = self.LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS.get(name)
+        if compare_name is None or not args:
+            return None
+
+        sampler_type = self.expression_shadow_sampler_type(args[0])
+        if sampler_type != "sampler2DShadow":
+            return None
+
+        expected_arg_count = 3 if name.endswith("Lod") else 2
+        if len(args) != expected_arg_count:
+            return None
+
+        coord_expr, compare_expr = self.shadow_texture_compare_coord_ref(
+            args[1], sampler_type
+        )
+        call_args = [
+            self.generate_expression(args[0]),
+            coord_expr,
+            compare_expr,
+        ]
+        if name.endswith("Lod"):
+            call_args.append(self.generate_expression(args[2]))
+        return compare_name, call_args
 
     def shadow_texture_compare_coord_ref(self, coord_ref, sampler_type):
         coord_swizzle, compare_swizzle = self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES[
@@ -2565,6 +2594,13 @@ class GLSLToCrossGLConverter:
         if ray_query_call is not None:
             return ray_query_call
 
+        legacy_shadow_texture_call = self.legacy_shadow_texture_compare_call(
+            name, node.args
+        )
+        if legacy_shadow_texture_call is not None:
+            compare_name, compare_args = legacy_shadow_texture_call
+            return f"{compare_name}({', '.join(compare_args)})"
+
         shadow_texture_call = self.shadow_texture_compare_call(name, node.args)
         if shadow_texture_call is not None:
             compare_name, compare_args = shadow_texture_call
@@ -2668,6 +2704,10 @@ class GLSLToCrossGLConverter:
         return None
 
     def generate_member_access(self, node):
+        legacy_shadow_component = self.legacy_shadow_texture_component_access(node)
+        if legacy_shadow_component is not None:
+            return legacy_shadow_component
+
         flattened_member = self.flattened_uniform_block_member(node)
         if flattened_member is not None:
             return flattened_member
@@ -2692,6 +2732,16 @@ class GLSLToCrossGLConverter:
             object_name = self.generate_expression(node.object)
 
         return f"{object_name}.{node.member}"
+
+    def legacy_shadow_texture_component_access(self, node):
+        if node.member not in {"r", "x"}:
+            return None
+        if not isinstance(node.object, FunctionCallNode):
+            return None
+        name = self.function_call_name(node.object)
+        if name not in self.LEGACY_SHADOW_TEXTURE_COMPARE_FUNCTIONS:
+            return None
+        return self.generate_function_call(node.object)
 
     def flattened_uniform_block_member(self, node):
         instance_name = self.expression_base_name(getattr(node, "object", None))

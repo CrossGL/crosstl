@@ -759,6 +759,39 @@ def test_codegen_native_shadow_texture_imports_compare_helpers():
     assert "textureCompareLodOffset(" not in glsl
 
 
+def test_codegen_legacy_shadow2d_imports_compare_helpers_from_openmw_pcf():
+    # Reduced from s-ilent/shadows_fragment.glsl, which samples a
+    # sampler2DShadow through shadow2D(...).r for PCF taps. GLSL 1.40 also
+    # deprecates the dimension-suffixed texture names in favor of texture().
+    code = textwrap.dedent("""
+        #version 120
+        varying vec2 uv;
+        uniform sampler2DShadow shadowMap;
+
+        void main() {
+            vec3 uvz = vec3(uv, 0.5);
+            float base = shadow2D(shadowMap, uvz).r;
+            float lod = shadow2DLod(shadowMap, vec3(uv, 0.75), 0.0).r;
+            gl_FragColor = vec4(base + lod);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float base = textureCompare(shadowMap, uvz.xy, uvz.z);" in crossgl
+    assert "float lod = textureCompareLod(shadowMap, input.uv, 0.75, 0.0);" in crossgl
+    assert "shadow2D(" not in crossgl
+    assert "shadow2DLod(" not in crossgl
+    assert "textureCompare(shadowMap, uvz.xy, uvz.z).r" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float base = texture(shadowMap, vec3(uvz.xy, uvz.z));" in glsl
+    assert "float lod = textureLod(shadowMap, vec3(uv, 0.75), 0.0);" in glsl
+    assert "shadow2D(" not in glsl
+    assert "shadow2DLod(" not in glsl
+    assert "textureCompare(" not in glsl
+
+
 def test_codegen_native_cube_array_shadow_texture_imports_separate_compare_reference():
     # GLSL 4.60.8 declares the cube-array shadow overload as
     # texture(samplerCubeArrayShadow, vec4 P, float compare), unlike the packed

@@ -1050,6 +1050,44 @@ def test_codegen_bitcast_intrinsics_from_microsoft_docs_reparse():
     parse_crossgl(crossgl)
 
 
+def test_codegen_asuint_double_out_overload_from_microsoft_docs_reparse():
+    # Source: Microsoft Learn asuint(double, out uint, out uint) docs.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/asuint
+    crossgl = generate_crossgl("""
+        float4 main(double value : TEXCOORD0) : SV_Target0 {
+            uint low;
+            uint high;
+            asuint(value, low, high);
+            return float4(low, high, 0, 1);
+        }
+    """)
+
+    assert "low = unpackDouble2x32(value).x;" in crossgl
+    assert "high = unpackDouble2x32(value).y;" in crossgl
+    assert "asuint(" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_user_defined_three_arg_asuint_is_preserved():
+    crossgl = generate_crossgl("""
+        void asuint(float value, out uint low, out uint high) {
+            low = 1;
+            high = 2;
+        }
+
+        float4 main(float value : TEXCOORD0) : SV_Target0 {
+            uint low;
+            uint high;
+            asuint(value, low, high);
+            return float4(low, high, 0, 1);
+        }
+    """)
+
+    assert "asuint(value, low, high);" in crossgl
+    assert "unpackDouble2x32(value)" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_bitcast_intrinsics_infer_resource_load_value_types():
     # Sources: Microsoft Learn asfloat and ByteAddressBuffer::Load docs.
     # URLs:

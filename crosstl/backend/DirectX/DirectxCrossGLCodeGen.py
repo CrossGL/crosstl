@@ -2850,6 +2850,11 @@ class HLSLToCrossGLConverter:
         sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
         if sincos_statement is not None:
             return sincos_statement
+        asuint_double_statement = self.generate_asuint_double_statement(
+            stmt, indent, is_main
+        )
+        if asuint_double_statement is not None:
+            return asuint_double_statement
         lowered_sequence = self.generate_function_call_statement_sequence(stmt, indent)
         if lowered_sequence is not None:
             return lowered_sequence
@@ -2890,6 +2895,25 @@ class HLSLToCrossGLConverter:
         return (
             f"{indent_text}{sine_target} = sin({value});\n"
             f"{indent_text}{cosine_target} = cos({value});\n"
+        )
+
+    def generate_asuint_double_statement(self, stmt, indent=0, is_main=False):
+        if (
+            not isinstance(stmt.name, str)
+            or self.normalize_hlsl_intrinsic_name(stmt.name) != "asuint"
+        ):
+            return None
+        if len(stmt.args) != 3:
+            return None
+        if self.raw_type_base(self.expression_value_raw_type(stmt.args[0])) != "double":
+            return None
+        value = self.generate_expression(stmt.args[0], is_main)
+        low_target = self.generate_expression(stmt.args[1], is_main)
+        high_target = self.generate_expression(stmt.args[2], is_main)
+        indent_text = "    " * indent
+        return (
+            f"{indent_text}{low_target} = unpackDouble2x32({value}).x;\n"
+            f"{indent_text}{high_target} = unpackDouble2x32({value}).y;\n"
         )
 
     def generate_clip_condition(self, operand_expr, is_main=False):

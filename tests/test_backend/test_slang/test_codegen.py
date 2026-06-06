@@ -2755,6 +2755,77 @@ def test_hlsl_namespace_builtin_calls_lower_to_crossgl_intrinsics():
     cgl_translator.parse(generated_code)
 
 
+def test_slang_bitcast_intrinsics_from_stdlib_reference_lower_to_crossgl():
+    # Source: Slang stdlib conversion references for asfloat/asint/asuint.
+    # URLs:
+    # https://shader-slang.org/stdlib-reference/global-decls/asfloat
+    # https://shader-slang.org/stdlib-reference/global-decls/asint
+    # https://shader-slang.org/stdlib-reference/global-decls/asuint
+    code = """
+    float4 main(uint4 packed, int4 signedPacked, float4 value) {
+        float4 unpacked = asfloat(packed);
+        float4 signedUnpacked = hlsl::asfloat(signedPacked);
+        int4 signedBits = asint(value);
+        uint4 unsignedBits = hlsl::asuint(value);
+        uint scalarBits = asuint(value.x);
+        return unpacked + signedUnpacked + uintBitsToFloat(unsignedBits)
+            + intBitsToFloat(signedBits) + uintBitsToFloat(scalarBits);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 unpacked = uintBitsToFloat(packed);" in generated_code
+    assert "vec4 signedUnpacked = intBitsToFloat(signedPacked);" in generated_code
+    assert "ivec4 signedBits = floatBitsToInt(value);" in generated_code
+    assert "uvec4 unsignedBits = floatBitsToUint(value);" in generated_code
+    assert "uint scalarBits = floatBitsToUint(value.x);" in generated_code
+    assert "asfloat" not in generated_code
+    assert "asint" not in generated_code
+    assert "asuint" not in generated_code
+    assert "hlsl::" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_user_defined_slang_bitcast_function_names_are_not_lowered():
+    code = """
+    uint asuint(float value) {
+        return 7;
+    }
+
+    uint main(float value) {
+        return asuint(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint asuint(float value)" in generated_code
+    assert "return asuint(value);" in generated_code
+    assert "floatBitsToUint(value)" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_slang_double_asuint_call_is_not_lowered_to_float_bitcast():
+    code = """
+    uint main(double value) {
+        return asuint(value);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "return asuint(value);" in generated_code
+    assert "floatBitsToUint(value)" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_slang_fmod_builtin_lowers_to_crossgl_mod():
     code = """
     void main() {

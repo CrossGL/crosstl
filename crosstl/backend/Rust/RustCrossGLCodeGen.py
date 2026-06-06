@@ -516,6 +516,8 @@ class RustToCrossGLConverter:
             "float_bits_to_uint": "floatBitsToUint",
             "int_bits_to_float": "intBitsToFloat",
             "uint_bits_to_float": "uintBitsToFloat",
+            "double_bits_to_long": "doubleBitsToLong",
+            "long_bits_to_double": "longBitsToDouble",
             "pack_unorm_2x16": "packUnorm2x16",
             "pack_snorm_2x16": "packSnorm2x16",
             "pack_unorm_4x8": "packUnorm4x8",
@@ -1424,12 +1426,10 @@ class RustToCrossGLConverter:
     def infer_builtin_method_return_type(self, method_name, receiver_type, args):
         if method_name == "extend" and len(args) == 1:
             return self.extended_vector_constructor(receiver_type)
-        if (
-            method_name == "to_bits"
-            and not args
-            and self.is_primitive_f32_receiver_type(receiver_type)
-        ):
-            return "uint"
+        if method_name == "to_bits" and not args:
+            bitcast_info = self.primitive_float_bitcast_info(receiver_type)
+            if bitcast_info is not None:
+                return bitcast_info["bits_type"]
         return None
 
     def infer_impl_method_return_type(self, match, arg_values):
@@ -4354,26 +4354,36 @@ class RustToCrossGLConverter:
         args,
         receiver_type,
     ):
-        if (
-            method_name != "to_bits"
-            or args
-            or not self.is_primitive_f32_receiver_type(receiver_type)
-        ):
+        if method_name != "to_bits" or args:
             return None
-        return f"floatBitsToUint({obj})"
+        bitcast_info = self.primitive_float_bitcast_info(receiver_type)
+        if bitcast_info is None:
+            return None
+        return f"{bitcast_info['to_bits']}({obj})"
 
     def format_primitive_float_bitcast_associated_call(self, function_name, args):
-        if (
-            self.infer_primitive_float_bitcast_associated_return_type(
-                function_name,
-                args,
-            )
-            is None
-        ):
+        bitcast_info = self.primitive_float_bitcast_associated_info(
+            function_name,
+            args,
+        )
+        if bitcast_info is None:
             return None
-        return f"uintBitsToFloat({args[0]})"
+        return f"{bitcast_info['from_bits']}({args[0]})"
 
     def infer_primitive_float_bitcast_associated_return_type(
+        self,
+        function_name,
+        args=None,
+    ):
+        bitcast_info = self.primitive_float_bitcast_associated_info(
+            function_name,
+            args,
+        )
+        if bitcast_info is None:
+            return None
+        return bitcast_info["float_type"]
+
+    def primitive_float_bitcast_associated_info(
         self,
         function_name,
         args=None,
@@ -4389,16 +4399,29 @@ class RustToCrossGLConverter:
         type_name, method_name, method_type_args = parsed
         if method_name != "from_bits" or method_type_args:
             return None
-        if not self.is_primitive_f32_receiver_type(type_name):
-            return None
-        return "float"
+        return self.primitive_float_bitcast_info(type_name)
 
-    def is_primitive_f32_receiver_type(self, receiver_type):
+    def primitive_float_bitcast_info(self, receiver_type):
         if not isinstance(receiver_type, str):
-            return False
+            return None
 
         receiver_type = self.normalize_receiver_type(receiver_type)
-        return receiver_type == "f32" or self.map_type(receiver_type) == "float"
+        mapped_type = self.map_type(receiver_type)
+        if receiver_type in {"f32", "float"} or mapped_type == "float":
+            return {
+                "to_bits": "floatBitsToUint",
+                "from_bits": "uintBitsToFloat",
+                "bits_type": "uint",
+                "float_type": "float",
+            }
+        if receiver_type in {"f64", "double"} or mapped_type == "double":
+            return {
+                "to_bits": "doubleBitsToLong",
+                "from_bits": "longBitsToDouble",
+                "bits_type": "uint64_t",
+                "float_type": "double",
+            }
+        return None
 
     def lookup_impl_method_receiver_match(self, obj, method_name):
         receiver_type = self.lookup_value_type(obj)
