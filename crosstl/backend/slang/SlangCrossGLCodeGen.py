@@ -1795,12 +1795,21 @@ class SlangToCrossGLConverter:
         return self.split_top_level_commas(text[start + 1 : -1])
 
     def generate_storage_image_method_call(self, expr, obj, is_main=False):
-        if expr.method != "Load":
-            return None
         if not self.is_storage_image_resource_expression(expr.object):
             return None
+
+        resource_type = self.storage_image_resource_expression_type(expr.object)
+        resource_base = self.resource_type_base(resource_type)
         args = [self.generate_expression(arg, is_main) for arg in expr.args or []]
-        return f"imageLoad({', '.join([obj] + args)})"
+        if expr.method == "Load":
+            return f"imageLoad({', '.join([obj] + args)})"
+        if (
+            expr.method == "Store"
+            and len(args) == 2
+            and not self.is_multisample_resource_base(resource_base)
+        ):
+            return f"imageStore({', '.join([obj] + args)})"
+        return None
 
     def generate_byte_address_buffer_method_call(self, expr, obj, is_main=False):
         method = self.method_base_name(expr.method)
@@ -2323,6 +2332,8 @@ class SlangToCrossGLConverter:
             "Texture2DMSArray",
             "Sampler2DMS",
             "Sampler2DMSArray",
+            "RWTexture2DMS",
+            "RWTexture2DMSArray",
         }
 
     def is_sampleable_resource_expression(self, expr):

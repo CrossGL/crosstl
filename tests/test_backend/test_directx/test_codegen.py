@@ -2150,6 +2150,55 @@ def test_codegen_cbuffer_member_layout_metadata_passthrough():
     assert roughness_offset.member == "x"
 
 
+def test_codegen_matrix_layout_qualifiers_from_hlsl_variable_syntax():
+    # Source: Microsoft Learn HLSL variable syntax documents row_major and
+    # column_major as variable modifiers.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+    hlsl = textwrap.dedent("""
+        row_major float2x3 g_row;
+        column_major float3x2 g_col;
+
+        struct Layouts {
+            row_major float4x4 transform;
+        };
+
+        float3 UseLayout(row_major float2x3 input, column_major float2x3 fallback) {
+            row_major float2x3 local = input;
+            return local[0] + fallback[0];
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ row_major\n    mat2x3 g_row;" in output
+    assert "@ column_major\n    mat3x2 g_col;" in output
+    assert "@ row_major\n        mat4 transform;" in output
+    assert (
+        "vec3 UseLayout(@ row_major mat2x3 input, " "@ column_major mat2x3 fallback)"
+    ) in output
+    assert "@ row_major\n        mat2x3 local = input;" in output
+
+    shader_ast = parse_crossgl(output)
+    assert [attr.name for attr in shader_ast.global_variables[0].attributes] == [
+        "row_major"
+    ]
+    assert [attr.name for attr in shader_ast.global_variables[1].attributes] == [
+        "column_major"
+    ]
+    assert [attr.name for attr in shader_ast.structs[0].members[0].attributes] == [
+        "row_major"
+    ]
+    assert [attr.name for attr in shader_ast.functions[0].parameters[0].attributes] == [
+        "row_major"
+    ]
+    assert [attr.name for attr in shader_ast.functions[0].parameters[1].attributes] == [
+        "column_major"
+    ]
+    assert [
+        attr.name for attr in shader_ast.functions[0].body.statements[0].attributes
+    ] == ["row_major"]
+
+
 def test_codegen_cbuffer_name_matching_struct_is_renamed_for_crossgl():
     # Source: microsoft/DirectX-Graphics-Samples
     # Libraries/D3D12RaytracingFallback/src/GpuBvh2CopyBindings.h

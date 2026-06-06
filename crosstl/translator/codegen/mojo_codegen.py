@@ -8292,6 +8292,9 @@ class MojoCodeGen:
                 min_max_call = self.generate_min_max_call(func_name, expr.args)
                 if min_max_call is not None:
                     return min_max_call
+            if func_name == "atan" and len(expr.args) == 2:
+                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
+                return f"atan2({args})"
             if func_name == "texture":
                 return self.generate_texture_call(expr.args, "sample")
             if func_name == "textureLod":
@@ -13836,6 +13839,12 @@ class MojoCodeGen:
             if func_name in {"mix", "lerp"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"degrees", "radians"} and expr.args:
+                return self.expression_result_type(expr.args[0]) or "float"
+            if func_name in {"atan", "atan2"} and expr.args:
+                for arg in expr.args:
+                    arg_type = self.expression_result_type(arg)
+                    if self.vector_type_info(arg_type) is not None:
+                        return arg_type
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "pow" and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"

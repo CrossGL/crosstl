@@ -987,13 +987,29 @@ class RustToCrossGLConverter:
             semantic = self.get_semantic_from_attributes(
                 getattr(param, "attributes", [])
             )
-            param_type = self.normalize_parameter_type(param.vtype, struct_name)
-            declarations.append(
-                f"{self.format_typed_declarator(param_type, name)}{semantic}"
+            qualifier = self.get_parameter_qualifier_from_attributes(
+                getattr(param, "attributes", [])
             )
+            param_type = self.normalize_parameter_type(param.vtype, struct_name)
+            declaration = self.format_typed_declarator(param_type, name)
+            if qualifier:
+                declaration = f"{qualifier} {declaration}"
+            declarations.append(f"{declaration}{semantic}")
             param_types.append((name, param_type))
 
         return ", ".join(declarations), param_types, aliases
+
+    def get_parameter_qualifier_from_attributes(self, attributes):
+        if not attributes:
+            return ""
+
+        for attr in self.effective_attributes(attributes):
+            if not isinstance(attr, AttributeNode) or attr.name != "spirv":
+                continue
+            if "uniform" in attr.args:
+                return "uniform"
+
+        return ""
 
     def local_aliasing_enabled(self):
         return bool(self.local_binding_name_scopes)

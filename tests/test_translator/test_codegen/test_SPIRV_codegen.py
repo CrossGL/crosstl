@@ -16737,6 +16737,55 @@ class TestVulkanSPIRVCodeGen:
         assert "textureQueryLod" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_texture_query_lod_combines_separate_texture_sampler_for_spirv(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SeparateTextureQuery {
+            texture2D colorTexture;
+            sampler linearSampler;
+
+            fragment {
+                input vec2 uv;
+                output vec4 fragColor;
+
+                void main() {
+                    vec2 lod = textureQueryLod(colorTexture, linearSampler, uv);
+                    fragColor = vec4(lod, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec2_type is not None
+
+        sampled_image_type = re.search(r"(%\d+) = OpTypeSampledImage %\d+", spv_code)
+        assert sampled_image_type is not None
+        sampled_image_value = re.search(
+            rf"(%\d+) = OpSampledImage "
+            rf"{re.escape(sampled_image_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert sampled_image_value is not None
+        assert re.search(
+            rf"OpImageQueryLod {re.escape(vec2_type.group(1))} "
+            rf"{re.escape(sampled_image_value.group(1))} %\d+",
+            spv_code,
+        )
+        assert "textureQueryLod" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_dynamic_and_nested_resource_array_queries_emit_spirv_element_access(self):
         source_code = """
         shader Resources {

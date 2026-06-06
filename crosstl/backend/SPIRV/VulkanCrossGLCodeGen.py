@@ -75,8 +75,8 @@ class VulkanToCrossGLConverter:
             "bvec4": "bool4",
             "float": "float",
             "double": "double",
-            "subpassInput": "Texture2D",
-            "subpassInputMS": "Texture2DMS",
+            "subpassInput": "subpassInput",
+            "subpassInputMS": "subpassInputMS",
             "sampler": "sampler",
             "sampler2D": "Texture2D",
             "isampler1D": "isampler1D",
@@ -517,6 +517,8 @@ class VulkanToCrossGLConverter:
         storage_suffix = self.storage_image_layout_attribute_suffix(node)
         if storage_suffix:
             return storage_suffix
+        if self.is_subpass_input_type(getattr(node, "data_type", None)):
+            return self.uniform_block_attribute_suffix(node)
         if getattr(node, "spirv_storage_class", None) == "UniformConstant":
             return self.uniform_block_attribute_suffix(node)
         return ""
@@ -564,15 +566,38 @@ class VulkanToCrossGLConverter:
 
     def uniform_block_attribute_suffix(self, node):
         attributes = []
+        descriptor_set = None
+        binding = None
+        input_attachment_index = None
         for name, value in getattr(node, "qualifiers", []) or []:
             qualifier_name = str(name).lower()
             if qualifier_name == "set" and value is not None:
-                attributes.append(f"@set({value})")
+                descriptor_set = value
             elif qualifier_name == "binding" and value is not None:
-                attributes.append(f"@binding({value})")
+                binding = value
+            elif qualifier_name == "input_attachment_index" and value is not None:
+                input_attachment_index = value
+        spirv_input_attachment_index = self.spirv_input_attachment_index(node)
+        if spirv_input_attachment_index is not None:
+            input_attachment_index = spirv_input_attachment_index
+        if descriptor_set is not None:
+            attributes.append(f"@set({descriptor_set})")
+        if binding is not None:
+            attributes.append(f"@binding({binding})")
+        if input_attachment_index is not None:
+            attributes.append(f"@input_attachment_index({input_attachment_index})")
         if getattr(node, "push_constant", False):
             attributes.append("@push_constant")
         return f" {' '.join(attributes)}" if attributes else ""
+
+    def spirv_input_attachment_index(self, node):
+        for decoration, operands in getattr(node, "spirv_decorations", []) or []:
+            if decoration == "InputAttachmentIndex" and operands:
+                return operands[0]
+        return None
+
+    def is_subpass_input_type(self, type_name):
+        return type_name in {"subpassInput", "subpassInputMS"}
 
     def is_storage_image_type(self, type_name):
         return isinstance(type_name, str) and type_name.startswith(

@@ -1342,6 +1342,25 @@ class HLSLToCrossGLConverter:
             lines += "    " * indent + f"@ packoffset({packoffset})\n"
         return lines
 
+    def matrix_layout_qualifiers(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        return [
+            qualifier
+            for qualifier in ("row_major", "column_major")
+            if qualifier in qualifiers
+        ]
+
+    def format_matrix_layout_attributes(self, node, indent):
+        return "".join(
+            "    " * indent + f"@ {qualifier}\n"
+            for qualifier in self.matrix_layout_qualifiers(node)
+        )
+
+    def format_inline_matrix_layout_attributes(self, node):
+        return " ".join(
+            f"@ {qualifier}" for qualifier in self.matrix_layout_qualifiers(node)
+        )
+
     def is_uav_resource_type(self, hlsl_type):
         if not hlsl_type:
             return False
@@ -1505,6 +1524,11 @@ class HLSLToCrossGLConverter:
         )
         if resource_attributes:
             prefixes.append(resource_attributes)
+        matrix_layout_attributes = self.format_inline_matrix_layout_attributes(
+            parameter
+        )
+        if matrix_layout_attributes:
+            prefixes.append(matrix_layout_attributes)
         qualifier_prefix = self.format_storage_qualifier_prefix(
             parameter, {"in", "out", "inout", "const", "precise"}
         ).strip()
@@ -2554,6 +2578,7 @@ class HLSLToCrossGLConverter:
                         member, member.semantic
                     )
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
+                    code += self.format_matrix_layout_attributes(member, 2)
                     code += (
                         f"        {qualifier_prefix}{self.map_variable_type(member)} "
                         f"{self.render_identifier(member.name)}"
@@ -2572,6 +2597,7 @@ class HLSLToCrossGLConverter:
             code += self.format_attributes(getattr(node, "attributes", []), 1)
             code += self.format_resource_qualifier_attributes(node, 1)
             code += self.format_binding_attributes(node, 1)
+            code += self.format_matrix_layout_attributes(node, 1)
             storage_prefix = self.format_global_storage_qualifier_prefix(node)
             precise_prefix = self.format_precise_qualifier_prefix(node)
             array_suffix = self.format_array_suffixes(node)
@@ -2635,9 +2661,7 @@ class HLSLToCrossGLConverter:
                 code += self.format_binding_attributes(node, 1)
                 code += f"    cbuffer {cbuffer_name} {{\n"
                 for member in node.members:
-                    for qualifier in getattr(member, "qualifiers", []) or []:
-                        if qualifier in {"row_major", "column_major"}:
-                            code += f"        @ {qualifier}\n"
+                    code += self.format_matrix_layout_attributes(member, 2)
                     code += self.format_attributes(getattr(member, "attributes", []), 2)
                     code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
@@ -2691,6 +2715,8 @@ class HLSLToCrossGLConverter:
             if isinstance(stmt, FunctionCallNode):
                 code += self.generate_function_call_statement(stmt, indent, is_main)
                 continue
+            if isinstance(stmt, VariableNode):
+                code += self.format_matrix_layout_attributes(stmt, indent)
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 array_suffix = self.format_array_suffixes(stmt, is_main)
