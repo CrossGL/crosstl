@@ -10637,7 +10637,7 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
     assert (
         "- simple.cgl -> cgl (variant: release) at "
         "out/cgl/release/simple.cgl: validation failed "
-        "(generated hash: mismatch)"
+        "(generated hash: mismatch; source map: not-checked)"
     ) in result.stdout
     assert validation_text.returncode == 1
     assert (
@@ -11377,7 +11377,7 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
     assert "Validation source remaps: ok=1" in result.stdout
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl: "
-        "validation failed (generated hash: mismatch)"
+        "validation failed (generated hash: mismatch; source map: not-checked)"
     ) in result.stdout
     assert "project.validate.generated-hash-mismatch" in result.stdout
 

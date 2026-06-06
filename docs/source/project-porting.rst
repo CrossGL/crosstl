@@ -394,8 +394,9 @@ Project reports are JSON documents with:
   summarized validation artifacts, aggregate validation artifact and validation
   status summary counts, direct validation report artifact target, source
   backend, variant, hash-status, source-map status, source-remap status,
-  toolchain status, and toolchain-run status rollups, bounded validation artifact and
-  validation toolchain-run inspection samples, source-root and
+  toolchain status, and toolchain-run status rollups, failed-artifact text with
+  non-OK hash, source-map, and source-remap statuses, bounded validation artifact
+  and validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, unit source
   hash shape and current-file
   checks, full-report artifact matrix coverage and artifact define map checks,

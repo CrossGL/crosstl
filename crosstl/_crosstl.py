@@ -2244,14 +2244,15 @@ def _format_project_report_inspection(payload):
                 description = f"{description}: {artifact.get('error')}"
             else:
                 validation_details = []
-                source_hash_status = artifact.get("sourceHashStatus")
-                generated_hash_status = artifact.get("generatedHashStatus")
-                if source_hash_status and source_hash_status != "ok":
-                    validation_details.append(f"source hash: {source_hash_status}")
-                if generated_hash_status and generated_hash_status != "ok":
-                    validation_details.append(
-                        f"generated hash: {generated_hash_status}"
-                    )
+                for field_name, label in (
+                    ("sourceHashStatus", "source hash"),
+                    ("generatedHashStatus", "generated hash"),
+                    ("sourceMapStatus", "source map"),
+                    ("sourceRemapStatus", "source remap"),
+                ):
+                    value = artifact.get(field_name)
+                    if value and value != "ok":
+                        validation_details.append(f"{label}: {value}")
                 if validation_details:
                     description = (
                         f"{description}: validation failed "
