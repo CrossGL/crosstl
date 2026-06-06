@@ -2826,6 +2826,59 @@ def test_integer_bit_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "crate::math::bitfield_insert" not in result
 
 
+def test_rust_std_integer_bit_methods_convert_to_crossgl_intrinsics():
+    code = """
+    fn bit_methods(mask: u32, signed_mask: i32) -> u32 {
+        let population = mask.count_ones();
+        let reversed = mask.reverse_bits();
+        let signed_population = signed_mask.count_ones();
+        let signed_reversed = signed_mask.reverse_bits();
+        return population + reversed + signed_population + signed_reversed;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint bit_methods(uint mask, int signed_mask)" in result
+    assert "population = bitCount(mask);" in result
+    assert "reversed = bitfieldReverse(mask);" in result
+    assert "signed_population = bitCount(signed_mask);" in result
+    assert "signed_reversed = bitfieldReverse(signed_mask);" in result
+    assert ".count_ones(" not in result
+    assert ".reverse_bits(" not in result
+
+
+def test_user_defined_integer_bit_method_names_are_preserved():
+    code = """
+    struct Mask {
+        value: u32,
+    }
+
+    impl Mask {
+        fn count_ones(&self) -> u32 {
+            return self.value;
+        }
+
+        fn reverse_bits(&self) -> u32 {
+            return self.value;
+        }
+    }
+
+    fn use_mask(mask: Mask) -> u32 {
+        let population = mask.count_ones();
+        let reversed = mask.reverse_bits();
+        return population + reversed;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "population = Mask_count_ones(mask);" in result
+    assert "reversed = Mask_reverse_bits(mask);" in result
+    assert "bitCount(mask)" not in result
+    assert "bitfieldReverse(mask)" not in result
+
+
 def test_bit_reinterpret_intrinsic_calls_convert_to_crossgl_intrinsics():
     code = """
     fn reinterpret_ops(value: Vec3<f32>, scalar: f32, signed_bits: Vec3<i32>, unsigned_bits: Vec3<u32>) -> Vec3<f32> {

@@ -405,6 +405,12 @@ class MetalCodeGen:
         "intBitsToFloat": "float",
         "uintBitsToFloat": "float",
     }
+    METAL_INTEGER_BIT_FUNCTION_TARGETS = {
+        "bitCount": "popcount",
+        "bitfieldReverse": "reverse_bits",
+        "countbits": "popcount",
+        "reversebits": "reverse_bits",
+    }
     METAL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -6274,6 +6280,11 @@ class MetalCodeGen:
             bitcast_result_type = self.metal_bitcast_result_type(func_name, args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
+            integer_bit_result_type = self.metal_integer_bit_result_type(
+                func_name, args
+            )
+            if integer_bit_result_type is not None:
+                return integer_bit_result_type
             if func_name in {"mix", "clamp", "min", "max", "saturate"} and args:
                 return self.expression_result_type(args[0])
             if is_resource_size_query_operation(func_name) and args:
@@ -7456,6 +7467,11 @@ class MetalCodeGen:
             bitcast_call = self.generate_metal_bitcast_call(func_name, expr.args)
             if bitcast_call is not None:
                 return bitcast_call
+            integer_bit_call = self.generate_metal_integer_bit_call(
+                func_name, expr.args
+            )
+            if integer_bit_call is not None:
+                return integer_bit_call
             if (
                 func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
                 and func_name not in self.user_function_names
@@ -7820,6 +7836,35 @@ class MetalCodeGen:
 
         arg = self.generate_expression(args[0])
         return f"as_type<{target_type}>({arg})"
+
+    def metal_integer_bit_result_type(self, func_name, args):
+        if (
+            func_name not in self.METAL_INTEGER_BIT_FUNCTION_TARGETS
+            or func_name in self.user_function_names
+            or len(args or []) != 1
+        ):
+            return None
+
+        argument_type = self.expression_result_type(args[0])
+        mapped_argument_type = self.map_type(argument_type)
+        component_type = self.vector_component_type(mapped_argument_type)
+        if component_type not in {"int", "uint"}:
+            return None
+
+        return mapped_argument_type
+
+    def generate_metal_integer_bit_call(self, func_name, args):
+        if self.metal_integer_bit_result_type(func_name, args) is None:
+            return None
+
+        intrinsic_name = self.METAL_INTEGER_BIT_FUNCTION_TARGETS[func_name]
+        call_name = (
+            f"metal::{intrinsic_name}"
+            if self.metal_function_name_is_shadowed(intrinsic_name)
+            else intrinsic_name
+        )
+        arg = self.generate_expression(args[0])
+        return f"{call_name}({arg})"
 
     def generate_binary_operand(self, expr):
         rendered = self.generate_expression(expr)

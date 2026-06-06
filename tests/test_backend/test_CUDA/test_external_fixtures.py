@@ -1301,6 +1301,52 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
         assert raw_name not in crossgl
 
 
+def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA Math API Reference Manual v13.3, Type Casting Intrinsics.
+    # URL:
+    # https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__CAST.html
+    source = """
+    __device__ unsigned long long convert_rounding(float x, double y) {
+        int nearest = __float2int_rn(x);
+        int down = ::__float2int_rd(x);
+        unsigned int trunc = __float2uint_rz(x);
+        unsigned int up = __double2uint_ru(y);
+        long long wide = __double2ll_rn(y);
+        unsigned long long uwide = __float2ull_rd(x);
+        return (unsigned long long)(nearest + down) + trunc + up
+               + (unsigned long long)wide + uwide;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__float2int_rn"
+    assert body[1].value.name == "::__float2int_rd"
+    assert body[2].value.name == "__float2uint_rz"
+    assert body[3].value.name == "__double2uint_ru"
+    assert body[4].value.name == "__double2ll_rn"
+    assert body[5].value.name == "__float2ull_rd"
+    assert_crossgl_reparse(crossgl)
+    assert "var nearest: i32 = i32(round(x));" in crossgl
+    assert "var down: i32 = i32(floor(x));" in crossgl
+    assert "var trunc: u32 = u32(x);" in crossgl
+    assert "var up: u32 = u32(ceil(y));" in crossgl
+    assert "var wide: i64 = i64(round(y));" in crossgl
+    assert "var uwide: u64 = u64(floor(x));" in crossgl
+    for raw_name in {
+        "__float2int_rn",
+        "__float2int_rd",
+        "__float2uint_rz",
+        "__double2uint_ru",
+        "__double2ll_rn",
+        "__float2ull_rd",
+    }:
+        assert raw_name not in crossgl
+
+
 def test_cuda_math_api_qualified_scalar_math_aliases_codegen_reparse():
     source = """
     __device__ float qualified_aliases(float x, float y, float z) {

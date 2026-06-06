@@ -2863,6 +2863,35 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NUMERIC_GLSL_STD450_SQRT_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/GLSL.std.450.html
+; Source enum: KhronosGroup/SPIRV-Headers include/spirv/unified1/GLSL.std.450.h.
+; Reduced from OpExtInst binary form where GLSLstd450Sqrt has instruction number 31.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %output_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %output_value "outputValue"
+OpDecorate %input_value Location 0
+OpDecorate %output_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%output_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%root = OpExtInst %float %std450 31 %loaded
+OpStore %output_value %root
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
@@ -5053,6 +5082,19 @@ def test_spirv_tools_std450_sqrt_extinst_codegen():
     assert "float outputValue @output @location(0);" in generated_code
     assert "outputValue = sqrt(inputValue);" in generated_code
     assert "spirv_GLSL_std_450_Sqrt" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_numeric_glsl_std450_sqrt_extinst_codegen():
+    tokens = tokenize_code(SPIRV_NUMERIC_GLSL_STD450_SQRT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float inputValue @input @location(0);" in generated_code
+    assert "float outputValue @output @location(0);" in generated_code
+    assert "outputValue = sqrt(inputValue);" in generated_code
+    assert "spirv_GLSL_std_450_instruction_31" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
