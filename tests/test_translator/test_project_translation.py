@@ -5865,7 +5865,7 @@ def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_p
     }
 
 
-def test_validate_project_report_accepts_summary_without_diagnostic_rollups(tmp_path):
+def test_validate_project_report_rejects_missing_diagnostic_summary_rollups(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -5878,7 +5878,14 @@ def test_validate_project_report_accepts_summary_without_diagnostic_rollups(tmp_
 
     validation = validate_project_report(report_path)
 
-    assert validation["success"] is True
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "summary.diagnosticsByCode must be an object" in diagnostic["message"]
+    assert "summary.missingCapabilityCounts must be an object" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_malformed_validation_summary(tmp_path):

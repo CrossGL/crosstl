@@ -578,6 +578,9 @@ def test_project_diagnostics_document_location_path_checks():
         assert "non-repository-relative diagnostic locations" in (
             backend_support["notes"]
         )
+        assert "validation rejects missing diagnostic summary rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_filters_invalid_include_dirs_before_frontend"
@@ -594,6 +597,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_diagnostic_locations_outside_project"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_diagnostic_summary_rollups"
         ) in backend_support["evidence"]
 
 

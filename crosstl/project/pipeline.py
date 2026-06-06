@@ -8555,22 +8555,20 @@ def _summary_contract_reasons(
                 diagnostics,
             )
         )
-        if "diagnosticsByCode" in summary:
-            reasons.extend(
-                _diagnostic_code_counts_contract_reasons(
-                    "summary.diagnosticsByCode",
-                    summary.get("diagnosticsByCode"),
-                    diagnostics,
-                )
+        reasons.extend(
+            _diagnostic_code_counts_contract_reasons(
+                "summary.diagnosticsByCode",
+                summary.get("diagnosticsByCode"),
+                diagnostics,
             )
-        if "missingCapabilityCounts" in summary:
-            reasons.extend(
-                _missing_capability_counts_contract_reasons(
-                    "summary.missingCapabilityCounts",
-                    summary.get("missingCapabilityCounts"),
-                    diagnostics,
-                )
+        )
+        reasons.extend(
+            _missing_capability_counts_contract_reasons(
+                "summary.missingCapabilityCounts",
+                summary.get("missingCapabilityCounts"),
+                diagnostics,
             )
+        )
     return reasons
 
 
