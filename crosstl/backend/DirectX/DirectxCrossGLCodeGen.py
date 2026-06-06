@@ -1380,8 +1380,8 @@ class HLSLToCrossGLConverter:
             ordered.append("groupshared")
         if "static" in qualifiers:
             ordered.append("static")
-            if "const" in qualifiers:
-                ordered.append("const")
+        if "const" in qualifiers:
+            ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
     def format_local_storage_qualifier_prefix(self, node):

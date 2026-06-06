@@ -8779,7 +8779,10 @@ class VulkanSPIRVCodeGen:
                 "reflect": "Reflect",
                 "refract": "Refract",
             }
-            if function_name not in glsl_std450_map:
+            std450_function_name = (
+                "atan2" if function_name == "atan" and len(args) == 2 else function_name
+            )
+            if std450_function_name not in glsl_std450_map:
                 self.emit(
                     f"; WARNING: SPIR-V backend cannot lower unknown function "
                     f"'{function_name}'; using default value"
@@ -8826,7 +8829,7 @@ class VulkanSPIRVCodeGen:
                     "refract": 3,
                 }
             )
-            expected_operand_count = std450_operand_counts.get(function_name)
+            expected_operand_count = std450_operand_counts.get(std450_function_name)
             if (
                 expected_operand_count is not None
                 and len(args) != expected_operand_count
@@ -8837,12 +8840,12 @@ class VulkanSPIRVCodeGen:
                     f"{expected_operand_count} {operand_label}"
                 )
                 fallback_type = float_type
-                if args and function_name not in {"length", "distance"}:
+                if args and std450_function_name not in {"length", "distance"}:
                     fallback_type = self.ensure_registered_type(args[0].type)
                 return self.default_value_for_type(fallback_type)
 
             vector_math_diagnostic = self.vector_math_operand_diagnostic(
-                function_name, args
+                std450_function_name, args
             )
             if vector_math_diagnostic is not None:
                 warning, fallback_type = vector_math_diagnostic
@@ -8852,7 +8855,7 @@ class VulkanSPIRVCodeGen:
             result_type = float_type.type
 
             if args:
-                if function_name in [
+                if std450_function_name in [
                     "sin",
                     "cos",
                     "tan",
@@ -8881,13 +8884,13 @@ class VulkanSPIRVCodeGen:
                 ]:
                     # These functions return the same type as their first argument
                     result_type = args[0].type
-                elif function_name in ["length", "distance"]:
+                elif std450_function_name in ["length", "distance"]:
                     # These functions return the scalar component type.
                     result_type = self.metric_result_type(args).type
-                elif function_name in ["normalize", "reflect", "refract"]:
+                elif std450_function_name in ["normalize", "reflect", "refract"]:
                     # These functions return the same vector type as their first argument
                     result_type = args[0].type
-                elif function_name in ["cross"]:
+                elif std450_function_name in ["cross"]:
                     # cross product returns a vec3
                     component_type_name = "float"
                     vector_info = self.vector_component_type_and_count(
@@ -8901,7 +8904,7 @@ class VulkanSPIRVCodeGen:
 
             result_type_id = self.ensure_registered_type(result_type)
             return self.emit_glsl_std450_instruction(
-                glsl_std450_map[function_name], result_type_id, args
+                glsl_std450_map[std450_function_name], result_type_id, args
             )
 
     def derivative_function_opcode(self, function_name: str) -> Optional[str]:

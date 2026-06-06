@@ -872,6 +872,22 @@ class TestCudaCodeGen:
         assert "// __syncwarp() not directly supported in CrossGL" in result
         assert "None" not in result
 
+    def test_nvidia_cuda_shfl_sync_full_width_argument_converts(self):
+        code = """
+        __device__ int broadcast_lane(int value, int lane) {
+            return __shfl_sync(0xffffffff, value, lane, warpSize);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "return WaveReadLaneAt(value, lane);" in result
+        assert "cuda warp intrinsic __shfl_sync" not in result
+
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_cuda_calls(self):
         code = """
         __global__ void warp(unsigned int mask, int pred, int value, int lane, unsigned int* out) {

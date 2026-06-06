@@ -183,6 +183,27 @@ def test_codegen_fragment_front_facing_attribute_uses_parseable_crossgl_builtin(
     assert parse_crossgl(result) is not None
 
 
+def test_codegen_trailing_return_type_helper_from_msl_cxx14_grammar():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    auto remap(float value) -> float {
+        return value * 2.0;
+    }
+
+    fragment float4 fragment_main() {
+        return float4(remap(1.0));
+    }
+    """
+    result = convert(code)
+
+    assert "float remap(float value)" in result
+    assert "auto remap" not in result
+    assert "return vec4(remap(1.0));" in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_type_mapping_vectors_and_matrices():
     code = """
     #include <metal_stdlib>

@@ -1193,6 +1193,23 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
+def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syntax():
+    # Source: Microsoft Learn HLSL variable syntax documents const type modifiers.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+    output = generate_crossgl("""
+        const float ExposureScale = 1.25f;
+
+        float main(float value : TEXCOORD0) : SV_Target0 {
+            return value * ExposureScale;
+        }
+    """)
+
+    lines = {line.strip() for line in output.splitlines()}
+    assert "const float ExposureScale = 1.25;" in lines
+    assert "float ExposureScale = 1.25;" not in lines
+    parse_crossgl(output)
+
+
 def test_codegen_local_static_const_array_from_dxc_bc6hdecode():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenHLSL/Samples/DX11/BC6HDecode.hlsl

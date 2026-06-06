@@ -4295,7 +4295,11 @@ class CudaToCrossGLConverter:
             return f"WaveActiveBallot({predicate}).x"
 
         if function_name == "__shfl_sync":
-            if len(args) != 3 or not self.is_full_or_active_warp_mask(args[0]):
+            if (
+                len(args) not in {3, 4}
+                or not self.is_full_or_active_warp_mask(args[0])
+                or (len(args) == 4 and not self.is_full_warp_width(args[3]))
+            ):
                 return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
             return f"WaveReadLaneAt({args[1]}, {args[2]})"
 
@@ -4337,6 +4341,10 @@ class CudaToCrossGLConverter:
             "full_mask",
             "waveactiveballot(true).x",
         }
+
+    def is_full_warp_width(self, width):
+        normalized = self.normalize_warp_mask_expression(width)
+        return normalized in {"32", "32u", "warpsize"}
 
     def normalize_warp_mask_expression(self, mask):
         text = str(mask).strip()

@@ -2480,6 +2480,84 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_two_argument_atan_lowers_to_spirv_atan2(self, tmp_path):
+        source_code = """
+        shader TwoArgumentAtanIntrinsic {
+            compute {
+                void main() {
+                    float scalar = atan(1.0, 2.0);
+                    float slope = atan(1.0 / 2.0);
+                    vec2 y = vec2(1.0, 2.0);
+                    vec2 x = vec2(3.0, 4.0);
+                    vec2 vector = atan(y, x);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        vec2_type = re.search(r"(%\d+) = OpTypeVector %\d+ 2", spv_code)
+
+        assert float_type is not None
+        assert vec2_type is not None
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"Atan2 %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(vec2_type.group(1))} %\d+ "
+            r"Atan2 %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ " r"Atan %\d+",
+            spv_code,
+        )
+        assert "; WARNING: atan requires 1 operand" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_user_defined_two_argument_atan_is_not_lowered_to_spirv_atan2(
+        self, tmp_path
+    ):
+        source_code = """
+        shader UserAtan {
+            float atan(float y, float x) {
+                return y + x;
+            }
+
+            compute {
+                void main() {
+                    float angle = atan(1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        atan_function = re.search(
+            r"(?P<function>%\d+) = OpFunction %\d+ None %\d+\n"
+            r"%\d+ = OpFunctionParameter %\d+\n"
+            r"%\d+ = OpFunctionParameter %\d+",
+            spv_code,
+        )
+
+        assert atan_function is not None
+        assert re.search(
+            rf"%\d+ = OpFunctionCall %\d+ "
+            rf"{re.escape(atan_function.group('function'))} %\d+ %\d+",
+            spv_code,
+        )
+        assert " Atan2 " not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_invalid_atan2_operand_shapes_emit_diagnostics(self, tmp_path):
         source_code = """
         shader InvalidAtan2BuiltinShapes {

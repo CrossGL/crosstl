@@ -3408,6 +3408,7 @@ class HipParser:
 
         self.consume("KERNEL_LAUNCH_END")
 
+        self.skip_newlines()
         self.consume("LPAREN")
         args = self.parse_argument_list()
         self.consume("RPAREN")

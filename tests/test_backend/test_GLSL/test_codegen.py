@@ -307,6 +307,35 @@ def test_codegen_for_init_custom_struct_declaration_from_glsl_460_grammar():
     assert "cursor.value += 1;" in output
 
 
+def test_codegen_interface_block_nested_struct_member_from_glsl_460_grammar():
+    # Reduced from Khronos GLSL 4.60.8 grammar:
+    # member_declaration -> type_specifier struct_declarator_list ';',
+    # where type_specifier_nonarray can be a struct_specifier.
+    code = textwrap.dedent("""
+        #version 460
+
+        layout(std140, binding = 0) uniform Scene {
+            struct Light {
+                vec4 position;
+                vec4 color;
+            } light;
+        };
+
+        void main()
+        {
+            gl_Position = light.position;
+        }
+    """).strip()
+
+    output = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "struct Light" in output
+    assert "struct Scene" in output
+    assert output.index("struct Light") < output.index("struct Scene")
+    assert "Light light;" in output
+    assert "gl_Position = light.position;" in output
+
+
 def test_codegen_local_function_prototype_from_glslang_scope_vert():
     code = textwrap.dedent("""
         #version 110
