@@ -3522,6 +3522,68 @@ class TestVulkanSPIRVCodeGen:
 
         assert shadowed == float_type
 
+    def test_integer_bit_builtins_lower_to_spirv_core_and_std450_ops(self, tmp_path):
+        source_code = """
+        shader SpirvIntegerBitBuiltins {
+            compute {
+                void main(uint3 tid @ gl_GlobalInvocationID) {
+                    uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                    int3 signedMask = int3(tid.x, tid.y, tid.z);
+                    let counts = bitCount(mask);
+                    let reversed = bitfieldReverse(mask);
+                    let lowBits = findLSB(mask);
+                    let unsignedHighBits = findMSB(mask);
+                    let signedHighBits = findMSB(signedMask);
+                    let aliasCount = countbits(tid.x);
+                    let aliasReverse = reversebits(tid.y);
+                    let aliasLow = firstbitlow(tid.z);
+                    let aliasHigh = firstbithigh(tid.x);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        # SPIR-V core provides OpBitCount/OpBitReverse. GLSL.std.450 provides
+        # FindILsb/FindSMsb/FindUMsb for least/most significant bit queries.
+        assert "OpBitCount" in spv_code
+        assert "OpBitReverse" in spv_code
+        assert re.search(r"%\d+ = OpExtInst %\d+ %\d+ FindILsb %\d+", spv_code)
+        assert re.search(r"%\d+ = OpExtInst %\d+ %\d+ FindUMsb %\d+", spv_code)
+        assert re.search(r"%\d+ = OpExtInst %\d+ %\d+ FindSMsb %\d+", spv_code)
+        assert "cannot lower unknown function" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_user_defined_integer_bit_builtin_name_shadows_spirv_lowering(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SpirvUserBitCountName {
+            uint bitCount(uint value) {
+                return value + 1u;
+            }
+
+            compute {
+                void main(uint3 tid @ gl_GlobalInvocationID) {
+                    uint adjusted = bitCount(tid.x);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" in spv_code
+        assert "OpBitCount" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_vector_saturate_builtins_lower_to_vector_fclamp(self):
         source_code = """
         shader BuiltinAliases {

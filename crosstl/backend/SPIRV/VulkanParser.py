@@ -4123,16 +4123,33 @@ class VulkanParser:
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []
+        pending_lines = []
+        pending_line_number = None
+        pending_error = None
         for line_number, line in enumerate(code.splitlines(), start=1):
-            lexer = shlex.shlex(line, posix=True)
+            if pending_line_number is None:
+                pending_line_number = line_number
+            pending_lines.append(line)
+            instruction_text = "\n".join(pending_lines)
+
+            lexer = shlex.shlex(instruction_text, posix=True)
             lexer.whitespace_split = True
             lexer.commenters = ";"
             try:
                 parts = list(lexer)
             except ValueError as exc:
+                if "No closing quotation" in str(exc):
+                    pending_error = exc
+                    continue
                 raise SyntaxError(
-                    f"Invalid SPIR-V assembly syntax on line {line_number}: {exc}"
+                    "Invalid SPIR-V assembly syntax on line "
+                    f"{pending_line_number}: {exc}"
                 ) from exc
+
+            instruction_line_number = pending_line_number
+            pending_lines = []
+            pending_line_number = None
+            pending_error = None
 
             if not parts:
                 continue
@@ -4148,9 +4165,16 @@ class VulkanParser:
 
             if not opcode.startswith("Op"):
                 raise SyntaxError(
-                    f"Expected SPIR-V opcode on line {line_number}, got {opcode}"
+                    "Expected SPIR-V opcode on line "
+                    f"{instruction_line_number}, got {opcode}"
                 )
-            instructions.append((result_id, opcode, operands, line_number))
+            instructions.append((result_id, opcode, operands, instruction_line_number))
+
+        if pending_lines:
+            raise SyntaxError(
+                "Invalid SPIR-V assembly syntax on line "
+                f"{pending_line_number}: {pending_error or 'No closing quotation'}"
+            )
 
         return instructions
 

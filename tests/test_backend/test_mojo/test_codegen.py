@@ -280,6 +280,23 @@ def test_default_keyword_parameter_name_codegen_from_modular_stdlib():
     assert "Unhandled expression" not in generated_code
 
 
+def test_ref_binding_declaration_codegen_from_official_variables_docs():
+    # https://docs.modular.com/mojo/manual/variables/#reference-bindings
+    code = """
+    def bump_item(items: List[Int]):
+        ref item_ref = items[1]
+        item_ref += 1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void bump_item(List[Int] items)" in generated_code
+    assert "var item_ref = items[1];" in generated_code
+    assert "item_ref += 1;" in generated_code
+    assert "ref item_ref" not in generated_code
+    assert "Unhandled" not in generated_code
+
+
 def test_backtick_local_identifier_codegen_from_modular_base64_stdlib_reparses_crossgl():
     # Reduced from https://github.com/modular/modular.git commit
     # daa47bb846cc213723a54c51844ea4e923eb5e13,

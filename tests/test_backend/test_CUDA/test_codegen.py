@@ -907,6 +907,36 @@ class TestCudaCodeGen:
         assert "workgroupBarrier();" in result
         assert "__threadfence" not in result
 
+    def test_cuda_atomic_thread_fence_converts_to_crossgl_memory_barrier(self):
+        code = """
+        namespace cu = cuda;
+
+        __global__ void fence(int* data, int* flag) {
+            data[threadIdx.x] = threadIdx.x;
+            cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
+                                      cuda::thread_scope_block);
+            cuda::atomic_thread_fence(cuda::memory_order_seq_cst,
+                                      cuda::thread_scope_device);
+            cu::atomic_thread_fence(cuda::memory_order_seq_cst,
+                                    cuda::thread_scope_system);
+            flag[0] = 1;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert result.count("memoryBarrier();") == 3
+        assert "data[gl_LocalInvocationID.x] = gl_LocalInvocationID.x;" in result
+        assert "flag[0] = 1;" in result
+        assert "atomic_thread_fence" not in result
+        assert "cuda::thread_scope" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_syncwarp_mask_emits_explicit_diagnostic(self):
         code = """
         __global__ void sync(unsigned int mask) {

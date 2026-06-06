@@ -8458,6 +8458,109 @@ class VulkanSPIRVCodeGen:
         source_type = self.infer_expression_result_type(args[0])
         return self.bitcast_builtin_result_type(function_name, source_type)
 
+    def normalize_integer_bit_builtin_name(self, function_name: str) -> str:
+        return {
+            "countbits": "bitCount",
+            "reversebits": "bitfieldReverse",
+            "firstbitlow": "findLSB",
+            "firstbithigh": "findMSB",
+        }.get(function_name, function_name)
+
+    def integer_bit_builtin_result_type(
+        self, function_name: str, source_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        function_name = self.normalize_integer_bit_builtin_name(function_name)
+        if function_name not in {"bitCount", "bitfieldReverse", "findLSB", "findMSB"}:
+            return None
+
+        if source_type is None:
+            return self.register_primitive_type("int")
+
+        source_type = self.ensure_registered_type(source_type)
+        vector_info = self.vector_component_type_and_count(source_type.type.base_type)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+            if component_type in {"int", "uint"}:
+                return source_type
+            return self.register_vector_type(
+                self.register_primitive_type("int"), component_count
+            )
+
+        component_type = self.normalize_primitive_name(source_type.type.base_type)
+        if component_type in {"int", "uint"}:
+            return source_type
+        return self.register_primitive_type("int")
+
+    def integer_bit_builtin_operand_is_valid(self, operand: SpirvId) -> bool:
+        operand_type = self.registered_value_type(
+            operand
+        ) or self.ensure_registered_type(operand.type)
+        component_type = self.scalar_or_vector_component_type(operand_type.type)
+        return self.normalize_primitive_name(component_type) in {"int", "uint"}
+
+    def call_integer_bit_builtin_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        if function_name in self.struct_types:
+            return None
+
+        normalized_name = self.normalize_integer_bit_builtin_name(function_name)
+        if normalized_name not in {"bitCount", "bitfieldReverse", "findLSB", "findMSB"}:
+            return None
+
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            result_type = self.integer_bit_builtin_result_type(normalized_name, None)
+            return self.default_value_for_type(result_type)
+
+        source_type = self.registered_value_type(
+            args[0]
+        ) or self.ensure_registered_type(args[0].type)
+        result_type = self.integer_bit_builtin_result_type(normalized_name, source_type)
+        if result_type is None:
+            return None
+
+        if not self.integer_bit_builtin_operand_is_valid(args[0]):
+            self.emit(
+                f"; WARNING: {function_name} requires an integer scalar or vector "
+                "operand"
+            )
+            return self.default_value_for_type(result_type)
+
+        if normalized_name == "bitCount":
+            opcode = "OpBitCount"
+        elif normalized_name == "bitfieldReverse":
+            opcode = "OpBitReverse"
+        else:
+            component_type = self.scalar_or_vector_component_type(source_type.type)
+            if normalized_name == "findLSB":
+                instruction = "FindILsb"
+            elif self.normalize_primitive_name(component_type) == "uint":
+                instruction = "FindUMsb"
+            else:
+                instruction = "FindSMsb"
+            return self.emit_glsl_std450_instruction(instruction, result_type, args)
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {opcode} %{result_type.id} %{args[0].id}")
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        if self.is_non_uniform_value(args[0]):
+            self.mark_non_uniform_result(spirv_id)
+        return spirv_id
+
+    def infer_integer_bit_builtin_result_type(
+        self, function_name: str, args: List
+    ) -> Optional[SpirvId]:
+        normalized_name = self.normalize_integer_bit_builtin_name(function_name)
+        if normalized_name not in {"bitCount", "bitfieldReverse", "findLSB", "findMSB"}:
+            return None
+        if len(args) != 1:
+            return self.integer_bit_builtin_result_type(normalized_name, None)
+        return self.integer_bit_builtin_result_type(
+            normalized_name, self.infer_expression_result_type(args[0])
+        )
+
     def call_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -8483,6 +8586,10 @@ class VulkanSPIRVCodeGen:
         bitcast_call = self.call_bitcast_builtin_function(function_name, args)
         if bitcast_call is not None:
             return bitcast_call
+
+        integer_bit_call = self.call_integer_bit_builtin_function(function_name, args)
+        if integer_bit_call is not None:
+            return integer_bit_call
 
         exact_operand_counts = {
             "min": 2,
@@ -13186,6 +13293,11 @@ class VulkanSPIRVCodeGen:
             )
             if bitcast_type is not None:
                 return bitcast_type
+            integer_bit_type = self.infer_integer_bit_builtin_result_type(
+                callee_name, expr.args
+            )
+            if integer_bit_type is not None:
+                return integer_bit_type
             return None
         if isinstance(expr, ArrayAccessNode):
             array_type = self.infer_expression_result_type(expr.array)

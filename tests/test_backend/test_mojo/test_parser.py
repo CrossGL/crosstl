@@ -371,6 +371,29 @@ def test_default_keyword_parameter_name_parse_from_modular_stdlib():
     assert function.body[0].value.name == "default"
 
 
+def test_ref_binding_declaration_parse_from_official_variables_docs():
+    # https://docs.modular.com/mojo/manual/variables/#reference-bindings
+    code = """
+    def bump_item(items: List[Int]):
+        ref item_ref = items[1]
+        item_ref += 1
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "bump_item")
+    ref_binding = function.body[0]
+    update = function.body[1]
+
+    assert isinstance(ref_binding, VariableDeclarationNode)
+    assert ref_binding.name == "item_ref"
+    assert getattr(ref_binding, "binding_convention", None) == "ref"
+    assert isinstance(ref_binding.initial_value, ArrayAccessNode)
+    assert ref_binding.initial_value.array.name == "items"
+    assert ref_binding.initial_value.index == "1"
+    assert isinstance(update, AssignmentNode)
+    assert update.operator == "+="
+    assert update.left.name == "item_ref"
+
+
 def test_backtick_local_identifier_parse_from_modular_base64_stdlib():
     # Reduced from https://github.com/modular/modular.git commit
     # daa47bb846cc213723a54c51844ea4e923eb5e13,

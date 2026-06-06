@@ -4202,6 +4202,10 @@ class CudaToCrossGLConverter:
         if load_cache_intrinsic is not None:
             return load_cache_intrinsic
 
+        memory_fence = self.format_cuda_memory_fence_call(raw_name, args)
+        if memory_fence is not None:
+            return memory_fence
+
         time_function = self.format_cuda_time_function_call(raw_name, args)
         if time_function is not None:
             return time_function
@@ -4288,6 +4292,19 @@ class CudaToCrossGLConverter:
             f"(/* cuda load cache intrinsic {function_name}({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
+
+    def format_cuda_memory_fence_call(self, function_name, args):
+        if not isinstance(function_name, str):
+            return None
+
+        normalized_name = self.resolve_namespace_alias_name(function_name)
+        if normalized_name.startswith("::"):
+            normalized_name = normalized_name[2:]
+
+        if normalized_name != "cuda::atomic_thread_fence" or len(args) != 2:
+            return None
+
+        return "memoryBarrier()"
 
     def format_cuda_warp_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):
