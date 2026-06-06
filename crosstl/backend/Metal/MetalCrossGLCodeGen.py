@@ -426,6 +426,12 @@ class MetalToCrossGLConverter:
             "gather": "gather",
             "gather_compare": "gather_compare",
         }
+        self.texture_gather_components = {
+            "x": "0",
+            "y": "1",
+            "z": "2",
+            "w": "3",
+        }
         self.texture_size_query_methods = {
             "get_width",
             "get_height",
@@ -808,6 +814,25 @@ class MetalToCrossGLConverter:
             "0.0 /* unsupported Metal depth compare lod option: "
             f"{option_name} on {obj} */"
         )
+
+    def texture_gather_call(self, obj, method_args, is_main=False):
+        args = [self.texture_gather_argument(arg, is_main) for arg in method_args]
+        return f"textureGather({obj}, {', '.join(args)})"
+
+    def texture_gather_argument(self, arg, is_main=False):
+        component = self.texture_gather_component_index(arg)
+        if component is not None:
+            return component
+        return self.generate_expression(arg, is_main)
+
+    def texture_gather_component_index(self, arg):
+        if not isinstance(arg, VariableNode):
+            return None
+        name = str(getattr(arg, "name", ""))
+        parts = name.split("::")
+        if len(parts) < 2 or parts[-2] != "component":
+            return None
+        return self.texture_gather_components.get(parts[-1])
 
     def is_multisample_resource_type(self, mapped_type):
         return bool(mapped_type and "MS" in str(mapped_type))
@@ -1742,6 +1767,8 @@ class MetalToCrossGLConverter:
                 return self.unsupported_sampled_texture_write(
                     expr.object, method, is_main
                 )
+            if descriptor and method == "gather":
+                return self.texture_gather_call(obj, expr.args, is_main)
             if descriptor:
                 return f"{descriptor['function']}({obj}, {args})"
             return f"{obj}.{method}({args})"

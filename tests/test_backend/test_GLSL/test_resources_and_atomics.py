@@ -336,6 +336,30 @@ def test_parse_image_atomics_and_counters():
     assert ast is not None
 
 
+def test_codegen_preserves_atomic_counter_resource_layout():
+    code = """
+    #version 430 core
+    layout(binding = 2, offset = 4) uniform atomic_uint counter;
+
+    void main() {
+        uint previous = atomicCounterIncrement(counter);
+        uint current = atomicCounter(counter);
+        atomicCounterAdd(counter, previous + current);
+    }
+    """
+
+    output = generate_crossgl(code, "fragment")
+
+    assert "atomic_uint counter @binding(2) @offset(4);" in output
+    assert "cbuffer Uniforms" not in output
+    assert "atomicCounterIncrement(counter)" in output
+    assert "atomicCounter(counter)" in output
+    assert "atomicCounterAdd(counter, (previous + current))" in output
+
+    shader_ast = parse_crossgl(output)
+    assert shader_ast is not None
+
+
 def test_codegen_preserves_compute_shared_workgroup_memory_qualifier():
     code = """
     #version 450 core

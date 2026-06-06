@@ -1494,6 +1494,32 @@ def test_codegen_struct_template_methods_semantic_case_from_dxc_spirv():
     parse_crossgl(output)
 
 
+def test_codegen_post_name_vk_binding_attributes_on_byte_address_resources():
+    hlsl = textwrap.dedent("""
+        ByteAddressBuffer inputBytes [[vk::binding(0, 1)]] : register(t0, space1);
+        RWByteAddressBuffer outputBytes [[vk::binding(1, 1)]] : register(u0, space1);
+
+        [numthreads(1, 1, 1)]
+        void main(uint3 tid : SV_DispatchThreadID) {
+            uint offset = tid.x * 4u;
+            uint value = inputBytes.Load(offset);
+            outputBytes.Store(offset, value);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ vk::binding(0, 1)" in output
+    assert "@ vk::binding(1, 1)" in output
+    assert "@ register(t0, space1)" in output
+    assert "@ register(u0, space1)" in output
+    assert "ByteAddressBuffer inputBytes;" in output
+    assert "RWByteAddressBuffer outputBytes;" in output
+    assert "uint value = buffer_load(inputBytes, offset);" in output
+    assert "buffer_store(outputBytes, offset, value);" in output
+    parse_crossgl(output)
+
+
 def test_codegen_one_row_matrix_aliases_from_dxc_matrix_syntax():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/SemaHLSL/matrix-syntax.hlsl
