@@ -7675,6 +7675,36 @@ def test_validate_project_report_records_toolchain_failures(
         "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
     assert payload["toolchainRunStatusByVariant"] == {}
+    inspection = inspect_project_report(report_path, run_toolchains=True)
+    assert inspection["validation"]["artifactCount"] == 1
+    assert inspection["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "opengl",
+            "path": "out/opengl/simple.glsl",
+            "status": "ok",
+            "exists": True,
+            "sourceHashStatus": "not-recorded",
+            "generatedHashStatus": "not-recorded",
+        }
+    ]
+    assert inspection["validation"]["toolchainRunCount"] == 1
+    assert inspection["validation"]["truncatedToolchainRunCount"] == 0
+    assert inspection["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "opengl",
+            "path": "out/opengl/simple.glsl",
+            "status": "failed",
+            "returncode": 2,
+            "command": ["glslangValidator", "--stdin"],
+            "stdoutLength": 0,
+            "stderrLength": len("shader validation failed"),
+        }
+    ]
+    assert "stdout" not in inspection["validation"]["toolchainRuns"][0]
+    assert "stderr" not in inspection["validation"]["toolchainRuns"][0]
 
     exit_code = crosstl_cli.main(
         [
@@ -7694,6 +7724,29 @@ def test_validate_project_report_records_toolchain_failures(
         "Validation toolchain runs by source backend: cgl=1 run (0 ok, 1 failed)"
         in stdout
     )
+    exit_code = crosstl_cli.main(
+        [
+            "inspect-report",
+            str(report_path),
+            "--run-toolchains",
+            "--format",
+            "text",
+        ]
+    )
+    assert exit_code == 1
+    stdout = capsys.readouterr().out
+    assert "Validation artifact samples:" in stdout
+    assert (
+        "- simple.cgl -> opengl at out/opengl/simple.glsl "
+        "(status=ok, exists=true, sourceHash=not-recorded, "
+        "generatedHash=not-recorded)"
+    ) in stdout
+    assert "Validation toolchain run samples:" in stdout
+    assert (
+        "- simple.cgl -> opengl at out/opengl/simple.glsl "
+        "(sourceBackend=cgl, status=failed, returncode=2, "
+        "command=glslangValidator --stdin, stdout=0 chars, stderr=24 chars)"
+    ) in stdout
 
 
 def test_validate_project_report_records_toolchain_run_variant_rollups(
@@ -9094,6 +9147,22 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             "failedCount": 0,
         }
     }
+    assert payload["validation"]["artifactCount"] == 1
+    assert payload["validation"]["truncatedArtifactCount"] == 0
+    assert payload["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "cgl",
+            "path": "out/cgl/simple.cgl",
+            "status": "ok",
+            "exists": True,
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "ok",
+        }
+    ]
+    assert payload["validation"]["toolchainRunCount"] == 0
+    assert payload["validation"]["truncatedToolchainRunCount"] == 0
+    assert payload["validation"]["toolchainRuns"] == []
     assert payload["validation"]["result"]["summary"] == {
         "artifactCount": 1,
         "okCount": 1,
@@ -9871,6 +9940,11 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "- simple.cgl -> out/cgl/simple.cgl "
         "(sourceBackend=cgl, target=cgl, "
         "pipeline=single-file-translate, intermediate=none)"
+    ) in result.stdout
+    assert "Validation artifact samples:" in result.stdout
+    assert (
+        "- simple.cgl -> cgl at out/cgl/simple.cgl "
+        "(status=ok, exists=true, sourceHash=ok, generatedHash=ok)"
     ) in result.stdout
 
 

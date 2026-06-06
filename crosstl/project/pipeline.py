@@ -48,6 +48,7 @@ EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 SOURCE_MAP_INSPECTION_SAMPLE_LIMIT = 20
+VALIDATION_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -3630,6 +3631,18 @@ def inspect_project_report(
     toolchain_run_status_by_variant = validation_report.get(
         "toolchainRunStatusByVariant"
     )
+    validation_artifact_samples = [
+        sample
+        for artifact in _record_sequence(validation_artifacts)
+        for sample in (_inspection_validation_artifact(artifact),)
+        if sample is not None
+    ]
+    validation_toolchain_run_samples = [
+        sample
+        for run in _record_sequence(validation_toolchain_runs)
+        for sample in (_inspection_validation_toolchain_run(run),)
+        if sample is not None
+    ]
     payload: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": REPORT_INSPECTION_KIND,
@@ -3705,6 +3718,23 @@ def inspect_project_report(
                     _record_sequence(validation_toolchain_runs)
                 )
             ),
+            "artifactCount": len(validation_artifact_samples),
+            "truncatedArtifactCount": max(
+                0,
+                len(validation_artifact_samples) - VALIDATION_INSPECTION_SAMPLE_LIMIT,
+            ),
+            "artifacts": validation_artifact_samples[
+                :VALIDATION_INSPECTION_SAMPLE_LIMIT
+            ],
+            "toolchainRunCount": len(validation_toolchain_run_samples),
+            "truncatedToolchainRunCount": max(
+                0,
+                len(validation_toolchain_run_samples)
+                - VALIDATION_INSPECTION_SAMPLE_LIMIT,
+            ),
+            "toolchainRuns": validation_toolchain_run_samples[
+                :VALIDATION_INSPECTION_SAMPLE_LIMIT
+            ],
             "result": (
                 dict(validation_result)
                 if isinstance(validation_result, Mapping)
@@ -3986,6 +4016,48 @@ def _inspection_artifact_matrix_summary(
         "statusByTarget": status_by_target,
         "statusByVariant": status_by_variant,
     }
+
+
+def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
+    if not isinstance(artifact, Mapping):
+        return None
+
+    sample = {
+        "source": artifact.get("source"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+        "status": artifact.get("status"),
+        "exists": artifact.get("exists"),
+        "sourceHashStatus": artifact.get("sourceHashStatus"),
+        "generatedHashStatus": artifact.get("generatedHashStatus"),
+    }
+    if "variant" in artifact:
+        sample["variant"] = artifact.get("variant")
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_validation_toolchain_run(run: Any) -> dict[str, Any] | None:
+    if not isinstance(run, Mapping):
+        return None
+
+    sample = {
+        "source": run.get("source"),
+        "sourceBackend": run.get("sourceBackend"),
+        "target": run.get("target"),
+        "path": run.get("path"),
+        "status": run.get("status"),
+        "returncode": run.get("returncode"),
+    }
+    command = run.get("command")
+    if isinstance(command, list) and all(isinstance(part, str) for part in command):
+        sample["command"] = list(command)
+    for field_name in ("stdout", "stderr"):
+        value = run.get(field_name)
+        if isinstance(value, str):
+            sample[f"{field_name}Length"] = len(value)
+    if "variant" in run:
+        sample["variant"] = run.get("variant")
+    return {key: value for key, value in sample.items() if value is not None}
 
 
 def _inspection_artifact_matrix_identity_sets(

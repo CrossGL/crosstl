@@ -121,12 +121,13 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
 Report inspection includes validation status, invalid/unavailable report status,
 project counts, project configuration path and counts, failed artifacts with
 variant labels when present, diagnostic code and missing-capability rollups,
-validation diagnostic-code,
-missing-capability, and artifact target and variant rollups, report
-source-backend, file-extension, and artifact target rollups, source-map count,
-granularity, target, and source-backend rollups, artifact matrix completion
-counts, target and variant completion rollups, plus sampled missing and extra
-artifact identities,
+validation diagnostic-code, missing-capability, artifact target and variant,
+hash-status, toolchain status, and toolchain-run rollups, report source-backend,
+file-extension, and artifact target rollups, source-map count, granularity,
+target, and source-backend rollups, artifact matrix completion counts, target
+and variant completion rollups, sampled missing and extra artifact identities,
+bounded validation artifact and validation toolchain-run samples with
+truncation counts,
 include-directory status counts, inactive source-root and include-directory
 record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
@@ -368,8 +369,10 @@ Project reports are JSON documents with:
   source/generated hash status fields for summarized validation artifacts,
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, variant, hash-status, toolchain status,
-  and toolchain-run status rollups, source-root and include-directory status
-  record and count consistency checks, unit source hash shape and current-file
+  and toolchain-run status rollups, bounded validation artifact and
+  validation toolchain-run inspection samples, source-root and
+  include-directory status record and count consistency checks, unit source
+  hash shape and current-file
   checks, full-report artifact matrix coverage and artifact define map checks,
   artifact define-processing metadata and status/source-backend/variant rollup
   checks,

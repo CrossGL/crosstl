@@ -1117,6 +1117,109 @@ def _format_artifact_sample_lines(label, artifacts, truncated_count):
     return lines
 
 
+def _format_validation_artifact_sample_line(artifact):
+    line = _format_artifact_identity_line(artifact)
+    if not line:
+        return None
+
+    details = []
+    status = artifact.get("status")
+    if isinstance(status, str) and status:
+        details.append(f"status={status}")
+    exists = artifact.get("exists")
+    if isinstance(exists, bool):
+        details.append(f"exists={'true' if exists else 'false'}")
+    source_hash = artifact.get("sourceHashStatus")
+    if isinstance(source_hash, str) and source_hash:
+        details.append(f"sourceHash={source_hash}")
+    generated_hash = artifact.get("generatedHashStatus")
+    if isinstance(generated_hash, str) and generated_hash:
+        details.append(f"generatedHash={generated_hash}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"{line}{suffix}"
+
+
+def _format_validation_artifact_sample_lines(validation):
+    if not isinstance(validation, Mapping):
+        return []
+    artifacts = validation.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Validation artifact samples:"]
+    for artifact in artifacts:
+        line = _format_validation_artifact_sample_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = validation.get("truncatedArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
+def _format_validation_toolchain_run_sample_line(run):
+    line = _format_artifact_identity_line(run)
+    if not line:
+        return None
+
+    details = []
+    source_backend = run.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    status = run.get("status")
+    if isinstance(status, str) and status:
+        details.append(f"status={status}")
+    returncode = run.get("returncode")
+    if isinstance(returncode, int) and not isinstance(returncode, bool):
+        details.append(f"returncode={returncode}")
+    command = run.get("command")
+    if isinstance(command, list):
+        command_parts = [part for part in command if isinstance(part, str) and part]
+        if command_parts:
+            details.append(f"command={' '.join(command_parts)}")
+    for field_name, label in (("stdoutLength", "stdout"), ("stderrLength", "stderr")):
+        length = run.get(field_name)
+        if isinstance(length, int) and not isinstance(length, bool) and length >= 0:
+            unit = "char" if length == 1 else "chars"
+            details.append(f"{label}={length} {unit}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"{line}{suffix}"
+
+
+def _format_validation_toolchain_run_sample_lines(validation):
+    if not isinstance(validation, Mapping):
+        return []
+    runs = validation.get("toolchainRuns")
+    if not isinstance(runs, list) or not runs:
+        return []
+
+    lines = ["Validation toolchain run samples:"]
+    for run in runs:
+        line = _format_validation_toolchain_run_sample_line(run)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = validation.get("truncatedToolchainRunCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_define_processing_issue_line(artifact):
     line = _format_artifact_identity_line(artifact)
     if not line:
@@ -1974,6 +2077,9 @@ def _format_project_report_inspection(payload):
     )
     if validation_toolchain_runs_by_variant:
         lines.append(validation_toolchain_runs_by_variant)
+    lines.extend(
+        _format_validation_toolchain_run_sample_lines(payload.get("validation"))
+    )
     if isinstance(validation_summary, Mapping):
         lines.append(
             "Validation artifacts: "
@@ -2006,6 +2112,9 @@ def _format_project_report_inspection(payload):
         )
         if generated_hashes:
             lines.append(generated_hashes)
+        lines.extend(
+            _format_validation_artifact_sample_lines(payload.get("validation"))
+        )
 
     external_corpus = payload.get("externalCorpus")
     if isinstance(external_corpus, Mapping):
