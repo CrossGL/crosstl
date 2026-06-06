@@ -14378,6 +14378,7 @@ class MojoCodeGen:
             "alias",
             "and",
             "as",
+            "assert",
             "async",
             "await",
             "borrowed",

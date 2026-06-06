@@ -588,6 +588,27 @@ def test_matrix_multiplication_operator_codegen_from_official_docs_reparses_cros
     parse_crossgl(generated_code)
 
 
+def test_walrus_assignment_expression_codegen_from_official_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/operators/
+    # "Walrus operator" assignment-expression example.
+    code = """
+    def main():
+        var name = ""
+        while (name := input("Name or 'quit': ")) != "quit":
+            print("Hello,", name)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert 'while (((name = input("Name or \'quit\': ")) != "quit"))' in (
+        generated_code
+    )
+    assert 'print("Hello,", name);' in generated_code
+    assert ":=" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_modular_image_pipeline_blur_chained_bounds_codegen():
     # Reduced from modularml/mojo commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

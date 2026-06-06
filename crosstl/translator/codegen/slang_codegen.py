@@ -173,6 +173,19 @@ class SlangCodeGen:
         "Append": {1},
         "RestartStrip": {0},
     }
+    SLANG_INTERPOLATION_QUALIFIER_MAP = {
+        "flat": "nointerpolation",
+        "smooth": "linear",
+        "noperspective": "noperspective",
+        "centroid": "centroid",
+        "sample": "sample",
+        "nointerpolation": "nointerpolation",
+        "linear": "linear",
+        "linear_centroid": "linear centroid",
+        "linear_noperspective": "linear noperspective",
+        "linear_noperspective_centroid": "linear noperspective centroid",
+        "linear_sample": "linear sample",
+    }
 
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
@@ -2736,6 +2749,7 @@ class SlangCodeGen:
                 self.is_resource_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.slang_interpolation_qualifier(attr.name)
                 or self.slang_mesh_payload_parameter_attribute_name(attr)
                 or self.slang_mesh_output_parameter_role(attr)
             ):
@@ -4499,6 +4513,8 @@ class SlangCodeGen:
                 mapped = "groupshared"
             elif normalized == "uniform":
                 mapped = "uniform"
+            elif self.slang_interpolation_qualifier(normalized):
+                mapped = self.slang_interpolation_qualifier(normalized)
             else:
                 mapped = None
             if mapped and mapped not in seen:
@@ -4516,12 +4532,29 @@ class SlangCodeGen:
             normalized = str(qualifier).lower()
             if normalized in {"const", "in", "out", "inout"}:
                 mapped = normalized
+            elif self.slang_interpolation_qualifier(normalized):
+                mapped = self.slang_interpolation_qualifier(normalized)
             else:
                 mapped = None
             if mapped and mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)
 
+        if not qualifiers:
+            return ""
+        return " ".join(qualifiers) + " "
+
+    def slang_interpolation_qualifier(self, qualifier):
+        return self.SLANG_INTERPOLATION_QUALIFIER_MAP.get(str(qualifier).lower())
+
+    def slang_interpolation_attribute_prefix(self, node):
+        qualifiers = []
+        seen = set()
+        for attr in getattr(node, "attributes", []) or []:
+            mapped = self.slang_interpolation_qualifier(getattr(attr, "name", attr))
+            if mapped and mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
         if not qualifiers:
             return ""
         return " ".join(qualifiers) + " "
@@ -5434,7 +5467,9 @@ class SlangCodeGen:
                 f"struct member semantic '{node.name}.{member.name}'",
             )
             semantic_str = self.semantic_suffix(semantic)
-            declaration = self.format_declaration(member_type, member.name)
+            declaration = self.slang_interpolation_attribute_prefix(
+                member
+            ) + self.format_declaration(member_type, member.name)
             result += f"{self.indent()}{declaration}{semantic_str};\n"
 
         self.indent_level -= 1

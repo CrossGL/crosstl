@@ -1247,6 +1247,8 @@ class MojoToCrossGLConverter:
             return "!="
         if op == "@":
             return "*"
+        if op == ":=":
+            return "="
         if op == "//":
             return "/"
         if op == "//=":

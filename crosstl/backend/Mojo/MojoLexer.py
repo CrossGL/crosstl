@@ -63,6 +63,7 @@ TOKENS = tuple(
         ("SEMICOLON", r";"),
         ("STRING_LITERAL", r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''),
         ("COMMA", r","),
+        ("WALRUS", r":="),
         ("COLON", r":"),
         ("QUESTION", r"\?"),
         ("ASSIGN_SHIFT_LEFT", r"<<="),

@@ -2955,6 +2955,29 @@ def test_matrix_multiplication_operator_parsing_from_official_docs():
     assert declaration.attributes == []
 
 
+def test_walrus_assignment_expression_parse_from_official_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/operators/
+    # "Walrus operator" assignment-expression example.
+    code = """
+    def main():
+        var name = ""
+        while (name := input("Name or 'quit': ")) != "quit":
+            print("Hello,", name)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    condition = function.body[1].condition
+
+    assert isinstance(condition, BinaryOpNode)
+    assert condition.op == "!="
+    assignment = condition.left
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.operator == ":="
+    assert assignment.left.name == "name"
+    assert assignment.right.name == "input"
+    assert assignment.right.args == ["\"Name or 'quit': \""]
+
+
 def test_mod_parsing():
     code = """
     fn main():

@@ -1618,6 +1618,29 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_RAY_TRACING_ACCELERATION_STRUCTURE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source extension: https://github.khronos.org/SPIRV-Registry/extensions/KHR/SPV_KHR_ray_tracing.html
+; Reduced from the OpTypeAccelerationStructureKHR opaque type declaration and
+; a descriptor-backed UniformConstant OpVariable.
+OpCapability RayTracingKHR
+OpExtension "SPV_KHR_ray_tracing"
+OpMemoryModel Logical GLSL450
+OpEntryPoint RayGenerationKHR %main "main"
+OpName %top_level_as "topLevelAS"
+OpDecorate %top_level_as DescriptorSet 0
+OpDecorate %top_level_as Binding 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%accel = OpTypeAccelerationStructureKHR
+%ptr_accel = OpTypePointer UniformConstant %accel
+%top_level_as = OpVariable %ptr_accel UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY = """
 ; Reduced from Vulkan storage-image SPIR-V mapping examples.
 OpCapability Shader
@@ -4444,6 +4467,17 @@ def test_spirv_assembly_uniform_constant_resources_codegen():
     assert "Texture2D combinedTex @set(0) @binding(0);" in generated_code
     assert "sampler linearSampler @set(0) @binding(1);" in generated_code
     assert "%combined" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_ray_tracing_acceleration_structure_resource_codegen_reparse():
+    tokens = tokenize_code(SPIRV_RAY_TRACING_ACCELERATION_STRUCTURE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "accelerationStructureEXT topLevelAS @set(0) @binding(3);" in generated_code
+    assert "%top_level_as" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

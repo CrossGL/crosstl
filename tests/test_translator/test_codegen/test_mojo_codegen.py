@@ -26427,5 +26427,28 @@ def test_mojo_keyword_like_bindings_escape_in_declarations_calls_and_members():
     assert "input.match.x" not in generated_code
 
 
+def test_mojo_assert_keyword_bindings_escape_in_declarations_and_calls():
+    code = """
+    fn assert(float value) -> float {
+        float assert = value;
+        return assert;
+    }
+
+    fn useAssert(float input) -> float {
+        return assert(input);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn assert_(value: Float32) -> Float32:" in generated_code
+    assert "var assert_: Float32 = value" in generated_code
+    assert "return assert_" in generated_code
+    assert "return assert_(input)" in generated_code
+    assert "fn assert(" not in generated_code
+    assert "var assert:" not in generated_code
+    assert "return assert(input)" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

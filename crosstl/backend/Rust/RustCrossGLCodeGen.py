@@ -9912,11 +9912,70 @@ class RustToCrossGLConverter:
             return False
         return not segment[0].isupper()
 
+    def effective_attributes(self, attributes):
+        for attr in attributes or []:
+            yield attr
+            if isinstance(attr, AttributeNode) and attr.name == "cfg_attr":
+                yield from self.extract_cfg_attr_codegen_attributes(attr.args)
+
+    def extract_cfg_attr_codegen_attributes(self, args):
+        codegen_attribute_names = {
+            "spirv",
+            "vertex_shader",
+            "fragment_shader",
+            "compute_shader",
+            "location",
+            "binding",
+        }
+        extracted = []
+        index = 0
+        args = list(args or [])
+
+        while index < len(args):
+            name = args[index]
+            if name not in codegen_attribute_names:
+                index += 1
+                continue
+
+            if index + 1 < len(args) and args[index + 1] == "(":
+                nested_args, index = self.collect_nested_cfg_attr_args(
+                    args,
+                    index + 1,
+                )
+                extracted.append(AttributeNode(name, nested_args))
+                continue
+
+            extracted.append(AttributeNode(name, []))
+            index += 1
+
+        return extracted
+
+    def collect_nested_cfg_attr_args(self, args, open_index):
+        nested_args = []
+        depth = 0
+        index = open_index + 1
+
+        while index < len(args):
+            token = args[index]
+            if token == "(":
+                depth += 1
+                nested_args.append(token)
+            elif token == ")":
+                if depth == 0:
+                    return nested_args, index + 1
+                depth -= 1
+                nested_args.append(token)
+            else:
+                nested_args.append(token)
+            index += 1
+
+        return nested_args, index
+
     def get_shader_type_from_attributes(self, attributes):
         if not attributes:
             return None
 
-        for attr in attributes:
+        for attr in self.effective_attributes(attributes):
             if isinstance(attr, AttributeNode):
                 mapped = self.attribute_map.get(attr.name)
                 if mapped in ["vertex", "fragment", "compute"]:
@@ -9932,7 +9991,7 @@ class RustToCrossGLConverter:
         if not attributes:
             return None
 
-        for attr in attributes:
+        for attr in self.effective_attributes(attributes):
             if not isinstance(attr, AttributeNode) or attr.name != "spirv":
                 continue
 
@@ -9946,7 +10005,7 @@ class RustToCrossGLConverter:
         if not attributes:
             return None
 
-        for attr in attributes:
+        for attr in self.effective_attributes(attributes):
             if not isinstance(attr, AttributeNode) or attr.name != "spirv":
                 continue
             args = list(attr.args or [])
@@ -9994,7 +10053,7 @@ class RustToCrossGLConverter:
         if not attributes:
             return ""
 
-        for attr in attributes:
+        for attr in self.effective_attributes(attributes):
             if isinstance(attr, AttributeNode):
                 if attr.name in self.semantic_map:
                     return f" @ {self.semantic_map[attr.name]}"
