@@ -194,6 +194,43 @@ def test_codegen_type_mapping_vectors_and_matrices():
     assert "mat4" in result
 
 
+def test_codegen_packed_integer_vertex_storage_types_do_not_leak_metal_names():
+    code = """
+    struct VertexInput {
+        packed_float3 position;
+        packed_uchar4 color;
+        packed_short2 joints;
+        metal::packed_ushort2 uv;
+    };
+
+    packed_uchar4 makeColor(VertexInput in) {
+        return packed_uchar4(in.color);
+    }
+
+    metal::packed_ushort2 makeUv(VertexInput in) {
+        return metal::packed_ushort2(in.uv);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "vec3 position;" in crossgl
+    assert "u8vec4 color;" in crossgl
+    assert "i16vec2 joints;" in crossgl
+    assert "u16vec2 uv;" in crossgl
+    assert "u8vec4 makeColor(VertexInput in_)" in crossgl
+    assert "return u8vec4(in_.color);" in crossgl
+    assert "u16vec2 makeUv(VertexInput in_)" in crossgl
+    assert "return u16vec2(in_.uv);" in crossgl
+    assert "metal_u3a" not in crossgl
+    for raw_type in (
+        "packed_uchar4",
+        "packed_short2",
+        "packed_ushort2",
+    ):
+        assert raw_type not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_texture_and_sampler_translation():
     code = """
     #include <metal_stdlib>

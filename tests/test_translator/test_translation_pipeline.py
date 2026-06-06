@@ -189,6 +189,30 @@ def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
             "VertexOutput main(VertexInput input)",
         ),
         (
+            "gbuffers_terrain.vsh",
+            """
+            #version 450 core
+            layout(location = 0) in vec3 position;
+            void main() {
+                gl_Position = vec4(position, 1.0);
+            }
+            """,
+            ShaderStage.VERTEX,
+            "VertexOutput main(VertexInput input)",
+        ),
+        (
+            "deferred8.fsh",
+            """
+            #version 450 core
+            layout(location = 0) out vec4 fragColor;
+            void main() {
+                fragColor = vec4(1.0);
+            }
+            """,
+            ShaderStage.FRAGMENT,
+            "fragment {",
+        ),
+        (
             "eevee_film_frag.glsl",
             """
             #version 450 core

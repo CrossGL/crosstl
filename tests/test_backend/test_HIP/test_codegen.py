@@ -1266,6 +1266,38 @@ class TestHipCodeGen:
         assert "hipAtomic" not in result
         assert "atomicCAS(" not in result
 
+    def test_bounded_wrap_atomics_preserve_hip_semantics(self):
+        code = """
+        __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
+            __shared__ unsigned int sharedCounters[32];
+            unsigned int oldInc = atomicInc(&values[index], limit);
+            unsigned int oldDec = atomicDec(&sharedCounters[threadIdx.x], limit);
+            unsigned int aliasInc = hipAtomicInc(&values[index + 1], limit);
+            unsigned int aliasDec = hipAtomicDec(&values[index + 2], limit);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var<workgroup> sharedCounters: array<u32, 32>;" in result
+        assert "var oldInc: u32 = atomicInc(values[index], limit);" in result
+        expected_old_dec = (
+            "var oldDec: u32 = "
+            "atomicDec(sharedCounters[gl_LocalInvocationID.x], limit);"
+        )
+        assert expected_old_dec in result
+        assert "var aliasInc: u32 = atomicInc(values[(index + 1)], limit);" in result
+        assert "var aliasDec: u32 = atomicDec(values[(index + 2)], limit);" in result
+        assert "hipAtomicInc" not in result
+        assert "hipAtomicDec" not in result
+        assert "(&values[index])" not in result
+        assert "(&sharedCounters[gl_LocalInvocationID.x])" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_user_defined_atomic_name_call_does_not_convert_to_builtin(self):
         code = """
         int hipAtomicExch(int value) {

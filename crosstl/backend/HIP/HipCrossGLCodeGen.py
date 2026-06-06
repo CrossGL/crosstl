@@ -6531,6 +6531,10 @@ class HipToCrossGLConverter:
             "hipAtomicOr": "atomicOr",
             "atomicXor": "atomicXor",
             "hipAtomicXor": "atomicXor",
+            "atomicInc": "atomicInc",
+            "hipAtomicInc": "atomicInc",
+            "atomicDec": "atomicDec",
+            "hipAtomicDec": "atomicDec",
         }
 
         return function_mapping.get(func_name, func_name)

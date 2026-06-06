@@ -3961,6 +3961,13 @@ class RustToCrossGLConverter:
         if method_name == "length" and not args:
             return f"length({obj})"
 
+        if (
+            method_name == "length_squared"
+            and not args
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"dot({obj}, {obj})"
+
         if method_name == "normalize" and not args:
             return f"normalize({obj})"
 
@@ -3973,6 +3980,14 @@ class RustToCrossGLConverter:
             and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
         ):
             return f"distance({obj}, {args[0]})"
+
+        if (
+            method_name == "distance_squared"
+            and len(args) == 1
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            delta = f"({obj} - {args[0]})"
+            return f"dot({delta}, {delta})"
 
         if (
             method_name == "reflect"

@@ -767,6 +767,37 @@ def test_codegen_canonicalizes_high_color_interpolation_metadata():
     parse_crossgl(crossgl)
 
 
+def test_codegen_canonicalizes_high_index_vertex_stream_semantics():
+    crossgl = generate_crossgl("""
+        struct VertexInput {
+            float3 normal : NORMAL8;
+            float4 tangent : TANGENT9;
+            float3 binormal : BINORMAL10;
+            uint4 blendIndices : BLENDINDICES11;
+            float4 blendWeight : BLENDWEIGHT12;
+        };
+
+        [shader("vertex")]
+        float4 VSMain(VertexInput input, float4 fallbackWeight : BLENDWEIGHT13) : SV_Position {
+            return float4(input.normal, 1.0) + fallbackWeight;
+        }
+    """)
+
+    assert "vec3 normal @ Normal8;" in crossgl
+    assert "vec4 tangent @ Tangent9;" in crossgl
+    assert "vec3 binormal @ Binormal10;" in crossgl
+    assert "uvec4 blendIndices @ BlendIndices11;" in crossgl
+    assert "vec4 blendWeight @ BlendWeight12;" in crossgl
+    assert "vec4 fallbackWeight @ BlendWeight13" in crossgl
+    assert "@ NORMAL8" not in crossgl
+    assert "@ TANGENT9" not in crossgl
+    assert "@ BINORMAL10" not in crossgl
+    assert "@ BLENDINDICES11" not in crossgl
+    assert "@ BLENDWEIGHT12" not in crossgl
+    assert "@ BLENDWEIGHT13" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_contextual_shared_storage_modifier():
     crossgl = generate_crossgl("""
         shared float cachedWeight;

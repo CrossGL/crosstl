@@ -97,6 +97,8 @@ class HipParser:
         "ATOMICAND",
         "ATOMICOR",
         "ATOMICXOR",
+        "ATOMICINC",
+        "ATOMICDEC",
     }
     FLAT_BUILTIN_TOKEN_MAP = {
         "HIPTHREADIDX": "threadIdx",
@@ -206,6 +208,12 @@ class HipParser:
         "atomicXor",
         "atomicXor_system",
         "hipAtomicXor",
+        "atomicInc",
+        "atomicInc_system",
+        "hipAtomicInc",
+        "atomicDec",
+        "atomicDec_system",
+        "hipAtomicDec",
     }
     PACK_EXPANSION_FUNCTION_NAME = "__hip_pack_expand__"
     TEMPLATE_SUFFIX_FOLLOW_TOKENS = {

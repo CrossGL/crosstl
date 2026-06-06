@@ -732,10 +732,7 @@ class VulkanParser:
                 component_type = self.spirv_type_name(operands[0], types)
                 types[result_id] = {
                     "kind": "vector",
-                    "name": self.SPIRV_VECTOR_TYPES.get(
-                        (component_type, operands[1]),
-                        f"{component_type}{operands[1]}" if component_type else None,
-                    ),
+                    "name": self.spirv_vector_type_name(component_type, operands[1]),
                     "component_type": operands[0],
                     "component_count": operands[1],
                 }
@@ -4828,9 +4825,25 @@ class VulkanParser:
     def spirv_int_type_name(self, width, signedness):
         if width == "1":
             return "bool"
+        if width in {"16", "64"}:
+            prefix = "u" if signedness == "0" else "i"
+            return f"{prefix}{width}"
         if signedness == "0":
             return "uint"
         return "int"
+
+    def spirv_vector_type_name(self, component_type, component_count):
+        if not component_type or not component_count:
+            return None
+
+        mapped_type = self.SPIRV_VECTOR_TYPES.get((component_type, component_count))
+        if mapped_type:
+            return mapped_type
+
+        if component_type in {"i16", "u16", "i64", "u64"}:
+            return f"vec{component_count}<{component_type}>"
+
+        return f"{component_type}{component_count}"
 
     def parse_precision_declaration(self):
         self.eat("PRECISION")

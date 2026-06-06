@@ -339,6 +339,63 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_INT16_INT64_INTERFACE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from fragment shader code using
+; GL_EXT_shader_explicit_arithmetic_types_int16/int64 and integer conversions.
+OpCapability Shader
+OpCapability Int16
+OpCapability Int64
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %signed16_in %unsigned16_in %signed16_out %unsigned16_out %signed64_out %unsigned64_out
+OpExecutionMode %main OriginUpperLeft
+OpName %signed16_in "signed16In"
+OpName %unsigned16_in "unsigned16In"
+OpName %signed16_out "signed16Out"
+OpName %unsigned16_out "unsigned16Out"
+OpName %signed64_out "signed64Out"
+OpName %unsigned64_out "unsigned64Out"
+OpDecorate %signed16_in Location 0
+OpDecorate %unsigned16_in Location 1
+OpDecorate %signed16_out Location 0
+OpDecorate %unsigned16_out Location 1
+OpDecorate %signed64_out Location 2
+OpDecorate %unsigned64_out Location 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%short = OpTypeInt 16 1
+%ushort = OpTypeInt 16 0
+%long = OpTypeInt 64 1
+%ulong = OpTypeInt 64 0
+%v4short = OpTypeVector %short 4
+%v3ushort = OpTypeVector %ushort 3
+%ptr_input_v4short = OpTypePointer Input %v4short
+%ptr_input_v3ushort = OpTypePointer Input %v3ushort
+%ptr_output_v4short = OpTypePointer Output %v4short
+%ptr_output_v3ushort = OpTypePointer Output %v3ushort
+%ptr_output_long = OpTypePointer Output %long
+%ptr_output_ulong = OpTypePointer Output %ulong
+%signed16_in = OpVariable %ptr_input_v4short Input
+%unsigned16_in = OpVariable %ptr_input_v3ushort Input
+%signed16_out = OpVariable %ptr_output_v4short Output
+%unsigned16_out = OpVariable %ptr_output_v3ushort Output
+%signed64_out = OpVariable %ptr_output_long Output
+%unsigned64_out = OpVariable %ptr_output_ulong Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_signed16 = OpLoad %v4short %signed16_in
+%loaded_unsigned16 = OpLoad %v3ushort %unsigned16_in
+%signed_component = OpCompositeExtract %short %loaded_signed16 0
+%unsigned_component = OpCompositeExtract %ushort %loaded_unsigned16 1
+%wide_signed = OpSConvert %long %signed_component
+%wide_unsigned = OpUConvert %ulong %unsigned_component
+OpStore %signed16_out %loaded_signed16
+OpStore %unsigned16_out %loaded_unsigned16
+OpStore %signed64_out %wide_signed
+OpStore %unsigned64_out %wide_unsigned
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -3602,6 +3659,31 @@ def test_glslang_float16_interface_codegen_reparse():
     assert "float4 halfOut" not in generated_code
     assert "half2 inputMatrix" not in generated_code
     assert "floatOut = wide;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_int16_int64_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_INT16_INT64_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "vec4<i16> signed16In @input @location(0);" in generated_code
+    assert "vec3<u16> unsigned16In @input @location(1);" in generated_code
+    assert "vec4<i16> signed16Out @output @location(0);" in generated_code
+    assert "vec3<u16> unsigned16Out @output @location(1);" in generated_code
+    assert "i64 signed64Out @output @location(2);" in generated_code
+    assert "u64 unsigned64Out @output @location(3);" in generated_code
+    assert "signed16Out = signed16In;" in generated_code
+    assert "unsigned16Out = unsigned16In;" in generated_code
+    assert "signed64Out = i64(signed16In[0]);" in generated_code
+    assert "unsigned64Out = u64(unsigned16In[1]);" in generated_code
+    assert "ivec4 signed16In" not in generated_code
+    assert "uvec3 unsigned16In" not in generated_code
+    assert "int signed64Out" not in generated_code
+    assert "uint unsigned64Out" not in generated_code
+    assert "signed64Out = wide_signed;" not in generated_code
+    assert "unsigned64Out = wide_unsigned;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

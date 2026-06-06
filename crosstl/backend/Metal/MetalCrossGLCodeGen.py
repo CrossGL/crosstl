@@ -246,6 +246,18 @@ class MetalToCrossGLConverter:
             "packed_half2": "f16vec2",
             "packed_half3": "f16vec3",
             "packed_half4": "f16vec4",
+            "packed_char2": "i8vec2",
+            "packed_char3": "i8vec3",
+            "packed_char4": "i8vec4",
+            "packed_uchar2": "u8vec2",
+            "packed_uchar3": "u8vec3",
+            "packed_uchar4": "u8vec4",
+            "packed_short2": "i16vec2",
+            "packed_short3": "i16vec3",
+            "packed_short4": "i16vec4",
+            "packed_ushort2": "u16vec2",
+            "packed_ushort3": "u16vec3",
+            "packed_ushort4": "u16vec4",
             "packed_int2": "ivec2",
             "packed_int3": "ivec3",
             "packed_int4": "ivec4",
@@ -1877,6 +1889,9 @@ class MetalToCrossGLConverter:
     def map_function_call_name(self, name):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
+            metal_type_constructor = self.map_metal_type_constructor_name(name)
+            if metal_type_constructor is not None:
+                return metal_type_constructor
             metal_math_name = self.map_metal_math_function_name(name)
             if metal_math_name is not None:
                 return metal_math_name
@@ -1891,6 +1906,16 @@ class MetalToCrossGLConverter:
         if target_type.startswith("int") or mapped_type.startswith("ivec"):
             return "asint"
         return name
+
+    def map_metal_type_constructor_name(self, name):
+        text = str(name)
+        if "::" not in text:
+            return None
+        normalized = self.normalized_metal_type(text)
+        mapped = self.map_type(normalized)
+        if normalized in self.type_map or mapped != normalized:
+            return mapped
+        return None
 
     def map_metal_math_function_name(self, name):
         for prefix in self.metal_math_namespace_prefixes:

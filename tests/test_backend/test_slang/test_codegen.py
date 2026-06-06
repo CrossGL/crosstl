@@ -420,6 +420,42 @@ def test_high_color_semantic_codegen_matches_hlsl_varying_packing():
     cgl_translator.parse(generated_code)
 
 
+def test_high_index_vertex_stream_semantics_codegen_matches_hlsl_mesh_layouts():
+    code = """
+    struct VertexInput {
+        float3 normal : NORMAL8;
+        float4 tangent : TANGENT9;
+        float3 binormal : BINORMAL10;
+        uint4 blendIndices : BLENDINDICES11;
+        float4 blendWeight : BLENDWEIGHT12;
+    };
+
+    [shader("vertex")]
+    float4 vertexMain(VertexInput input, float4 fallbackWeight : BLENDWEIGHT13) : SV_Position
+    {
+        return float4(input.normal, 1.0) + fallbackWeight;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec3 normal @ in_Normal8;" in generated_code
+    assert "vec4 tangent @ in_Tangent9;" in generated_code
+    assert "vec3 binormal @ in_Binormal10;" in generated_code
+    assert "uvec4 blendIndices @ in_BlendIndices11;" in generated_code
+    assert "vec4 blendWeight @ in_BlendWeight12;" in generated_code
+    assert "vec4 fallbackWeight @ in_BlendWeight13" in generated_code
+    assert "@ NORMAL8" not in generated_code
+    assert "@ TANGENT9" not in generated_code
+    assert "@ BINORMAL10" not in generated_code
+    assert "@ BLENDINDICES11" not in generated_code
+    assert "@ BLENDWEIGHT12" not in generated_code
+    assert "@ BLENDWEIGHT13" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names():
     code = """
     [shader("compute")]

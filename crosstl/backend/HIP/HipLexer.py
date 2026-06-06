@@ -64,6 +64,8 @@ TOKENS = tuple(
         ("ATOMICAND", r"\batomicAnd(?:_system)?\b|hipAtomicAnd\b"),
         ("ATOMICOR", r"\batomicOr(?:_system)?\b|hipAtomicOr\b"),
         ("ATOMICXOR", r"\batomicXor(?:_system)?\b|hipAtomicXor\b"),
+        ("ATOMICINC", r"\batomicInc(?:_system)?\b|hipAtomicInc\b"),
+        ("ATOMICDEC", r"\batomicDec(?:_system)?\b|hipAtomicDec\b"),
         # HIP error handling
         ("HIPERROR", r"\bhipError_t\b"),
         ("HIPSUCCESS", r"\bhipSuccess\b"),

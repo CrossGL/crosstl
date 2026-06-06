@@ -253,6 +253,10 @@ def test_plain_glsl_registry_infers_stage_from_real_world_snippets(
 @pytest.mark.parametrize(
     ("suffix", "expected_shader_type", "expected_stage"),
     [
+        (".vsh", "vertex", ShaderStage.VERTEX),
+        (".fsh", "fragment", ShaderStage.FRAGMENT),
+        (".gsh", "geometry", ShaderStage.GEOMETRY),
+        (".csh", "compute", ShaderStage.COMPUTE),
         (".mesh", "mesh", ShaderStage.MESH),
         (".task", "task", ShaderStage.TASK),
         (".rgen", "ray_generation", ShaderStage.RAY_GENERATION),

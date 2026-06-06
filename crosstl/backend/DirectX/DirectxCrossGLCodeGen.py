@@ -3697,6 +3697,18 @@ class HLSLToCrossGLConverter:
                 if color_match:
                     mapped = f"Color{color_match.group(1)}"
             if mapped is None:
+                for hlsl_prefix, crossgl_prefix in (
+                    ("NORMAL", "Normal"),
+                    ("TANGENT", "Tangent"),
+                    ("BINORMAL", "Binormal"),
+                    ("BLENDINDICES", "BlendIndices"),
+                    ("BLENDWEIGHT", "BlendWeight"),
+                ):
+                    indexed_match = re.fullmatch(rf"{hlsl_prefix}(\d+)", semantic_upper)
+                    if indexed_match:
+                        mapped = f"{crossgl_prefix}{indexed_match.group(1)}"
+                        break
+            if mapped is None:
                 for hlsl_prefix, crossgl_semantic in (
                     ("SV_CLIPDISTANCE", "gl_ClipDistance"),
                     ("SV_CULLDISTANCE", "gl_CullDistance"),

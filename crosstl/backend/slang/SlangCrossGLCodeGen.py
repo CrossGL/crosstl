@@ -2151,6 +2151,20 @@ class SlangToCrossGLConverter:
             color_match = re.fullmatch(r"COLOR(\d+)", str(semantic).upper())
             if color_match:
                 mapped_semantic = f"Color{color_match.group(1)}"
+        if mapped_semantic is None:
+            for hlsl_prefix, crossgl_prefix in (
+                ("NORMAL", "in_Normal"),
+                ("TANGENT", "in_Tangent"),
+                ("BINORMAL", "in_Binormal"),
+                ("BLENDINDICES", "in_BlendIndices"),
+                ("BLENDWEIGHT", "in_BlendWeight"),
+            ):
+                indexed_match = re.fullmatch(
+                    rf"{hlsl_prefix}(\d+)", str(semantic).upper()
+                )
+                if indexed_match:
+                    mapped_semantic = f"{crossgl_prefix}{indexed_match.group(1)}"
+                    break
         return f"@ {mapped_semantic or semantic}"
 
     def map_ray_payload_access_semantic(self, semantic):

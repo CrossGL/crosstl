@@ -1314,6 +1314,25 @@ def test_rust_gpu_glam_reflect_refract_methods_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_glam_squared_norm_methods_codegen_reparse():
+    # glam Vec methods documented in rust-gpu APIs and common in distance checks.
+    code = """
+    fn squared_metrics(normal: Vec3<f32>, point: Vec3<f32>, light: Vec3<f32>) -> f32 {
+        let normal_len2 = normal.length_squared();
+        let light_dist2 = point.distance_squared(light);
+        normal_len2 + light_dist2
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "normal_len2 = dot(normal, normal);" in result
+    assert "light_dist2 = dot((point - light), (point - light));" in result
+    assert ".length_squared(" not in result
+    assert ".distance_squared(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
