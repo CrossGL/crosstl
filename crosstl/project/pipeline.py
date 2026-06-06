@@ -8509,15 +8509,14 @@ def _summary_contract_reasons(
                 "artifact source maps",
             )
         )
-        if "sourceMapsByVariant" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.sourceMapsByVariant",
-                    summary.get("sourceMapsByVariant"),
-                    source_map_rollups["sourceMapsByVariant"],
-                    "artifact source maps",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceMapsByVariant",
+                summary.get("sourceMapsByVariant"),
+                source_map_rollups["sourceMapsByVariant"],
+                "artifact source maps",
             )
+        )
         reasons.extend(
             _count_field_contract_reasons(
                 "summary.sourceRemapCount",
@@ -8542,15 +8541,14 @@ def _summary_contract_reasons(
                 "artifact source remaps",
             )
         )
-        if "sourceRemapsByVariant" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.sourceRemapsByVariant",
-                    summary.get("sourceRemapsByVariant"),
-                    source_map_rollups["sourceRemapsByVariant"],
-                    "artifact source remaps",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceRemapsByVariant",
+                summary.get("sourceRemapsByVariant"),
+                source_map_rollups["sourceRemapsByVariant"],
+                "artifact source remaps",
             )
+        )
     if isinstance(diagnostics, list):
         reasons.extend(
             _diagnostic_counts_contract_reasons(

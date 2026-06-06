@@ -745,6 +745,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "source-remap summary rollups including variant rollups" in (
             backend_support["notes"]
         )
+        assert "missing source-map and source-remap variant rollups" in (
+            backend_support["notes"]
+        )
         assert "current file-level source-map span coverage" in (
             backend_support["notes"]
         )
@@ -811,6 +814,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_artifact_provenance_"
             "source_backend_rollup"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_source_map_variant_rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
