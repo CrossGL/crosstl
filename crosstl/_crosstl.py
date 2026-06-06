@@ -1503,6 +1503,9 @@ def _format_include_dependency_issue_line(dependency):
         location += f":{line}"
         if isinstance(column, int) and not isinstance(column, bool) and column > 0:
             location += f":{column}"
+    source_backend = dependency.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        location += f" [{source_backend}]"
 
     kind = dependency.get("kind")
     kind_label = f" {kind}" if isinstance(kind, str) and kind else ""
@@ -1542,6 +1545,9 @@ def _format_resolved_include_dependency_line(dependency):
         location += f":{line}"
         if isinstance(column, int) and not isinstance(column, bool) and column > 0:
             location += f":{column}"
+    source_backend = dependency.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        location += f" [{source_backend}]"
 
     kind = dependency.get("kind")
     kind_label = f" {kind}" if isinstance(kind, str) and kind else ""

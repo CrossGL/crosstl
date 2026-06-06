@@ -836,6 +836,7 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
     assert inspection["includeDependencies"]["unresolvedDependencies"] == [
         {
             "source": "main.frag",
+            "sourceBackend": "opengl",
             "include": "missing.inc",
             "status": "missing",
             "kind": "local",
@@ -863,7 +864,8 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
 
     assert result.returncode == 0
     assert (
-        "- main.frag:1:1: missing local include missing.inc " "(define PROJECT_HEADER)"
+        "- main.frag:1:1 [opengl]: missing local include missing.inc "
+        "(define PROJECT_HEADER)"
     ) in result.stdout
 
 
@@ -10822,15 +10824,17 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     )
     assert "Resolved include dependencies:" in result.stdout
     assert (
-        "- main.frag:2:1: resolved system include shared.inc -> "
+        "- main.frag:2:1 [opengl]: resolved system include shared.inc -> "
         "includes/shared.inc (include-dir)"
     ) in result.stdout
     assert (
-        "- main.frag:3:1: resolved local include generated.inc -> "
+        "- main.frag:3:1 [opengl]: resolved local include generated.inc -> "
         "generated.inc (source, define PROJECT_HEADER)"
     ) in result.stdout
     assert "Include dependency issues:" in result.stdout
-    assert "- main.frag:4:1: missing local include missing.inc" in result.stdout
+    assert "- main.frag:4:1 [opengl]: missing local include missing.inc" in (
+        result.stdout
+    )
 
     payload = inspect_project_report(report_path)
     assert payload["includeDependencies"] == {
@@ -10846,6 +10850,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         "resolvedDependencies": [
             {
                 "source": "main.frag",
+                "sourceBackend": "opengl",
                 "include": "shared.inc",
                 "status": "resolved",
                 "kind": "system",
@@ -10856,6 +10861,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
             },
             {
                 "source": "main.frag",
+                "sourceBackend": "opengl",
                 "include": "generated.inc",
                 "status": "resolved",
                 "kind": "local",
@@ -10871,6 +10877,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         "unresolvedDependencies": [
             {
                 "source": "main.frag",
+                "sourceBackend": "opengl",
                 "include": "missing.inc",
                 "status": "missing",
                 "kind": "local",

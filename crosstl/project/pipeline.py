@@ -4914,6 +4914,7 @@ def _inspection_include_path_processing_summary(
 
 def _inspection_include_dependency_sample(
     unit_path: Any,
+    source_backend: Any,
     dependency: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     include = dependency.get("include")
@@ -4923,6 +4924,9 @@ def _inspection_include_dependency_sample(
 
     sample: dict[str, Any] = {
         "source": unit_path if _is_non_empty_string(unit_path) else None,
+        "sourceBackend": (
+            source_backend if _is_non_empty_string(source_backend) else None
+        ),
         "include": include,
         "status": status,
     }
@@ -4977,6 +4981,7 @@ def _inspection_include_dependency_summary(
             if status == "resolved":
                 sample = _inspection_include_dependency_sample(
                     unit.get("path"),
+                    unit.get("sourceBackend"),
                     dependency,
                 )
                 if sample:
@@ -4990,6 +4995,7 @@ def _inspection_include_dependency_summary(
                 continue
             sample = _inspection_include_dependency_sample(
                 unit.get("path"),
+                unit.get("sourceBackend"),
                 dependency,
             )
             if sample:

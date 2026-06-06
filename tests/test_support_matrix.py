@@ -380,6 +380,9 @@ def test_project_include_resolution_documents_status_reporting():
         assert "resolved and unresolved include dependency samples" in (
             backend_support["notes"]
         )
+        assert "source-backend labels and project-define provenance" in (
+            backend_support["notes"]
+        )
         assert "unresolved include dependency samples" in backend_support["notes"]
         assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
