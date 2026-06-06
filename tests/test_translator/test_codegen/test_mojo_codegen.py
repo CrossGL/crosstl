@@ -23653,6 +23653,130 @@ def test_scalar_vec2_vec4_constructors_emit_splat_form():
     assert "fn _crossgl_vec3_splat" not in generated_code
 
 
+def test_underfilled_vector_constructors_zero_fill_missing_mojo_lanes():
+    code = """
+    vec2 makeUv() {
+        return vec2(1.0, 2.0);
+    }
+
+    int nextIndex() {
+        return 3;
+    }
+
+    bool nextFlag() {
+        return true;
+    }
+
+    vec4 fromScalars() {
+        return vec4(1.0, 2.0);
+    }
+
+    vec3 fromVec3Scalars() {
+        return vec3(1.0, 2.0);
+    }
+
+    vec4 fromVec2Call() {
+        return vec4(makeUv());
+    }
+
+    ivec4 fromIntScalar() {
+        return ivec4(nextIndex(), 4);
+    }
+
+    bvec4 fromBoolScalar() {
+        return bvec4(nextFlag(), false);
+    }
+
+    vec4 emptyVec4() {
+        return vec4();
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return SIMD[DType.float32, 4](1.0, 2.0, 0.0, 0.0)" in generated_code
+    assert "fn _crossgl_construct_f32_4_vf322_01_s_s" in generated_code
+    assert (
+        "return _crossgl_construct_f32_4_vf322_01_s_s(makeUv(), 0.0, 0.0)"
+        in generated_code
+    )
+    assert "makeUv()[0]" not in generated_code
+    assert "makeUv()[1]" not in generated_code
+    assert "return SIMD[DType.int32, 4](nextIndex(), 4, 0, 0)" in generated_code
+    assert (
+        "return SIMD[DType.bool, 4](nextFlag(), False, False, False)" in generated_code
+    )
+    assert "return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)" in generated_code
+
+
+def test_underfilled_vector_constructors_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    vec2 makeUv() {
+        return vec2(1.0, 2.0);
+    }
+
+    int nextIndex() {
+        return 3;
+    }
+
+    bool nextFlag() {
+        return true;
+    }
+
+    vec4 fromScalars() {
+        return vec4(1.0, 2.0);
+    }
+
+    vec3 fromVec3Scalars() {
+        return vec3(1.0, 2.0);
+    }
+
+    vec4 fromVec2Call() {
+        return vec4(makeUv());
+    }
+
+    ivec4 fromIntScalar() {
+        return ivec4(nextIndex(), 4);
+    }
+
+    bvec4 fromBoolScalar() {
+        return bvec4(nextFlag(), false);
+    }
+
+    vec4 emptyVec4() {
+        return vec4();
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(fromScalars())
+    print(fromVec3Scalars())
+    print(fromVec2Call())
+    print(fromIntScalar())
+    print(fromBoolScalar())
+    print(emptyVec4())
+"""
+
+    source_path = tmp_path / "underfilled_vector_constructors.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[1.0, 2.0, 0.0, 0.0]" in result.stdout
+    assert "[3, 4, 0, 0]" in result.stdout
+    assert "[True, False, False, False]" in result.stdout
+    assert "[0.0, 0.0, 0.0, 0.0]" in result.stdout
+
+
 def test_scalar_vec2_vec4_constructors_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

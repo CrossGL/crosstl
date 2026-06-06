@@ -6336,6 +6336,72 @@ def test_hlsl_bit_count_lowers_to_countbits_intrinsic():
     assert "uint countbits = tid.x;" not in generated_code
 
 
+def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
+    shader = """
+    shader HlslFirstBitBuiltinLowering {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                let lowBits = findLSB(mask);
+                let highBit = findMSB(tid.x);
+                int3 signedMask = int3(tid.x, tid.y, tid.z);
+                let signedHighBits = findMSB(signedMask);
+                uint firstbitlow = tid.x;
+                uint firstbithigh = tid.y;
+                let mixed = findLSB(tid.z) + firstbitlow + firstbithigh;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL exposes firstbitlow/firstbithigh for scalar and vector
+    # integer operands, rather than GLSL's findLSB/findMSB spelling.
+    assert "uint3 lowBits = firstbitlow(mask);" in generated_code
+    assert "uint highBit = firstbithigh(tid.x);" in generated_code
+    assert "int3 signedHighBits = firstbithigh(signedMask);" in generated_code
+    assert "uint firstbitlow_ = tid.x;" in generated_code
+    assert "uint firstbithigh_ = tid.y;" in generated_code
+    assert (
+        "uint mixed = ((firstbitlow(tid.z) + firstbitlow_) + firstbithigh_);"
+    ) in generated_code
+    assert "findLSB(" not in generated_code
+    assert "findMSB(" not in generated_code
+    assert "uint firstbitlow = tid.x;" not in generated_code
+    assert "uint firstbithigh = tid.y;" not in generated_code
+
+
+def test_hlsl_user_defined_first_bit_names_are_not_lowered():
+    shader = """
+    shader HlslUserFirstBitNames {
+        uint findLSB(uint value) {
+            return value + 1u;
+        }
+
+        uint findMSB(uint value) {
+            return value + 2u;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint low = findLSB(tid.x);
+                uint high = findMSB(tid.y);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint findLSB(uint value)" in generated_code
+    assert "uint findMSB(uint value)" in generated_code
+    assert "uint low = findLSB(tid.x);" in generated_code
+    assert "uint high = findMSB(tid.y);" in generated_code
+    assert "firstbitlow(" not in generated_code
+    assert "firstbithigh(" not in generated_code
+
+
 def test_hlsl_user_defined_bit_count_name_is_not_lowered():
     shader = """
     shader HlslUserBitCountName {

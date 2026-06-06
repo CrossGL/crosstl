@@ -291,6 +291,28 @@ def test_external_rocm_convolution_std_array_template_extent_codegen():
     assert "fn convolution(" in crossgl
 
 
+def test_external_rocm_stb_image_trailing_aligned_attribute_codegen_reparse():
+    # Upstream: ROCm/rocm-examples image convolution and histogram_atomics
+    # vendored stb_image.h define STBI_SIMD_ALIGN as:
+    # type name __attribute__((aligned(16))).
+    source = """
+    void stbi_filter_tile() {
+        unsigned char temp[16] __attribute__((aligned(16)));
+        temp[0] = 1;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    temp = ast.statements[0].body[0]
+
+    assert isinstance(temp, VariableNode)
+    assert temp.vtype == "unsigned char[16]"
+    assert "var temp: array<u8, 16>;" in crossgl
+    assert "temp[0] = 1;" in crossgl
+    assert "__attribute__" not in crossgl
+    assert "aligned" not in crossgl
+
+
 def test_external_hip_one_component_vectors_codegen_reparse():
     # HIP exposes CUDA-compatible one-component vector types through
     # hip_vector_types.h; they should lower to scalar CrossGL values.

@@ -1687,6 +1687,31 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_STORAGE_IMAGE_ARRAY_FORMAT_ASSEMBLY = """
+; Reduced from Vulkan descriptor arrays of formatted storage images.
+; The Image Format lives on the OpTypeImage element, not the OpTypeArray.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %storage_images "storageImages"
+OpDecorate %storage_images DescriptorSet 0
+OpDecorate %storage_images Binding 0
+OpDecorate %storage_images NonWritable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%count = OpConstant %uint 4
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%image_array = OpTypeArray %image %count
+%ptr_storage_images = OpTypePointer UniformConstant %image_array
+%storage_images = OpVariable %ptr_storage_images UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_NON_32BIT_INTEGER_IMAGE_FAMILY_ASSEMBLY = """
 ; Reduced from SPIR-V explicit integer-width image declarations.
 ; Preserved i16/u16 sampled types should still select signed integer resources.
@@ -4516,6 +4541,20 @@ def test_spirv_assembly_storage_image_format_codegen():
         in generated_code
     )
     assert "%storage_image" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_storage_image_array_format_codegen():
+    tokens = tokenize_code(SPIRV_STORAGE_IMAGE_ARRAY_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "RWTexture2D<uint> storageImages[4] @set(0) @binding(0) @r32ui @readonly;"
+        in generated_code
+    )
+    assert "storageImages[4] @set(0) @binding(0) @readonly;" not in generated_code
+    assert "%storage_images" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
