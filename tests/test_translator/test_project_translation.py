@@ -1623,6 +1623,22 @@ def test_translate_project_records_define_processing_without_frontend_support(
     report_path = repo / "translated" / "portability-report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     assert validation["success"] is True
     assert payload["artifacts"][0]["sourceBackend"] == "rust"
@@ -1637,6 +1653,32 @@ def test_translate_project_records_define_processing_without_frontend_support(
     assert payload["summary"]["defineProcessingBySourceBackend"] == {
         "rust": {"not-supported": 1}
     }
+    assert inspection["defineProcessing"] == {
+        "available": True,
+        "byStatus": {"not-supported": 1},
+        "bySourceBackend": {"rust": {"not-supported": 1}},
+        "notSupportedArtifactCount": 1,
+        "truncatedNotSupportedArtifactCount": 0,
+        "notSupportedArtifacts": [
+            {
+                "source": "shader.rs",
+                "sourceBackend": "rust",
+                "target": "cgl",
+                "path": "translated/cgl/shader.cgl",
+                "status": "not-supported",
+                "frontend": "lexer",
+                "supportsDefines": False,
+                "defineCount": 1,
+            }
+        ],
+    }
+    assert result.returncode == 0
+    assert "Define processing: not-supported=1" in result.stdout
+    assert "Define processing issues:" in result.stdout
+    assert (
+        "- shader.rs -> cgl at translated/cgl/shader.cgl: "
+        "1 define not forwarded by rust lexer frontend"
+    ) in result.stdout
 
 
 def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatch):
@@ -8251,6 +8293,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "notSupportedArtifactCount": 0,
+        "truncatedNotSupportedArtifactCount": 0,
+        "notSupportedArtifacts": [],
     }
     assert payload["includeDependencies"] == {
         "available": True,

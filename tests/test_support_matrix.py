@@ -388,6 +388,9 @@ def test_project_macro_variants_document_artifact_define_maps():
             backend_support["notes"]
         )
         assert "define-processing rollups" in backend_support["notes"]
+        assert "not-supported define-processing artifact samples" in (
+            backend_support["notes"]
+        )
         assert "malformed define/variant metadata including empty mapping keys" in (
             backend_support["notes"]
         )

@@ -887,6 +887,61 @@ def _format_artifact_sample_lines(label, artifacts, truncated_count):
     return lines
 
 
+def _format_define_processing_issue_line(artifact):
+    line = _format_artifact_identity_line(artifact)
+    if not line:
+        return None
+
+    define_count = artifact.get("defineCount")
+    if (
+        not isinstance(define_count, int)
+        or isinstance(define_count, bool)
+        or define_count <= 0
+    ):
+        return None
+
+    source_backend = artifact.get("sourceBackend")
+    source_backend_label = (
+        f" by {source_backend}"
+        if isinstance(source_backend, str) and source_backend
+        else ""
+    )
+    frontend = artifact.get("frontend")
+    frontend_label = (
+        f" {frontend} frontend" if isinstance(frontend, str) and frontend else ""
+    )
+    define_label = "define" if define_count == 1 else "defines"
+    return (
+        f"{line}: {define_count} {define_label} not forwarded"
+        f"{source_backend_label}{frontend_label}"
+    )
+
+
+def _format_define_processing_issue_lines(define_processing):
+    if not isinstance(define_processing, Mapping):
+        return []
+    artifacts = define_processing.get("notSupportedArtifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Define processing issues:"]
+    for artifact in artifacts:
+        line = _format_define_processing_issue_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = define_processing.get("truncatedNotSupportedArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_dependency_issue_line(dependency):
     if not isinstance(dependency, Mapping):
         return None
@@ -1136,6 +1191,7 @@ def _format_project_report_inspection(payload):
     )
     if define_processing:
         lines.append(define_processing)
+    lines.extend(_format_define_processing_issue_lines(payload.get("defineProcessing")))
     include_path_processing = _format_count_rollup(
         "Include path processing",
         summary.get("includePathProcessingByStatus"),

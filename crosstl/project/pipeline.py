@@ -42,6 +42,7 @@ REPORT_PACKAGE_NAME = "crosstl"
 UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
 ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT = 20
+DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
@@ -3397,7 +3398,10 @@ def inspect_project_report(
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
     }
     payload["sourceMaps"] = _inspection_source_map_summary(summary)
-    payload["defineProcessing"] = _inspection_define_processing_summary(summary)
+    payload["defineProcessing"] = _inspection_define_processing_summary(
+        summary,
+        report.get("artifacts"),
+    )
     payload["includeDependencies"] = _inspection_include_dependency_summary(
         summary,
         report.get("units"),
@@ -3725,7 +3729,41 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     return summary
 
 
-def _inspection_define_processing_summary(summary: Any) -> dict[str, Any]:
+def _inspection_define_processing_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    define_processing = artifact.get("defineProcessing")
+    if not isinstance(define_processing, Mapping):
+        return None
+    if define_processing.get("status") != "not-supported":
+        return None
+    define_count = define_processing.get("defineCount")
+    if (
+        not isinstance(define_count, int)
+        or isinstance(define_count, bool)
+        or define_count <= 0
+    ):
+        return None
+
+    sample = {
+        "source": artifact.get("source"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+        "status": define_processing.get("status"),
+        "frontend": define_processing.get("frontend"),
+        "supportsDefines": define_processing.get("supportsDefines"),
+        "defineCount": define_count,
+    }
+    if "variant" in artifact:
+        sample["variant"] = artifact.get("variant")
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_define_processing_summary(
+    summary: Any,
+    artifacts: Any = None,
+) -> dict[str, Any]:
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -3733,6 +3771,14 @@ def _inspection_define_processing_summary(summary: Any) -> dict[str, Any]:
     by_source_backend = summary.get("defineProcessingBySourceBackend")
     if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
         return {"available": False}
+
+    not_supported_artifacts = []
+    for artifact in _record_sequence(artifacts):
+        if not isinstance(artifact, Mapping):
+            continue
+        sample = _inspection_define_processing_artifact(artifact)
+        if sample:
+            not_supported_artifacts.append(sample)
 
     return {
         "available": True,
@@ -3742,6 +3788,14 @@ def _inspection_define_processing_summary(summary: Any) -> dict[str, Any]:
             for source_backend, counts in by_source_backend.items()
             if isinstance(source_backend, str) and isinstance(counts, Mapping)
         },
+        "notSupportedArtifactCount": len(not_supported_artifacts),
+        "truncatedNotSupportedArtifactCount": max(
+            0,
+            len(not_supported_artifacts) - DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "notSupportedArtifacts": not_supported_artifacts[
+            :DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT
+        ],
     }
 
 
