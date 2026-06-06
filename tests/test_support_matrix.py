@@ -322,7 +322,7 @@ def test_project_migration_actions_are_first_class_support_feature():
         assert "bounded inspection samples with truncation metadata" in (
             backend_support["notes"]
         )
-        assert "altered action rollups" in backend_support["notes"]
+        assert "missing or altered action rollups" in backend_support["notes"]
         assert "shader/kernel source translation from host runtime APIs" in (
             backend_support["notes"]
         )
@@ -339,6 +339,10 @@ def test_project_migration_actions_are_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_noncanonical_migration_action_"
             "targets"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_migration_rollups"
         ) in backend_support["evidence"]
 
 
@@ -897,8 +901,8 @@ def test_project_validation_hooks_document_migration_contract_checks():
 
     for backend_support in feature["support"].values():
         assert (
-            "migration scope, non-goals, action count and kind, severity, and "
-            "target rollups, and canonical target declarations"
+            "migration scope, non-goals, required action count and kind, "
+            "severity, and target rollups, and canonical target declarations"
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]
@@ -1028,6 +1032,15 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_migration_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_external_corpus_"
+            "accounting"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_unit_extension_mismatches"
         ) in backend_support["evidence"]
         assert (
@@ -1147,6 +1160,7 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         assert "entry presence/discovery/source-backend consistency" in (
             backend_support["notes"]
         )
+        assert "required manifest accounting" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_external_corpus_entry_"
@@ -1165,6 +1179,11 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_skips_duplicate_external_corpus_entries"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_external_corpus_"
+            "accounting"
         ) in backend_support["evidence"]
 
 

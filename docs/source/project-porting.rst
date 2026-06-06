@@ -378,8 +378,8 @@ Project reports are JSON documents with:
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact
   outcome counts for manifest entries. Validation checks entry presence against
   the project root, checks discovered/source-backend fields against declared
-  translation units, and rejects inconsistent retained-entry and manifest-entry
-  summary counts when those fields are present.
+  translation units, and rejects missing or inconsistent retained-entry and
+  manifest-entry summary counts.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract. Project-level include and define forwarding limitations
@@ -418,8 +418,9 @@ Project reports are JSON documents with:
   consistency, anchor consistency, current file-level source-map span coverage,
   source-remap metadata shape, sidecar hash, closed compiler sidecar field
   sets, and sidecar content checks, external
-  corpus record, per-entry artifact count, and summary checks, summary
-  consistency checks, migration action shape and target declaration checks,
+  corpus record, per-entry artifact count, required manifest-entry accounting,
+  and summary checks, summary consistency checks, migration action shape,
+  rollup, and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
   target declaration checks, scan-scope count consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run

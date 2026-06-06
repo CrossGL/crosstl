@@ -468,6 +468,32 @@ def test_scan_report_records_documented_migration_actions(tmp_path):
     ]
 
 
+def test_validate_project_report_rejects_missing_migration_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+    payload["migration"].pop("actionCount")
+    payload["migration"].pop("actionsByKind")
+    payload["migration"].pop("actionsBySeverity")
+    payload["migration"].pop("actionsByTarget")
+    report_path = repo / "missing-migration-rollups-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "migration.actionCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "migration.actionsByKind must be an object" in diagnostic["message"]
+    assert "migration.actionsBySeverity must be an object" in diagnostic["message"]
+    assert "migration.actionsByTarget must be an object" in diagnostic["message"]
+
+
 def test_scan_report_records_unsupported_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -6029,6 +6055,62 @@ def test_validate_project_report_rejects_malformed_external_corpus_records(tmp_p
     ) in diagnostic["message"]
     assert "externalCorpus.summary.artifactsByTarget must be an object" in (
         diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_missing_external_corpus_accounting(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["externalCorpus"]["summary"].pop("manifestEntryCount")
+    payload["externalCorpus"]["summary"].pop("validEntryCount")
+    payload["externalCorpus"]["summary"].pop("invalidEntryCount")
+    report_path = repo / "missing-external-corpus-accounting-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.summary.manifestEntryCount must be a non-negative integer"
+        in diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.summary.validEntryCount must be a non-negative integer"
+        in diagnostic["message"]
+    )
+    assert (
+        "externalCorpus.summary.invalidEntryCount must be a non-negative integer"
+        in diagnostic["message"]
     )
 
 

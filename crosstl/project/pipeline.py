@@ -7922,28 +7922,26 @@ def _external_corpus_summary_contract_reasons(
         "validEntryCount",
         "invalidEntryCount",
     )
-    if any(field_name in summary for field_name in accounting_fields):
-        for field_name in accounting_fields:
-            if not _is_non_negative_int(summary.get(field_name)):
-                reasons.append(
-                    f"externalCorpus.summary.{field_name} "
-                    "must be a non-negative integer"
-                )
-        if all(_is_non_negative_int(summary.get(field)) for field in accounting_fields):
-            manifest_entry_count = summary["manifestEntryCount"]
-            valid_entry_count = summary["validEntryCount"]
-            invalid_entry_count = summary["invalidEntryCount"]
-            if valid_entry_count != len(entries):
-                reasons.append(
-                    "externalCorpus.summary.validEntryCount must match "
-                    "externalCorpus.entries"
-                )
-            if manifest_entry_count != valid_entry_count + invalid_entry_count:
-                reasons.append(
-                    "externalCorpus.summary.manifestEntryCount must equal "
-                    "externalCorpus.summary.validEntryCount plus "
-                    "externalCorpus.summary.invalidEntryCount"
-                )
+    for field_name in accounting_fields:
+        if not _is_non_negative_int(summary.get(field_name)):
+            reasons.append(
+                f"externalCorpus.summary.{field_name} must be a non-negative integer"
+            )
+    if all(_is_non_negative_int(summary.get(field)) for field in accounting_fields):
+        manifest_entry_count = summary["manifestEntryCount"]
+        valid_entry_count = summary["validEntryCount"]
+        invalid_entry_count = summary["invalidEntryCount"]
+        if valid_entry_count != len(entries):
+            reasons.append(
+                "externalCorpus.summary.validEntryCount must match "
+                "externalCorpus.entries"
+            )
+        if manifest_entry_count != valid_entry_count + invalid_entry_count:
+            reasons.append(
+                "externalCorpus.summary.manifestEntryCount must equal "
+                "externalCorpus.summary.validEntryCount plus "
+                "externalCorpus.summary.invalidEntryCount"
+            )
     expected_counts = {
         "entryCount": len(entries),
         "presentCount": sum(1 for entry in entry_records if entry.get("present")),
@@ -8158,25 +8156,23 @@ def _migration_contract_reasons(
                             )
                             break
         rollups = _migration_action_rollups(actions)
-        if "actionCount" in migration:
+        reasons.extend(
+            _count_field_contract_reasons(
+                "migration.actionCount",
+                migration.get("actionCount"),
+                rollups["actionCount"],
+                "migration.actions",
+            )
+        )
+        for field_name in ("actionsByKind", "actionsBySeverity", "actionsByTarget"):
             reasons.extend(
-                _count_field_contract_reasons(
-                    "migration.actionCount",
-                    migration.get("actionCount"),
-                    rollups["actionCount"],
+                _mapping_field_contract_reasons(
+                    f"migration.{field_name}",
+                    migration.get(field_name),
+                    rollups[field_name],
                     "migration.actions",
                 )
             )
-        for field_name in ("actionsByKind", "actionsBySeverity", "actionsByTarget"):
-            if field_name in migration:
-                reasons.extend(
-                    _mapping_field_contract_reasons(
-                        f"migration.{field_name}",
-                        migration.get(field_name),
-                        rollups[field_name],
-                        "migration.actions",
-                    )
-                )
     return reasons
 
 
