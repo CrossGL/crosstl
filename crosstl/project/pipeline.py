@@ -8404,17 +8404,16 @@ def _summary_contract_reasons(
                 "artifact provenance",
             )
         )
-        if "artifactProvenanceIntermediateBySourceBackend" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.artifactProvenanceIntermediateBySourceBackend",
-                    summary.get("artifactProvenanceIntermediateBySourceBackend"),
-                    artifact_provenance_rollups[
-                        "artifactProvenanceIntermediateBySourceBackend"
-                    ],
-                    "artifact provenance",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactProvenanceIntermediateBySourceBackend",
+                summary.get("artifactProvenanceIntermediateBySourceBackend"),
+                artifact_provenance_rollups[
+                    "artifactProvenanceIntermediateBySourceBackend"
+                ],
+                "artifact provenance",
             )
+        )
         define_processing_rollups = _define_processing_rollups(artifact_records)
         reasons.extend(
             _mapping_field_contract_reasons(

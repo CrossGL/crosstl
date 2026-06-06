@@ -7536,6 +7536,30 @@ def test_validate_project_report_rejects_compiler_incompatible_source_remap_side
     )
 
 
+def test_validate_project_report_rejects_missing_artifact_provenance_source_backend_rollup(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["summary"].pop("artifactProvenanceIntermediateBySourceBackend")
+    report_path = repo / "out" / "missing-provenance-rollup-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "summary.artifactProvenanceIntermediateBySourceBackend must be an object"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

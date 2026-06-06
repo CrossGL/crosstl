@@ -770,6 +770,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert "unit and skipped source override rollups" in (backend_support["notes"])
         assert "source-relative target/variant layout" in backend_support["notes"]
+        assert "missing artifact provenance summary rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_detects_modified_unit_sources"
@@ -803,6 +806,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_source_map_counts_split_file_and_fine_grained_totals"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_artifact_provenance_"
+            "source_backend_rollup"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
