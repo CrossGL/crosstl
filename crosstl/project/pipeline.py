@@ -1944,20 +1944,64 @@ def _variant_jobs(
 
 
 def _artifact_matrix_report(
+    config: ProjectConfig,
     units: Sequence[ProjectTranslationUnit],
     targets: Sequence[str],
     variants: Mapping[str, Mapping[str, str]],
+    artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     variant_count = len(variants)
     variant_factor = variant_count if variant_count else 1
     normalized_targets = _normalized_targets(targets)
-    return {
+    payload = {
         "unitCount": len(units),
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
         "variantMode": "named" if variant_count else "none",
         "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
     }
+    artifact_identities = {
+        identity
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        for identity in (_artifact_identity(artifact),)
+        if identity is not None
+    }
+    variant_names: list[str | None] = sorted(variants) if variants else [None]
+    expected_identities = {
+        identity
+        for unit in units
+        for target in normalized_targets
+        for variant in variant_names
+        for identity in (
+            _expected_artifact_identity(
+                config.root,
+                config.output_path,
+                unit.relative_path,
+                target,
+                variant,
+            ),
+        )
+        if identity is not None
+    }
+    missing_identities = expected_identities - artifact_identities
+    extra_identities = artifact_identities - expected_identities
+    payload.update(
+        {
+            "emittedArtifactCount": len(artifacts),
+            "translatedCount": sum(
+                1 for artifact in artifacts if artifact.get("status") == "translated"
+            ),
+            "failedCount": sum(
+                1 for artifact in artifacts if artifact.get("status") == "failed"
+            ),
+            "identityCoverageAvailable": True,
+            "missingArtifactCount": len(missing_identities),
+            "extraArtifactCount": len(extra_identities),
+            "complete": not missing_identities and not extra_identities,
+        }
+    )
+    return payload
 
 
 def _artifact_source_map(
@@ -2165,7 +2209,7 @@ def translate_project(
             scan.units, selected_targets, artifacts
         ),
         artifact_matrix=_artifact_matrix_report(
-            scan.units, selected_targets, config.variants
+            config, scan.units, selected_targets, config.variants, artifacts
         ),
     )
 
@@ -3725,6 +3769,7 @@ def _expected_artifact_matrix_metadata(
 def _artifact_matrix_metadata_contract_reasons(
     project: Mapping[str, Any],
     units: Any,
+    artifacts: Any,
     artifact_matrix: Any,
     *,
     required: bool,
@@ -3758,6 +3803,42 @@ def _artifact_matrix_metadata_contract_reasons(
             "expected artifact matrix",
         )
     )
+    rollup_fields = (
+        "emittedArtifactCount",
+        "translatedCount",
+        "failedCount",
+        "missingArtifactCount",
+        "extraArtifactCount",
+    )
+    boolean_rollup_fields = ("identityCoverageAvailable", "complete")
+    require_rollups = required or any(
+        field in artifact_matrix for field in (*rollup_fields, *boolean_rollup_fields)
+    )
+    if require_rollups and isinstance(artifacts, list):
+        actual = _inspection_artifact_matrix_summary(
+            artifact_matrix,
+            artifacts,
+            project=project,
+            units=units,
+        )
+        if actual.get("available"):
+            for field_name in rollup_fields:
+                reasons.extend(
+                    _count_field_contract_reasons(
+                        f"artifactMatrix.{field_name}",
+                        artifact_matrix.get(field_name),
+                        actual[field_name],
+                        "artifact matrix artifacts",
+                    )
+                )
+            for field_name in boolean_rollup_fields:
+                value = artifact_matrix.get(field_name)
+                if not isinstance(value, bool):
+                    reasons.append(f"artifactMatrix.{field_name} must be a boolean")
+                elif value != actual[field_name]:
+                    reasons.append(
+                        f"artifactMatrix.{field_name} must match artifact matrix"
+                    )
     return reasons
 
 
@@ -6063,6 +6144,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 _artifact_matrix_metadata_contract_reasons(
                     project,
                     units,
+                    artifacts,
                     artifact_matrix,
                     required=bool(artifacts),
                 )

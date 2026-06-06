@@ -1560,6 +1560,13 @@ def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatc
         "variantCount": 2,
         "variantMode": "named",
         "expectedArtifactCount": 8,
+        "emittedArtifactCount": 8,
+        "translatedCount": 8,
+        "failedCount": 0,
+        "identityCoverageAvailable": True,
+        "missingArtifactCount": 0,
+        "extraArtifactCount": 0,
+        "complete": True,
     }
     assert payload["summary"]["artifactCount"] == 8
     assert {
@@ -1682,6 +1689,30 @@ def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_pa
         "artifactMatrix.expectedArtifactCount must match expected artifact matrix"
         in (diagnostic["message"])
     )
+
+
+def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifactMatrix"]["emittedArtifactCount"] = 2
+    payload["artifactMatrix"]["complete"] = False
+    report_path = repo / "out" / "invalid-artifact-matrix-rollup-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifactMatrix.emittedArtifactCount must match artifact matrix artifacts"
+        in diagnostic["message"]
+    )
+    assert "artifactMatrix.complete must match artifact matrix" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_missing_variant_artifact_matrix_entries(

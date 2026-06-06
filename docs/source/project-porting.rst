@@ -292,13 +292,13 @@ Project reports are JSON documents with:
   records. Full reports also reject translated artifacts that carry error
   metadata. Invalid project output directories are recorded as failed artifacts
   without writing files.
-- ``artifactMatrix``: translation-report metadata with the expected artifact
-  count for the unit, target, and variant matrix. Scan-only reports omit this
-  object because they intentionally contain no translated or failed artifacts.
-  Report inspection summarizes the matrix as emitted, translated, failed,
-  missing, extra, and completion counts, with sampled missing and extra artifact
-  identities when report metadata is sufficient, so incomplete batch outputs
-  are visible without opening every artifact record.
+- ``artifactMatrix``: translation-report metadata with expected, emitted,
+  translated, failed, missing, extra, and completion counts for the unit, target,
+  and variant matrix. Scan-only reports omit this object because they
+  intentionally contain no translated or failed artifacts. Report inspection
+  also includes sampled missing and extra artifact identities when report
+  metadata is sufficient, so incomplete batch outputs are visible without
+  opening every artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact
@@ -321,6 +321,7 @@ Project reports are JSON documents with:
   and toolchain-run status rollups, source-root and include-directory status
   record and count consistency checks, unit source hash shape and current-file
   checks, full-report artifact matrix coverage and artifact define map checks,
+  artifact matrix emitted/translated/failed/missing/extra/completion count checks,
   full-report source-map granularity, target, and source-backend rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact
   error metadata rejection, required artifact provenance and provenance value

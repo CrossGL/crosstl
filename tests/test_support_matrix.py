@@ -406,6 +406,32 @@ def test_project_diagnostics_document_location_path_checks():
         ) in backend_support["evidence"]
 
 
+def test_project_batch_translation_documents_artifact_matrix_rollups():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.batch_translation"]
+
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "partial"
+        assert "artifact matrix emitted, translated, failed, missing, extra" in (
+            backend_support["notes"]
+        )
+        assert "unit-target-variant batch" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_records_artifact_matrix_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_matrix_rollup_"
+            "mismatches"
+        ) in backend_support["evidence"]
+
+
 def test_project_artifact_manifest_documents_source_map_requirement():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
