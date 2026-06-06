@@ -100,6 +100,11 @@ class SourceSpec:
         parser = parser_cls(tokens, **parser_kwargs)
         return parser.parse()
 
+    def supports_lexer_keyword(self, keyword: str) -> bool:
+        """Return whether this source frontend accepts a lexer keyword option."""
+        lexer_cls, _parser_cls = self.load_lexer_parser()
+        return _accepts_keyword(lexer_cls, keyword)
+
 
 class SourceRegistry:
     """Lookup table for source parsers by name, alias, and extension."""

@@ -89,6 +89,44 @@ def test_registered_native_sources_have_reverse_codegen_factories():
         assert callable(getattr(converter, "generate", None))
 
 
+def test_source_registry_reports_lexer_option_support():
+    register_default_sources()
+
+    expected_define_support = {
+        "cgl": True,
+        "cuda": True,
+        "directx": True,
+        "hip": True,
+        "metal": True,
+        "mojo": False,
+        "opengl": True,
+        "rust": False,
+        "slang": True,
+        "vulkan": True,
+    }
+    expected_include_support = {
+        "cgl": False,
+        "cuda": True,
+        "directx": True,
+        "hip": True,
+        "metal": True,
+        "mojo": False,
+        "opengl": True,
+        "rust": False,
+        "slang": True,
+        "vulkan": True,
+    }
+
+    for source_name, supports_defines in expected_define_support.items():
+        spec = SOURCE_REGISTRY.get(source_name)
+        assert spec is not None
+        assert spec.supports_lexer_keyword("defines") is supports_defines
+        assert (
+            spec.supports_lexer_keyword("include_paths")
+            is expected_include_support[source_name]
+        )
+
+
 @pytest.mark.parametrize("backend", codegen.backend_names())
 def test_cgl_translate_api_accepts_registered_backend_aliases(tmp_path, backend):
     spec = codegen.get_backend(backend)

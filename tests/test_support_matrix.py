@@ -356,13 +356,22 @@ def test_project_macro_variants_document_artifact_define_maps():
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "partial"
         assert "records each artifact applied define map" in backend_support["notes"]
+        assert "define-processing status" in backend_support["notes"]
+        assert "source frontend support metadata" in backend_support["notes"]
         assert "inspection summaries expose variant names without define values" in (
             backend_support["notes"]
         )
+        assert "define-processing rollups" in backend_support["notes"]
         assert "malformed define/variant metadata including empty mapping keys" in (
             backend_support["notes"]
         )
         assert "artifact define maps that do not match base defines merged" in (
+            backend_support["notes"]
+        )
+        assert "forged artifact define-processing metadata" in (
+            backend_support["notes"]
+        )
+        assert "define-processing summary rollup mismatches" in (
             backend_support["notes"]
         )
         assert "object-like define expansion" in backend_support["notes"]
@@ -372,6 +381,18 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_define_processing_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_define_processing_summary_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_translation_pipeline.py::def "
+            "test_source_registry_reports_lexer_option_support"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

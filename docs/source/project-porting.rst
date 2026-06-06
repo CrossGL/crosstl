@@ -189,7 +189,9 @@ configuration diagnostics so reports retain portability and provenance context.
 Existing include directories that remain inside the repository, plus configured
 defines, are passed to source frontends that expose preprocessor options. CLI
 include and define overrides are merged with this configuration before scan or
-translation.
+translation. Translation artifacts record ``defineProcessing`` metadata so
+reports distinguish define maps that were forwarded to the source lexer from
+define maps that were not requested or could not be consumed by that frontend.
 During scan, project reports also record ``#include`` directives discovered in
 translation units. Each dependency record keeps the include target, local,
 system, or dynamic kind, line and column, and a status of ``resolved``,
@@ -284,7 +286,8 @@ Project reports are JSON documents with:
   include the expected artifact matrix for each declared translation unit,
   target, and configured variant. Full reports also require artifact define
   maps to match the project-level defines merged with the artifact variant's
-  define overrides.
+  define overrides, and require ``defineProcessing`` metadata to match the
+  artifact define map and registered source frontend support.
   Successful artifact records in full reports must include file-level
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level
@@ -329,6 +332,7 @@ Project reports are JSON documents with:
   and toolchain-run status rollups, source-root and include-directory status
   record and count consistency checks, unit source hash shape and current-file
   checks, full-report artifact matrix coverage and artifact define map checks,
+  artifact define-processing metadata and rollup checks,
   artifact matrix emitted/translated/failed/missing/extra/completion count checks,
   full-report source-map granularity, target, and source-backend rollup checks,
   source-remap target and source-backend rollup checks,

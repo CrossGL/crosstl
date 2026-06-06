@@ -949,6 +949,13 @@ def _format_project_report_inspection(payload):
     source_remaps = _format_source_remap_counts(summary)
     if source_remaps:
         lines.append(source_remaps)
+    define_processing = _format_count_rollup(
+        "Define processing",
+        summary.get("defineProcessingByStatus"),
+        include_zero=False,
+    )
+    if define_processing:
+        lines.append(define_processing)
     artifact_matrix_payload = payload.get("artifactMatrix")
     artifact_matrix = _format_artifact_matrix_summary(artifact_matrix_payload)
     if artifact_matrix:

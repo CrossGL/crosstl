@@ -1444,6 +1444,24 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         {"MODE": "debug", "USE_FAST_PATH": "1"},
         {"MODE": "base", "USE_FAST_PATH": "1"},
     ]
+    assert [artifact["defineProcessing"] for artifact in payload["artifacts"]] == [
+        {
+            "status": "forwarded",
+            "frontend": "lexer",
+            "supportsDefines": True,
+            "defineCount": 2,
+        },
+        {
+            "status": "forwarded",
+            "frontend": "lexer",
+            "supportsDefines": True,
+            "defineCount": 2,
+        },
+    ]
+    assert payload["summary"]["defineProcessingByStatus"] == {"forwarded": 2}
+    assert payload["summary"]["defineProcessingBySourceBackend"] == {
+        "cgl": {"forwarded": 2}
+    }
     assert [artifact["path"] for artifact in payload["artifacts"]] == [
         "translated/opengl/debug/simple.glsl",
         "translated/opengl/release/simple.glsl",
@@ -1544,6 +1562,61 @@ def test_translate_project_named_variants_apply_crossgl_defines(tmp_path):
     assert "fragColor = vec4(0.0, 0.0, 1.0, 1.0);" in release_output
     assert "#if" not in debug_output
     assert "#if" not in release_output
+
+
+def test_translate_project_records_define_processing_without_frontend_support(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "shader.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "translated"
+
+            [project.defines]
+            ENABLE_PATH = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["artifacts"][0]["sourceBackend"] == "rust"
+    assert payload["artifacts"][0]["defines"] == {"ENABLE_PATH": "1"}
+    assert payload["artifacts"][0]["defineProcessing"] == {
+        "status": "not-supported",
+        "frontend": "lexer",
+        "supportsDefines": False,
+        "defineCount": 1,
+    }
+    assert payload["summary"]["defineProcessingByStatus"] == {"not-supported": 1}
+    assert payload["summary"]["defineProcessingBySourceBackend"] == {
+        "rust": {"not-supported": 1}
+    }
 
 
 def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatch):
@@ -1874,6 +1947,75 @@ def test_validate_project_report_rejects_artifact_define_mismatches(tmp_path):
         "artifacts[0].defines must match project defines and artifact variant"
         in diagnostic["message"]
     )
+
+
+def test_validate_project_report_rejects_artifact_define_processing_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.defines]
+            MODE = "base"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["artifacts"][0]["defineProcessing"]["supportsDefines"] = False
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].defineProcessing.status must match define count "
+        "and source frontend support"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].defineProcessing.supportsDefines must match "
+        "artifacts[0].sourceBackend"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_define_processing_summary_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["summary"]["defineProcessingByStatus"] = {"forwarded": 1}
+    payload["summary"]["defineProcessingBySourceBackend"] = {"cgl": {"forwarded": 1}}
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "summary.defineProcessingByStatus must match artifact define processing"
+        in diagnostic["message"]
+    )
+    assert (
+        "summary.defineProcessingBySourceBackend must match "
+        "artifact define processing"
+    ) in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_artifacts_with_undeclared_sources(tmp_path):
@@ -7760,6 +7902,11 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceRemapsByTarget": {"cgl": 1},
         "sourceRemapsBySourceBackend": {"cgl": 1},
     }
+    assert payload["defineProcessing"] == {
+        "available": True,
+        "byStatus": {"not-requested": 1},
+        "bySourceBackend": {"cgl": {"not-requested": 1}},
+    }
     assert payload["artifactMatrix"] == {
         "available": True,
         "unitCount": 1,
@@ -8420,6 +8567,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert result.returncode == 0
     assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
     assert "Source remaps: 1" in result.stdout
+    assert "Define processing: not-requested=1" in result.stdout
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout

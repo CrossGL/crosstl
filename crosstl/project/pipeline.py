@@ -93,6 +93,7 @@ INCLUDE_DEPENDENCY_KINDS = frozenset(("dynamic", "local", "system"))
 INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
+DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-supported"))
 VALIDATION_TOOLCHAIN_RUN_STATUSES = frozenset(("ok", "failed"))
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
@@ -255,6 +256,40 @@ def _hash_matches_report(
         expected.get("algorithm"),
         expected.get("value"),
     )
+
+
+def _source_frontend_supports_lexer_keyword(source_backend: str, keyword: str) -> bool:
+    register_default_sources()
+    discover_backend_plugins()
+    spec = SOURCE_REGISTRY.get(source_backend)
+    if spec is None:
+        return False
+    return spec.supports_lexer_keyword(keyword)
+
+
+def _artifact_define_processing(
+    source_backend: str,
+    defines: Mapping[str, str],
+    *,
+    supports_defines: bool | None = None,
+) -> dict[str, Any]:
+    define_count = len(defines)
+    if supports_defines is None:
+        supports_defines = _source_frontend_supports_lexer_keyword(
+            source_backend, "defines"
+        )
+    if define_count == 0:
+        status = "not-requested"
+    elif supports_defines:
+        status = "forwarded"
+    else:
+        status = "not-supported"
+    return {
+        "status": status,
+        "frontend": "lexer",
+        "supportsDefines": supports_defines,
+        "defineCount": define_count,
+    }
 
 
 def _resolve_report_path(config: ProjectConfig, path_value: Any) -> Path:
@@ -611,6 +646,56 @@ def _source_remap_counts_by_source_backend(
         key = source_backend if _is_non_empty_string(source_backend) else "unknown"
         counts[key] = counts.get(key, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _define_processing_status_counts(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts = {status: 0 for status in sorted(DEFINE_PROCESSING_STATUSES)}
+    counts["unknown"] = 0
+    for artifact in artifacts:
+        define_processing = artifact.get("defineProcessing")
+        status = (
+            define_processing.get("status")
+            if isinstance(define_processing, Mapping)
+            else None
+        )
+        if isinstance(status, str) and status in counts:
+            counts[status] += 1
+        else:
+            counts["unknown"] += 1
+    return {status: count for status, count in counts.items() if count}
+
+
+def _define_processing_counts_by_source_backend(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        source_backend = artifact.get("sourceBackend")
+        key = source_backend if _is_non_empty_string(source_backend) else "unknown"
+        define_processing = artifact.get("defineProcessing")
+        status = (
+            define_processing.get("status")
+            if isinstance(define_processing, Mapping)
+            else "unknown"
+        )
+        if not isinstance(status, str) or status not in DEFINE_PROCESSING_STATUSES:
+            status = "unknown"
+        row = counts.setdefault(key, {})
+        row[status] = row.get(status, 0) + 1
+    return {source: dict(sorted(row.items())) for source, row in sorted(counts.items())}
+
+
+def _define_processing_rollups(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "defineProcessingByStatus": _define_processing_status_counts(artifacts),
+        "defineProcessingBySourceBackend": _define_processing_counts_by_source_backend(
+            artifacts
+        ),
+    }
 
 
 def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1653,6 +1738,7 @@ class ProjectPortabilityReport:
         )
         diagnostics = [diagnostic.to_json() for diagnostic in self.diagnostics]
         source_map_rollups = _source_map_rollups(self.artifacts)
+        define_processing_rollups = _define_processing_rollups(self.artifacts)
         source_root_status = _source_root_status_records(self.config)
         include_dir_status = _include_dir_status_records(self.config)
         external_corpus = _external_corpus_report(
@@ -1732,6 +1818,7 @@ class ProjectPortabilityReport:
                 "artifactsByVariant": _artifact_counts_by_variant(self.artifacts),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
                 **source_map_rollups,
+                **define_processing_rollups,
             },
             "units": [unit.to_json() for unit in self.units],
             "skipped": list(self.skipped),
@@ -2214,6 +2301,9 @@ def translate_project(
     variant_jobs = _variant_jobs(config)
 
     for unit in scan.units:
+        source_supports_defines = _source_frontend_supports_lexer_keyword(
+            unit.source_backend, "defines"
+        )
         for target in selected_targets:
             for variant, defines in variant_jobs:
                 output_path = _artifact_path(config, unit, target, variant)
@@ -2224,6 +2314,11 @@ def translate_project(
                     "path": _artifact_report_path(output_path, config),
                     "status": "translated",
                     "defines": dict(sorted(defines.items())),
+                    "defineProcessing": _artifact_define_processing(
+                        unit.source_backend,
+                        defines,
+                        supports_defines=source_supports_defines,
+                    ),
                     "sourceHash": dict(unit.source_hash),
                     "provenance": {
                         "pipeline": "single-file-translate",
@@ -2884,6 +2979,7 @@ def inspect_project_report(
         "success": bool(validation_report.get("success")),
         "report": {"available": False, "valid": False},
         "sourceMaps": {"available": False},
+        "defineProcessing": {"available": False},
         "artifactMatrix": {"available": False},
         "diagnosticCount": len(diagnostics),
         "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
@@ -2959,6 +3055,7 @@ def inspect_project_report(
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
     }
     payload["sourceMaps"] = _inspection_source_map_summary(summary)
+    payload["defineProcessing"] = _inspection_define_processing_summary(summary)
     payload["artifactMatrix"] = _inspection_artifact_matrix_summary(
         report.get("artifactMatrix"),
         report.get("artifacts"),
@@ -3256,6 +3353,26 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
             name for name in variants if isinstance(name, str) and name
         )
     return summary
+
+
+def _inspection_define_processing_summary(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, Mapping):
+        return {"available": False}
+
+    by_status = summary.get("defineProcessingByStatus")
+    by_source_backend = summary.get("defineProcessingBySourceBackend")
+    if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
+        return {"available": False}
+
+    return {
+        "available": True,
+        "byStatus": dict(by_status),
+        "bySourceBackend": {
+            source_backend: dict(counts)
+            for source_backend, counts in by_source_backend.items()
+            if isinstance(source_backend, str) and isinstance(counts, Mapping)
+        },
+    }
 
 
 def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
@@ -4748,6 +4865,65 @@ def _artifact_defines_contract_reasons(
     return reasons
 
 
+def _artifact_define_processing_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool,
+) -> list[str]:
+    if not required and "defineProcessing" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].defineProcessing"
+    define_processing = artifact.get("defineProcessing")
+    if not isinstance(define_processing, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    status = define_processing.get("status")
+    if not isinstance(status, str) or status not in DEFINE_PROCESSING_STATUSES:
+        reasons.append(
+            f"{prefix}.status must be one of "
+            f"{', '.join(sorted(DEFINE_PROCESSING_STATUSES))}"
+        )
+    frontend = define_processing.get("frontend")
+    if frontend != "lexer":
+        reasons.append(f"{prefix}.frontend must be lexer")
+    supports_defines = define_processing.get("supportsDefines")
+    if not isinstance(supports_defines, bool):
+        reasons.append(f"{prefix}.supportsDefines must be a boolean")
+    define_count = define_processing.get("defineCount")
+    if not _is_non_negative_int(define_count):
+        reasons.append(f"{prefix}.defineCount must be a non-negative integer")
+
+    defines = artifact.get("defines")
+    if isinstance(defines, Mapping) and _valid_string_mapping(defines):
+        if define_count != len(defines):
+            reasons.append(
+                f"{prefix}.defineCount must match artifacts[{index}].defines"
+            )
+        expected_status = (
+            "not-requested"
+            if not defines
+            else "forwarded" if supports_defines is True else "not-supported"
+        )
+        if isinstance(status, str) and status != expected_status:
+            reasons.append(
+                f"{prefix}.status must match define count and source frontend support"
+            )
+
+    source_backend = artifact.get("sourceBackend")
+    if _is_non_empty_string(source_backend) and isinstance(supports_defines, bool):
+        expected_support = _source_frontend_supports_lexer_keyword(
+            source_backend, "defines"
+        )
+        if supports_defines != expected_support:
+            reasons.append(
+                f"{prefix}.supportsDefines must match artifacts[{index}].sourceBackend"
+            )
+    return reasons
+
+
 def _project_root_path(project: Mapping[str, Any]) -> Path | None:
     root = project.get("root")
     if not _is_non_empty_string(root):
@@ -6052,6 +6228,23 @@ def _summary_contract_reasons(
                 "artifacts",
             )
         )
+        define_processing_rollups = _define_processing_rollups(artifact_records)
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.defineProcessingByStatus",
+                summary.get("defineProcessingByStatus"),
+                define_processing_rollups["defineProcessingByStatus"],
+                "artifact define processing",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.defineProcessingBySourceBackend",
+                summary.get("defineProcessingBySourceBackend"),
+                define_processing_rollups["defineProcessingBySourceBackend"],
+                "artifact define processing",
+            )
+        )
         source_map_rollups = _source_map_rollups(artifact_records)
         reasons.extend(
             _count_field_contract_reasons(
@@ -6606,6 +6799,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         required=has_summary,
                     )
                 )
+            reasons.extend(
+                _artifact_define_processing_contract_reasons(
+                    index,
+                    artifact,
+                    required=has_summary,
+                )
+            )
             identity = _artifact_identity(artifact)
             if identity is not None:
                 previous_index = artifact_identities.get(identity)
