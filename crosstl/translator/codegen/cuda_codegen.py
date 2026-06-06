@@ -103,6 +103,10 @@ CUDA_WAVE_UVEC4_RESULT_OPS = {
     "WaveMatch",
 }
 
+CUDA_WARP_SYNC_BUILTIN_ARITIES = {
+    "__shfl_down_sync": (3, 4),
+}
+
 CUDA_BITCAST_FUNCTION_TARGETS = {
     "floatBitsToInt": "int",
     "floatBitsToUint": "uint",
@@ -3140,6 +3144,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if bitcast_call is not None:
                 return bitcast_call
 
+            warp_sync_call = self.generate_warp_sync_builtin_call(
+                func_name, raw_args, args
+            )
+            if warp_sync_call is not None:
+                return warp_sync_call
+
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
@@ -3675,6 +3685,54 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         suffix = suffix.replace(" ", "_").replace("*", "_ptr")
         suffix = suffix.replace("&", "_ref").replace("::", "_")
         return "".join(char if char.isalnum() else "_" for char in suffix).strip("_")
+
+    def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
+        expected_counts = CUDA_WARP_SYNC_BUILTIN_ARITIES.get(func_name)
+        if expected_counts is None:
+            return None
+        if len(raw_args) not in expected_counts:
+            expected_list = " or ".join(str(count) for count in expected_counts)
+            raise ValueError(
+                f"CUDA warp sync builtin {func_name} requires {expected_list} "
+                f"arguments, got {len(raw_args)}"
+            )
+        if func_name == "__shfl_down_sync":
+            helper_name = self.require_cuda_shfl_down_sync_helper(
+                raw_args[1],
+                has_width=len(raw_args) == 4,
+            )
+            return f"{helper_name}({', '.join(args)})"
+        return None
+
+    def require_cuda_shfl_down_sync_helper(self, value_arg, has_width=False):
+        value_type = self.map_type(self.expression_result_type(value_arg) or "uint")
+        width_suffix = "_width" if has_width else ""
+        helper_name = (
+            f"cgl_cuda_shfl_down_sync{width_suffix}_"
+            f"{self.wave_type_suffix(value_type)}"
+        )
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        width_param = ", int width" if has_width else ""
+        width_arg = ", width" if has_width else ""
+        width_ignore = "    (void)width;\n" if has_width else ""
+        helper = (
+            f"__device__ inline {value_type} {helper_name}"
+            f"(unsigned int mask, {value_type} value, unsigned int delta{width_param})\n"
+            "{\n"
+            "#if defined(__CUDA_ARCH__)\n"
+            f"    return __shfl_down_sync(mask, value, delta{width_arg});\n"
+            "#else\n"
+            "    (void)mask;\n"
+            "    (void)delta;\n"
+            f"{width_ignore}"
+            "    return value;\n"
+            "#endif\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
 
     def wave_helper_parameter_names(self, operation, arg_count):
         if arg_count == 1:

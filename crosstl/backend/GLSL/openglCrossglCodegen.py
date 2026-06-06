@@ -601,6 +601,7 @@ class GLSLToCrossGLConverter:
                 "sampler",
                 "isampler",
                 "usampler",
+                "atomic_uint",
                 "image",
                 "iimage",
                 "uimage",
@@ -1051,6 +1052,9 @@ class GLSLToCrossGLConverter:
                 "@input_attachment_index("
                 f"{self.layout_value_to_string(input_attachment_index)})"
             )
+        offset = layout.get("offset")
+        if var_type == "atomic_uint" and offset is not None:
+            attributes.append(f"@offset({self.layout_value_to_string(offset)})")
 
         if self._is_image_resource_type(var_type):
             supported_formats = self.supported_image_formats()

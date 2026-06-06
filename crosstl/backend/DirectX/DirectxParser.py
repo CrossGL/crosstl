@@ -325,6 +325,7 @@ class HLSLParser:
             qualifiers = self.parse_qualifiers()
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
+            attributes.extend(self.parse_attribute_list())
             if not self.is_identifier_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
@@ -811,7 +812,7 @@ class HLSLParser:
 
     def parse_array_suffixes(self):
         sizes = []
-        while self.current_token[0] == "LBRACKET":
+        while self.current_token[0] == "LBRACKET" and self.peek()[0] != "LBRACKET":
             self.eat("LBRACKET")
             if self.current_token[0] != "RBRACKET":
                 sizes.append(self.parse_expression())
@@ -2145,11 +2146,13 @@ class HLSLParser:
         allow_semantic=True,
         consume_semicolon=True,
     ):
-        qualifiers = qualifiers or []
-        attributes = attributes or []
+        qualifiers = list(qualifiers or [])
+        attributes = list(attributes or [])
 
         array_sizes = self.parse_array_suffixes()
+        attributes.extend(self.parse_attribute_list())
         bit_width = self.parse_bitfield_width()
+        attributes.extend(self.parse_attribute_list())
         semantic = None
         register = None
         packoffset = None

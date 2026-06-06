@@ -21,6 +21,7 @@ class SlangParser:
         "__global",
         "__extern_cpp",
         "extern",
+        "precise",
         "groupshared",
         "globallycoherent",
         "flat",

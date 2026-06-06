@@ -25915,6 +25915,22 @@ def test_rust_subgroup_builtin_expressions_lower_to_helpers(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_bitwise_not_uses_rust_complement_operator_and_compiles(tmp_path):
+    code = """
+    shader RustBitwiseNot {
+        uint flip(uint mask) {
+            return ~mask;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return (!mask);" in generated_code
+    assert "(~mask)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_swizzle_assignments_emit_component_writes(tmp_path):
     code = """
     shader RustSwizzleAssignments {

@@ -1437,6 +1437,80 @@ class TestCudaCodeGen:
         ):
             CudaCodeGen().generate(ast)
 
+    def test_direct_shfl_down_sync_lowers_to_guarded_cuda_helper(self):
+        source_code = """
+        shader CudaDirectShuffle {
+            compute {
+                void main() {
+                    float partial = 1.0;
+                    float reduced = __shfl_down_sync(0xFFFFFFFF, partial, 16);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "__device__ inline float "
+            "cgl_cuda_shfl_down_sync_float(unsigned int mask, float value, "
+            "unsigned int delta)" in cuda_code
+        )
+        assert "#if defined(__CUDA_ARCH__)" in cuda_code
+        assert "return __shfl_down_sync(mask, value, delta);" in cuda_code
+        assert (
+            "float reduced = cgl_cuda_shfl_down_sync_float"
+            "(4294967295, partial, 16);" in cuda_code
+        )
+
+    def test_direct_shfl_down_sync_width_lowers_to_guarded_cuda_helper(self):
+        # NVIDIA documents __shfl_down_sync with optional width=warpSize.
+        # Source: https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#warp-shuffle-functions
+        source_code = """
+        shader CudaDirectShuffleWidth {
+            compute {
+                void main() {
+                    uint partial = 7u;
+                    uint reduced = __shfl_down_sync(0xffffffff, partial, 1, 32);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "__device__ inline uint "
+            "cgl_cuda_shfl_down_sync_width_uint(unsigned int mask, "
+            "uint value, unsigned int delta, int width)" in cuda_code
+        )
+        assert "return __shfl_down_sync(mask, value, delta, width);" in cuda_code
+        assert "(void)width;" in cuda_code
+        assert (
+            "uint reduced = cgl_cuda_shfl_down_sync_width_uint"
+            "(4294967295, partial, 1, 32);" in cuda_code
+        )
+
+    def test_direct_shfl_down_sync_rejects_invalid_arity(self):
+        source_code = """
+        shader CudaBadDirectShuffle {
+            compute {
+                void main() {
+                    uint partial = __shfl_down_sync(0xffffffff, 1u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=r"CUDA warp sync builtin __shfl_down_sync requires 3 or 4 "
+            r"arguments, got 2",
+        ):
+            CudaCodeGen().generate(ast)
+
     def test_shared_memory_synchronization_helper_lowers_to_cuda(self, tmp_path):
         source_code = """
         shader SharedSynchronizationHelper {

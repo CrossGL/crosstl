@@ -671,6 +671,32 @@ def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_sh
     cgl_translator.parse(generated_code)
 
 
+def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
+    code = """
+    float4x4 g_mWorldViewProjection;
+
+    [shader("vertex")]
+    void main(in float3 inPos : POSITION,
+              out precise float4 outPos : SV_Position)
+    {
+        outPos = mul(float4(inPos, 1.0), g_mWorldViewProjection);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    output_param = ast.functions[0].params[1]
+    assert output_param.qualifiers == ["out", "precise"]
+    assert (
+        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ Out_Position)"
+        in generated_code
+    )
+    assert "precise" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_struct_methods_do_not_break_field_codegen():
     code = """
     struct Primitive {

@@ -1001,6 +1001,23 @@ def test_codegen_texture_sample_offset_options_roundtrip():
     assert "level(offset)" not in metal
 
 
+def test_codegen_texture_gather_component_selector_from_msl_spec():
+    # Metal texture gather overloads accept component::x/y/z/w selectors.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float4 gatherRed(texture2d<float> tex, sampler samp, float2 uv) {
+        return tex.gather(samp, uv, component::x);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureGather(tex, samp, uv, 0)" in crossgl
+    assert "component_u3a_u3ax" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_texture_method_descriptors():
     converter = MetalToCrossGLConverter()
 

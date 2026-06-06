@@ -8473,8 +8473,8 @@ class RustCodeGen:
             return self.generate_match_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             operand_expr = getattr(expr, "operand", "")
-            op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            op = self.map_operator(op)
+            raw_op = getattr(expr, "operator", getattr(expr, "op", "+"))
+            op = self.map_operator(raw_op)
             if op in ["++", "--"]:
                 operand = self.generate_expression(operand_expr)
                 assignment_op = "+=" if op == "++" else "-="
@@ -8482,6 +8482,9 @@ class RustCodeGen:
                     self.expression_result_type(operand_expr)
                 )
                 return f"{operand} {assignment_op} {increment}"
+            if raw_op in {"~", "BITWISE_NOT"}:
+                operand = self.generate_expression(operand_expr)
+                return f"(!{operand})"
             bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
             if bool_vector_not is not None:
                 return bool_vector_not
