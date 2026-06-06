@@ -1463,6 +1463,11 @@ def _format_project_report_inspection(payload):
             summary.get("artifactProvenanceByIntermediate"),
             include_zero=False,
         ),
+        _format_nested_count_rollup(
+            "Artifact provenance by source backend and intermediate",
+            summary.get("artifactProvenanceIntermediateBySourceBackend"),
+            include_zero=False,
+        ),
     ):
         if line:
             lines.append(line)

@@ -323,8 +323,9 @@ Project reports are JSON documents with:
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
   bridge. Report summaries and inspections include provenance rollups by
-  pipeline and intermediate marker. Full reports require failed artifacts to
-  carry an actionable error string and reject failed artifacts that claim
+  pipeline, intermediate marker, and source backend with intermediate marker.
+  Full reports require failed artifacts to carry an actionable error string and
+  reject failed artifacts that claim
   generated hashes or source-map records. Full reports also reject translated
   artifacts that carry error metadata. Invalid project output directories are
   recorded as failed artifacts without writing files.
