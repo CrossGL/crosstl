@@ -2277,6 +2277,13 @@ def _format_project_report_inspection(payload):
             lines.append(
                 "- " f"{action.get('kind', 'unknown')}: " f"{action.get('message', '')}"
             )
+        truncated_actions = migration.get("truncatedActionCount", 0)
+        if (
+            isinstance(truncated_actions, int)
+            and not isinstance(truncated_actions, bool)
+            and truncated_actions > 0
+        ):
+            lines.append(f"- +{truncated_actions} more")
     return "\n".join(lines) + "\n"
 
 

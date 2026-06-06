@@ -118,6 +118,26 @@ def _write_count_balanced_artifact_gap_report(repo):
     return report_path
 
 
+def _write_large_migration_report(repo, *, action_count=21):
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    actions = [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": f"Review host integration task {index}.",
+            "targets": ["cgl"],
+        }
+        for index in range(action_count)
+    ]
+    payload["migration"].update(project_pipeline._migration_action_rollups(actions))
+    payload["migration"]["actions"] = actions
+    report_path = repo / "out" / "large-migration-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    return report_path
+
+
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
         (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
@@ -9181,6 +9201,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
     assert payload["migration"]["actionsBySeverity"] == {"note": 1}
     assert payload["migration"]["actionsByTarget"] == {"cgl": 1}
+    assert payload["migration"]["truncatedActionCount"] == 0
     assert payload["migration"]["actions"] == [
         {
             "kind": "manual-runtime-integration",
@@ -9193,6 +9214,29 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             "targets": ["cgl"],
         }
     ]
+
+
+def test_inspect_project_report_samples_migration_actions(tmp_path):
+    report_path = _write_large_migration_report(tmp_path / "repo")
+
+    payload = inspect_project_report(report_path)
+
+    assert payload["success"] is True
+    assert payload["migration"]["actionCount"] == 21
+    assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 21}
+    assert payload["migration"]["actionsBySeverity"] == {"note": 21}
+    assert payload["migration"]["actionsByTarget"] == {"cgl": 21}
+    assert payload["migration"]["truncatedActionCount"] == 1
+    assert len(payload["migration"]["actions"]) == 20
+    assert payload["migration"]["actions"][0] == {
+        "kind": "manual-runtime-integration",
+        "severity": "note",
+        "message": "Review host integration task 0.",
+        "targets": ["cgl"],
+    }
+    assert payload["migration"]["actions"][-1]["message"] == (
+        "Review host integration task 19."
+    )
 
 
 def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps(tmp_path):
@@ -9411,6 +9455,37 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
         "review host runtime API calls, resource binding setup, build scripts, "
         "and backend framework integration separately"
     ) in result.stdout
+
+
+def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
+    report_path = _write_large_migration_report(tmp_path / "repo")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Migration actions by kind: manual-runtime-integration=21" in result.stdout
+    assert "- manual-runtime-integration: Review host integration task 0." in (
+        result.stdout
+    )
+    assert "- manual-runtime-integration: Review host integration task 19." in (
+        result.stdout
+    )
+    assert "Review host integration task 20." not in result.stdout
+    assert "- +1 more" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path):

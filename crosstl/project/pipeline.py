@@ -47,6 +47,7 @@ DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
+MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT = 20
 SOURCE_MAP_INSPECTION_SAMPLE_LIMIT = 20
 VALIDATION_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
@@ -3591,6 +3592,22 @@ def _inspection_external_corpus_sample(
     )
 
 
+def _inspection_migration_action(action: Any) -> dict[str, Any] | None:
+    if not isinstance(action, Mapping):
+        return None
+
+    payload: dict[str, Any] = {}
+    for field_name in ("kind", "severity", "message"):
+        value = action.get(field_name)
+        if isinstance(value, str):
+            payload[field_name] = value
+
+    targets = action.get("targets")
+    if isinstance(targets, list):
+        payload["targets"] = [target for target in targets if isinstance(target, str)]
+    return payload
+
+
 def inspect_project_report(
     report_path: str | os.PathLike[str],
     *,
@@ -3850,6 +3867,11 @@ def inspect_project_report(
             if isinstance(migration.get("actions"), list)
             else []
         )
+        action_samples = [
+            sample
+            for action in actions
+            if (sample := _inspection_migration_action(action)) is not None
+        ]
         payload["migration"] = {
             "scope": migration.get("scope"),
             "nonGoals": (
@@ -3877,7 +3899,11 @@ def inspect_project_report(
                 if isinstance(migration.get("actionsByTarget"), Mapping)
                 else _migration_action_counts_by_target(actions)
             ),
-            "actions": actions,
+            "truncatedActionCount": max(
+                0,
+                len(action_samples) - MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
+            ),
+            "actions": action_samples[:MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT],
         }
 
     external_corpus = report.get("externalCorpus")

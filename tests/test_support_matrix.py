@@ -263,7 +263,8 @@ def test_project_report_inspection_documents_rollups():
         assert "skipped source-override" in backend_support["notes"]
         assert (
             "migration scope, non-goals, action count and kind, severity, and "
-            "target rollups, actions"
+            "target rollups, bounded migration action samples with truncation "
+            "metadata"
         ) in backend_support["notes"]
 
 
@@ -285,6 +286,9 @@ def test_project_migration_actions_are_first_class_support_feature():
         assert "action count and kind, severity, and target rollups" in (
             backend_support["notes"]
         )
+        assert "bounded inspection samples with truncation metadata" in (
+            backend_support["notes"]
+        )
         assert "altered action rollups" in backend_support["notes"]
         assert "shader/kernel source translation from host runtime APIs" in (
             backend_support["notes"]
@@ -292,6 +296,11 @@ def test_project_migration_actions_are_first_class_support_feature():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_report_records_documented_migration_actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_reports_truncated_migration_"
+            "actions"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

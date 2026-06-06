@@ -132,6 +132,8 @@ include-directory status counts, inactive source-root and include-directory
 record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
 present-but-undiscovered external corpus entries, and migration actions.
+Migration action inspection is bounded and records truncation counts for large
+reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for
 code-scanning workflows. Inspection exits nonzero when validation finds report
 errors.
