@@ -105,6 +105,21 @@ SOURCE_HASH_VALIDATION_STATUSES = frozenset(
 GENERATED_HASH_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
 )
+SOURCE_MAP_VALIDATION_STATUSES = frozenset(
+    ("ok", "mismatch", "not-applicable", "not-checked", "not-recorded")
+)
+SOURCE_REMAP_VALIDATION_STATUSES = frozenset(
+    (
+        "ok",
+        "hash-mismatch",
+        "invalid",
+        "mismatch",
+        "missing",
+        "not-applicable",
+        "not-recorded",
+        "outside-project",
+    )
+)
 SOURCE_ROOT_STATUSES = frozenset(
     ("active", "missing", "not-directory", "outside-project")
 )
@@ -3144,6 +3159,16 @@ def _validation_summary(artifact_checks: Sequence[Any]) -> dict[str, Any]:
             "generatedHashStatus",
             GENERATED_HASH_VALIDATION_STATUSES,
         ),
+        "sourceMapStatusCounts": _status_counts(
+            artifact_checks,
+            "sourceMapStatus",
+            SOURCE_MAP_VALIDATION_STATUSES,
+        ),
+        "sourceRemapStatusCounts": _status_counts(
+            artifact_checks,
+            "sourceRemapStatus",
+            SOURCE_REMAP_VALIDATION_STATUSES,
+        ),
     }
 
 
@@ -3464,6 +3489,51 @@ def _source_remap_validation_diagnostics(
     return diagnostics
 
 
+def _source_map_validation_status(
+    artifact: Mapping[str, Any],
+    *,
+    source_hash_status: str,
+    generated_hash_status: str,
+    source_map_diagnostics: Sequence[ProjectDiagnostic],
+) -> str:
+    if artifact.get("status") != "translated":
+        return "not-applicable"
+    if not isinstance(artifact.get("sourceMap"), Mapping):
+        return "not-recorded"
+    if source_map_diagnostics:
+        return "mismatch"
+    if source_hash_status not in {"ok", "not-recorded"}:
+        return "not-checked"
+    if generated_hash_status not in {"ok", "not-recorded"}:
+        return "not-checked"
+    return "ok"
+
+
+def _source_remap_validation_status(
+    artifact: Mapping[str, Any],
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> str:
+    if artifact.get("status") != "translated":
+        return "not-applicable"
+    if not isinstance(artifact.get("sourceRemap"), Mapping):
+        return "not-recorded"
+    if not diagnostics:
+        return "ok"
+
+    codes = {diagnostic.code for diagnostic in diagnostics}
+    if "project.validate.source-remap-outside-project" in codes:
+        return "outside-project"
+    if "project.validate.missing-source-remap" in codes:
+        return "missing"
+    if "project.validate.source-remap-invalid" in codes:
+        return "invalid"
+    if "project.validate.source-remap-mismatch" in codes:
+        return "mismatch"
+    if "project.validate.source-remap-hash-mismatch" in codes:
+        return "hash-mismatch"
+    return "invalid"
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -3604,6 +3674,16 @@ def _validate_artifacts(
                 generated_hash_status=generated_hash_status,
             )
             diagnostics.extend(source_map_diagnostics)
+        source_map_status = _source_map_validation_status(
+            artifact,
+            source_hash_status=source_hash_status,
+            generated_hash_status=generated_hash_status,
+            source_map_diagnostics=source_map_diagnostics,
+        )
+        source_remap_status = _source_remap_validation_status(
+            artifact,
+            source_remap_diagnostics,
+        )
         if artifact.get("status") == "failed":
             error = str(artifact.get("error", "")).strip()
             message = (
@@ -3639,6 +3719,8 @@ def _validate_artifacts(
             ),
             "sourceHashStatus": source_hash_status,
             "generatedHashStatus": generated_hash_status,
+            "sourceMapStatus": source_map_status,
+            "sourceRemapStatus": source_remap_status,
         }
         if artifact.get("variant") is not None:
             artifact_check["variant"] = artifact["variant"]
@@ -3896,6 +3978,18 @@ def inspect_project_report(
                     _record_sequence(validation_artifacts)
                 )
             ),
+            "sourceHashStatusCounts": dict(
+                validation_report.get("sourceHashStatusCounts", {})
+            ),
+            "generatedHashStatusCounts": dict(
+                validation_report.get("generatedHashStatusCounts", {})
+            ),
+            "sourceMapStatusCounts": dict(
+                validation_report.get("sourceMapStatusCounts", {})
+            ),
+            "sourceRemapStatusCounts": dict(
+                validation_report.get("sourceRemapStatusCounts", {})
+            ),
             "toolchainStatusCounts": (
                 dict(toolchain_status_counts)
                 if isinstance(toolchain_status_counts, Mapping)
@@ -4042,6 +4136,8 @@ def inspect_project_report(
                             "exists",
                             "sourceHashStatus",
                             "generatedHashStatus",
+                            "sourceMapStatus",
+                            "sourceRemapStatus",
                             "validationStatus",
                         )
                         if field_name in failed
@@ -4252,6 +4348,8 @@ def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
         "exists": artifact.get("exists"),
         "sourceHashStatus": artifact.get("sourceHashStatus"),
         "generatedHashStatus": artifact.get("generatedHashStatus"),
+        "sourceMapStatus": artifact.get("sourceMapStatus"),
+        "sourceRemapStatus": artifact.get("sourceRemapStatus"),
     }
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
@@ -4933,7 +5031,13 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         failed["variant"] = artifact.get("variant")
     if "error" in artifact:
         failed["error"] = artifact.get("error")
-    for field_name in ("exists", "sourceHashStatus", "generatedHashStatus"):
+    for field_name in (
+        "exists",
+        "sourceHashStatus",
+        "generatedHashStatus",
+        "sourceMapStatus",
+        "sourceRemapStatus",
+    ):
         if field_name in artifact:
             failed[field_name] = artifact.get(field_name)
     return failed
@@ -5024,6 +5128,8 @@ def _validation_report_payload(
     )
     source_hash_status_counts = validation_summary.get("sourceHashStatusCounts")
     generated_hash_status_counts = validation_summary.get("generatedHashStatusCounts")
+    source_map_status_counts = validation_summary.get("sourceMapStatusCounts")
+    source_remap_status_counts = validation_summary.get("sourceRemapStatusCounts")
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": "crosstl-project-validation-report",
@@ -5068,6 +5174,16 @@ def _validation_report_payload(
         "generatedHashStatusCounts": (
             dict(generated_hash_status_counts)
             if isinstance(generated_hash_status_counts, Mapping)
+            else {}
+        ),
+        "sourceMapStatusCounts": (
+            dict(source_map_status_counts)
+            if isinstance(source_map_status_counts, Mapping)
+            else {}
+        ),
+        "sourceRemapStatusCounts": (
+            dict(source_remap_status_counts)
+            if isinstance(source_remap_status_counts, Mapping)
             else {}
         ),
         "diagnostics": list(diagnostics),
@@ -7055,10 +7171,14 @@ def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> b
         return status == "failed"
     source_hash_status = artifact.get("sourceHashStatus", "not-recorded")
     generated_hash_status = artifact.get("generatedHashStatus", "not-recorded")
+    source_map_status = artifact.get("sourceMapStatus", "ok")
+    source_remap_status = artifact.get("sourceRemapStatus", "ok")
     expected_status = (
         "ok"
         if source_hash_status in {"ok", "not-recorded"}
         and generated_hash_status in {"ok", "not-recorded"}
+        and source_map_status in {"ok", "not-applicable", "not-recorded"}
+        and source_remap_status in {"ok", "not-applicable", "not-recorded"}
         else "failed"
     )
     return status == expected_status
@@ -7074,7 +7194,7 @@ def _validation_artifact_contract_reasons(
     declared_artifacts_by_identity: (
         Mapping[ArtifactIdentity, DeclaredArtifact] | None
     ) = None,
-    require_hash_statuses: bool = False,
+    require_status_fields: bool = False,
 ) -> list[str]:
     prefix = f"validation.artifacts[{index}]"
     if not isinstance(artifact, Mapping):
@@ -7118,7 +7238,7 @@ def _validation_artifact_contract_reasons(
     if identity is not None and declared_artifacts_by_identity is not None:
         referenced_artifact = declared_artifacts_by_identity.get(identity)
     source_hash_status = artifact.get("sourceHashStatus")
-    if require_hash_statuses and "sourceHashStatus" not in artifact:
+    if require_status_fields and "sourceHashStatus" not in artifact:
         reasons.append(
             f"{prefix}.sourceHashStatus must be recorded "
             "when validation.summary is present"
@@ -7132,7 +7252,7 @@ def _validation_artifact_contract_reasons(
             f"{', '.join(sorted(SOURCE_HASH_VALIDATION_STATUSES))}"
         )
     generated_hash_status = artifact.get("generatedHashStatus")
-    if require_hash_statuses and "generatedHashStatus" not in artifact:
+    if require_status_fields and "generatedHashStatus" not in artifact:
         reasons.append(
             f"{prefix}.generatedHashStatus must be recorded "
             "when validation.summary is present"
@@ -7145,6 +7265,34 @@ def _validation_artifact_contract_reasons(
             f"{prefix}.generatedHashStatus must be one of "
             f"{', '.join(sorted(GENERATED_HASH_VALIDATION_STATUSES))}"
         )
+    source_map_status = artifact.get("sourceMapStatus")
+    if require_status_fields and "sourceMapStatus" not in artifact:
+        reasons.append(
+            f"{prefix}.sourceMapStatus must be recorded "
+            "when validation.summary is present"
+        )
+    if (
+        "sourceMapStatus" in artifact
+        and source_map_status not in SOURCE_MAP_VALIDATION_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.sourceMapStatus must be one of "
+            f"{', '.join(sorted(SOURCE_MAP_VALIDATION_STATUSES))}"
+        )
+    source_remap_status = artifact.get("sourceRemapStatus")
+    if require_status_fields and "sourceRemapStatus" not in artifact:
+        reasons.append(
+            f"{prefix}.sourceRemapStatus must be recorded "
+            "when validation.summary is present"
+        )
+    if (
+        "sourceRemapStatus" in artifact
+        and source_remap_status not in SOURCE_REMAP_VALIDATION_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.sourceRemapStatus must be one of "
+            f"{', '.join(sorted(SOURCE_REMAP_VALIDATION_STATUSES))}"
+        )
     if (
         status_is_valid
         and isinstance(artifact.get("exists"), bool)
@@ -7156,9 +7304,19 @@ def _validation_artifact_contract_reasons(
             "generatedHashStatus" not in artifact
             or generated_hash_status in GENERATED_HASH_VALIDATION_STATUSES
         )
+        and (
+            "sourceMapStatus" not in artifact
+            or source_map_status in SOURCE_MAP_VALIDATION_STATUSES
+        )
+        and (
+            "sourceRemapStatus" not in artifact
+            or source_remap_status in SOURCE_REMAP_VALIDATION_STATUSES
+        )
         and not _validation_artifact_status_matches_record(artifact)
     ):
-        reasons.append(f"{prefix}.status must match exists and hash statuses")
+        reasons.append(
+            f"{prefix}.status must match exists, hash statuses, and provenance statuses"
+        )
     if (
         status == "ok"
         and referenced_artifact is not None
@@ -7187,7 +7345,12 @@ def _validation_summary_contract_reasons(
                 "validation.artifacts",
             )
         )
-    for field_name in ("sourceHashStatusCounts", "generatedHashStatusCounts"):
+    for field_name in (
+        "sourceHashStatusCounts",
+        "generatedHashStatusCounts",
+        "sourceMapStatusCounts",
+        "sourceRemapStatusCounts",
+    ):
         reasons.extend(
             _mapping_field_contract_reasons(
                 f"validation.summary.{field_name}",
@@ -7348,7 +7511,7 @@ def _validation_contract_reasons(
                     declared_variants=declared_variants,
                     declared_artifact_identities=declared_artifact_identities,
                     declared_artifacts_by_identity=declared_artifacts_by_identity,
-                    require_hash_statuses=summarized_validation,
+                    require_status_fields=summarized_validation,
                 )
             )
         reasons.extend(

@@ -144,7 +144,7 @@ def test_project_report_inspection_is_first_class_support_feature():
             backend_support["notes"]
         )
         assert (
-            "validation hash-status, diagnostic-code, missing-capability, "
+            "validation status, diagnostic-code, missing-capability, "
             "toolchain-status, toolchain-run target, source-backend, and variant "
             "rollups plus artifact target and variant rollups"
             in (backend_support["notes"])
@@ -885,7 +885,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "repository-relative file paths" in backend_support["notes"]
-        assert "required summarized validation artifact hash status fields" in (
+        assert "required summarized validation artifact status fields" in (
             backend_support["notes"]
         )
         assert "validation diagnostic-code and missing-capability rollups" in (
@@ -898,6 +898,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "direct validation report artifact target" in backend_support["notes"]
         assert "toolchain run status" in backend_support["notes"]
         assert "toolchain run target" in backend_support["notes"]
+        assert "toolchain run source backend" in backend_support["notes"]
         assert "toolchain run variant" in backend_support["notes"]
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
@@ -950,7 +951,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_summarized_validation_without_"
-            "hash_statuses"
+            "status_fields"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

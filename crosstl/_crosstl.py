@@ -544,6 +544,16 @@ def _format_project_validation_report(payload):
             include_zero=False,
         ),
         _format_count_rollup(
+            "Validation source maps",
+            payload.get("sourceMapStatusCounts"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Validation source remaps",
+            payload.get("sourceRemapStatusCounts"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
             "Validation toolchains",
             payload.get("toolchainStatusCounts"),
             include_zero=False,
@@ -1135,6 +1145,12 @@ def _format_validation_artifact_sample_line(artifact):
     generated_hash = artifact.get("generatedHashStatus")
     if isinstance(generated_hash, str) and generated_hash:
         details.append(f"generatedHash={generated_hash}")
+    source_map = artifact.get("sourceMapStatus")
+    if isinstance(source_map, str) and source_map:
+        details.append(f"sourceMap={source_map}")
+    source_remap = artifact.get("sourceRemapStatus")
+    if isinstance(source_remap, str) and source_remap:
+        details.append(f"sourceRemap={source_remap}")
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"{line}{suffix}"
@@ -2112,6 +2128,20 @@ def _format_project_report_inspection(payload):
         )
         if generated_hashes:
             lines.append(generated_hashes)
+        source_maps = _format_count_rollup(
+            "Validation source maps",
+            validation_summary.get("sourceMapStatusCounts"),
+            include_zero=False,
+        )
+        if source_maps:
+            lines.append(source_maps)
+        source_remaps = _format_count_rollup(
+            "Validation source remaps",
+            validation_summary.get("sourceRemapStatusCounts"),
+            include_zero=False,
+        )
+        if source_remaps:
+            lines.append(source_remaps)
         lines.extend(
             _format_validation_artifact_sample_lines(payload.get("validation"))
         )

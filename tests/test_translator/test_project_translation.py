@@ -66,6 +66,33 @@ def _generated_hash_status_counts(**overrides):
     return counts
 
 
+def _source_map_status_counts(**overrides):
+    counts = {
+        "mismatch": 0,
+        "not-applicable": 0,
+        "not-checked": 0,
+        "not-recorded": 0,
+        "ok": 0,
+    }
+    counts.update(overrides)
+    return counts
+
+
+def _source_remap_status_counts(**overrides):
+    counts = {
+        "hash-mismatch": 0,
+        "invalid": 0,
+        "mismatch": 0,
+        "missing": 0,
+        "not-applicable": 0,
+        "not-recorded": 0,
+        "ok": 0,
+        "outside-project": 0,
+    }
+    counts.update(overrides)
+    return counts
+
+
 def _refresh_artifact_summary(payload):
     artifacts = payload["artifacts"]
     summary = payload["summary"]
@@ -1719,6 +1746,8 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "sourceMapStatus": "ok",
+            "sourceRemapStatus": "not-recorded",
             "variant": "debug",
         },
         {
@@ -1729,6 +1758,8 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "sourceMapStatus": "ok",
+            "sourceRemapStatus": "not-recorded",
             "variant": "release",
         },
     ]
@@ -1738,6 +1769,8 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=2),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=2),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=2),
+        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 2}),
     }
     assert json.loads(
         (repo / "translated" / "opengl" / "debug" / "simple.glsl").read_text(
@@ -2454,6 +2487,8 @@ def test_validate_project_report_allows_scan_reports_without_artifacts(tmp_path)
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(),
         "generatedHashStatusCounts": _generated_hash_status_counts(),
+        "sourceMapStatusCounts": _source_map_status_counts(),
+        "sourceRemapStatusCounts": _source_remap_status_counts(),
     }
 
 
@@ -3393,6 +3428,8 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "sourceMapStatus": "ok",
+            "sourceRemapStatus": "ok",
         }
     ]
     assert payload["validation"]["summary"] == {
@@ -3401,6 +3438,8 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=1),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     assert payload["artifactStatusByTarget"] == {
         "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
@@ -3408,6 +3447,8 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     assert payload["artifactStatusByVariant"] == {}
     assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(ok=1)
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(ok=1)
+    assert payload["sourceMapStatusCounts"] == _source_map_status_counts(ok=1)
+    assert payload["sourceRemapStatusCounts"] == _source_remap_status_counts(ok=1)
     assert payload["toolchainStatusCounts"] == {
         "available": 0,
         "not-configured": 1,
@@ -3438,12 +3479,16 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "mismatch"
+    assert payload["validation"]["artifacts"][0]["sourceMapStatus"] == "not-checked"
+    assert payload["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
     assert payload["validation"]["summary"] == {
         "artifactCount": 1,
         "okCount": 0,
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(mismatch=1),
+        "sourceMapStatusCounts": _source_map_status_counts(**{"not-checked": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.generated-hash-mismatch"
@@ -3470,12 +3515,16 @@ def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "mismatch"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert payload["validation"]["artifacts"][0]["sourceMapStatus"] == "not-checked"
+    assert payload["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
     assert payload["validation"]["summary"] == {
         "artifactCount": 1,
         "okCount": 0,
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(mismatch=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(**{"not-checked": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.source-hash-mismatch"
@@ -3502,12 +3551,16 @@ def test_validate_project_report_detects_missing_source_artifacts(tmp_path):
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "missing"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert payload["validation"]["artifacts"][0]["sourceMapStatus"] == "not-checked"
+    assert payload["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
     assert payload["validation"]["summary"] == {
         "artifactCount": 1,
         "okCount": 0,
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(missing=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(**{"not-checked": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.missing-source"
@@ -3640,6 +3693,8 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "sourceMapStatus": "ok",
+            "sourceRemapStatus": "not-recorded",
         }
     ]
     assert payload["validation"]["summary"] == {
@@ -3648,6 +3703,8 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=1),
+        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
     }
     assert payload["validation"]["toolchains"][0]["target"] == "opengl"
     assert payload["validation"]["toolchains"][0]["status"] in {
@@ -4557,6 +4614,8 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "variant": "",
                             "sourceHashStatus": "ready",
                             "generatedHashStatus": "ready",
+                            "sourceMapStatus": "ready",
+                            "sourceRemapStatus": "ready",
                         },
                         "not an artifact check",
                     ],
@@ -4641,6 +4700,12 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.artifacts[0].generatedHashStatus must be one of" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[0].sourceMapStatus must be one of" in (
+        diagnostic["message"]
+    )
+    assert "validation.artifacts[0].sourceRemapStatus must be one of" in (
         diagnostic["message"]
     )
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
@@ -4903,16 +4968,16 @@ def test_validate_project_report_rejects_inconsistent_validation_artifact_status
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.artifacts[0].status must match exists and hash statuses"
-        in diagnostic["message"]
+        "validation.artifacts[0].status must match exists, hash statuses, "
+        "and provenance statuses" in diagnostic["message"]
     )
     assert (
-        "validation.artifacts[1].status must match exists and hash statuses"
-        in diagnostic["message"]
+        "validation.artifacts[1].status must match exists, hash statuses, "
+        "and provenance statuses" in diagnostic["message"]
     )
 
 
-def test_validate_project_report_rejects_summarized_validation_without_hash_statuses(
+def test_validate_project_report_rejects_summarized_validation_without_status_fields(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -4923,13 +4988,21 @@ def test_validate_project_report_rejects_summarized_validation_without_hash_stat
     validation_artifact = payload["validation"]["artifacts"][0]
     validation_artifact.pop("sourceHashStatus")
     validation_artifact.pop("generatedHashStatus")
+    validation_artifact.pop("sourceMapStatus")
+    validation_artifact.pop("sourceRemapStatus")
     payload["validation"]["summary"][
         "sourceHashStatusCounts"
     ] = _source_hash_status_counts()
     payload["validation"]["summary"][
         "generatedHashStatusCounts"
     ] = _generated_hash_status_counts()
-    report_path = repo / "out" / "validation-artifact-missing-hash-status-report.json"
+    payload["validation"]["summary"][
+        "sourceMapStatusCounts"
+    ] = _source_map_status_counts()
+    payload["validation"]["summary"][
+        "sourceRemapStatusCounts"
+    ] = _source_remap_status_counts()
+    report_path = repo / "out" / "validation-artifact-missing-status-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
     validation = validate_project_report(report_path)
@@ -4944,6 +5017,14 @@ def test_validate_project_report_rejects_summarized_validation_without_hash_stat
     ) in diagnostic["message"]
     assert (
         "validation.artifacts[0].generatedHashStatus must be recorded "
+        "when validation.summary is present"
+    ) in diagnostic["message"]
+    assert (
+        "validation.artifacts[0].sourceMapStatus must be recorded "
+        "when validation.summary is present"
+    ) in diagnostic["message"]
+    assert (
+        "validation.artifacts[0].sourceRemapStatus must be recorded "
         "when validation.summary is present"
     ) in diagnostic["message"]
 
@@ -5252,6 +5333,8 @@ def test_validate_project_report_rejects_validation_summary_missing_artifact_che
                         "failedCount": 0,
                         "sourceHashStatusCounts": _source_hash_status_counts(),
                         "generatedHashStatusCounts": _generated_hash_status_counts(),
+                        "sourceMapStatusCounts": _source_map_status_counts(),
+                        "sourceRemapStatusCounts": _source_remap_status_counts(),
                     },
                 },
             }
@@ -5386,6 +5469,8 @@ def test_validate_project_report_rejects_duplicate_validation_record_identities(
         "failedCount": 0,
         "sourceHashStatusCounts": {"ok": 2},
         "generatedHashStatusCounts": {"ok": 2},
+        "sourceMapStatusCounts": {"ok": 2},
+        "sourceRemapStatusCounts": {"not-recorded": 2},
     }
     toolchain_run = {
         "source": "simple.cgl",
@@ -5449,6 +5534,8 @@ def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_p
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(),
         "generatedHashStatusCounts": _generated_hash_status_counts(),
+        "sourceMapStatusCounts": _source_map_status_counts(),
+        "sourceRemapStatusCounts": _source_remap_status_counts(),
     }
 
 
@@ -6713,6 +6800,14 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
     assert validation["validation"]["summary"]["failedCount"] == 1
     assert validation["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
     assert validation["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["sourceMapStatus"] == "mismatch"
+    assert validation["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
+    assert validation["validation"]["summary"]["sourceMapStatusCounts"] == (
+        _source_map_status_counts(mismatch=1)
+    )
+    assert validation["validation"]["summary"]["sourceRemapStatusCounts"] == (
+        _source_remap_status_counts(ok=1)
+    )
     assert validation["diagnosticsByCode"] == {
         "project.validate.source-map-file-span-mismatch": 1,
     }
@@ -6964,6 +7059,18 @@ def test_validate_project_report_rejects_stale_source_remap_sidecar(tmp_path):
 
     assert validation["success"] is False
     assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["validation"]["artifacts"][0]["sourceMapStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["sourceRemapStatus"] == "invalid"
+    assert validation["validation"]["summary"]["sourceMapStatusCounts"] == (
+        _source_map_status_counts(ok=1)
+    )
+    assert validation["validation"]["summary"]["sourceRemapStatusCounts"] == (
+        _source_remap_status_counts(invalid=1)
+    )
+    assert validation["sourceMapStatusCounts"] == _source_map_status_counts(ok=1)
+    assert validation["sourceRemapStatusCounts"] == _source_remap_status_counts(
+        invalid=1
+    )
     assert validation["diagnosticsByCode"] == {
         "project.validate.source-remap-hash-mismatch": 1,
         "project.validate.source-remap-invalid": 1,
@@ -7001,6 +7108,8 @@ def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_pat
 
     assert validation["success"] is False
     assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["validation"]["artifacts"][0]["sourceMapStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["sourceRemapStatus"] == "mismatch"
     assert validation["diagnosticsByCode"] == {
         "project.validate.source-remap-mismatch": 1,
     }
@@ -7871,6 +7980,8 @@ def test_validate_project_report_records_toolchain_failures(
             "exists": True,
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "not-recorded",
+            "sourceMapStatus": "not-recorded",
+            "sourceRemapStatus": "not-recorded",
         }
     ]
     assert inspection["validation"]["toolchainRunCount"] == 1
@@ -7924,7 +8035,8 @@ def test_validate_project_report_records_toolchain_failures(
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
         "(status=ok, exists=true, sourceHash=not-recorded, "
-        "generatedHash=not-recorded)"
+        "generatedHash=not-recorded, sourceMap=not-recorded, "
+        "sourceRemap=not-recorded)"
     ) in stdout
     assert "Validation toolchain run samples:" in stdout
     assert (
@@ -8130,6 +8242,8 @@ def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "missing",
+            "sourceMapStatus": "not-recorded",
+            "sourceRemapStatus": "not-recorded",
         }
     ]
     assert payload["validation"]["summary"] == {
@@ -8138,6 +8252,8 @@ def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(**{"not-recorded": 1}),
         "generatedHashStatusCounts": _generated_hash_status_counts(missing=1),
+        "sourceMapStatusCounts": _source_map_status_counts(**{"not-recorded": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
     }
     assert payload["validation"]["toolchainRuns"] == []
     diagnostic = payload["diagnostics"][0]
@@ -8186,6 +8302,8 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "not-applicable",
+            "sourceMapStatus": "not-applicable",
+            "sourceRemapStatus": "not-applicable",
         }
     ]
     assert payload["validation"]["summary"] == {
@@ -8196,6 +8314,8 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
         "generatedHashStatusCounts": _generated_hash_status_counts(
             **{"not-applicable": 1}
         ),
+        "sourceMapStatusCounts": _source_map_status_counts(**{"not-applicable": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-applicable": 1}),
     }
     assert payload["artifactStatusByTarget"] == {
         "not-a-backend": {"artifactCount": 1, "okCount": 0, "failedCount": 1}
@@ -8204,6 +8324,12 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
         **{"not-recorded": 1}
     )
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(
+        **{"not-applicable": 1}
+    )
+    assert payload["sourceMapStatusCounts"] == _source_map_status_counts(
+        **{"not-applicable": 1}
+    )
+    assert payload["sourceRemapStatusCounts"] == _source_remap_status_counts(
         **{"not-applicable": 1}
     )
     diagnostic = payload["diagnostics"][0]
@@ -8348,6 +8474,8 @@ def test_validate_project_report_rejects_artifacts_outside_project(
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "outside-project",
+            "sourceMapStatus": "not-recorded",
+            "sourceRemapStatus": "not-recorded",
         }
     ]
     assert payload["validation"]["summary"] == {
@@ -8358,6 +8486,8 @@ def test_validate_project_report_rejects_artifacts_outside_project(
         "generatedHashStatusCounts": _generated_hash_status_counts(
             **{"outside-project": 1}
         ),
+        "sourceMapStatusCounts": _source_map_status_counts(**{"not-recorded": 1}),
+        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
     }
     assert payload["validation"]["toolchainRuns"] == []
     diagnostic = payload["diagnostics"][0]
@@ -9024,6 +9154,8 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert expected_artifact_rollup in text_result.stdout
     assert "Validation source hashes: not-recorded=1" in text_result.stdout
     assert "Validation generated hashes: not-applicable=1" in text_result.stdout
+    assert "Validation source maps: not-applicable=1" in text_result.stdout
+    assert "Validation source remaps: not-applicable=1" in text_result.stdout
     assert "Validation diagnostics:" in text_result.stdout
 
     sarif_result = subprocess.run(
@@ -9325,6 +9457,18 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["validation"]["toolchainRunStatusByTarget"] == {}
     assert payload["validation"]["toolchainRunStatusBySourceBackend"] == {}
     assert payload["validation"]["toolchainRunStatusByVariant"] == {}
+    assert payload["validation"][
+        "sourceHashStatusCounts"
+    ] == _source_hash_status_counts(ok=1)
+    assert payload["validation"]["generatedHashStatusCounts"] == (
+        _generated_hash_status_counts(ok=1)
+    )
+    assert payload["validation"]["sourceMapStatusCounts"] == (
+        _source_map_status_counts(ok=1)
+    )
+    assert payload["validation"]["sourceRemapStatusCounts"] == (
+        _source_remap_status_counts(ok=1)
+    )
     assert payload["validation"]["artifactStatusByTarget"] == {
         "cgl": {
             "artifactCount": 1,
@@ -9343,6 +9487,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             "exists": True,
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "sourceMapStatus": "ok",
+            "sourceRemapStatus": "ok",
         }
     ]
     assert payload["validation"]["toolchainRunCount"] == 0
@@ -9354,6 +9500,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=1),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     assert payload["failedArtifacts"] == []
     assert payload["migration"]["scope"] == "shader-kernel-translation"
@@ -9579,6 +9727,52 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "intermediate": "none",
             }
         ],
+    }
+    assert payload["defineProcessing"] == {
+        "available": True,
+        "byStatus": {"not-requested": 1},
+        "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byVariant": {},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "status": "not-requested",
+                "frontend": "lexer",
+                "supportsDefines": True,
+                "defineCount": 0,
+            }
+        ],
+        "notSupportedArtifactCount": 0,
+        "truncatedNotSupportedArtifactCount": 0,
+        "notSupportedArtifacts": [],
+    }
+    assert payload["includePathProcessing"] == {
+        "available": True,
+        "byStatus": {"not-requested": 1},
+        "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byVariant": {},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "status": "not-requested",
+                "frontend": "lexer",
+                "supportsIncludePaths": False,
+                "includePathCount": 0,
+            }
+        ],
+        "notSupportedArtifactCount": 0,
+        "truncatedNotSupportedArtifactCount": 0,
+        "notSupportedArtifacts": [],
     }
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
@@ -9815,6 +10009,8 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
             "exists": True,
             "sourceHashStatus": "ok",
             "generatedHashStatus": "mismatch",
+            "sourceMapStatus": "not-checked",
+            "sourceRemapStatus": "ok",
             "validationStatus": "failed",
         }
     ]
@@ -10184,7 +10380,8 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Validation artifact samples:" in result.stdout
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl "
-        "(status=ok, exists=true, sourceHash=ok, generatedHash=ok)"
+        "(status=ok, exists=true, sourceHash=ok, generatedHash=ok, "
+        "sourceMap=ok, sourceRemap=ok)"
     ) in result.stdout
 
 
@@ -10447,6 +10644,8 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
             "exists": True,
             "sourceHashStatus": "ok",
             "generatedHashStatus": "mismatch",
+            "sourceMapStatus": "not-checked",
+            "sourceRemapStatus": "ok",
             "validationStatus": "failed",
         }
     ]
@@ -10475,6 +10674,8 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
     assert "Validation missing capabilities: artifact.manifest=1" in result.stdout
     assert "Validation source hashes: ok=1" in result.stdout
     assert "Validation generated hashes: mismatch=1" in result.stdout
+    assert "Validation source maps: not-checked=1" in result.stdout
+    assert "Validation source remaps: ok=1" in result.stdout
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl: "
         "validation failed (generated hash: mismatch)"
