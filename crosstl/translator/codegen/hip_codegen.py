@@ -2096,6 +2096,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "gl_LocalInvocationID": "local_invocation_id",
             "gl_GlobalInvocationID": "global_invocation_id",
             "gl_LocalInvocationIndex": "local_invocation_index",
+            "gl_WorkGroupSize": "workgroup_size",
+            "gl_NumWorkGroups": "num_workgroups",
             "payload": "ray_payload",
             "rayPayloadEXT": "ray_payload",
             "rayPayloadInEXT": "ray_payload",
@@ -2138,8 +2140,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "gl_instanceid",
             "gl_localinvocationid",
             "gl_localinvocationindex",
+            "gl_numworkgroups",
             "gl_pointcoord",
             "gl_vertexid",
+            "gl_workgroupsize",
             "gl_workgroupid",
         } or upper_name in {
             "SV_DISPATCHTHREADID",
@@ -2765,6 +2769,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "unsigned int",
                 {"compute"},
             ),
+            "gl_workgroupsize": ("workgroup_size", "uint3", {"compute"}),
+            "gl_numworkgroups": ("num_workgroups", "uint3", {"compute"}),
             "SV_GROUPID": ("workgroup_id", "uint3", {"compute"}),
             "SV_GROUPTHREADID": ("local_invocation_id", "uint3", {"compute"}),
             "SV_DISPATCHTHREADID": ("global_invocation_id", "uint3", {"compute"}),
@@ -2799,6 +2805,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "global_invocation_id",
             "local_invocation_id",
             "local_invocation_index",
+            "num_workgroups",
+            "workgroup_size",
             "workgroup_id",
         }:
             return role

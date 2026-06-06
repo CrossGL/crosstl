@@ -6858,12 +6858,31 @@ class GLSLCodeGen:
         return target in {"gl_FragDepth", "gl_SampleMask", "gl_SampleMask[0]"}
 
     def fragment_input_member_name(self, member, struct_name):
+        if self.fragment_input_builtin_alias(member) is not None:
+            return None
         if struct_name in self.vertex_output_struct_names:
             output_name = self.vertex_output_member_name(member)
             if self.is_vertex_builtin_output(output_name):
                 return None
             return self.combined_fragment_input_member_name(output_name)
         return self.combined_fragment_input_member_name(member.name)
+
+    def fragment_input_builtin_alias(self, member):
+        semantic = self.semantic_from_node(member)
+        if semantic is None:
+            return None
+        mapped_semantic = self.map_stage_input_semantic(semantic, "fragment")
+        if mapped_semantic not in {
+            "gl_PrimitiveID",
+            "gl_FrontFacing",
+            "gl_FragCoord",
+            "gl_PointCoord",
+            "gl_SampleID",
+            "gl_SamplePosition",
+            "gl_SampleMaskIn",
+        }:
+            return None
+        return self.stage_input_builtin_alias(semantic, "fragment")
 
     def combined_fragment_input_member_name(self, input_name):
         if (
@@ -6895,6 +6914,10 @@ class GLSLCodeGen:
             if shader_type == "fragment":
                 member_map = {}
                 for member in getattr(struct, "members", []) or []:
+                    builtin_alias = self.fragment_input_builtin_alias(member)
+                    if builtin_alias is not None:
+                        member_map[member.name] = builtin_alias
+                        continue
                     input_name = self.fragment_input_member_name(member, type_name)
                     if input_name is not None:
                         member_map[member.name] = input_name

@@ -14385,6 +14385,7 @@ class MojoCodeGen:
             "break",
             "case",
             "class",
+            "comptime",
             "constrained",
             "continue",
             "def",

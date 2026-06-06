@@ -3770,6 +3770,41 @@ class TestHipCodeGen:
         assert "SV_DispatchThreadID" not in hip_code
         assert "SV_GroupID" not in hip_code
 
+    def test_compute_grid_size_semantic_parameters_lower_to_hip_builtins(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main(
+                    uvec3 groupCount @ gl_NumWorkGroups,
+                    uvec3 groupSize @ gl_WorkGroupSize
+                ) {
+                    uvec3 groups = groupCount;
+                    uint groupsX = groupCount.x;
+                    uint sizeY = groupSize.y;
+                    uvec2 sizeYZ = groupSize.yz;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "// CrossGL parameter semantic: groupCount: num_workgroups" in hip_code
+        assert "// CrossGL parameter semantic: groupSize: workgroup_size" in hip_code
+        assert "__global__ void compute_main()" in hip_code
+        assert "uint3 groupCount" not in hip_code
+        assert "uint3 groupSize" not in hip_code
+        assert "uint3 groups = make_uint3(gridDim.x, gridDim.y, gridDim.z);" in hip_code
+        assert "unsigned int groupsX = gridDim.x;" in hip_code
+        assert "unsigned int sizeY = blockDim.y;" in hip_code
+        assert "uint2 sizeYZ = make_uint2(blockDim.y, blockDim.z);" in hip_code
+        assert "gl_NumWorkGroups" not in hip_code
+        assert "gl_WorkGroupSize" not in hip_code
+
     def test_direct_hlsl_compute_vector_builtins_emit_hip_vectors(self):
         ast = ShaderNode(
             name="DirectHlslBuiltins",
