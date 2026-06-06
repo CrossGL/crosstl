@@ -2668,6 +2668,26 @@ def test_explicit_none_return_codegen_maps_to_void():
     assert "None main" not in generated_code
 
 
+def test_return_none_literal_codegen_from_generated_mojo_example_reparses_crossgl():
+    # Reduced from examples/output/mojo/gpu_computing/MatrixMultiplication.mojo,
+    # matmul_batched's early exit.
+    code = """
+    fn matmul_batched(done: Bool) -> None:
+        if done:
+            return None
+        return
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void matmul_batched(bool done)" in generated_code
+    assert "return;\n" in generated_code
+    assert "return None;" not in generated_code
+    assert "None matmul_batched" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_at_attribute_codegen():
     code = """
     struct MyStruct:

@@ -1493,7 +1493,25 @@ class RustParser:
             parts.append(str(token_value))
             self.eat(token_type)
 
-        return "".join(parts).strip() or None
+        return self.normalize_array_type_size("".join(parts).strip())
+
+    def normalize_array_type_size(self, size):
+        if not size:
+            return None
+
+        if not (size.startswith("{") and size.endswith("}")):
+            return size
+
+        depth = 0
+        for index, char in enumerate(size):
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0 and index != len(size) - 1:
+                    return size
+
+        return size[1:-1].strip() or None
 
     def format_array_type(self, element_type, size):
         suffix = f"[{size}]" if size is not None else "[]"

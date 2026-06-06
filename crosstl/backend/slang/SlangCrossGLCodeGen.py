@@ -1106,11 +1106,23 @@ class SlangToCrossGLConverter:
         return f"    {self.generate_variable_declaration(node)};\n"
 
     def generate_variable_declaration(self, node):
+        qualifiers = self.format_global_variable_qualifiers(node)
+        if qualifiers:
+            qualifiers += " "
         return (
-            f"{self.map_type(node.vtype)} "
+            f"{qualifiers}{self.map_type(node.vtype)} "
             f"{self.format_identifier(node.name)}{self.format_array_suffixes(node)}"
             f"{self.format_variable_metadata(node)}"
         )
+
+    def format_global_variable_qualifiers(self, node):
+        allowed_qualifiers = {"extern", "static", "const", "constexpr"}
+        qualifiers = [
+            qualifier
+            for qualifier in getattr(node, "qualifiers", []) or []
+            if str(qualifier).lower() in allowed_qualifiers
+        ]
+        return " ".join(qualifiers)
 
     def generate_struct_member(self, struct_node, member):
         qualifiers = self.format_struct_member_qualifiers(member)

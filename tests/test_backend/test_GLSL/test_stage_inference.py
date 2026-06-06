@@ -126,6 +126,24 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
         pytest.param(
             """
             #version 450 core
+            #extension GL_AMD_shader_early_and_late_fragment_tests : enable
+
+            layout(early_and_late_fragment_tests) in;
+
+            void main() {
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "layout(early_and_late_fragment_tests) in;",
+            ],
+            id="vulkan-amd-early-and-late-fragment-tests-layout-only",
+        ),
+        pytest.param(
+            """
+            #version 450 core
 
             void main() {
                 if (gl_HelperInvocation) {

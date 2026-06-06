@@ -283,7 +283,6 @@ class SlangCodeGen:
         }
         self.function_map = {
             "mix": "lerp",
-            "mod": "fmod",
             "fract": "frac",
             "dFdx": "ddx",
             "dFdy": "ddy",
@@ -7782,8 +7781,10 @@ class SlangCodeGen:
         right = self.generate_expression_with_expected(
             node.right, self.expression_result_type(node.left)
         )
-        if node.operator == "%=" and self.modulo_requires_fmod(node.left, node.right):
-            return f"{left} = fmod({left}, {right})"
+        if node.operator == "%=" and self.modulo_requires_slang_floor(
+            node.left, node.right
+        ):
+            return f"{left} = {self.generate_slang_mod_expression(left, right)}"
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
@@ -7798,8 +7799,10 @@ class SlangCodeGen:
         prelude, _results, right = self.generate_expression_with_prelude(
             node.right, self.expression_result_type(node.left)
         )
-        if node.operator == "%=" and self.modulo_requires_fmod(node.left, node.right):
-            statement = f"{left} = fmod({left}, {right});"
+        if node.operator == "%=" and self.modulo_requires_slang_floor(
+            node.left, node.right
+        ):
+            statement = f"{left} = {self.generate_slang_mod_expression(left, right)};"
         else:
             statement = f"{left} {node.operator} {right};"
         return self.statement_with_prelude(prelude, statement)
@@ -8192,8 +8195,8 @@ class SlangCodeGen:
         self.register_helper_function(helper_name, helper)
         return helper_name
 
-    def modulo_requires_fmod(self, left_expr, right_expr):
-        """Return whether scalar/vector modulo needs Slang fmod lowering."""
+    def modulo_requires_slang_floor(self, left_expr, right_expr):
+        """Return whether scalar/vector modulo needs GLSL floor semantics lowering."""
         left_component = self.vector_component_type(
             self.expression_result_type(left_expr)
         )
@@ -8204,6 +8207,9 @@ class SlangCodeGen:
             "float",
             "double",
         }
+
+    def generate_slang_mod_expression(self, left, right):
+        return f"(({left}) - (floor(({left}) / ({right})) * ({right})))"
 
     def binary_expression_result_type(self, expr):
         left_type = self.expression_result_type(expr.left)
@@ -8631,8 +8637,8 @@ class SlangCodeGen:
             left = f"({left})"
         if self.binary_child_needs_parentheses(node.op, node.right, True):
             right = f"({right})"
-        if node.op == "%" and self.modulo_requires_fmod(node.left, node.right):
-            return f"fmod({left}, {right})"
+        if node.op == "%" and self.modulo_requires_slang_floor(node.left, node.right):
+            return self.generate_slang_mod_expression(left, right)
         if node.op == "*" and self.binary_requires_slang_mul(
             self.expression_result_type(node.left),
             self.expression_result_type(node.right),
@@ -8772,6 +8778,14 @@ class SlangCodeGen:
                 bool_mix = self.generate_bool_mix_call(node.args)
                 if bool_mix is not None:
                     return bool_mix
+            if (
+                callee == "mod"
+                and len(node.args) == 2
+                and callee not in self.user_function_names
+            ):
+                left = self.generate_expression(node.args[0])
+                right = self.generate_expression(node.args[1])
+                return self.generate_slang_mod_expression(left, right)
             if callee == "inverse" and callee not in self.user_function_names:
                 if len(node.args) != 1:
                     fallback_type = self.current_expression_expected_type or "float"

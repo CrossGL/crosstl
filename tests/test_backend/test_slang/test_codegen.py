@@ -2379,10 +2379,27 @@ def test_initialized_top_level_global_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float threshold = 0.5;" in generated_code
+    assert "static const float threshold = 0.5;" in generated_code
     assert "vec4 tint = vec4(1.0, 0.5, 0.0, 1.0);" in generated_code
     assert "float gain = 1.0;" in generated_code
     assert "gain = 1f" not in generated_code
+
+
+def test_extern_static_const_globals_codegen_from_link_time_constant_tests():
+    # Source: shader-slang/slang link-time constant tests.
+    code = """
+    extern static const bool turnOnFeature;
+    extern static const float constValue;
+    extern static const uint numthread = 0;
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "extern static const bool turnOnFeature;" in generated_code
+    assert "extern static const float constValue;" in generated_code
+    assert "extern static const uint numthread = 0;" in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_initializer_list_declaration_codegen():

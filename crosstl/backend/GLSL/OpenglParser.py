@@ -336,6 +336,7 @@ GEOMETRY_BUILTINS = {
     "gl_PrimitiveIDIn",
 }
 FRAGMENT_LAYOUT_QUALIFIERS = {
+    "early_and_late_fragment_tests",
     "early_fragment_tests",
     "depth_any",
     "depth_greater",

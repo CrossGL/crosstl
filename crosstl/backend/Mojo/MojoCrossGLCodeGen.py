@@ -615,7 +615,7 @@ class MojoToCrossGLConverter:
                     else:
                         code += self.generate_assignment(stmt) + ";\n"
                 elif isinstance(stmt, ReturnNode):
-                    if stmt.value is None:
+                    if stmt.value is None or self.is_none_literal(stmt.value):
                         code += "return;\n"
                     else:
                         code += f"return {self.generate_expression(stmt.value)};\n"
@@ -667,6 +667,13 @@ class MojoToCrossGLConverter:
         if getattr(node.left, "vtype", ""):
             return False
         return node.left.name != "_" and not self.is_scoped_value_name(node.left.name)
+
+    def is_none_literal(self, node):
+        return (
+            isinstance(node, VariableNode)
+            and node.name == "None"
+            and not getattr(node, "vtype", "")
+        )
 
     def generate_implicit_assignment_declaration(self, node):
         value = self.generate_expression(node.right)
