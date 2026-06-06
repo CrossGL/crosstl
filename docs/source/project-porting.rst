@@ -334,6 +334,7 @@ Project reports are JSON documents with:
   record shape and duplicate identity checks, validation artifact and
   toolchain target coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,
+  current include dependency status, resolved-path, and resolution-source checks,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   translated artifact existence checks, escaped output directory and

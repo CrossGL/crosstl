@@ -4109,12 +4109,90 @@ def _include_dependency_contract_reasons(
         reasons.append(f"{prefix}.resolvedFrom must be source or include-dir")
     if status == "resolved" and "resolvedFrom" not in dependency:
         reasons.append(f"{prefix}.resolvedFrom must be recorded for resolved includes")
+    elif status != "resolved" and "resolvedFrom" in dependency:
+        reasons.append(
+            f"{prefix}.resolvedFrom must be omitted unless status is resolved"
+        )
 
     return reasons
 
 
+def _project_config_for_include_validation(
+    project: Mapping[str, Any] | None,
+    root_path: Path | None,
+) -> ProjectConfig | None:
+    if project is None or root_path is None:
+        return None
+    include_dirs = project.get("includeDirs", [])
+    if not isinstance(include_dirs, list) or any(
+        not isinstance(include_dir, str) for include_dir in include_dirs
+    ):
+        return None
+    output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
+    if not isinstance(output_dir, str):
+        output_dir = DEFAULT_OUTPUT_DIR
+    return ProjectConfig(
+        root=root_path,
+        include_dirs=tuple(include_dirs),
+        output_dir=output_dir,
+    )
+
+
+def _current_include_dependency_contract_reasons(
+    unit_index: int,
+    dependency_index: int,
+    unit: Mapping[str, Any],
+    dependency: Mapping[str, Any],
+    *,
+    root_path: Path | None,
+    include_config: ProjectConfig | None,
+) -> list[str]:
+    if root_path is None or include_config is None:
+        return []
+
+    prefix = f"units[{unit_index}].includeDependencies[{dependency_index}]"
+    include_value = dependency.get("include")
+    kind = dependency.get("kind")
+    status = dependency.get("status")
+    source_path = unit.get("path")
+    if not (
+        _is_non_empty_string(include_value)
+        and kind in INCLUDE_DEPENDENCY_KINDS
+        and status in INCLUDE_DEPENDENCY_STATUSES
+        and _is_non_empty_string(source_path)
+        and _is_repository_relative_report_path(source_path)
+    ):
+        return []
+    if kind == "dynamic":
+        return []
+
+    unit_path = (root_path / source_path).resolve()
+    expected_status, expected_path, expected_from = _resolve_include_dependency(
+        include_config,
+        unit_path,
+        kind,
+        include_value,
+    )
+
+    reasons = []
+    if status != expected_status:
+        reasons.append(f"{prefix}.status must match current include resolution")
+    if expected_status != "resolved":
+        return reasons
+
+    if dependency.get("resolvedPath") != expected_path:
+        reasons.append(f"{prefix}.resolvedPath must match current include resolution")
+    if dependency.get("resolvedFrom") != expected_from:
+        reasons.append(f"{prefix}.resolvedFrom must match current include resolution")
+    return reasons
+
+
 def _unit_include_dependencies_contract_reasons(
-    index: int, unit: Mapping[str, Any]
+    index: int,
+    unit: Mapping[str, Any],
+    *,
+    root_path: Path | None = None,
+    project: Mapping[str, Any] | None = None,
 ) -> list[str]:
     if "includeDependencies" not in unit:
         return []
@@ -4124,9 +4202,23 @@ def _unit_include_dependencies_contract_reasons(
         return [f"units[{index}].includeDependencies must be a list"]
 
     reasons = []
+    include_config = _project_config_for_include_validation(project, root_path)
     for dependency_index, dependency in enumerate(dependencies):
+        dependency_reasons = _include_dependency_contract_reasons(
+            index, dependency_index, dependency
+        )
+        reasons.extend(dependency_reasons)
+        if dependency_reasons or not isinstance(dependency, Mapping):
+            continue
         reasons.extend(
-            _include_dependency_contract_reasons(index, dependency_index, dependency)
+            _current_include_dependency_contract_reasons(
+                index,
+                dependency_index,
+                unit,
+                dependency,
+                root_path=root_path,
+                include_config=include_config,
+            )
         )
     return reasons
 
@@ -4187,7 +4279,14 @@ def _unit_contract_reasons(
             check_current_file=check_current_source_hash,
         )
     )
-    reasons.extend(_unit_include_dependencies_contract_reasons(index, unit))
+    reasons.extend(
+        _unit_include_dependencies_contract_reasons(
+            index,
+            unit,
+            root_path=root_path,
+            project=project,
+        )
+    )
     return reasons
 
 

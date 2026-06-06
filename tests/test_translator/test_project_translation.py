@@ -762,6 +762,81 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     )
 
 
+def test_validate_project_report_rejects_stale_include_dependency_resolution(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "include-dependencies-report.json"
+    report.write_json(report_path)
+    (shader_dir / "local.inc").unlink()
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].status must match current include resolution"
+        in diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_include_dependency_resolution_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (include_dir / "shared.inc").write_text("vec4 shared_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    dependency = payload["units"][0]["includeDependencies"][0]
+    dependency["resolvedPath"] = "includes/shared.inc"
+    dependency["resolvedFrom"] = "include-dir"
+    report_path = repo / "bad-include-dependencies-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].resolvedPath must match current "
+        "include resolution"
+    ) in diagnostic["message"]
+    assert (
+        "units[0].includeDependencies[0].resolvedFrom must match current "
+        "include resolution"
+    ) in diagnostic["message"]
+
+
 def test_project_config_rejects_malformed_variant_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
