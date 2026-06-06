@@ -865,6 +865,44 @@ class TestHipCodeGen:
         assert "__fma" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_qualified_scalar_math_builtins_convert_to_crossgl_reparse(self):
+        code = """
+        __device__ float qualified_math(float x, float y, float z) {
+            float roots = ::sqrtf(x) + std::sqrtf(y) + ::rsqrtf(z);
+            float extrema = std::fminf(x, y) + std::fmaxf(y, z);
+            float magnitude = ::std::fabs(x);
+            float fused = ::std::fmaf(x, y, z);
+            return roots + extrema + magnitude + fused;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "var roots: f32 = ((sqrt(x) + sqrt(y)) + inversesqrt(z));" in result
+        assert "var extrema: f32 = (min(x, y) + max(y, z));" in result
+        assert "var magnitude: f32 = abs(x);" in result
+        assert "var fused: f32 = fma(x, y, z);" in result
+        for raw_name in {
+            "::sqrtf",
+            "std::sqrtf",
+            "::rsqrtf",
+            "std::fminf",
+            "std::fmaxf",
+            "::std::fabs",
+            "::std::fmaf",
+            "sqrtf",
+            "rsqrtf",
+            "fminf",
+            "fmaxf",
+            "fmaf",
+        }:
+            assert raw_name not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
         code = """
         __global__ void fence(float* out) {

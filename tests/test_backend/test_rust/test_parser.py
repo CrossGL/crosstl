@@ -320,6 +320,28 @@ def test_rust_gpu_path_qualified_attribute_parsing():
     assert macro_call.macro_delimiter == "LBRACE"
 
 
+def test_absolute_path_expression_parsing_from_rust_gpu_intrinsics():
+    code = """
+    fn derivative_ops(value: Vec3<f32>) {
+        let direct = ::spirv_std::arch::fwidth(value.x);
+        let associated = ::spirv_std::arch::Derivative::dfdx(value);
+        ::spirv_std::arch::workgroup_memory_barrier_with_group_sync();
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    assert isinstance(body[0], LetNode)
+    assert isinstance(body[0].value, FunctionCallNode)
+    assert body[0].value.name == "spirv_std::arch::fwidth"
+    assert isinstance(body[1], LetNode)
+    assert isinstance(body[1].value, FunctionCallNode)
+    assert body[1].value.name == "spirv_std::arch::Derivative::dfdx"
+    assert isinstance(body[2], FunctionCallNode)
+    assert body[2].name == "spirv_std::arch::workgroup_memory_barrier_with_group_sync"
+
+
 def test_key_value_attribute_parsing_from_rust_gpu_spirv_std():
     code = r"""
     #[lang = "eh_personality"]

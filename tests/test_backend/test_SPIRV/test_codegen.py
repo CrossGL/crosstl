@@ -3312,6 +3312,32 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_WORKGROUP_SHARED_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for GLSL compute:
+; shared uint sharedData[4]; sharedData[0] = 7u.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %shared_data "sharedData"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%uint_4 = OpConstant %uint 4
+%uint_7 = OpConstant %uint 7
+%arr_uint = OpTypeArray %uint %uint_4
+%ptr_workgroup_uint = OpTypePointer Workgroup %uint
+%ptr_workgroup_arr_uint = OpTypePointer Workgroup %arr_uint
+%shared_data = OpVariable %ptr_workgroup_arr_uint Workgroup
+%main = OpFunction %void None %fn
+%label = OpLabel
+%element = OpAccessChain %ptr_workgroup_uint %shared_data %uint_0
+OpStore %element %uint_7
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_EXTENDED_ARITHMETIC_ASSEMBLY = """
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
@@ -5002,6 +5028,7 @@ def test_spirv_tools_ptr_access_chain_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
+    assert "groupshared uint workgroupValues[4][4];" in generated_code
     assert "uint outA @output @location(0);" in generated_code
     assert "uint outB @output @location(1);" in generated_code
     assert "outA = workgroupValues[1][2];" in generated_code
@@ -5010,6 +5037,18 @@ def test_spirv_tools_ptr_access_chain_codegen_reparse():
     assert "outB = inBoundsPtr;" not in generated_code
     assert "OpPtrAccessChain" not in generated_code
     assert "OpInBoundsPtrAccessChain" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_workgroup_shared_variable_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_WORKGROUP_SHARED_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "groupshared uint sharedData[4];" in generated_code
+    assert "sharedData[0] = 7;" in generated_code
+    assert "compute {" in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

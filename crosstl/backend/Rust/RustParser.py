@@ -152,6 +152,7 @@ class RustParser:
             "LBRACKET",
             "LPAREN",
             "LESS_THAN",
+            "DOUBLE_COLON",
             "RANGE",
             "RANGE_INCLUSIVE",
             "SELF",
@@ -2990,6 +2991,9 @@ class RustParser:
         if self.current_token[0] == "LESS_THAN":
             return self.parse_qualified_path_expression()
 
+        if self.current_token[0] == "DOUBLE_COLON":
+            return self.parse_absolute_path_expression()
+
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -3316,6 +3320,17 @@ class RustParser:
             self.eat(self.current_token[0])
 
         return "::".join(segments)
+
+    def parse_absolute_path_expression(self):
+        self.eat("DOUBLE_COLON")
+        if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
+            raise SyntaxError(
+                f"Expected absolute path segment, got {self.current_token[0]}"
+            )
+
+        first_segment = self.current_token[1]
+        self.eat(self.current_token[0])
+        return self.finish_path_or_call(first_segment)
 
     def finish_path_or_call(self, first_segment):
         path = self.parse_path_expression(first_segment)

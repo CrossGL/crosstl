@@ -2577,6 +2577,28 @@ def test_texture_method_call_parsing():
     assert call.args[1].name == "uv"
 
 
+def test_hlsl_namespace_builtin_call_parsing():
+    code = """
+    void main(float4 color, float4x4 matrix, float4 vector, float value) {
+        float4 clamped = hlsl::saturate(color);
+        float4 transformed = hlsl::mul(matrix, vector);
+        float wrapped = hlsl::frac(value);
+        float wave = hlsl::sin(value);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+
+    calls = [stmt.right for stmt in function.body]
+    assert [call.name for call in calls] == [
+        "hlsl::saturate",
+        "hlsl::mul",
+        "hlsl::frac",
+        "hlsl::sin",
+    ]
+
+
 def test_texture_load_method_parsing():
     code = """
     Texture2D<float4> albedo;

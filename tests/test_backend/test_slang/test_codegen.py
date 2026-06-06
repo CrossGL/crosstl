@@ -2491,6 +2491,29 @@ def test_slang_frac_builtin_lowers_to_crossgl_fract():
     assert "frac(" not in generated_code
 
 
+def test_hlsl_namespace_builtin_calls_lower_to_crossgl_intrinsics():
+    code = """
+    float4 main(float4 color, float4x4 matrix, float4 vector, float value) {
+        float4 clamped = hlsl::saturate(color);
+        float4 transformed = hlsl::mul(matrix, vector);
+        float wrapped = hlsl::frac(value);
+        float wave = hlsl::sin(value);
+        return clamped + transformed + float4(wrapped + wave);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 clamped = clamp(color, 0.0, 1.0);" in generated_code
+    assert "vec4 transformed = (matrix * vector);" in generated_code
+    assert "float wrapped = fract(value);" in generated_code
+    assert "float wave = sin(value);" in generated_code
+    assert "hlsl::" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_slang_fmod_builtin_lowers_to_crossgl_mod():
     code = """
     void main() {

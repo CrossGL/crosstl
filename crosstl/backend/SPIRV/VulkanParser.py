@@ -902,6 +902,11 @@ class VulkanParser:
                 variables, names, decorations, types, constants
             )
         )
+        global_variables.extend(
+            self.spirv_assembly_workgroup_global_variables(
+                variables, names, decorations, types, constants
+            )
+        )
         global_variables = (
             self.spirv_assembly_specialization_constants(
                 spec_constant_ids, names, decorations, types, constants, constant_types
@@ -4200,6 +4205,37 @@ class VulkanParser:
                 )
             else:
                 declarations.append(declaration)
+
+        return declarations
+
+    def spirv_assembly_workgroup_global_variables(
+        self, variables, names, decorations, types, constants
+    ):
+        declarations = []
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            if storage_class != "Workgroup" or pointer_type.get("kind") != "pointer":
+                continue
+
+            data_type, array_suffix = self.spirv_type_name_and_suffix(
+                pointer_type.get("type_id"), types, constants, names=names
+            )
+            if data_type is None:
+                continue
+
+            declarations.append(
+                VariableNode(
+                    f"groupshared {data_type}",
+                    f"{self.spirv_assembly_value_name(variable['id'], names, decorations)}"
+                    f"{array_suffix}",
+                    spirv_id=variable["id"],
+                    spirv_type_id=pointer_type.get("type_id"),
+                    spirv_storage_class=storage_class,
+                )
+            )
 
         return declarations
 

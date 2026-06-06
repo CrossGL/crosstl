@@ -40,6 +40,56 @@ class SlangToCrossGLConverter:
     )
     HEX_NUMERIC_LITERAL = re.compile(r"^0[xX][0-9a-fA-F]+[uUlL]*$")
     RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
+    HLSL_NAMESPACE_PREFIX = "hlsl::"
+    HLSL_NAMESPACE_SPECIAL_BUILTINS = {"mad", "mul", "rcp", "saturate", "sincos"}
+    HLSL_NAMESPACE_PASSTHROUGH_BUILTINS = {
+        "abs",
+        "acos",
+        "acosh",
+        "all",
+        "any",
+        "asin",
+        "asinh",
+        "atan",
+        "atanh",
+        "ceil",
+        "clamp",
+        "cos",
+        "cosh",
+        "cross",
+        "degrees",
+        "determinant",
+        "distance",
+        "dot",
+        "exp",
+        "exp2",
+        "floor",
+        "fwidth",
+        "isfinite",
+        "isinf",
+        "isnan",
+        "length",
+        "log",
+        "log2",
+        "max",
+        "min",
+        "normalize",
+        "pow",
+        "radians",
+        "reflect",
+        "refract",
+        "round",
+        "sign",
+        "sin",
+        "sinh",
+        "smoothstep",
+        "sqrt",
+        "step",
+        "tan",
+        "tanh",
+        "transpose",
+        "trunc",
+    }
     SAMPLE_METHOD_MAP = {
         "Sample": "texture",
         "SampleBias": "texture",
@@ -931,7 +981,10 @@ class SlangToCrossGLConverter:
         return code
 
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
-        if not isinstance(stmt, FunctionCallNode) or stmt.name != "sincos":
+        if not isinstance(stmt, FunctionCallNode):
+            return None
+        function_name, _ = self.canonical_function_call_name(stmt.name)
+        if function_name != "sincos":
             return None
         if len(stmt.args) != 3:
             return None
@@ -1201,9 +1254,10 @@ class SlangToCrossGLConverter:
             return f"({rendered})"
         return rendered
 
-    def generate_hlsl_mul_call(self, expr, is_main):
+    def generate_hlsl_mul_call(self, expr, is_main, function_name=None):
+        function_name = function_name or expr.name
         if (
-            expr.name != "mul"
+            function_name != "mul"
             or len(expr.args) != 2
             or expr.name in self.user_function_names
         ):
@@ -1215,9 +1269,10 @@ class SlangToCrossGLConverter:
         right = self.maybe_parenthesize_expression(expr.args[1], right)
         return f"({left} * {right})"
 
-    def generate_mad_call(self, expr, is_main):
+    def generate_mad_call(self, expr, is_main, function_name=None):
+        function_name = function_name or expr.name
         if (
-            expr.name != "mad"
+            function_name != "mad"
             or len(expr.args) != 3
             or expr.name in self.user_function_names
         ):
@@ -1266,35 +1321,44 @@ class SlangToCrossGLConverter:
                 return f"--{operand}"
             return f"{expr.op}{operand}"
         elif isinstance(expr, FunctionCallNode):
-            mul_call = self.generate_hlsl_mul_call(expr, is_main)
+            function_name, is_hlsl_namespace_builtin = (
+                self.canonical_function_call_name(expr.name)
+            )
+            mul_call = self.generate_hlsl_mul_call(expr, is_main, function_name)
             if mul_call is not None:
                 return mul_call
-            mad_call = self.generate_mad_call(expr, is_main)
+            mad_call = self.generate_mad_call(expr, is_main, function_name)
             if mad_call is not None:
                 return mad_call
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
             if (
-                expr.name == "saturate"
+                function_name == "saturate"
                 and len(expr.args) == 1
-                and expr.name not in self.user_function_names
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
             ):
                 return f"clamp({args}, 0.0, 1.0)"
             if (
-                expr.name == "rcp"
+                function_name == "rcp"
                 and len(expr.args) == 1
-                and expr.name not in self.user_function_names
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
             ):
                 value = self.generate_expression(expr.args[0], is_main)
                 value = self.maybe_parenthesize_expression(expr.args[0], value)
                 return f"(1.0 / {value})"
-            if expr.name in self.user_function_names:
+            if not is_hlsl_namespace_builtin and expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
-            elif expr.name in self.type_map and expr.name[:1].islower():
-                name = self.map_type(expr.name)
+            elif function_name in self.type_map and function_name[:1].islower():
+                name = self.map_type(function_name)
             else:
-                name = self.function_map.get(expr.name, expr.name)
+                name = self.function_map.get(function_name, function_name)
             return f"{name}({args})"
         elif isinstance(expr, MethodCallNode):
             obj = self.generate_expression(expr.object, is_main)
@@ -1424,6 +1488,23 @@ class SlangToCrossGLConverter:
     def map_parameter_type(self, slang_type):
         """Map Slang parameter wrapper types to CrossGL value/resource types."""
         return self.map_type(self.unwrap_resource_container_type(slang_type))
+
+    def canonical_function_call_name(self, name):
+        """Return the CrossGL-facing name for known namespace-qualified builtins."""
+        raw_name = str(name)
+        base_name = self.method_base_name(raw_name)
+        if base_name.startswith(self.HLSL_NAMESPACE_PREFIX):
+            unqualified_name = base_name[len(self.HLSL_NAMESPACE_PREFIX) :]
+            if self.is_known_hlsl_namespace_builtin(unqualified_name):
+                return unqualified_name, True
+        return raw_name, False
+
+    def is_known_hlsl_namespace_builtin(self, name):
+        return (
+            name in self.HLSL_NAMESPACE_SPECIAL_BUILTINS
+            or name in self.HLSL_NAMESPACE_PASSTHROUGH_BUILTINS
+            or name in self.function_map
+        )
 
     def collect_sampleable_resource_types(self, ast):
         resources = {}

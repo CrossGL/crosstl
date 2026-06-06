@@ -847,6 +847,39 @@ def test_codegen_texture_sample_min_lod_clamp_option_roundtrip():
     assert "level(min_lod_clamp(" not in metal
 
 
+def test_codegen_texture_sample_namespace_qualified_options_roundtrip():
+    code = """
+    float4 sampleScopedOptions(texture2d<float> tex,
+                               sampler samp,
+                               float2 uv,
+                               float lod,
+                               float biasValue,
+                               float2 ddx,
+                               float2 ddy,
+                               float firstTailMip) {
+        float4 mip = tex.sample(samp, uv, metal::level(lod));
+        float4 biased = tex.sample(samp, uv, metal::bias(biasValue));
+        float4 gradient = tex.sample(samp, uv, metal::gradient2d(ddx, ddy));
+        float4 clamped = tex.sample(samp, uv, metal::min_lod_clamp(firstTailMip));
+        return mip + biased + gradient + clamped;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureLod(tex, samp, uv, lod)" in crossgl
+    assert "texture(tex, samp, uv, biasValue)" in crossgl
+    assert "textureGrad(tex, samp, uv, ddx, ddy)" in crossgl
+    assert "textureMinLodClamp(tex, samp, uv, firstTailMip)" in crossgl
+    assert "metal_u3a_u3a" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.sample(samp, uv, level(lod))" in metal
+    assert "tex.sample(samp, uv, bias(biasValue))" in metal
+    assert "tex.sample(samp, uv, gradient2d(ddx, ddy))" in metal
+    assert "tex.sample(samp, uv, min_lod_clamp(firstTailMip))" in metal
+
+
 def test_codegen_texture_sample_offset_options_roundtrip():
     code = """
     float4 sampleOffsetOptions(texture2d<float> tex,
