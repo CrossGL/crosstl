@@ -2084,6 +2084,73 @@ def test_mojo_from_import_alias_math_and_simd_builtins_lower_to_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_mojo_std_math_from_import_alias_builtins_lower_to_crossgl():
+    # Reduced from https://mojolang.org/docs/std/math/math/
+    # The current docs import math APIs with `from std.math import floor`.
+    code = """
+    from std.math import floor as lower_bound, sqrt as root
+
+    fn main(x: Float32):
+        let bucket = lower_bound(x)
+        let distance = root(x)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let bucket = floor(x);" in generated_code
+    assert "let distance = sqrt(x);" in generated_code
+    assert "lower_bound(" not in generated_code
+    assert "root(" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
+def test_mojo_std_math_module_alias_builtins_lower_to_crossgl():
+    # Reduced from https://mojolang.org/docs/std/math/math/
+    code = """
+    import std.math as m
+
+    fn main(x: Float32, low: Float32, high: Float32):
+        let bounded = m.clamp(m.sqrt(x), m.min(low, high), m.max(low, high))
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let bounded = clamp(sqrt(x), min(low, high), max(low, high));" in (
+        generated_code
+    )
+    assert "m.clamp(" not in generated_code
+    assert "m.sqrt(" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
+def test_user_defined_std_math_from_import_alias_call_does_not_lower_to_builtin():
+    code = """
+    from std.math import sqrt as root
+
+    fn root(x: Float32) -> Float32:
+        return x
+
+    fn main(x: Float32):
+        let result = root(x)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float root(float x)" in generated_code
+    assert "let result = root(x);" in generated_code
+    assert "let result = sqrt(x);" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
 def test_user_defined_from_import_alias_call_does_not_lower_to_builtin():
     code = """
     from simd import dot as project

@@ -1916,6 +1916,33 @@ def test_codegen_compute_atomics_and_barriers():
         assert expected in output
 
 
+def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
+    # Khronos GLSL 4.60 defines memoryBarrierAtomicCounter() as the atomic-counter
+    # specific member of the same memory-barrier family covered by memoryBarrier().
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(binding = 0, offset = 0) uniform atomic_uint counter;
+
+        void main() {
+            uint value = atomicCounterIncrement(counter);
+            memoryBarrierAtomicCounter();
+            barrier();
+            atomicCounterAdd(counter, value);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "memoryBarrier();" in crossgl
+    assert "memoryBarrierAtomicCounter(" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    assert "AllMemoryBarrier();" in hlsl
+    assert "memoryBarrierAtomicCounter(" not in hlsl
+
+
 def test_codegen_inserts_default_version_when_missing():
     code = textwrap.dedent("""
         layout(location = 0) in vec3 position;

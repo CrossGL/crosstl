@@ -2378,6 +2378,50 @@ def test_texture_compare_offset_method_call_codegen():
     assert "shadowMap.SampleCmp" not in generated_code
 
 
+def test_texture_gather_cmp_method_call_codegen_from_core_module_docs():
+    # Source: Slang stdlib reference for _Texture.GatherCmp documents explicit
+    # SamplerComparisonState and combined texture-sampler overloads with compare
+    # value and optional single offset.
+    code = """
+    Texture2D<float> shadowMap;
+    SamplerComparisonState cmpSampler;
+    Sampler2DShadow combinedShadow;
+
+    float4 main(float2 uv, float depth, int2 offset) {
+        float4 explicitGather = shadowMap.GatherCmp(cmpSampler, uv, depth);
+        float4 explicitOffsetGather = shadowMap.GatherCmp(cmpSampler, uv, depth, offset);
+        float4 combinedGather = combinedShadow.GatherCmp(uv, depth);
+        float4 combinedOffsetGather = combinedShadow.GatherCmp(uv, depth, offset);
+        return explicitGather + explicitOffsetGather + combinedGather + combinedOffsetGather;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D shadowMap;" in generated_code
+    assert "sampler cmpSampler;" in generated_code
+    assert "sampler2DShadow combinedShadow;" in generated_code
+    assert (
+        "vec4 explicitGather = textureGatherCompare("
+        "shadowMap, cmpSampler, uv, depth);" in generated_code
+    )
+    assert (
+        "vec4 explicitOffsetGather = textureGatherCompareOffset("
+        "shadowMap, cmpSampler, uv, depth, offset);" in generated_code
+    )
+    assert (
+        "vec4 combinedGather = textureGatherCompare("
+        "combinedShadow, uv, depth);" in generated_code
+    )
+    assert (
+        "vec4 combinedOffsetGather = textureGatherCompareOffset("
+        "combinedShadow, uv, depth, offset);" in generated_code
+    )
+    assert "GatherCmp" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_texture_lod_query_method_codegen_from_current_slang_intrinsic_test():
     # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
     # tests/hlsl-intrinsic/texture/texture-calculate-level-of-detail.slang

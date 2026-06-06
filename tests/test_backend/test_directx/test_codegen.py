@@ -966,12 +966,15 @@ def test_codegen_bit_scan_intrinsics_from_microsoft_docs_reparse():
     assert "uint low = findLSB(value);" in crossgl
     assert "uint high = findMSB(value);" in crossgl
     assert "uint count = bitCount(value);" in crossgl
-    assert "uint reversed = reverseBits(value);" in crossgl
+    assert "uint reversed = bitfieldReverse(value);" in crossgl
     assert "firstbitlow" not in crossgl
     assert "firstbithigh" not in crossgl
     assert "countbits" not in crossgl
     assert "reversebits" not in crossgl
-    parse_crossgl(crossgl)
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "uint reversed = reversebits(value);" in hlsl
+    assert "reverseBits(" not in hlsl
 
 
 def test_codegen_derivative_intrinsics_from_microsoft_docs_reparse():

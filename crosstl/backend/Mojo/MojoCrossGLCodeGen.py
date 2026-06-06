@@ -16,6 +16,12 @@ class MojoToCrossGLConverter:
     SHADER_STAGE_ATTRIBUTES = (
         VERTEX_ATTRIBUTES | FRAGMENT_ATTRIBUTES | COMPUTE_ATTRIBUTES
     )
+    IMPORT_MODULE_MAP = {
+        "math": "math",
+        "std.math": "math",
+        "std.math.math": "math",
+        "simd": "simd",
+    }
     MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
     REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
     MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`([^`]+)`$")
@@ -377,12 +383,15 @@ class MojoToCrossGLConverter:
             module_name = getattr(
                 import_node, "module_name", getattr(import_node, "module", None)
             )
-            if module_name not in {"math", "simd"}:
+            canonical_module = self.normalize_import_module_name(module_name)
+            if canonical_module is None:
                 continue
 
             alias = getattr(import_node, "alias", None)
             if alias:
-                aliases[self.map_identifier_name(alias)] = module_name
+                aliases[self.map_identifier_name(alias)] = canonical_module
+            else:
+                aliases[self.map_identifier_name(module_name)] = canonical_module
         return aliases
 
     def collect_imported_function_aliases(self, imports):
@@ -399,7 +408,8 @@ class MojoToCrossGLConverter:
         module_name = getattr(
             import_node, "module_name", getattr(import_node, "module", None)
         )
-        if module_name not in {"math", "simd"}:
+        canonical_module = self.normalize_import_module_name(module_name)
+        if canonical_module is None:
             return aliases
 
         for item in import_node.items:
@@ -408,10 +418,15 @@ class MojoToCrossGLConverter:
                 continue
 
             local_name = alias or import_name
-            resolved_name = f"{module_name}.{import_name}"
+            resolved_name = f"{canonical_module}.{import_name}"
             if resolved_name in self.function_map:
                 aliases[self.map_identifier_name(local_name)] = resolved_name
         return aliases
+
+    def normalize_import_module_name(self, module_name):
+        if not isinstance(module_name, str):
+            return None
+        return self.IMPORT_MODULE_MAP.get(module_name)
 
     def split_import_item_alias(self, item):
         if not isinstance(item, str):
@@ -432,6 +447,15 @@ class MojoToCrossGLConverter:
 
         if not isinstance(func_name, str) or "." not in func_name:
             return func_name
+
+        for qualifier, module_name in sorted(
+            self.imported_module_aliases.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            prefix = f"{qualifier}."
+            if func_name.startswith(prefix):
+                return f"{module_name}.{func_name[len(prefix):]}"
 
         qualifier, member = func_name.split(".", 1)
         module_name = self.imported_module_aliases.get(qualifier)

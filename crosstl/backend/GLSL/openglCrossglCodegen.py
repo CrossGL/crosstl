@@ -312,6 +312,7 @@ class GLSLToCrossGLConverter:
             "dFdyCoarse": "ddy_coarse",
             "fwidthFine": "fwidth_fine",
             "fwidthCoarse": "fwidth_coarse",
+            "memoryBarrierAtomicCounter": "memoryBarrier",
         }
         legacy_texture_aliases = {
             "texture1D": ("texture", "sample"),
