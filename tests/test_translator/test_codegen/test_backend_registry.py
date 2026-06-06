@@ -1,5 +1,6 @@
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -243,6 +244,17 @@ def test_source_registry_compound_artifact_extensions_raise_clear_diagnostic(
 
     with pytest.raises(ValueError, match=re.escape(message)):
         SOURCE_REGISTRY.get_by_extension(filename)
+
+
+def test_source_registry_accepts_pathlike_inputs_for_source_and_artifact_inference():
+    register_default_sources()
+
+    assert (
+        SOURCE_REGISTRY.get_by_extension(Path("shaders") / "deferred.FRAG.GLSL").name
+        == "opengl"
+    )
+    with pytest.raises(ValueError, match=re.escape(BINARY_SPIRV_UNSUPPORTED_MESSAGE)):
+        SOURCE_REGISTRY.get_by_extension(Path("build") / "deferred.FRAG.SPV")
 
 
 @pytest.mark.parametrize("extension", (".metal", ".msl"))

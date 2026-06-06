@@ -6,7 +6,9 @@ from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -595,6 +597,58 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureLod(tex, uv, 1.0)" in glsl
     assert "textureGrad(tex, uv, vec2(1.0), vec2(1.0))" in glsl
     assert "textureGather(tex, uv)" in glsl
+
+
+def test_codegen_native_shadow_texture_imports_compare_helpers():
+    code = textwrap.dedent("""
+        #version 460 core
+        layout(location = 0) in vec2 uv;
+        layout(location = 0) out vec4 fragColor;
+        uniform sampler2DShadow shadowMap;
+
+        void main() {
+            float cmp = texture(shadowMap, vec3(uv, 0.5));
+            vec3 uvz = vec3(uv, 0.75);
+            float lodOffset = textureLodOffset(
+                shadowMap,
+                uvz,
+                0.0,
+                ivec2(1, -1)
+            );
+            fragColor = vec4(cmp + lodOffset);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float cmp = textureCompare(shadowMap, input.uv, 0.5);" in crossgl
+    assert (
+        "float lodOffset = textureCompareLodOffset("
+        "shadowMap, uvz.xy, uvz.z, 0.0, ivec2(1, (-1)));"
+    ) in crossgl
+    assert "texture(shadowMap" not in crossgl
+    assert "textureLodOffset(shadowMap" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    assert "shadowMap.SampleCmp(shadowMapSampler, input.uv, 0.5)" in hlsl
+    assert (
+        "shadowMap.SampleCmpLevel(" "shadowMapSampler, uvz.xy, uvz.z, 0.0, int2(1, -1))"
+    ) in hlsl
+    assert "shadowMap.Sample(" not in hlsl
+
+    metal = MetalCodeGen().generate(shader_ast)
+    assert "shadowMap.sample_compare" in metal
+    assert "shadowMap.sample(" not in metal
+
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "texture(shadowMap, vec3(uv, 0.5))" in glsl
+    assert (
+        "textureLodOffset(shadowMap, vec3(uvz.xy, uvz.z), 0.0, ivec2(1, (-1)))" in glsl
+    )
+    assert "textureCompare(" not in glsl
+    assert "textureCompareLodOffset(" not in glsl
 
 
 def test_codegen_legacy_lod_grad_texture_intrinsics_from_bgfx_examples():

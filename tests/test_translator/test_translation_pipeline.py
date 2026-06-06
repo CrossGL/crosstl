@@ -210,6 +210,25 @@ def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     assert "gl_Position" not in generated
 
 
+def test_translate_accepts_pathlike_source_paths(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "pathlike.FRAG.GLSL",
+        """
+        #version 450 core
+        layout(location = 0) out vec4 fragColor;
+        void main() { fragColor = vec4(1.0); }
+        """,
+    )
+
+    generated = crosstl.translate(source_path, backend="cgl", format_output=False)
+
+    _assert_generated_output_is_usable(generated)
+    shader_ast = crosstl.translator.parse(generated)
+    assert ShaderStage.FRAGMENT in shader_ast.stages
+    assert "fragment {" in generated
+
+
 @pytest.mark.parametrize(
     ("filename", "source", "stage", "expected_crossgl"),
     (

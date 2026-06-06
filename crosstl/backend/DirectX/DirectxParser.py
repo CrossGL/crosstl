@@ -2743,6 +2743,16 @@ class HLSLParser:
 
     def parse_primary_expression(self):
         token_type, value = self.current_token
+        if self.current_token_is_double_colon():
+            self.eat_double_colon()
+            if not self.is_identifier_token(self.current_token[0]):
+                raise SyntaxError(
+                    f"Expected identifier after global scope qualifier, got {self.current_token[0]}"
+                )
+            scoped_name = self.parse_identifier()
+            if self.current_token_is_double_colon():
+                scoped_name = self.parse_scoped_name(scoped_name)
+            return scoped_name
         if self.is_template_type_constructor_start():
             type_name = self.parse_type()
             args = self.parse_call_arguments()

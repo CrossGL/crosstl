@@ -749,6 +749,26 @@ def test_parse_namespace_block_flattens_and_preserves_scoped_call_name():
     assert "CrossBilateral::Weight" in calls
 
 
+def test_parse_global_scope_hlsl_namespace_intrinsic_calls():
+    code = """
+    float4 main(float4 color : COLOR0) : SV_Target0 {
+        float a = hlsl::saturate(color.x);
+        float b = ::hlsl::lerp(a, color.y, 0.5);
+        return float4(b, a, 0.0, 1.0);
+    }
+    """
+
+    ast = parse_code(code)
+    calls = [
+        node.name
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and isinstance(node.name, str)
+    ]
+
+    assert "hlsl::saturate" in calls
+    assert "hlsl::lerp" in calls
+
+
 def test_parse_clip_intrinsic_expression_statement():
     code = """
     float4 PSMain(float4 color : COLOR0) : SV_Target {

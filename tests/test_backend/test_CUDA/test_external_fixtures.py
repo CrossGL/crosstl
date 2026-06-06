@@ -1307,6 +1307,34 @@ def test_cuda_math_api_qualified_scalar_math_aliases_codegen_reparse():
         assert raw_name not in crossgl
 
 
+def test_cuda_math_api_namespace_alias_scalar_math_codegen_reparse():
+    source = """
+    namespace cstd = cuda::std;
+
+    __device__ float namespace_alias_math(float x, float y, float z) {
+        float extrema = cstd::fminf(x, y) + cstd::fmaxf(x, y);
+        float fused = cstd::fmaf(x, y, z);
+        return extrema + fused;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var extrema: f32 = (min(x, y) + max(x, y));" in crossgl
+    assert "var fused: f32 = fma(x, y, z);" in crossgl
+    for raw_name in {
+        "cstd::",
+        "cuda::std::fminf",
+        "cuda::std::fmaxf",
+        "cuda::std::fmaf",
+        "fminf",
+        "fmaxf",
+        "fmaf",
+    }:
+        assert raw_name not in crossgl
+
+
 def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
     source = """
     __device__ int shfl_sync(int var, int srcLane) {
