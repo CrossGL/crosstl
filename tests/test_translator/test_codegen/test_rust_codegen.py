@@ -4178,16 +4178,20 @@ def rust_smoke_source(generated_code: str) -> str:
     return textwrap.dedent(RUST_SMOKE_STUBS) + "\n" + generated_code
 
 
-def assert_generated_rust_smoke_compiles(generated_code: str, tmp_path):
+def assert_generated_rust_smoke_compiles(
+    generated_code: str,
+    tmp_path,
+    edition: str = "2021",
+):
     source = rust_smoke_source(generated_code)
-    source_path = tmp_path / "generated.rs"
-    output_path = tmp_path / "libgenerated.rlib"
+    source_path = tmp_path / f"generated_{edition}.rs"
+    output_path = tmp_path / f"libgenerated_{edition}.rlib"
     source_path.write_text(source, encoding="utf-8")
 
     result = subprocess.run(
         [
             rustc_or_skip(),
-            "--edition=2021",
+            f"--edition={edition}",
             "--crate-type=lib",
             str(source_path),
             "-o",
@@ -4196,6 +4200,13 @@ def assert_generated_rust_smoke_compiles(generated_code: str, tmp_path):
         capture_output=True,
         text=True,
     )
+
+    if (
+        edition == "2024"
+        and result.returncode != 0
+        and "edition 2024" in (result.stderr.lower())
+    ):
+        pytest.skip("rustc does not support edition 2024")
 
     assert result.returncode == 0, result.stderr + "\n\n" + source
 
@@ -25736,6 +25747,33 @@ def test_rust_keyword_like_bindings_escape_in_functions_and_members(tmp_path):
     assert "let while:" not in generated_code
     assert "input.match.x" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_escapes_abstract_and_gen_reserved_identifiers(tmp_path):
+    # Rust identifiers may not be strict or reserved keywords, and `gen` is
+    # reserved in Rust 2024.
+    # Sources:
+    # https://doc.rust-lang.org/stable/reference/identifiers.html
+    # https://doc.rust-lang.org/edition-guide/rust-2024/gen-keyword.html
+    code = """
+    shader RustReservedKeywordIdentifiers {
+        float gen(float abstract) {
+            float gen = abstract + 1.0;
+            return gen;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub fn gen_(abstract_: f32) -> f32" in generated_code
+    assert "let gen_: f32 = (abstract_ + 1.0);" in generated_code
+    assert "return gen_;" in generated_code
+    assert "pub fn gen(" not in generated_code
+    assert "abstract: f32" not in generated_code
+    assert "let gen: f32" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path, edition="2024")
 
 
 def test_rust_keyword_struct_fields_survive_default_formatting(tmp_path):

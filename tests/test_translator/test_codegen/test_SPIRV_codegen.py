@@ -5023,6 +5023,62 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("SPIR-V LocalSize") == 3
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_fragment_discard_and_clip_lower_to_opkill(self, tmp_path):
+        source_code = """
+        shader FragmentDiscard {
+            fragment {
+                void main() {
+                    float alpha = -0.5;
+                    if (alpha < 0.0) {
+                        discard;
+                        float skipped = 1.0;
+                    }
+                    clip(alpha);
+                    clip(vec3(1.0, -1.0, 2.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpKill") == 3
+        assert "OpAny" in spv_code
+        assert re.search(r"%\d+ = OpFOrdLessThan %\d+ %\d+ %\d+", spv_code)
+        assert '"skipped"' not in spv_code
+        assert "Unknown variable discard" not in spv_code
+        assert "cannot lower unknown function 'clip'" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_discard_and_clip_warn_outside_fragment_stage(self, tmp_path):
+        source_code = """
+        shader ComputeDiscard {
+            compute {
+                void main() {
+                    discard();
+                    clip(-1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert not re.search(r"^OpKill$", spv_code, re.MULTILINE)
+        assert (
+            "; WARNING: SPIR-V discard lowers to OpKill, which is only valid "
+            "in the Fragment execution model"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V clip lowers to OpKill, which is only valid "
+            "in the Fragment execution model"
+        ) in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_compute_synchronization_builtins_emit_spirv_barriers(self, tmp_path):
         source_code = """
         shader ComputeSynchronization {

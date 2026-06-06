@@ -517,6 +517,34 @@ def test_codegen_user_defined_one_argument_atan_does_not_shadow_builtin_two_argu
     assert "float angle = atan2(input.direction.y, input.direction.x);" in crossgl
 
 
+def test_codegen_inversesqrt_from_khronos_spec_preserves_glsl_spelling():
+    # Khronos GLSL 4.60 specifies the builtin as inversesqrt(x). Keeping that
+    # spelling lets CrossGL reparse and regenerate valid native GLSL.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(location = 0) out vec4 fragColor;
+
+        void main()
+        {
+            float scalarInv = inversesqrt(4.0);
+            vec3 vectorInv = inversesqrt(vec3(4.0, 9.0, 16.0));
+            fragColor = vec4(vectorInv * scalarInv, 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float scalarInv = inversesqrt(4.0);" in crossgl
+    assert "vec3 vectorInv = inversesqrt(vec3(4.0, 9.0, 16.0));" in crossgl
+    assert "inverseSqrt(" not in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "float scalarInv = inversesqrt(4.0);" in glsl
+    assert "vec3 vectorInv = inversesqrt(vec3(4.0, 9.0, 16.0));" in glsl
+    assert "inverseSqrt(" not in glsl
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 

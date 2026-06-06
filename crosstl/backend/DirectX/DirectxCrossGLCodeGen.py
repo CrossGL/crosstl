@@ -3407,6 +3407,8 @@ class HLSLToCrossGLConverter:
                 else self.generate_expression(expr.name, is_main)
             )
             func_name = self.normalize_hlsl_intrinsic_name(func_name)
+            if func_name == "IsHelperLane" and not expr.args:
+                return "gl_HelperInvocation"
             if func_name == "sizeof":
                 sizeof_value = self.generate_sizeof_expression(expr.args)
                 if sizeof_value is not None:

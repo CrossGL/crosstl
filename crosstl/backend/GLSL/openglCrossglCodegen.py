@@ -276,7 +276,7 @@ class GLSLToCrossGLConverter:
             "exp": "exp",
             "log": "log",
             "sqrt": "sqrt",
-            "inversesqrt": "inverseSqrt",
+            "inversesqrt": "inversesqrt",
             "abs": "abs",
             "sign": "sign",
             "floor": "floor",
