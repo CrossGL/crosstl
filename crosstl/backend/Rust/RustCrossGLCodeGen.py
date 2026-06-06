@@ -3962,6 +3962,13 @@ class RustToCrossGLConverter:
             return f"length({obj})"
 
         if (
+            method_name == "length_recip"
+            and not args
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"(1.0 / length({obj}))"
+
+        if (
             method_name == "length_squared"
             and not args
             and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS

@@ -70,7 +70,7 @@ class CodeFormatter:
             ".tesc",
         ]:
             return ShaderLanguage.GLSL
-        elif ext in [".metal"]:
+        elif ext in [".metal", ".msl"]:
             return ShaderLanguage.METAL
         elif ext in [".spvasm", ".vulkan"]:
             return ShaderLanguage.SPIRV

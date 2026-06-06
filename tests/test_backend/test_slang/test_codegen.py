@@ -476,6 +476,44 @@ def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names
     cgl_translator.parse(generated_code)
 
 
+def test_target_and_depth_system_semantics_codegen_canonicalizes_dynamic_variants():
+    code = """
+    [shader("fragment")]
+    float4 colorMain(float2 uv : TEXCOORD0) : SV_TARGET8
+    {
+        return float4(uv, 0.0, 0.0, 1.0);
+    }
+
+    [shader("fragment")]
+    float depthMain() : SV_DEPTHGREATEREQUAL
+    {
+        return 1.0;
+    }
+
+    [shader("fragment")]
+    void depthAndColor(out float depth : SV_DEPTHLESSEQUAL,
+                       out float4 color : SV_TARGET9)
+    {
+        depth = 1.0;
+        color = float4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 colorMain(vec2 uv @ TexCoord0) @ Out_Color8" in generated_code
+    assert "float depthMain() @ Out_Depth" in generated_code
+    assert "out float depth @ Out_Depth" in generated_code
+    assert "out vec4 color @ Out_Color9" in generated_code
+    assert "@ SV_TARGET8" not in generated_code
+    assert "@ SV_TARGET9" not in generated_code
+    assert "@ SV_DEPTHGREATEREQUAL" not in generated_code
+    assert "@ SV_DEPTHLESSEQUAL" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_interpolation_qualifiers_codegen_remains_parseable_crossgl():
     code = """
     struct VSOutput

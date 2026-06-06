@@ -2152,6 +2152,17 @@ class SlangToCrossGLConverter:
             if color_match:
                 mapped_semantic = f"Color{color_match.group(1)}"
         if mapped_semantic is None:
+            target_match = re.fullmatch(r"SV_TARGET(\d*)", str(semantic).upper())
+            if target_match:
+                target_index = target_match.group(1)
+                mapped_semantic = f"Out_Color{target_index}"
+        if mapped_semantic is None:
+            depth_match = re.fullmatch(
+                r"SV_DEPTH(?:GREATEREQUAL|LESSEQUAL)?", str(semantic).upper()
+            )
+            if depth_match:
+                mapped_semantic = "Out_Depth"
+        if mapped_semantic is None:
             for hlsl_prefix, crossgl_prefix in (
                 ("NORMAL", "in_Normal"),
                 ("TANGENT", "in_Tangent"),

@@ -781,6 +781,59 @@ def test_external_rocm_hip_tests_brev_intrinsics_codegen_reparse():
     assert "__brevll" not in crossgl
 
 
+def test_rocm_hip_math_api_bit_reinterpret_intrinsics_codegen_reparse():
+    # ROCm HIP math API lists the CUDA-compatible type-cast intrinsics.
+    source = """
+    __device__ float neg_inf() {
+        return __int_as_float(0xff800000);
+    }
+
+    __global__ void reinterpret_bits(float value,
+                                     double wide,
+                                     int signedBits,
+                                     unsigned int unsignedBits,
+                                     long long int signedWide,
+                                     int* outSigned,
+                                     unsigned int* outUnsigned,
+                                     float* outFloat,
+                                     long long int* outLong,
+                                     double* outDouble) {
+        outSigned[0] = __float_as_int(value);
+        outUnsigned[0] = __float_as_uint(value);
+        outFloat[0] = __int_as_float(signedBits);
+        outFloat[1] = ::__uint_as_float(unsignedBits);
+        outLong[0] = __double_as_longlong(wide);
+        outDouble[0] = __longlong_as_double(signedWide);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    kernel_body = ast.statements[1].body
+
+    assert kernel_body[0].right.name == "__float_as_int"
+    assert kernel_body[1].right.name == "__float_as_uint"
+    assert kernel_body[2].right.name == "__int_as_float"
+    assert kernel_body[3].right.name == "::__uint_as_float"
+    assert kernel_body[4].right.name == "__double_as_longlong"
+    assert kernel_body[5].right.name == "__longlong_as_double"
+    assert "return intBitsToFloat(0xff800000);" in crossgl
+    assert "outSigned[0] = floatBitsToInt(value);" in crossgl
+    assert "outUnsigned[0] = floatBitsToUint(value);" in crossgl
+    assert "outFloat[0] = intBitsToFloat(signedBits);" in crossgl
+    assert "outFloat[1] = uintBitsToFloat(unsignedBits);" in crossgl
+    assert "outLong[0] = doubleBitsToLong(wide);" in crossgl
+    assert "outDouble[0] = longBitsToDouble(signedWide);" in crossgl
+    for raw_name in {
+        "__double_as_longlong",
+        "__float_as_int",
+        "__float_as_uint",
+        "__int_as_float",
+        "__longlong_as_double",
+        "__uint_as_float",
+    }:
+        assert raw_name not in crossgl
+
+
 def test_rocm_hip_math_api_sad_intrinsics_codegen_reparse():
     # Upstream source:
     # ROCm HIP math API 6.2.41133, Integer intrinsics.

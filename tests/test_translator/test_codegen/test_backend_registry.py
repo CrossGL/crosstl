@@ -14,6 +14,7 @@ from crosstl.translator.source_registry import (
     HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
     METAL_BINARY_UNSUPPORTED_MESSAGE,
     SOURCE_REGISTRY,
+    WGSL_SOURCE_UNSUPPORTED_MESSAGE,
     register_default_sources,
 )
 
@@ -204,6 +205,8 @@ def test_source_registry_recognizes_slang_real_world_extensions(extension):
         (".spirv", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
         (".air", METAL_BINARY_UNSUPPORTED_MESSAGE),
         (".metallib", METAL_BINARY_UNSUPPORTED_MESSAGE),
+        (".wgsl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
+        (".wesl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
         (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxbc", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxil", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
@@ -213,13 +216,23 @@ def test_source_registry_recognizes_slang_real_world_extensions(extension):
         (".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE),
     ),
 )
-def test_source_registry_known_binary_artifacts_raise_clear_diagnostic(
+def test_source_registry_known_unsupported_extensions_raise_clear_diagnostic(
     extension, message
 ):
     register_default_sources()
 
     with pytest.raises(ValueError, match=re.escape(message)):
         SOURCE_REGISTRY.get_by_extension(f"shader{extension}")
+
+
+@pytest.mark.parametrize("extension", (".metal", ".msl"))
+def test_source_registry_recognizes_metal_real_world_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "metal"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "metal"
+    )
 
 
 @pytest.mark.parametrize(

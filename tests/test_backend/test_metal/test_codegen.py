@@ -1306,6 +1306,27 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid] = value * 2.0;" in metal
 
 
+def test_codegen_buffer_pointer_typedef_resource_resolves_element_contract():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef texture2d<float> ColorTexture;
+
+    fragment float4 sample_alias(
+        constant ColorTexture* textures [[buffer(0)]],
+        sampler linearSampler [[sampler(0)]]) {
+        return textures[0].sample(linearSampler, float2(0.5));
+    }
+    """
+    crossgl = convert(code)
+
+    assert "StructuredBuffer<sampler2D> textures @buffer(0)" in crossgl
+    assert "StructuredBuffer<ColorTexture>" not in crossgl
+    assert "texture(buffer_load(textures, 0), linearSampler, vec2(0.5))" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_roundtrip_scalar_thread_position_in_grid_from_apple_compute_sample():
     code = """
     #include <metal_stdlib>

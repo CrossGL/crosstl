@@ -2392,6 +2392,7 @@ class MetalToCrossGLConverter:
         element_type = self.pointer_element_type(getattr(var, "vtype", None))
         if not element_type:
             return None
+        element_type = self.resolve_type_alias(element_type)
 
         buffer_type = (
             "StructuredBuffer"
