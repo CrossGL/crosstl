@@ -194,6 +194,16 @@ OPERATOR_OVERLOAD_TOKENS = {
     "GREATER_THAN",
 }
 
+EFFECT_BLOCK_KEYWORDS = {
+    "fxgroup",
+    "pass",
+    "program",
+    "state",
+    "technique",
+    "technique10",
+    "technique11",
+}
+
 SCALAR_CONSTRUCTOR_TOKENS = {
     "FLOAT",
     "HALF",
@@ -288,8 +298,8 @@ class HLSLParser:
                 self.parse_template_declaration_prefix()
                 continue
 
-            if self.is_effect_technique_block():
-                self.parse_effect_technique_block()
+            if self.is_effect_metadata_block():
+                self.parse_effect_metadata_block()
                 continue
 
             attributes = self.parse_attribute_list()
@@ -346,12 +356,29 @@ class HLSLParser:
             typedefs=typedefs,
         )
 
-    def is_effect_technique_block(self):
-        return self.current_token[0] == "IDENTIFIER" and str(
-            self.current_token[1]
-        ).lower() in {"technique", "technique10", "technique11"}
+    def is_effect_metadata_block(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        if str(self.current_token[1]).lower() not in EFFECT_BLOCK_KEYWORDS:
+            return False
 
-    def parse_effect_technique_block(self):
+        idx = self.current_index + 1
+        while idx < len(self.tokens) and self.tokens[idx][0] not in {
+            "LBRACE",
+            "LESS_THAN",
+            "SEMICOLON",
+            "EOF",
+        }:
+            idx += 1
+
+        while idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
+                return False
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+
+    def parse_effect_metadata_block(self):
         self.eat("IDENTIFIER")
         while self.current_token[0] not in {
             "LBRACE",

@@ -1017,6 +1017,44 @@ class TestHipCodeGen:
         assert "double invD = (1.0 / sqrt(d));" in hip_code
         assert "inverseSqrt(" not in hip_code
 
+    def test_inverse_sqrt_aliases_feed_hip_bitcasts(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 4.0;
+                    vec3 v = vec3(4.0, 9.0, 16.0);
+
+                    uint scalarR = asuint(rsqrt(x));
+                    uint scalarI = floatBitsToUint(inverseSqrt(x));
+                    uvec3 vectorR = asuint(rsqrt(v));
+                    uvec3 vectorI = floatBitsToUint(inverseSqrt(v));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int scalarR = __float_as_uint(rsqrtf(x));" in hip_code
+        assert "unsigned int scalarI = __float_as_uint(rsqrtf(x));" in hip_code
+        assert (
+            "uint3 vectorR = cgl_float3_to_uint3_bitcast("
+            "cgl_float3_inversesqrt(v));" in hip_code
+        )
+        assert (
+            "uint3 vectorI = cgl_float3_to_uint3_bitcast("
+            "cgl_float3_inversesqrt(v));" in hip_code
+        )
+        assert "asuint(" not in hip_code
+        assert "floatBitsToUint(" not in hip_code
+        assert "inverseSqrt(" not in hip_code
+        assert " rsqrt(" not in hip_code
+
     def test_glsl_bitcast_builtins_lower_to_hip_intrinsics(self):
         source_code = """
         shader TestShader {

@@ -1156,6 +1156,38 @@ def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter()
     ]
 
 
+def test_skip_top_level_pmfx_style_effect_metadata_blocks():
+    ast = parse_code("""
+    state default {
+        DepthEnable = true;
+    }
+
+    program p0 {
+        vs = vs_main;
+        ps = ps_main;
+    }
+
+    fxgroup PostProcess {
+        technique10 Render {
+            pass P0 {
+                PixelShader = compile ps_5_0 ps_main();
+            }
+        }
+    }
+
+    pass ExtractedPass {
+        PixelShader = compile ps_5_0 ps_main();
+    }
+
+    float4 ps_main() : SV_Target {
+        return 1;
+    }
+    """)
+
+    assert [function.name for function in ast.functions] == ["ps_main"]
+    assert ast.global_variables == []
+
+
 def test_parse_rasterizer_ordered_resources_and_register_space():
     code = """
     RasterizerOrderedTexture2D<uint> counters : register(u0, space1);

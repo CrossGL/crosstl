@@ -350,6 +350,9 @@ class MetalCodeGen:
         "step",
     }
     METAL_BITCAST_FUNCTION_TARGETS = {
+        "asfloat": "float",
+        "asint": "int",
+        "asuint": "uint",
         "floatBitsToInt": "int",
         "floatBitsToUint": "uint",
         "intBitsToFloat": "float",
@@ -930,12 +933,24 @@ class MetalCodeGen:
             # Vertex inputs
             "gl_VertexID": "vertex_id",
             "SV_VertexID": "vertex_id",
+            "SV_VertexId": "vertex_id",
+            "sv_vertex_id": "vertex_id",
+            "sv_vertexid": "vertex_id",
             "gl_InstanceID": "instance_id",
             "SV_InstanceID": "instance_id",
+            "SV_InstanceId": "instance_id",
+            "sv_instance_id": "instance_id",
+            "sv_instanceid": "instance_id",
             "gl_IsFrontFace": "is_front_facing",
             "SV_IsFrontFace": "is_front_facing",
+            "SV_IsFrontFacing": "is_front_facing",
+            "sv_is_front_face": "is_front_facing",
+            "sv_isfrontface": "is_front_facing",
             "gl_PrimitiveID": "primitive_id",
             "SV_PrimitiveID": "primitive_id",
+            "SV_PrimitiveId": "primitive_id",
+            "sv_primitive_id": "primitive_id",
+            "sv_primitiveid": "primitive_id",
             "POSITION": "attribute(0)",
             "NORMAL": "attribute(1)",
             "TANGENT": "attribute(2)",
@@ -998,12 +1013,23 @@ class MetalCodeGen:
             # Compute shader specific
             "gl_GlobalInvocationID": "thread_position_in_grid",
             "SV_DispatchThreadID": "thread_position_in_grid",
+            "SV_DispatchThreadId": "thread_position_in_grid",
+            "sv_dispatch_thread_id": "thread_position_in_grid",
+            "sv_dispatchthreadid": "thread_position_in_grid",
             "gl_LocalInvocationID": "thread_position_in_threadgroup",
             "SV_GroupThreadID": "thread_position_in_threadgroup",
+            "SV_GroupThreadId": "thread_position_in_threadgroup",
+            "sv_group_thread_id": "thread_position_in_threadgroup",
+            "sv_groupthreadid": "thread_position_in_threadgroup",
             "gl_WorkGroupID": "threadgroup_position_in_grid",
             "SV_GroupID": "threadgroup_position_in_grid",
+            "SV_GroupId": "threadgroup_position_in_grid",
+            "sv_group_id": "threadgroup_position_in_grid",
+            "sv_groupid": "threadgroup_position_in_grid",
             "gl_LocalInvocationIndex": "thread_index_in_threadgroup",
             "SV_GroupIndex": "thread_index_in_threadgroup",
+            "sv_group_index": "thread_index_in_threadgroup",
+            "sv_groupindex": "thread_index_in_threadgroup",
             "gl_WorkGroupSize": "threads_per_threadgroup",
             "gl_NumWorkGroups": "threadgroups_per_grid",
             # Ray tracing / payload semantics
@@ -20110,9 +20136,12 @@ class MetalCodeGen:
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to Metal attribute syntax."""
         if semantic is not None:
-            if self.is_metal_tessellation_helper_semantic(semantic):
+            mapped_semantic = self.semantic_map.get(str(semantic), str(semantic))
+            if (
+                self.is_metal_tessellation_helper_semantic(semantic)
+                and mapped_semantic != "primitive_id"
+            ):
                 return ""
-            mapped_semantic = self.semantic_map.get(semantic, semantic)
             if mapped_semantic.startswith("[[") and mapped_semantic.endswith("]]"):
                 return f" {mapped_semantic}"
             else:

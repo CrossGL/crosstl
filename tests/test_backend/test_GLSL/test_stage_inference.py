@@ -149,6 +149,28 @@ def reverse_plain_glsl(source: str):
             ],
             id="shadertoy-main-image-fragment-entrypoint",
         ),
+        pytest.param(
+            """
+            #version 450
+            #extension GL_ARB_separate_shader_objects : enable
+            #pragma shader_stage(fragment)
+
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = vec4(1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "#pragma shader_stage ( fragment )",
+                "vec4 main() @location(0) @ outColor",
+                "outColor = vec4(1.0);",
+            ],
+            id="glslc-pragma-shader-stage-fragment",
+        ),
     ],
 )
 def test_plain_glsl_registry_infers_stage_from_real_world_snippets(

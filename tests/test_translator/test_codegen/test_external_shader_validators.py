@@ -1609,6 +1609,33 @@ vs_output vs_main_permutations(vs_input input) {
 }
 """
 
+PMFX_EFFECT_METADATA_HLSL = """
+state default {
+    DepthEnable = true;
+}
+
+program p0 {
+    vs = vs_main;
+    ps = ps_main;
+}
+
+fxgroup PostProcess {
+    technique10 Render {
+        pass P0 {
+            PixelShader = compile ps_5_0 ps_main();
+        }
+    }
+}
+
+pass ExtractedPass {
+    PixelShader = compile ps_5_0 ps_main();
+}
+
+float4 ps_main() : SV_Target {
+    return float4(1, 1, 1, 1);
+}
+"""
+
 
 def _fragment_ast():
     return crosstl.translator.parse(FRAGMENT_SMOKE_SHADER)
@@ -1799,6 +1826,13 @@ def test_real_world_pmfx_permutation_conditionals_import_to_parseable_crossgl():
     assert "if (SKINNED)" in crossgl
     assert "else if (INSTANCED)" in crossgl
     assert "return vs_output_default();" in crossgl
+
+
+def test_pmfx_style_effect_metadata_blocks_import_to_parseable_crossgl():
+    crossgl = _hlsl_to_crossgl(PMFX_EFFECT_METADATA_HLSL)
+
+    assert "vec4 ps_main() @ gl_FragColor" in crossgl
+    assert "return vec4(1, 1, 1, 1);" in crossgl
 
 
 def test_generated_hlsl_fragment_compiles_with_dxc(tmp_path):

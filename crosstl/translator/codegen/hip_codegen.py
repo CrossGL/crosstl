@@ -8877,6 +8877,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if func_name == "ReportHit":
                 return "bool"
             raw_args = getattr(node, "arguments", getattr(node, "args", [])) or []
+            if (
+                func_name in {"inverseSqrt", "rsqrt"}
+                and raw_args
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.expression_result_type(raw_args[0])
             bitcast_result_type = self.hip_bitcast_result_type(func_name, raw_args)
             if bitcast_result_type is not None:
                 return bitcast_result_type

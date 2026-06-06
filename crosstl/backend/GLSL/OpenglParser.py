@@ -240,6 +240,22 @@ ASSIGNMENT_TOKENS = {
 }
 
 AUTO_SHADER_TYPES = {None, "", "auto", "infer", "inferred"}
+PRAGMA_SHADER_STAGE_TYPES = {
+    "vertex": "vertex",
+    "vert": "vertex",
+    "fragment": "fragment",
+    "frag": "fragment",
+    "compute": "compute",
+    "comp": "compute",
+    "geometry": "geometry",
+    "geom": "geometry",
+    "tesscontrol": "tessellation_control",
+    "tesc": "tessellation_control",
+    "tessellation_control": "tessellation_control",
+    "tesseval": "tessellation_evaluation",
+    "tese": "tessellation_evaluation",
+    "tessellation_evaluation": "tessellation_evaluation",
+}
 COMPUTE_LAYOUT_QUALIFIERS = {
     "local_size_x",
     "local_size_y",
@@ -552,6 +568,12 @@ class GLSLParser:
             function.qualifiers = qualifiers
 
     def infer_shader_type(self, shader):
+        pragma_shader_type = self.infer_shader_type_from_pragmas(
+            getattr(shader, "preprocessor", []) or []
+        )
+        if pragma_shader_type:
+            return pragma_shader_type
+
         layout_shader_type = self.infer_shader_type_from_layouts(
             getattr(shader, "layouts", []) or []
         )
@@ -575,6 +597,18 @@ class GLSLParser:
         if identifiers & VERTEX_BUILTINS or "gl_Position" in identifiers:
             return "vertex"
         return "vertex"
+
+    def infer_shader_type_from_pragmas(self, preprocessor):
+        for directive in preprocessor:
+            match = re.match(
+                r"#\s*pragma\s+shader_stage\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+                str(directive),
+            )
+            if match:
+                shader_type = PRAGMA_SHADER_STAGE_TYPES.get(match.group(1).lower())
+                if shader_type:
+                    return shader_type
+        return None
 
     def has_shadertoy_main_image(self, shader):
         for function in getattr(shader, "functions", []) or []:

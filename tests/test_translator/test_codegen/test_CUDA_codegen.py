@@ -3363,6 +3363,45 @@ class TestCudaCodeGen:
         assert "float value = rsqrtf(4.0);" not in cuda_code
         assert "float hlslValue = rsqrtf(4.0);" not in cuda_code
 
+    def test_inverse_sqrt_aliases_feed_cuda_bitcasts(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    float x = 4.0;
+                    vec3 v = vec3(4.0, 9.0, 16.0);
+
+                    uint scalarR = asuint(rsqrt(x));
+                    uint scalarI = floatBitsToUint(inverseSqrt(x));
+                    uvec3 vectorR = asuint(rsqrt(v));
+                    uvec3 vectorI = floatBitsToUint(inverseSqrt(v));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint scalarR = __float_as_uint(rsqrtf(x));" in cuda_code
+        assert "uint scalarI = __float_as_uint(rsqrtf(x));" in cuda_code
+        assert (
+            "uint3 vectorR = "
+            "cgl_float3_to_uint3_bitcast(cgl_float3_inversesqrt(v));" in cuda_code
+        )
+        assert (
+            "uint3 vectorI = "
+            "cgl_float3_to_uint3_bitcast(cgl_float3_inversesqrt(v));" in cuda_code
+        )
+        assert "asuint(" not in cuda_code
+        assert "floatBitsToUint(" not in cuda_code
+        assert "inverseSqrt(" not in cuda_code
+        assert " rsqrt(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_glsl_bitcast_builtins_lower_to_cuda_intrinsics(self, tmp_path):
         source_code = """
         shader TestShader {

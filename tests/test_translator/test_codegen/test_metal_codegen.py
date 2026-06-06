@@ -356,6 +356,61 @@ def test_metal_glsl_bitcast_builtins_lower_to_as_type():
     assert "uintBitsToFloat(" not in generated_code
 
 
+def test_metal_hlsl_as_bitcast_aliases_lower_to_as_type():
+    shader = """
+    shader MetalHlslAsBitcasts {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float f = 1.0;
+                uint u = 1u;
+                int i = 1;
+                vec3 v = vec3(1.0, 2.0, 3.0);
+                ivec3 iv = ivec3(1, 2, 3);
+                uvec3 uv = uvec3(1u, 2u, 3u);
+
+                int signedBits = asint(f);
+                uint unsignedBits = asuint(f);
+                float fromInt = asfloat(i);
+                float fromUint = asfloat(u);
+                ivec3 vectorBits = asint(v);
+                uvec3 unsignedVectorBits = asuint(v);
+                vec3 fromSignedVector = asfloat(iv);
+                vec3 fromUnsignedVector = asfloat(uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "__attribute__((unused)) int signedBits = as_type<int>(f);" in generated_code
+    assert (
+        "__attribute__((unused)) uint unsignedBits = as_type<uint>(f);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromInt = as_type<float>(i);" in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float fromUint = as_type<float>(u);" in generated_code
+    )
+    assert "int3 vectorBits = as_type<int3>(v);" in generated_code
+    assert "uint3 unsignedVectorBits = as_type<uint3>(v);" in generated_code
+    assert (
+        "__attribute__((unused)) float3 fromSignedVector = as_type<float3>(iv);"
+        in generated_code
+    )
+    assert (
+        "__attribute__((unused)) float3 fromUnsignedVector = as_type<float3>(uv);"
+        in generated_code
+    )
+    assert "asint(" not in generated_code
+    assert "asuint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
 def test_metal_user_defined_bitcast_function_names_are_preserved():
     shader = """
     shader MetalUserBitcastNames {
@@ -390,6 +445,38 @@ def test_metal_user_defined_bitcast_function_names_are_preserved():
         "__attribute__((unused)) float fromUint = uintBitsToFloat(1u);"
         in generated_code
     )
+    assert "as_type<int>(" not in generated_code
+    assert "as_type<float>(" not in generated_code
+
+
+def test_metal_user_defined_hlsl_as_bitcast_function_names_are_preserved():
+    shader = """
+    shader MetalUserHlslAsBitcastNames {
+        compute {
+            int asint(float value) {
+                return 7;
+            }
+
+            float asfloat(uint value) {
+                return 1.0;
+            }
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int signedBits = asint(1.0);
+                float fromUint = asfloat(1u);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "int asint(float value)" in generated_code
+    assert "float asfloat(uint value)" in generated_code
+    assert "__attribute__((unused)) int signedBits = asint(1.0);" in generated_code
+    assert "__attribute__((unused)) float fromUint = asfloat(1u);" in generated_code
     assert "as_type<int>(" not in generated_code
     assert "as_type<float>(" not in generated_code
 
@@ -12547,6 +12634,30 @@ def test_compute_hlsl_system_value_semantic_aliases_lower_to_metal_builtins():
         assert hlsl_semantic not in generated
 
 
+def test_compute_hlsl_system_value_semantic_alias_variants_lower_to_metal_builtins():
+    code = """
+    shader HlslComputeAliasVariantsForMetal {
+        compute {
+            void main(uvec3 dispatchID @ SV_DispatchThreadId,
+                      uvec3 groupID @ sv_group_id,
+                      uvec3 groupThreadID @ sv_group_thread_id,
+                      uint groupIndex @ sv_groupindex) { }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+    generated = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "uint3 dispatchID [[thread_position_in_grid]]" in generated
+    assert "uint3 groupID [[threadgroup_position_in_grid]]" in generated
+    assert "uint3 groupThreadID [[thread_position_in_threadgroup]]" in generated
+    assert "uint groupIndex [[thread_index_in_threadgroup]]" in generated
+    assert "SV_DispatchThreadId" not in generated
+    assert "sv_group_id" not in generated
+    assert "sv_group_thread_id" not in generated
+    assert "sv_groupindex" not in generated
+
+
 @pytest.mark.parametrize(
     ("param_type", "semantic", "metal_semantic", "expected_type"),
     [
@@ -12690,6 +12801,49 @@ def test_graphics_hlsl_vertex_system_value_aliases_lower_to_metal_builtins():
     assert "uint instanceID [[instance_id]]" in generated
     assert "SV_VertexID" not in generated
     assert "SV_InstanceID" not in generated
+
+
+def test_graphics_hlsl_system_value_semantic_alias_variants_lower_to_metal_builtins():
+    code = """
+    shader HlslGraphicsAliasVariantsForMetal {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VSOutput main(
+                uint vertexID @ sv_vertex_id,
+                uint instanceID @ SV_InstanceId
+            ) {
+                VSOutput output;
+                output.position = vec4(float(vertexID + instanceID));
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                uint primitiveID @ SV_PrimitiveId,
+                bool frontFacing @ sv_isfrontface
+            ) @ SV_Target0 {
+                return vec4(float(primitiveID), frontFacing ? 1.0 : 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(code)
+
+    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
+    assert "uint vertexID [[vertex_id]]" in vertex_code
+    assert "uint instanceID [[instance_id]]" in vertex_code
+    assert "sv_vertex_id" not in vertex_code
+    assert "SV_InstanceId" not in vertex_code
+
+    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
+    assert "uint primitiveID [[primitive_id]]" in fragment_code
+    assert "bool frontFacing [[is_front_facing]]" in fragment_code
+    assert "SV_PrimitiveId" not in fragment_code
+    assert "sv_isfrontface" not in fragment_code
 
 
 def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():

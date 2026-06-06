@@ -1119,6 +1119,81 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(rf"OpFAdd {re.escape(vec4_type.group(1))}", spv_code)
         assert "WARNING" not in spv_code
 
+    def test_mixed_scalar_binary_inferred_lets_promote_operands(self, tmp_path):
+        source_code = """
+        shader MixedScalarBinaryInference {
+            compute {
+                void main() {
+                    let floatSum = 1 + 2.0;
+                    let floatReverse = 2.0 + 1;
+                    let doubleSum = 1 + double(2.0);
+                    float keepFloat = floatSum + floatReverse;
+                    double keepDouble = doubleSum;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+        assert float_type is not None
+        assert double_type is not None
+
+        assert re.search(rf"OpFAdd {re.escape(float_type.group(1))}", spv_code)
+        assert re.search(rf"OpFAdd {re.escape(double_type.group(1))}", spv_code)
+        assert "OpIAdd" not in spv_code
+        assert "OpConvertFToS" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mixed_vector_binary_and_comparison_promote_component_types(self, tmp_path):
+        source_code = """
+        shader MixedVectorBinaryInference {
+            compute {
+                void main() {
+                    let mixed = ivec2(1, 2) + vec2(0.5, 1.5);
+                    let mask = ivec2(1, 2) < vec2(0.5, 3.5);
+                    vec2 keepMixed = mixed;
+                    bvec2 keepMask = mask;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+        assert float_type is not None
+        assert bool_type is not None
+        vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 2",
+            spv_code,
+        )
+        bool_vec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(bool_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec2_type is not None
+        assert bool_vec2_type is not None
+
+        assert re.search(rf"OpFAdd {re.escape(vec2_type.group(1))}", spv_code)
+        assert re.search(
+            rf"OpFOrdLessThan {re.escape(bool_vec2_type.group(1))}", spv_code
+        )
+        assert "OpIAdd" not in spv_code
+        assert "OpSLessThan" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_precise_variable_decorates_float_arithmetic_results_no_contraction(self):
         source_code = """
         shader PreciseArithmetic {

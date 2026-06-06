@@ -1992,16 +1992,72 @@ class VulkanSPIRVCodeGen:
             return bool_type, left, right
 
         component_type, component_count = left_vector or right_vector
-        vector_operand_type = self.ensure_registered_type(
-            left.type if left_vector is not None else right.type
+        promoted_component_type = component_type
+        if left_vector is not None and right_vector is not None:
+            if left_vector[1] != right_vector[1]:
+                return (
+                    self.register_vector_type(bool_type, component_count),
+                    left,
+                    right,
+                )
+            promoted_component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_vector[0]]
+            )
+            if promoted_component_type is None:
+                promoted_component_type = (
+                    left_vector[0]
+                    if left_vector[0] == right_vector[0]
+                    else component_type
+                )
+        elif left_vector is not None:
+            right_component = self.scalar_or_vector_component_type(right.type)
+            promoted_component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_component]
+            )
+            if promoted_component_type is None:
+                promoted_component_type = (
+                    left_vector[0]
+                    if right_component == left_vector[0]
+                    else component_type
+                )
+        elif right_vector is not None:
+            left_component = self.scalar_or_vector_component_type(left.type)
+            promoted_component_type = self.promoted_numeric_type_name(
+                [left_component, right_vector[0]]
+            )
+            if promoted_component_type is None:
+                promoted_component_type = (
+                    right_vector[0]
+                    if left_component == right_vector[0]
+                    else component_type
+                )
+
+        vector_operand_type = self.register_vector_type(
+            self.register_primitive_type(promoted_component_type),
+            component_count,
         )
 
         if left_vector is not None and right_vector is None:
-            if self.scalar_or_vector_component_type(right.type) == component_type:
+            left = self.convert_value_to_type(left, vector_operand_type)
+            component = self.register_primitive_type(promoted_component_type)
+            right = self.convert_scalar_to_type(right, component)
+            if (
+                self.scalar_or_vector_component_type(right.type)
+                == promoted_component_type
+            ):
                 right = self.splat_scalar_to_vector(right, vector_operand_type)
         elif right_vector is not None and left_vector is None:
-            if self.scalar_or_vector_component_type(left.type) == component_type:
+            right = self.convert_value_to_type(right, vector_operand_type)
+            component = self.register_primitive_type(promoted_component_type)
+            left = self.convert_scalar_to_type(left, component)
+            if (
+                self.scalar_or_vector_component_type(left.type)
+                == promoted_component_type
+            ):
                 left = self.splat_scalar_to_vector(left, vector_operand_type)
+        elif left_vector is not None and right_vector is not None:
+            left = self.convert_value_to_type(left, vector_operand_type)
+            right = self.convert_value_to_type(right, vector_operand_type)
 
         return self.register_vector_type(bool_type, component_count), left, right
 
@@ -2013,31 +2069,138 @@ class VulkanSPIRVCodeGen:
         right_vector = self.vector_component_type_and_count(right.type.base_type)
 
         if left_vector is not None and right_vector is None:
-            vector_type = self.ensure_registered_type(left.type)
-            component_type = self.register_primitive_type(left_vector[0])
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            vector_type = (
+                result_type
+                if result_vector is not None and result_vector[1] == left_vector[1]
+                else self.ensure_registered_type(left.type)
+            )
+            component_type_name = self.vector_component_type_and_count(
+                vector_type.type.base_type
+            )[0]
+            component_type = self.register_primitive_type(component_type_name)
+            left = self.convert_value_to_type(left, vector_type)
             right = self.convert_scalar_to_type(right, component_type)
-            if self.scalar_or_vector_component_type(right.type) == left_vector[0]:
+            if self.scalar_or_vector_component_type(right.type) == component_type_name:
                 return (
                     vector_type,
                     left,
                     self.splat_scalar_to_vector(right, vector_type),
                 )
         if right_vector is not None and left_vector is None:
-            vector_type = self.ensure_registered_type(right.type)
-            component_type = self.register_primitive_type(right_vector[0])
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            vector_type = (
+                result_type
+                if result_vector is not None and result_vector[1] == right_vector[1]
+                else self.ensure_registered_type(right.type)
+            )
+            component_type_name = self.vector_component_type_and_count(
+                vector_type.type.base_type
+            )[0]
+            component_type = self.register_primitive_type(component_type_name)
+            right = self.convert_value_to_type(right, vector_type)
             left = self.convert_scalar_to_type(left, component_type)
-            if self.scalar_or_vector_component_type(left.type) == right_vector[0]:
+            if self.scalar_or_vector_component_type(left.type) == component_type_name:
                 return (
                     vector_type,
                     self.splat_scalar_to_vector(left, vector_type),
                     right,
                 )
+        if left_vector is not None and right_vector is not None:
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            if (
+                result_vector is not None
+                and left_vector[1] == result_vector[1]
+                and right_vector[1] == result_vector[1]
+            ):
+                left = self.convert_value_to_type(left, result_type)
+                right = self.convert_value_to_type(right, result_type)
+                if self.value_has_type(left, result_type) and self.value_has_type(
+                    right, result_type
+                ):
+                    return result_type, left, right
 
         if left_vector is None and right_vector is None:
             left = self.convert_value_to_type(left, result_type)
             right = self.convert_value_to_type(right, result_type)
 
         return result_type, left, right
+
+    def binary_expression_result_type(
+        self, op: str, left_type: Optional[SpirvId], right_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        """Infer the SPIR-V result type for a binary expression."""
+        if left_type is None or right_type is None:
+            return left_type or right_type
+
+        left_type = self.ensure_registered_type(left_type)
+        right_type = self.ensure_registered_type(right_type)
+        left_vector = self.vector_component_type_and_count(left_type.type.base_type)
+        right_vector = self.vector_component_type_and_count(right_type.type.base_type)
+
+        if op in {"&&", "||"}:
+            if left_vector is not None or right_vector is not None:
+                component_count = (left_vector or right_vector)[1]
+                return self.register_vector_type(
+                    self.register_primitive_type("bool"), component_count
+                )
+            return self.register_primitive_type("bool")
+
+        if op in {"==", "!=", "<", ">", "<=", ">="}:
+            if left_vector is not None or right_vector is not None:
+                component_count = (left_vector or right_vector)[1]
+                return self.register_vector_type(
+                    self.register_primitive_type("bool"), component_count
+                )
+            return self.register_primitive_type("bool")
+
+        if op not in {"+", "-", "*", "MULTIPLY", "/", "%"}:
+            return left_type
+
+        if left_vector is not None and right_vector is not None:
+            if left_vector[1] != right_vector[1]:
+                return left_type
+            component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_vector[0]]
+            )
+            if component_type is None:
+                return left_type
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), left_vector[1]
+            )
+
+        if left_vector is not None:
+            component_type = self.promoted_numeric_type_name(
+                [left_vector[0], right_type.type.base_type]
+            )
+            if component_type is None:
+                return left_type
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), left_vector[1]
+            )
+
+        if right_vector is not None:
+            component_type = self.promoted_numeric_type_name(
+                [left_type.type.base_type, right_vector[0]]
+            )
+            if component_type is None:
+                return right_type
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), right_vector[1]
+            )
+
+        scalar_type = self.promoted_numeric_type_name(
+            [left_type.type.base_type, right_type.type.base_type]
+        )
+        if scalar_type is None:
+            return left_type
+        return self.register_primitive_type(scalar_type)
 
     def splat_scalar_to_vector(
         self, scalar_id: SpirvId, vector_type: SpirvId
@@ -12784,7 +12947,9 @@ class VulkanSPIRVCodeGen:
                 return swizzle_info[2]
             return None
         if isinstance(expr, BinaryOpNode):
-            return self.infer_expression_result_type(expr.left)
+            left_type = self.infer_expression_result_type(expr.left)
+            right_type = self.infer_expression_result_type(expr.right)
+            return self.binary_expression_result_type(expr.op, left_type, right_type)
         if isinstance(expr, TernaryOpNode):
             true_type = self.infer_expression_result_type(expr.true_expr)
             false_type = self.infer_expression_result_type(expr.false_expr)
@@ -18800,11 +18965,19 @@ class VulkanSPIRVCodeGen:
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            result_type = left.type  # Default to left operand's type
-
-            return self.binary_operation(
-                expr.op, self.map_crossgl_type(result_type.base_type), left, right
+            left_type = self.registered_value_type(left) or self.ensure_registered_type(
+                left.type
             )
+            right_type = self.registered_value_type(
+                right
+            ) or self.ensure_registered_type(right.type)
+            result_type = self.binary_expression_result_type(
+                expr.op, left_type, right_type
+            )
+            if result_type is None:
+                result_type = left_type
+
+            return self.binary_operation(expr.op, result_type, left, right)
 
         elif isinstance(expr, UnaryOpNode):
             if expr.op in {"++", "--"}:
