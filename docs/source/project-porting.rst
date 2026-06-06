@@ -335,6 +335,8 @@ Project reports are JSON documents with:
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level
   generated/original mapping for compiler ``--source-remap`` consumers. The
+  source-map and source-remap ``offset``, ``length``, and ``endOffset`` fields
+  are UTF-8 byte offsets.
   report records the sidecar path, hash, generated-file identity, summary
   rollups by target and source backend, and bounded inspection samples for
   source-map and source-remap artifacts. Validation checks that file-level

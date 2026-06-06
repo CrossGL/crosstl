@@ -3042,6 +3042,21 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     }
 
 
+def test_file_level_source_map_spans_use_utf8_byte_offsets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_text = "// unicode marker: \u2603\n" + SIMPLE_CROSSL
+    source_path = repo / "simple.cgl"
+    source_path.write_text(source_text, encoding="utf-8")
+
+    span = project_pipeline._file_span(source_path, "simple.cgl").to_json()
+
+    assert span["file"] == "simple.cgl"
+    assert span["length"] == len(source_text.encode("utf-8"))
+    assert span["endOffset"] == len(source_text.encode("utf-8"))
+    assert span["endOffset"] > len(source_text)
+
+
 def test_translate_project_reports_source_maps_and_remaps_by_variant(
     tmp_path, monkeypatch
 ):

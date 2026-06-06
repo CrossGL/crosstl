@@ -425,7 +425,8 @@ def _variant_output_segment(variant: str) -> str:
 
 
 def _file_span(path: Path, report_path: str) -> SourceLocation:
-    text = path.read_text(encoding="utf-8", errors="replace")
+    source_bytes = path.read_bytes()
+    text = source_bytes.decode("utf-8", errors="replace")
     line = 1
     column = 1
     for character in text:
@@ -436,10 +437,10 @@ def _file_span(path: Path, report_path: str) -> SourceLocation:
             column += 1
     return SourceLocation(
         file=report_path,
-        length=len(text),
+        length=len(source_bytes),
         end_line=line,
         end_column=column,
-        end_offset=len(text),
+        end_offset=len(source_bytes),
     )
 
 
