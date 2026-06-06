@@ -6156,6 +6156,57 @@ def test_validate_project_report_rejects_missing_external_corpus_accounting(
     )
 
 
+def test_validate_project_report_rejects_noncanonical_external_corpus_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["externalCorpus"]["entries"][0]["targets"] = ["crossgl", "cgl", "OpenGL"]
+    payload["externalCorpus"]["summary"]["entriesByTarget"] = {
+        "OpenGL": 1,
+        "cgl": 1,
+        "crossgl": 1,
+    }
+    report_path = repo / "noncanonical-external-corpus-targets.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.entries[0].targets must use normalized backend names "
+        "without duplicates"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_drive_relative_external_corpus_paths(
     tmp_path,
 ):

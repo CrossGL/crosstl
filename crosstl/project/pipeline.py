@@ -7881,9 +7881,14 @@ def _external_corpus_entry_contract_reasons(
             reasons.append(f"{prefix}.path must be repository-relative")
         else:
             path_is_valid = True
-    reasons.extend(
-        _string_list_contract_reasons(f"{prefix}.targets", entry.get("targets"))
+    target_reasons = _string_list_contract_reasons(
+        f"{prefix}.targets", entry.get("targets")
     )
+    reasons.extend(target_reasons)
+    if not target_reasons and _normalized_targets(entry["targets"]) != entry["targets"]:
+        reasons.append(
+            f"{prefix}.targets must use normalized backend names without duplicates"
+        )
     for field_name in ("present", "discovered"):
         if not isinstance(entry.get(field_name), bool):
             reasons.append(f"{prefix}.{field_name} must be a boolean")
