@@ -979,6 +979,11 @@ class MojoToCrossGLConverter:
             return self.generate_list_comprehension(expr)
         elif isinstance(expr, DictLiteralNode):
             return self.generate_dict_literal(expr)
+        elif isinstance(expr, BracedLiteralNode):
+            elements = ", ".join(
+                self.generate_expression(element) for element in expr.elements
+            )
+            return f"{{{elements}}}"
         elif isinstance(expr, DictComprehensionNode):
             return self.generate_dict_comprehension(expr)
         elif isinstance(expr, SliceNode):

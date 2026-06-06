@@ -1232,6 +1232,20 @@ def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syn
     parse_crossgl(output)
 
 
+def test_codegen_precise_entry_return_from_hlsl_variable_syntax_docs():
+    # Source: Microsoft Learn HLSL variable syntax recommends marking shader
+    # outputs precise on struct fields, output parameters, or entry returns.
+    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+    output = generate_crossgl("""
+        precise float4 PSMain(float4 color : COLOR0) : SV_Target0 {
+            return color;
+        }
+    """)
+
+    assert "precise vec4 PSMain(vec4 color @ Color0) @ gl_FragData[0]" in output
+    parse_crossgl(output)
+
+
 def test_codegen_local_static_const_array_from_dxc_bc6hdecode():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenHLSL/Samples/DX11/BC6HDecode.hlsl

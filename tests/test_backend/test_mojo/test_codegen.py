@@ -496,6 +496,22 @@ def test_dict_display_and_comprehension_codegen_from_current_mojo_docs():
     assert "Unhandled expression: DictComprehensionNode" not in generated_code
 
 
+def test_braced_set_and_initializer_list_codegen_from_current_mojo_docs():
+    # Reduced from https://mojolang.org/docs/reference/expressions/
+    # Version 1.0.0b1, "Collection displays" sets and initializer lists.
+    code = """
+    def main():
+        var primes = {2, 3, 5}
+        var point: Point = {x=1.0, y=2.0}
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var primes = {2, 3, 5};" in generated_code
+    assert "Point point = {x = 1.0, y = 2.0};" in generated_code
+    assert "Unhandled expression: BracedLiteralNode" not in generated_code
+
+
 def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
     code = """
     def tiled_matmul_kernel(matrix_c: TileTensor):

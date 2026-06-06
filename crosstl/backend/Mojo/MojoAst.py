@@ -119,6 +119,16 @@ class DictLiteralNode(ASTNode):
         return f"DictLiteralNode(entries={self.entries})"
 
 
+class BracedLiteralNode(ASTNode):
+    """Node representing a non-dictionary Mojo braced display or initializer list."""
+
+    def __init__(self, elements):
+        self.elements = elements
+
+    def __repr__(self):
+        return f"BracedLiteralNode(elements={self.elements})"
+
+
 class DictComprehensionNode(ASTNode):
     """Node representing a Mojo dictionary comprehension expression."""
 

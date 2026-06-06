@@ -11022,6 +11022,28 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpDecorate {material_index} Flat" in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
 
+    @pytest.mark.parametrize(
+        ("declaration", "message"),
+        [
+            ("bool flag @input @location(0);", "input variable 'flag'.*OpTypeBool"),
+            (
+                "bvec2 flags @output @location(0);",
+                "output variable 'flags'.*OpTypeBool",
+            ),
+        ],
+    )
+    def test_user_defined_bool_interface_variables_are_rejected_for_vulkan(
+        self, declaration, message
+    ):
+        source_code = f"""
+        shader BoolInterface {{
+            {declaration}
+        }}
+        """
+
+        with pytest.raises(ValueError, match=message):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
     @pytest.mark.parametrize("attribute", ["input", "output"])
     def test_global_interface_variables_reject_duplicate_explicit_locations(
         self, attribute
