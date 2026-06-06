@@ -155,6 +155,67 @@ class CudaToCrossGLConverter:
         "surfCubemapLayeredread": "imageCubeArray",
         "surfCubemapLayeredwrite": "imageCubeArray",
     }
+    CUDA_SURFACE_VALUE_BYTE_SIZES = {
+        "char": 1,
+        "signed char": 1,
+        "unsigned char": 1,
+        "int8_t": 1,
+        "uint8_t": 1,
+        "uchar": 1,
+        "short": 2,
+        "unsigned short": 2,
+        "int16_t": 2,
+        "uint16_t": 2,
+        "half": 2,
+        "__half": 2,
+        "int": 4,
+        "signed int": 4,
+        "uint": 4,
+        "unsigned int": 4,
+        "int32_t": 4,
+        "uint32_t": 4,
+        "float": 4,
+        "long long": 8,
+        "signed long long": 8,
+        "unsigned long long": 8,
+        "int64_t": 8,
+        "uint64_t": 8,
+        "double": 8,
+        "char1": 1,
+        "uchar1": 1,
+        "short1": 2,
+        "ushort1": 2,
+        "int1": 4,
+        "uint1": 4,
+        "float1": 4,
+        "double1": 8,
+        "char2": 2,
+        "uchar2": 2,
+        "short2": 4,
+        "ushort2": 4,
+        "half2": 4,
+        "__half2": 4,
+        "int2": 8,
+        "uint2": 8,
+        "float2": 8,
+        "double2": 16,
+        "char3": 3,
+        "uchar3": 3,
+        "short3": 6,
+        "ushort3": 6,
+        "int3": 12,
+        "uint3": 12,
+        "float3": 12,
+        "double3": 24,
+        "char4": 4,
+        "uchar4": 4,
+        "short4": 8,
+        "ushort4": 8,
+        "int4": 16,
+        "uint4": 16,
+        "float4": 16,
+        "double4": 32,
+    }
     CUDA_DEVICE_GRAPH_LAUNCH_MODES = {
         "cudaStreamGraphFireAndForget": "fire-and-forget",
         "cudaStreamGraphTailLaunch": "tail",
@@ -176,6 +237,7 @@ class CudaToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
+        self.variable_type_scopes = [{}]
         self.namespace_aliases = {}
         self.global_resource_binding_count = 0
 
@@ -197,6 +259,7 @@ class CudaToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
+        self.variable_type_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.visit(ast_node)
@@ -3592,6 +3655,7 @@ class CudaToCrossGLConverter:
         if isinstance(stmt, list):
             return ", ".join(self.format_statement_fragment(item) for item in stmt)
         if isinstance(stmt, VariableNode):
+            self.register_variable_type(stmt.name, stmt.vtype)
             var_type = self.convert_cuda_variable_type_to_crossgl(stmt.vtype, stmt.name)
             self.register_vector1_name(stmt.name, stmt.vtype)
             name = self.register_identifier_name(stmt.name)
@@ -3727,7 +3791,9 @@ class CudaToCrossGLConverter:
             self.push_unique_ptr_scope()
             self.push_cooperative_group_scope()
             self.push_cuda_async_sync_scope()
+            self.push_variable_type_scope()
             for param in node.params:
+                self.register_variable_type(param.name, param.vtype)
                 self.register_unique_ptr_name(param.name, param.vtype)
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
@@ -3735,6 +3801,7 @@ class CudaToCrossGLConverter:
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
                 self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
@@ -3817,7 +3884,9 @@ class CudaToCrossGLConverter:
             self.push_unique_ptr_scope()
             self.push_cooperative_group_scope()
             self.push_cuda_async_sync_scope()
+            self.push_variable_type_scope()
             for param in kernel.params:
+                self.register_variable_type(param.name, param.vtype)
                 self.register_unique_ptr_name(param.name, param.vtype)
                 self.register_cooperative_group_parameter(param)
                 self.register_cuda_async_sync_parameter(param)
@@ -3825,6 +3894,7 @@ class CudaToCrossGLConverter:
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
                 self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
@@ -3858,6 +3928,8 @@ class CudaToCrossGLConverter:
         return comments
 
     def visit_VariableNode(self, node):
+        self.register_variable_type(node.name, node.vtype)
+
         cuda_async_sync = self.cuda_async_sync_declaration_metadata(node)
         if cuda_async_sync is not None:
             self.register_cuda_async_sync_name(node.name, cuda_async_sync)
@@ -3936,6 +4008,23 @@ class CudaToCrossGLConverter:
     def pop_cuda_async_sync_scope(self):
         if len(self.cuda_async_sync_scopes) > 1:
             self.cuda_async_sync_scopes.pop()
+
+    def push_variable_type_scope(self):
+        self.variable_type_scopes.append({})
+
+    def pop_variable_type_scope(self):
+        if len(self.variable_type_scopes) > 1:
+            self.variable_type_scopes.pop()
+
+    def register_variable_type(self, name, type_name):
+        if name:
+            self.variable_type_scopes[-1][name] = type_name
+
+    def lookup_variable_type(self, name):
+        for scope in reversed(self.variable_type_scopes):
+            if name in scope:
+                return scope[name]
+        return None
 
     def register_cuda_async_sync_parameter(self, param):
         metadata = self.cuda_async_sync_metadata_from_type(param.vtype)
@@ -4234,7 +4323,7 @@ class CudaToCrossGLConverter:
         if block_sync_vote is not None:
             return block_sync_vote
 
-        resource_call = self.format_cuda_resource_call(raw_name, args)
+        resource_call = self.format_cuda_resource_call(raw_name, args, node.args)
         if resource_call is not None:
             return resource_call
 
@@ -5084,7 +5173,7 @@ class CudaToCrossGLConverter:
             return None
         return name.rsplit("::", 1)[-1].split("<", 1)[0]
 
-    def format_cuda_resource_call(self, function_name, args):
+    def format_cuda_resource_call(self, function_name, args, raw_args=None):
         base_name, template_args = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
@@ -5159,7 +5248,9 @@ class CudaToCrossGLConverter:
                 "surfCubemapwrite": 3,
                 "surfCubemapLayeredwrite": 3,
             }[base_name]
-            return self.format_cuda_surface_write(args, dimensions, value_type)
+            return self.format_cuda_surface_write(
+                args, dimensions, value_type, raw_args
+            )
 
         return None
 
@@ -5271,9 +5362,11 @@ class CudaToCrossGLConverter:
         coord_args.extend(args[2 : dimensions + 1])
         return f"imageLoad({surface_name}, {self.format_vector_constructor(f'vec{dimensions}', coord_args, 'i32')})"
 
-    def format_cuda_surface_write(self, args, dimensions, value_type):
+    def format_cuda_surface_write(self, args, dimensions, value_type, raw_args=None):
         if len(args) < dimensions + 2:
             return None
+        if value_type is None and raw_args:
+            value_type = self.infer_cuda_surface_value_type(raw_args[0])
         value = args[0]
         surface_name = args[1]
         coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
@@ -5291,11 +5384,69 @@ class CudaToCrossGLConverter:
             if text.endswith(suffix):
                 return text[: -len(suffix)].strip()
 
+            byte_size = self.cuda_surface_value_byte_size(value_type)
+            if byte_size is not None:
+                for literal in self.cuda_byte_size_literals(byte_size):
+                    suffix = f" * {literal}"
+                    if text.endswith(suffix):
+                        return text[: -len(suffix)].strip()
+                    prefix = f"{literal} * "
+                    if text.startswith(prefix):
+                        return text[len(prefix) :].strip()
+
         marker = " * sizeof("
         if marker in text and text.endswith(")"):
             return text.split(marker, 1)[0].strip()
 
         return expression
+
+    def infer_cuda_surface_value_type(self, expression):
+        if isinstance(expression, CastNode):
+            return self.strip_type_qualifiers(expression.target_type)
+        if isinstance(expression, ArrayAccessNode):
+            array_type = self.cuda_surface_value_source_type(expression.array)
+            return self.cuda_surface_element_type(array_type)
+        if isinstance(expression, str):
+            return self.cuda_surface_element_type(self.lookup_variable_type(expression))
+        if isinstance(expression, UnaryOpNode) and expression.op == "*":
+            return self.cuda_surface_element_type(
+                self.cuda_surface_value_source_type(expression.operand)
+            )
+        return None
+
+    def cuda_surface_value_source_type(self, expression):
+        if isinstance(expression, str):
+            return self.lookup_variable_type(expression)
+        if isinstance(expression, ArrayAccessNode):
+            return self.cuda_surface_element_type(
+                self.cuda_surface_value_source_type(expression.array)
+            )
+        if isinstance(expression, CastNode):
+            return expression.target_type
+        if isinstance(expression, UnaryOpNode):
+            return self.cuda_surface_value_source_type(expression.operand)
+        return None
+
+    def cuda_surface_element_type(self, type_name):
+        if not type_name:
+            return None
+        type_name = self.strip_type_qualifiers(self.resolve_type_alias(type_name))
+        if self.has_array_suffix(type_name):
+            return type_name.split("[", 1)[0].strip()
+        if "*" in type_name:
+            return type_name.replace("*", "").strip()
+        return type_name
+
+    def cuda_surface_value_byte_size(self, value_type):
+        if not value_type:
+            return None
+        value_type = self.strip_type_qualifiers(self.resolve_type_alias(value_type))
+        value_type = value_type.replace("*", "").strip()
+        return self.CUDA_SURFACE_VALUE_BYTE_SIZES.get(value_type)
+
+    def cuda_byte_size_literals(self, byte_size):
+        text = str(byte_size)
+        return (text, f"{text}u", f"{text}U", f"{text}ul", f"{text}UL")
 
     def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
         return (

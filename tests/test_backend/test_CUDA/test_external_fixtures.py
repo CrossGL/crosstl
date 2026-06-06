@@ -995,8 +995,7 @@ def test_cuda_samples_simple_surface_write_texture_object_codegen_reparse():
     assert_crossgl_reparse(crossgl)
     assert "image2D outputSurface" in crossgl
     assert (
-        "imageStore(outputSurface, vec2<i32>((x * 4), y), "
-        "gIData[((y * width) + x)]);"
+        "imageStore(outputSurface, vec2<i32>(x, y), " "gIData[((y * width) + x)]);"
     ) in crossgl
     assert "sampler2D tex" in crossgl
     assert "gOData[((y * width) + x)] = texture(tex, vec2<f32>(tu, tv));" in crossgl

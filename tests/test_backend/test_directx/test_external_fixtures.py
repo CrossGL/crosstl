@@ -92,7 +92,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "@ RootSignature(Present_RootSig)",
             "sampler2D ColorTex;",
-            "vec3 LinearRGB = ColorTex[ivec2(position.xy)];",
+            "vec3 LinearRGB = texelFetch(ColorTex, ivec2(position.xy), 0);",
         ),
     ),
     ExternalFixture(
@@ -997,7 +997,7 @@ EXTERNAL_FIXTURES = [
         contains=(
             "groupshared vec3 Tile[((2 * 1) + 16) * ((2 * 1) + 16)];",
             "@ numthreads(16, 16, 1)",
-            "vec3 color0 = ColorBuffer[coord1].xyz;",
+            "vec3 color0 = texelFetch(ColorBuffer, coord1, 0).xyz;",
             "workgroupBarrier();",
             "imageStore(OutputBuffer, globalID.xy, vec4(center, 1.0));",
         ),

@@ -2320,14 +2320,15 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "Explicit LOD, gradient, bias, offset, split-sampler, resource-array, and shadow-compare LOD/gradient/offset forms lower to Slang SampleLevel/SampleGrad/SampleBias/SampleCmp* methods with deterministic invalid resource, coordinate, and target-type diagnostics.",
+          "notes": "Explicit LOD, gradient, bias, offset, split-sampler, resource-array, and shadow-compare bias/LOD/gradient/offset forms lower to Slang SampleLevel/SampleGrad/SampleBias/SampleCmp* methods with deterministic invalid resource, coordinate, and target-type diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_sampled_texture_builtins_emit_slang_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_explicit_sampler_texture_builtins_emit_combined_slang_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_offset_builtins_emit_slang_offset_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_malformed_sampled_texture_ops_emit_slang_diagnostics",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs",
+            "tests/test_backend/test_slang/test_external_fixtures.py::slang_hlsl_intrinsic_sample_cmp_bias"
           ]
         }
       }
@@ -2606,13 +2607,14 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "Shadow compare, compare-offset, compare-LOD, compare-gradient, gather-compare, explicit sampler, resource-array, and nested expected-type forms lower to Slang SampleCmp/SampleCmpLevel/SampleCmpGrad/GatherCmp methods with deterministic invalid resource, coordinate, argument, and target-type diagnostics.",
+          "notes": "Shadow compare, compare-offset, compare-bias, compare-LOD, compare-gradient, gather-compare, explicit sampler, resource-array, and nested expected-type forms lower to Slang SampleCmp/SampleCmpBias/SampleCmpLevel/SampleCmpGrad/GatherCmp methods with deterministic invalid resource, coordinate, argument, and target-type diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_validate_target_result_types",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_expected_types_flow_through_nested_contexts",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
+            "tests/test_backend/test_slang/test_external_fixtures.py::slang_hlsl_intrinsic_sample_cmp_bias"
           ]
         }
       }

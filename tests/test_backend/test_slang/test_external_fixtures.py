@@ -514,6 +514,69 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["tex.GatherRed"],
     },
     {
+        "id": "slang_hlsl_intrinsic_sample_cmp_bias",
+        "repo": "shader-slang/slang",
+        "path": "tests/hlsl-intrinsic/texture/sample-cmp.slang",
+        "source": (
+            """
+            SamplerComparisonState shadowSampler;
+            Texture2D<float> shadowMap2D;
+            Texture2DArray<float> shadowMap2DArray;
+            TextureCube<float> shadowMapCube;
+
+            struct PSInput
+            {
+                float4 position : SV_Position;
+                float2 texCoord : TEXCOORD0;
+                float depth : DEPTH;
+            };
+
+            struct PSOutput
+            {
+                float4 color : SV_Target0;
+            };
+
+            PSOutput fragmentMain(PSInput input)
+            {
+                PSOutput output;
+                float bias = 0.5;
+                int2 offset2 = int2(1, 0);
+                float3 cubeDir = float3(input.texCoord, 1.0);
+                float shadow = 0;
+
+                shadow += shadowMap2D.SampleCmpBias(
+                    shadowSampler, input.texCoord, input.depth, bias);
+                shadow += shadowMap2DArray.SampleCmpBias(
+                    shadowSampler, float3(input.texCoord, 0),
+                    input.depth, bias, offset2);
+                shadow += shadowMapCube.SampleCmpBias(
+                    shadowSampler, cubeDir, input.depth, bias);
+
+                output.color = float4(shadow, shadow, shadow, 1.0);
+                return output;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "sampler shadowSampler;",
+            "sampler2D shadowMap2D;",
+            "sampler2DArray shadowMap2DArray;",
+            "samplerCube shadowMapCube;",
+            "textureCompare(shadowMap2D, shadowSampler, input.texCoord, input.depth)",
+            (
+                "textureCompareOffset(shadowMap2DArray, shadowSampler, "
+                "vec3(input.texCoord, 0), input.depth, offset2)"
+            ),
+            "textureCompare(shadowMapCube, shadowSampler, cubeDir, input.depth)",
+            (
+                "unsupported Slang texture overload extras for SampleCmpBias: "
+                "dropped LOD bias"
+            ),
+        ],
+        "not_contains": ["SampleCmpBias("],
+    },
+    {
         "id": "slang_texture2d_getdimensions_querysize_lod_from_spirv_generated",
         "repo": "shader-slang/slang-generated-2026",
         "path": (

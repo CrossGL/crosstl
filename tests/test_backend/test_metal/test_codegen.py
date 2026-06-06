@@ -1077,6 +1077,119 @@ def test_codegen_texture_gather_component_selector_from_msl_spec():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_texture_gather_offset_and_array_slice_overloads_roundtrip():
+    # The MSL gather overloads pass array slices separately from the coordinate.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float4 gatherOffset(texture2d<float> tex,
+                        sampler samp,
+                        float2 uv,
+                        int2 offset) {
+        return tex.gather(samp, uv, offset, component::z);
+    }
+
+    float4 gatherArray(texture2d_array<float> tex,
+                       sampler samp,
+                       float2 uv,
+                       uint layer,
+                       int2 offset) {
+        return tex.gather(samp, uv, layer, offset, component::w);
+    }
+
+    float4 gatherCubeArray(texturecube_array<float> tex,
+                           sampler samp,
+                           float3 dir,
+                           uint layer) {
+        return tex.gather(samp, dir, layer, component::y);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "textureGatherOffset(tex, samp, uv, offset, 2)" in crossgl
+    assert "textureGatherOffset(tex, samp, vec3(uv, layer), offset, 3)" in crossgl
+    assert "textureGather(tex, samp, vec4(dir, layer), 1)" in crossgl
+    assert "textureGather(tex, samp, uv, layer" not in crossgl
+    assert "component_u3a_u3a" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert "tex.gather(samp, uv, offset, component::z)" in metal
+    assert (
+        "tex.gather(samp, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), offset, component::w)" in metal
+    )
+    assert (
+        "tex.gather(samp, (float4(dir, layer)).xyz, "
+        "uint((float4(dir, layer)).w), component::y)" in metal
+    )
+    assert "textureGather" not in metal
+
+
+def test_codegen_depth_gather_compare_array_slice_overloads_roundtrip():
+    # MSL depth array gather_compare overloads carry array slice before compare.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float4 gatherDepthArray(depth2d_array<float> shadowMap,
+                            sampler shadowSampler,
+                            float2 uv,
+                            uint layer,
+                            float compare,
+                            int2 offset) {
+        float4 base = shadowMap.gather_compare(
+            shadowSampler, uv, layer, compare);
+        float4 shifted = shadowMap.gather_compare(
+            shadowSampler, uv, layer, compare, offset);
+        return base + shifted;
+    }
+
+    float4 gatherDepthCubeArray(depthcube_array<float> shadowMap,
+                                sampler shadowSampler,
+                                float3 dir,
+                                uint layer,
+                                float compare) {
+        return shadowMap.gather_compare(shadowSampler, dir, layer, compare);
+    }
+    """
+    crossgl = convert(code)
+
+    assert (
+        "textureGatherCompare(shadowMap, shadowSampler, vec3(uv, layer), compare)"
+        in crossgl
+    )
+    assert (
+        "textureGatherCompareOffset("
+        "shadowMap, shadowSampler, vec3(uv, layer), compare, offset)" in crossgl
+    )
+    assert (
+        "textureGatherCompare("
+        "shadowMap, shadowSampler, vec4(dir, layer), compare)" in crossgl
+    )
+    assert "textureGatherCompare(shadowMap, shadowSampler, uv, layer" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+    assert (
+        "shadowMap.gather_compare("
+        "shadowSampler, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), compare)" in metal
+    )
+    assert (
+        "shadowMap.gather_compare("
+        "shadowSampler, (float3(uv, layer)).xy, "
+        "uint((float3(uv, layer)).z), compare, offset)" in metal
+    )
+    assert (
+        "shadowMap.gather_compare("
+        "shadowSampler, (float4(dir, layer)).xyz, "
+        "uint((float4(dir, layer)).w), compare)" in metal
+    )
+    assert "textureGatherCompare(" not in metal
+
+
 def test_codegen_texture_method_descriptors():
     converter = MetalToCrossGLConverter()
 
