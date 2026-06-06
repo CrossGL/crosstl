@@ -1006,8 +1006,10 @@ class GLSLParser:
         ):
             if self.current_token[0] == "SUBROUTINE":
                 self.advance()
+                self.skip_newlines()
                 if self.current_token[0] == "LPAREN":
                     self.eat("LPAREN")
+                    self.skip_newlines()
                     type_names = []
                     while True:
                         if self.current_token[0] in TYPE_TOKENS:
@@ -1020,6 +1022,7 @@ class GLSLParser:
                             raise SyntaxError(
                                 f"Expected subroutine type, got {self.current_token}"
                             )
+                        self.skip_newlines()
                         if self.current_token[0] != "COMMA":
                             break
                         self.eat("COMMA")

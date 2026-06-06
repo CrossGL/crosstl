@@ -3878,6 +3878,150 @@ class TestCudaCodeGen:
         assert "__float_as_int(1.0)" not in cuda_code
         assert "__uint_as_float(1u)" not in cuda_code
 
+    def test_integer_bit_builtins_lower_to_cuda_intrinsics(self):
+        source_code = """
+        shader CudaIntegerBitBuiltins {
+            compute {
+                void main(uint3 tid @ gl_GlobalInvocationID) {
+                    uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                    int3 signedMask = int3(tid.x, tid.y, tid.z);
+
+                    uvec3 counts = bitCount(mask);
+                    uvec3 signedCounts = bitCount(signedMask);
+                    uvec3 reversed = bitfieldReverse(mask);
+                    int3 signedReversed = bitfieldReverse(signedMask);
+                    uvec3 lowBits = findLSB(mask);
+                    uvec3 highBits = findMSB(mask);
+                    int3 signedHighBits = findMSB(signedMask);
+                    uint aliasCount = countbits(tid.x);
+                    uint aliasReverse = reversebits(tid.y);
+                    uint aliasLow = firstbitlow(tid.z);
+                    uint aliasHigh = firstbithigh(tid.x);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in cuda_code
+        assert (
+            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));"
+            in (cuda_code)
+        )
+        assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in cuda_code
+        assert "__popc(static_cast<unsigned int>(value.x))" in cuda_code
+        assert (
+            "__device__ inline uint3 cgl_uint3_bitfieldReverse(uint3 value)"
+            in cuda_code
+        )
+        assert (
+            "__device__ inline int3 cgl_int3_bitfieldReverse(int3 value)" in cuda_code
+        )
+        assert "static_cast<int>(__brev(static_cast<unsigned int>(value.x)))" in (
+            cuda_code
+        )
+        assert "__device__ inline uint3 cgl_uint3_findLSB(uint3 value)" in cuda_code
+        assert "__device__ inline uint3 cgl_uint3_findMSB(uint3 value)" in cuda_code
+        assert "__device__ inline int3 cgl_int3_findMSB(int3 value)" in cuda_code
+        assert "(31 - __clz(~(value.x)))" in cuda_code
+
+        assert "uint3 counts = cgl_uint3_bitCount(mask);" in cuda_code
+        assert "uint3 signedCounts = cgl_int3_bitCount(signedMask);" in cuda_code
+        assert "uint3 reversed = cgl_uint3_bitfieldReverse(mask);" in cuda_code
+        assert "int3 signedReversed = cgl_int3_bitfieldReverse(signedMask);" in (
+            cuda_code
+        )
+        assert "uint3 lowBits = cgl_uint3_findLSB(mask);" in cuda_code
+        assert "uint3 highBits = cgl_uint3_findMSB(mask);" in cuda_code
+        assert "int3 signedHighBits = cgl_int3_findMSB(signedMask);" in cuda_code
+        assert "uint aliasCount = __popc(" in cuda_code
+        assert "uint aliasReverse = __brev(" in cuda_code
+        assert "uint aliasLow = (__ffs(" in cuda_code
+        assert "uint aliasHigh = ((" in cuda_code
+        assert "__clz(" in cuda_code
+        assert "= bitCount(" not in cuda_code
+        assert "= bitfieldReverse(" not in cuda_code
+        assert "= findLSB(" not in cuda_code
+        assert "= findMSB(" not in cuda_code
+        assert "countbits(" not in cuda_code
+        assert "reversebits(" not in cuda_code
+        assert "firstbitlow(" not in cuda_code
+        assert "firstbithigh(" not in cuda_code
+
+    def test_user_defined_integer_bit_builtin_names_are_preserved(self):
+        source_code = """
+        shader CudaUserIntegerBitNames {
+            uint bitCount(uint value) {
+                return value + 7u;
+            }
+
+            uint countbits(uint value) {
+                return value + 8u;
+            }
+
+            uint bitfieldReverse(uint value) {
+                return value + 9u;
+            }
+
+            uint reversebits(uint value) {
+                return value + 10u;
+            }
+
+            uint findLSB(uint value) {
+                return value + 11u;
+            }
+
+            uint firstbitlow(uint value) {
+                return value + 12u;
+            }
+
+            uint findMSB(uint value) {
+                return value + 13u;
+            }
+
+            uint firstbithigh(uint value) {
+                return value + 14u;
+            }
+
+            compute {
+                void main(uint3 tid @ gl_GlobalInvocationID) {
+                    uint a = bitCount(tid.x);
+                    uint b = countbits(tid.y);
+                    uint c = bitfieldReverse(tid.z);
+                    uint d = reversebits(tid.x);
+                    uint e = findLSB(tid.y);
+                    uint f = firstbitlow(tid.z);
+                    uint g = findMSB(tid.x);
+                    uint h = firstbithigh(tid.y);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__device__ uint bitCount(uint value)" in cuda_code
+        assert "__device__ uint countbits(uint value)" in cuda_code
+        assert "__device__ uint bitfieldReverse(uint value)" in cuda_code
+        assert "__device__ uint reversebits(uint value)" in cuda_code
+        assert "__device__ uint findLSB(uint value)" in cuda_code
+        assert "__device__ uint firstbitlow(uint value)" in cuda_code
+        assert "__device__ uint findMSB(uint value)" in cuda_code
+        assert "__device__ uint firstbithigh(uint value)" in cuda_code
+        assert "uint a = bitCount(" in cuda_code
+        assert "uint b = countbits(" in cuda_code
+        assert "uint c = bitfieldReverse(" in cuda_code
+        assert "uint d = reversebits(" in cuda_code
+        assert "uint e = findLSB(" in cuda_code
+        assert "uint f = firstbitlow(" in cuda_code
+        assert "uint g = findMSB(" in cuda_code
+        assert "uint h = firstbithigh(" in cuda_code
+        assert "__popc(" not in cuda_code
+        assert "__brev(" not in cuda_code
+        assert "__ffs(" not in cuda_code
+        assert "__clz(" not in cuda_code
+
     def test_fma_and_mad_builtins_lower_to_cuda_fused_multiply_add(self):
         source_code = """
         shader TestShader {

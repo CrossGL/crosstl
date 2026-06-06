@@ -2550,6 +2550,29 @@ def test_codegen_rwbyteaddressbuffer_interlocked_add_from_microsoft_docs():
     parse_crossgl(crossgl)
 
 
+def test_codegen_rwbyteaddressbuffer_interlocked_family_from_microsoft_docs():
+    # Source: Microsoft RWByteAddressBuffer method table and Interlocked docs.
+    code = textwrap.dedent("""
+        RWByteAddressBuffer rawBytes : register(u1);
+
+        void main(uint offset : TEXCOORD0) {
+            uint original;
+            rawBytes.InterlockedMax(offset, 5u, original);
+            rawBytes.InterlockedCompareExchange(offset + 4u, 3u, 7u, original);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "RWByteAddressBuffer rawBytes;" in crossgl
+    assert "@ register(u1)" in crossgl
+    assert "original = atomicMax(rawBytes, offset, 5);" in crossgl
+    assert "original = atomicCompareExchange(rawBytes, offset + 4, 3, 7);" in crossgl
+    assert ".InterlockedMax(" not in crossgl
+    assert ".InterlockedCompareExchange(" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
     code = textwrap.dedent("""
         ByteAddressBuffer rawInput : register(t0);

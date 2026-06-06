@@ -60,6 +60,7 @@ support/generated/ci-coverage-comparison.json
 support/generated/ci-coverage-report.md
 support/generated/support-issue-plan.json
 support/generated/support-issue-sync-summary.json
+support/generated/support-evidence-check.json
 support/generated/support-matrix-check.json
 support/generated/support-issue-ci-summary.md
 support/generated/support-signals.json

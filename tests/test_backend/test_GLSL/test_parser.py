@@ -1344,6 +1344,40 @@ def test_parse_subroutine_function_layout_metadata_from_khronos_shader_subroutin
     assert material_color.layout == {"location": "1"}
 
 
+def test_parse_subroutine_type_list_with_newlines_from_khronos_syntax():
+    # Khronos GLSL 4.60 subroutine examples use subroutine(typeName) as a
+    # qualifier; newlines are whitespace between the qualifier tokens.
+    code = textwrap.dedent("""
+        #version 400 core
+        subroutine vec4 ColorFunc(vec3 color);
+
+        subroutine
+        (
+            ColorFunc
+        )
+        vec4 redColor(vec3 color)
+        {
+            return vec4(color.r, 0.0, 0.0, 1.0);
+        }
+
+        subroutine uniform ColorFunc materialColor;
+        out vec4 outColor;
+
+        void main()
+        {
+            outColor = materialColor(vec3(1.0));
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+
+    red_color = next(
+        function for function in ast.functions if function.name == "redColor"
+    )
+
+    assert red_color.qualifiers == ["subroutine(ColorFunc)"]
+
+
 def test_parse_vulkan_subpass_input_uniforms():
     code = textwrap.dedent("""
         #version 450
