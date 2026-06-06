@@ -1407,6 +1407,45 @@ class TestHipCodeGen:
         assert "f162" not in hip_code
         assert "f16(" not in hip_code
 
+    def test_scalar_alias_constructors_emit_hip_casts(self, tmp_path):
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    u32 mask = u32(1);
+                    uint shaderUnsigned = uint(mask);
+                    i32 signedMask = i32(shaderUnsigned);
+                    f32 weight = f32(signedMask);
+                    f64 precise = f64(weight);
+                    let inferredUnsigned = u32(2);
+                    let inferredFloat = f32(inferredUnsigned);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int mask = static_cast<unsigned int>(1);" in hip_code
+        assert (
+            "unsigned int shaderUnsigned = static_cast<unsigned int>(mask);" in hip_code
+        )
+        assert "int signedMask = static_cast<int>(shaderUnsigned);" in hip_code
+        assert "float weight = static_cast<float>(signedMask);" in hip_code
+        assert "double precise = static_cast<double>(weight);" in hip_code
+        assert (
+            "unsigned int inferredUnsigned = static_cast<unsigned int>(2);" in hip_code
+        )
+        assert "float inferredFloat = static_cast<float>(inferredUnsigned);" in hip_code
+        assert "u32(" not in hip_code
+        assert "i32(" not in hip_code
+        assert "f32(" not in hip_code
+        assert "f64(" not in hip_code
+        assert " = uint(" not in hip_code
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+
     @pytest.mark.parametrize("vector_type", ["vec3<f16>", "vec4<f16>"])
     def test_fp16_vec3_vec4_aliases_raise_hip_diagnostic(self, vector_type):
         source_code = f"""

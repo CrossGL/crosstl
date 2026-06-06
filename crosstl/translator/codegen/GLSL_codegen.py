@@ -663,6 +663,12 @@ class GLSLCodeGen:
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
     }
+    GLSL_VECTOR_RELATIONAL_FUNCTIONS = {
+        "<": "lessThan",
+        "<=": "lessThanEqual",
+        ">": "greaterThan",
+        ">=": "greaterThanEqual",
+    }
     GLSL_WAVE_EXTENSION_REQUIREMENTS = {
         "WaveGetLaneCount": "#extension GL_KHR_shader_subgroup_basic : require",
         "WaveGetLaneIndex": "#extension GL_KHR_shader_subgroup_basic : require",
@@ -8154,7 +8160,14 @@ class GLSLCodeGen:
             operator = self.map_operator(
                 getattr(expr, "op", getattr(expr, "operator", None))
             )
-            if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
+            if operator in self.GLSL_VECTOR_RELATIONAL_FUNCTIONS:
+                left_type = self.expression_result_type(expr.left)
+                right_type = self.expression_result_type(expr.right)
+                vector_type = self.glsl_relational_vector_type(left_type, right_type)
+                if vector_type is not None:
+                    return self.glsl_bool_vector_type(vector_type)
+                return "bool"
+            if operator in {"==", "!=", "&&", "||"}:
                 return "bool"
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
@@ -8326,6 +8339,54 @@ class GLSLCodeGen:
                 or self.global_variable_types.get(name)
             )
         return None
+
+    def glsl_bool_vector_type(self, vector_type):
+        mapped_type = self.map_type(vector_type)
+        if self.vector_component_type(mapped_type) is None:
+            return None
+        if mapped_type.endswith(("2", "3", "4")):
+            return f"bvec{mapped_type[-1]}"
+        return None
+
+    def glsl_relational_vector_type(self, left_type, right_type):
+        if self.is_vector_value_type(left_type):
+            return self.map_type(left_type)
+        if self.is_vector_value_type(right_type):
+            return self.map_type(right_type)
+        return None
+
+    def is_numeric_literal_expression(self, expr):
+        if isinstance(expr, (int, float)) and not isinstance(expr, bool):
+            return True
+        if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
+            value = getattr(expr, "value", None)
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        return False
+
+    def glsl_vector_relational_operand(self, expr, expr_type, vector_type):
+        generated = self.generate_expression(expr)
+        if self.is_vector_value_type(expr_type):
+            return generated
+        is_scalar = self.is_scalar_numeric_type(expr_type)
+        is_literal = self.is_numeric_literal_expression(expr)
+        if is_scalar or is_literal:
+            return f"{vector_type}({generated})"
+        return generated
+
+    def generate_vector_relational_expression(self, left_expr, operator, right_expr):
+        function_name = self.GLSL_VECTOR_RELATIONAL_FUNCTIONS.get(operator)
+        if function_name is None:
+            return None
+
+        left_type = self.expression_result_type(left_expr)
+        right_type = self.expression_result_type(right_expr)
+        vector_type = self.glsl_relational_vector_type(left_type, right_type)
+        if vector_type is None:
+            return None
+
+        left = self.glsl_vector_relational_operand(left_expr, left_type, vector_type)
+        right = self.glsl_vector_relational_operand(right_expr, right_type, vector_type)
+        return f"{function_name}({left}, {right})"
 
     def validate_dispatch_mesh_count_argument(self, arg, index):
         axis = ("x", "y", "z")[index]
@@ -9161,9 +9222,14 @@ class GLSLCodeGen:
                 return "true" if expr.value else "false"
             return str(expr.value)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
+            op = self.map_operator(expr.op)
+            vector_relational = self.generate_vector_relational_expression(
+                expr.left, op, expr.right
+            )
+            if vector_relational is not None:
+                return vector_relational
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
-            op = self.map_operator(expr.op)
             return f"({left} {op} {right})"
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
             return self.generate_assignment(expr)

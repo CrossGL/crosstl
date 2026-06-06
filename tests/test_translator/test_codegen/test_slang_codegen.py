@@ -3792,6 +3792,26 @@ def test_floating_binary_modulo_lowers_to_slang_fmod():
     assert "d %= 3.0;" not in generated_code
 
 
+def test_floating_modulo_with_uninferred_builtin_operand_does_not_crash():
+    code = """
+    shader BinaryModuloBuiltinOperand {
+        compute {
+            void main() {
+                float a = 5.0;
+                float wrapped = sin(a) % 1.0;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float wrapped = fmod(sin(a), 1.0);" in generated_code
+    assert "float wrapped = sin(a) % 1.0;" not in generated_code
+
+
 def test_multiple_stage_entry_points_emit():
     code = """
     shader main {

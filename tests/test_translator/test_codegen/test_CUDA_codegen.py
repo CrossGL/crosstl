@@ -210,6 +210,52 @@ class TestCudaCodeGen:
         assert "return;" in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_non_void_compute_return_preserves_discarded_atomic_side_effect(
+        self, tmp_path
+    ):
+        uint_type = PrimitiveType("uint")
+        ast = ShaderNode(
+            name="ReturnAtomicCudaKernel",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "increment",
+                    uint_type,
+                    [ParameterNode("counter", PointerType(uint_type))],
+                    BlockNode(
+                        [
+                            ReturnNode(
+                                FunctionCallNode(
+                                    IdentifierNode("atomicAdd"),
+                                    [
+                                        ArrayAccessNode(
+                                            IdentifierNode("counter"),
+                                            LiteralNode(
+                                                0,
+                                                PrimitiveType("int"),
+                                            ),
+                                        ),
+                                        LiteralNode(1, uint_type),
+                                    ],
+                                )
+                            )
+                        ]
+                    ),
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert 'extern "C" __global__ void increment(uint* counter)' in cuda_code
+        assert "atomicAdd(&counter[0], 1u);" in cuda_code
+        assert "return atomicAdd" not in cuda_code
+        atomic_index = cuda_code.index("atomicAdd(&counter[0], 1u);")
+        assert atomic_index < cuda_code.index("return;", atomic_index)
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_mesh_task_stages_lower_to_cuda_metadata_and_placeholder_hooks(self):
         """Mesh/task stages lower to deterministic CUDA helper representation."""
         source_code = """

@@ -5639,6 +5639,49 @@ def test_glsl_hlsl_integer_bool_vector_aliases_map_to_glsl_names():
     assert "bool4" not in generated_code
 
 
+def test_glsl_vector_relational_operators_lower_to_builtin_functions():
+    # Khronos GLSL 4.60 requires these built-ins for component-wise vector
+    # relational comparisons:
+    # https://registry.khronos.org/OpenGL/specs/gl/GLSLangSpec.4.60.html#operators
+    shader = """
+    shader VectorRelationalSmoke {
+        bool2 masks(float2 uv, float cutoff) {
+            bool2 above = uv > cutoff;
+            bool2 below = cutoff < uv;
+            bool2 atMost = uv <= float2(1.0);
+            bool2 atLeast = float2(0.0) >= uv;
+            return above;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bvec2 masks(vec2 uv, float cutoff)" in generated_code
+    assert "bvec2 above = greaterThan(uv, vec2(cutoff));" in generated_code
+    assert "bvec2 below = lessThan(vec2(cutoff), uv);" in generated_code
+    assert "bvec2 atMost = lessThanEqual(uv, vec2(1.0));" in generated_code
+    assert "bvec2 atLeast = greaterThanEqual(vec2(0.0), uv);" in generated_code
+    assert "(uv > cutoff)" not in generated_code
+    assert "(cutoff < uv)" not in generated_code
+
+
+def test_glsl_vector_relational_return_expression_uses_bool_vector_result():
+    shader = """
+    shader VectorRelationalReturn {
+        bool3 visible(vec3 color, vec3 threshold) {
+            return color >= threshold;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bvec3 visible(vec3 color, vec3 threshold)" in generated_code
+    assert "return greaterThanEqual(color, threshold);" in generated_code
+    assert "return (color >= threshold);" not in generated_code
+
+
 def test_glsl_precision_aliases_lower_to_standard_glsl_types():
     shader = """
     shader PrecisionAliasSmoke {

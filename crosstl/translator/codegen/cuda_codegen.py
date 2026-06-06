@@ -5909,7 +5909,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Visit return statement"""
         if self.current_function_is_kernel_entry:
             if node.value and not isinstance(node.value, MatchNode):
-                self.visit(node.value)
+                if self.kernel_return_expression_may_have_side_effects(node.value):
+                    self.emit_discarded_kernel_return_expression(node.value)
+                else:
+                    self.visit(node.value)
             self.emit("return;")
             return
         if node.value:
@@ -5919,6 +5922,68 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.emit(f"return {value};")
         else:
             self.emit("return;")
+
+    def emit_discarded_kernel_return_expression(self, value_node):
+        """Emit a non-void kernel return value when evaluating it can do work."""
+        if isinstance(value_node, AssignmentNode):
+            self.emit_assignment_statement(value_node)
+            return
+
+        value = self.visit(value_node)
+        if isinstance(value, str) and value.strip():
+            self.emit(f"{value};")
+
+    def kernel_return_expression_may_have_side_effects(self, node):
+        """Return whether discarding a kernel return expression would drop work."""
+        if node is None:
+            return False
+        if isinstance(
+            node,
+            (
+                AssignmentNode,
+                FunctionCallNode,
+                RayTracingOpNode,
+                RayQueryOpNode,
+            ),
+        ):
+            return True
+        if isinstance(node, UnaryOpNode):
+            operator = getattr(node, "operator", getattr(node, "op", ""))
+            if operator in {"++", "--"}:
+                return True
+
+        child_attrs = (
+            "left",
+            "right",
+            "operand",
+            "condition",
+            "true_expr",
+            "false_expr",
+            "array_expr",
+            "array",
+            "index_expr",
+            "index",
+            "object_expr",
+            "object",
+            "pointer_expr",
+            "arguments",
+            "args",
+            "named_arguments",
+        )
+        for attr in child_attrs:
+            child = getattr(node, attr, None)
+            if isinstance(child, dict):
+                children = child.values()
+            elif isinstance(child, (list, tuple)):
+                children = child
+            else:
+                children = (child,)
+            if any(
+                self.kernel_return_expression_may_have_side_effects(item)
+                for item in children
+            ):
+                return True
+        return False
 
     def emit_match_expression_return(self, match_node):
         return_type = self.type_name_string(self.current_function_return_type)

@@ -8284,6 +8284,10 @@ class MojoCodeGen:
                 bool_mix_call = self.generate_bool_mix_call(expr.args)
                 if bool_mix_call is not None:
                     return bool_mix_call
+            if func_name == "clamp":
+                clamp_call = self.generate_clamp_call(expr.args)
+                if clamp_call is not None:
+                    return clamp_call
             if func_name in {"min", "max"}:
                 min_max_call = self.generate_min_max_call(func_name, expr.args)
                 if min_max_call is not None:
@@ -9681,6 +9685,37 @@ class MojoCodeGen:
         elif left_info is None and right_info is not None:
             left = f"Float32({left})"
         return f"{func_name}({left}, {right})"
+
+    def generate_clamp_call(self, args):
+        if len(args) != 3:
+            return None
+
+        value_type = self.expression_result_type(args[0])
+        value_info = self.vector_type_info(value_type)
+        if value_info is None:
+            return None
+        if value_info[0] != "DType.float32":
+            return None
+
+        min_type = self.expression_result_type(args[1])
+        max_type = self.expression_result_type(args[2])
+        min_info = self.vector_type_info(min_type)
+        max_info = self.vector_type_info(max_type)
+        if min_info is not None and min_info[:3] != value_info[:3]:
+            return None
+        if max_info is not None and max_info[:3] != value_info[:3]:
+            return None
+        if (min_info is None) != (max_info is None):
+            return None
+
+        self.required_math_helpers.add("clamp")
+        value = self.generate_expression(args[0])
+        min_value = self.generate_expression(args[1])
+        max_value = self.generate_expression(args[2])
+        if min_info is None and max_info is None:
+            min_value = f"Float32({min_value})"
+            max_value = f"Float32({max_value})"
+        return f"clamp({value}, {min_value}, {max_value})"
 
     def generate_texture_call(self, args, helper_name):
         if not args:
@@ -12632,8 +12667,12 @@ class MojoCodeGen:
                 "    return min(max(value, min_value), max_value)\n\n"
                 "fn clamp(value: SIMD[DType.float32, 2], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value))\n\n"
+                "fn clamp(value: SIMD[DType.float32, 2], min_value: SIMD[DType.float32, 2], max_value: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
+                "    return SIMD[DType.float32, 2](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]))\n\n"
                 "fn clamp(value: SIMD[DType.float32, 4], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 4]:\n"
                 "    return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))\n\n"
+                "fn clamp(value: SIMD[DType.float32, 4], min_value: SIMD[DType.float32, 4], max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
+                "    return SIMD[DType.float32, 4](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]), clamp(value[2], min_value[2], max_value[2]), clamp(value[3], min_value[3], max_value[3]))\n\n"
             )
         if helper_name == "max":
             return self.generate_min_max_helper("max", ">=")
@@ -13806,7 +13845,7 @@ class MojoCodeGen:
                     if self.vector_type_info(arg_type) is not None:
                         return arg_type
                 return self.expression_result_type(expr.args[0]) or "float"
-            if func_name in {"min", "max"} and expr.args:
+            if func_name in {"min", "max", "clamp"} and expr.args:
                 for arg in expr.args:
                     arg_type = self.expression_result_type(arg)
                     if self.vector_type_info(arg_type) is not None:
