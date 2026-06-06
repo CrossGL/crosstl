@@ -381,6 +381,8 @@ FRAGMENT_OUTPUT_TYPES = {
 VERTEX_BUILTINS = {
     "gl_VertexID",
     "gl_InstanceID",
+    "gl_VertexIndex",
+    "gl_InstanceIndex",
     "gl_BaseVertex",
     "gl_BaseInstance",
     "gl_DrawID",

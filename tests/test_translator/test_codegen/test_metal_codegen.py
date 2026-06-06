@@ -6084,6 +6084,39 @@ def test_vertex_entry_structs_infer_metal_stage_io_attributes():
     assert "float4 position [[position]];" in generated_code
 
 
+def test_metal_stage_io_interpolation_attributes_preserve_semantics():
+    shader = """
+    shader MetalInterpolationStageIO {
+        struct FSInput {
+            vec4 color @TEXCOORD0 @flat;
+            vec2 uv @linear_noperspective_centroid @TEXCOORD1;
+            int materialId @nointerpolation @TEXCOORD2;
+            vec4 sampleColor @TEXCOORD3 @sample;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @gl_FragColor {
+                return input.color + vec4(input.uv, 0.0, 1.0) +
+                    input.sampleColor + vec4(float(input.materialId));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float4 color [[attribute(5)]] [[flat]];" in generated_code
+    assert "float2 uv [[attribute(6)]] [[centroid_no_perspective]];" in generated_code
+    assert "int materialId [[attribute(7)]] [[flat]];" in generated_code
+    assert (
+        "float4 sampleColor [[attribute(8)]] [[sample_perspective]];" in generated_code
+    )
+    assert "[[linear_noperspective_centroid]]" not in generated_code
+    assert "[[nointerpolation]]" not in generated_code
+
+
 def test_metal_stage_io_lowered_matrix_and_array_members_preserve_attributes():
     shader = """
     shader ExpandedVertexAttributes {

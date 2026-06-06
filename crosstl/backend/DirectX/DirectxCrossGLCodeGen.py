@@ -184,6 +184,12 @@ class HLSLToCrossGLConverter:
             "LineStream": "lineStream",
             "TriangleStream": "triangleStream",
             # Sampler Types
+            "sampler": "sampler",
+            "sampler_state": "sampler",
+            "sampler1D": "sampler1D",
+            "sampler2D": "sampler2D",
+            "sampler3D": "sampler3D",
+            "samplerCUBE": "samplerCube",
             "Sampler": "sampler",
             "SamplerState": "sampler",
             "SamplerComparisonState": "sampler",
@@ -273,7 +279,10 @@ class HLSLToCrossGLConverter:
             "GatherCmpAlpha": "3",
         }
         self.legacy_texture_function_sampler_types = {
+            "tex1D": {"sampler", "sampler1D"},
             "tex2D": {"sampler2D", "sampler2D_half", "sampler2D_float"},
+            "tex3D": {"sampler3D"},
+            "texCUBE": {"samplerCUBE", "samplerCube"},
             "tex2Dlod": {"sampler2D", "sampler2D_half", "sampler2D_float"},
             "tex2Dbias": {"sampler2D", "sampler2D_half", "sampler2D_float"},
             "tex2Dgrad": {"sampler2D", "sampler2D_half", "sampler2D_float"},
@@ -1146,7 +1155,7 @@ class HLSLToCrossGLConverter:
         if sampler_type not in expected_sampler_types:
             return None
 
-        if func_name == "tex2D" and len(raw_args) == 2:
+        if func_name in {"tex1D", "tex2D", "tex3D", "texCUBE"} and len(raw_args) == 2:
             return f"texture({', '.join(rendered_args)})"
 
         if func_name in {"tex2Dlod", "tex2Dbias"} and len(raw_args) == 2:

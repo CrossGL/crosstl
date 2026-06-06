@@ -1128,6 +1128,65 @@ class TestCudaCodeGen:
         assert "cooperative_groups::this_grid" not in result
         assert "cooperative_groups::coalesced_threads" not in result
 
+    def test_nvidia_cluster_group_histogram_methods_emit_diagnostics(self):
+        """Covers CUDA Programming Guide distributed shared-memory histogram."""
+        code = """
+        #include <cooperative_groups.h>
+        namespace cg = cooperative_groups;
+
+        __global__ void clusterHist_kernel(
+            int *bins,
+            const int bins_per_block,
+            const int *__restrict__ input,
+            size_t array_size) {
+            extern __shared__ int smem[];
+            int tid = cg::this_grid().thread_rank();
+            cg::cluster_group cluster = cg::this_cluster();
+            unsigned int clusterBlockRank = cluster.block_rank();
+            int cluster_size = cluster.dim_blocks().x;
+            int dst_block_rank = 0;
+            int dst_offset = 0;
+            int *dst_smem = cluster.map_shared_rank(smem, dst_block_rank);
+            atomicAdd(dst_smem + dst_offset, 1);
+            cluster.sync();
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert (
+            "// cooperative_groups cluster_group for cluster not directly supported in CrossGL"
+            in result
+        )
+        assert (
+            "var clusterBlockRank: u32 = "
+            "(/* cooperative_groups cluster_group.block_rank not directly supported in CrossGL */ 0);"
+            in result
+        )
+        assert (
+            "var cluster_size: i32 = "
+            "(/* cooperative_groups cluster_group.dim_blocks not directly supported in CrossGL */ "
+            "vec3<u32>(0, 0, 0)).x;" in result
+        )
+        assert (
+            "var dst_smem: ptr<i32> = "
+            "(/* cooperative_groups cluster_group.map_shared_rank(smem, dst_block_rank) "
+            "not directly supported in CrossGL */ smem);" in result
+        )
+        assert (
+            "// cooperative_groups cluster_group.sync not directly supported in CrossGL"
+            in result
+        )
+        assert "cg::this_cluster" not in result
+        assert "cluster.block_rank" not in result
+        assert "cluster.dim_blocks" not in result
+        assert "cluster.map_shared_rank" not in result
+        assert "cluster.sync" not in result
+
     def test_cooperative_groups_async_copy_wait_emit_diagnostics(self):
         code = """
         namespace cg = cooperative_groups;

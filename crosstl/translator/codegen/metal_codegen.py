@@ -335,6 +335,23 @@ class CharTypeMapper:
 class MetalCodeGen:
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
+    METAL_INTERPOLATION_ATTRIBUTES = {
+        "center_no_perspective": "center_no_perspective",
+        "center_perspective": "center_perspective",
+        "centroid": "centroid_perspective",
+        "centroid_no_perspective": "centroid_no_perspective",
+        "centroid_perspective": "centroid_perspective",
+        "flat": "flat",
+        "linear_centroid": "centroid_perspective",
+        "linear_noperspective": "center_no_perspective",
+        "linear_noperspective_centroid": "centroid_no_perspective",
+        "linear_sample": "sample_perspective",
+        "nointerpolation": "flat",
+        "noperspective": "center_no_perspective",
+        "sample": "sample_perspective",
+        "sample_no_perspective": "sample_no_perspective",
+        "sample_perspective": "sample_perspective",
+    }
     METAL_DERIVATIVE_FUNCTION_ALIASES = {
         "ddx": "dfdx",
         "dFdx": "dfdx",
@@ -2321,6 +2338,22 @@ class MetalCodeGen:
 
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def metal_interpolation_attribute_name(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return None
+        normalized = str(attr_name).lower()
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return self.METAL_INTERPOLATION_ATTRIBUTES.get(normalized)
+
+    def metal_interpolation_attribute_suffix(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            interpolation = self.metal_interpolation_attribute_name(attr)
+            if interpolation is not None:
+                return f" [[{interpolation}]]"
+        return ""
+
     def format_struct_resource_array_member(self, member):
         name = getattr(member, "name", None)
         if not name:
@@ -2582,6 +2615,7 @@ class MetalCodeGen:
                 "field_semantics": self.metal_stage_io_lowered_field_semantics(
                     semantic, len(fields)
                 ),
+                "interpolation_attr": self.metal_interpolation_attribute_suffix(member),
             }
 
         raw_type = self.struct_member_raw_type(member)
@@ -2604,6 +2638,7 @@ class MetalCodeGen:
             "field_semantics": self.metal_stage_io_lowered_field_semantics(
                 semantic, len(fields)
             ),
+            "interpolation_attr": self.metal_interpolation_attribute_suffix(member),
         }
 
     def metal_stage_io_lowered_field_semantics(self, semantic, field_count):
@@ -2749,12 +2784,16 @@ class MetalCodeGen:
         if lowering is not None:
             code = ""
             field_semantics = lowering.get("field_semantics", [])
+            interpolation_attr = lowering.get("interpolation_attr", "")
             for index, (field_name, field_type) in enumerate(lowering["fields"]):
                 semantic = (
                     field_semantics[index] if index < len(field_semantics) else None
                 )
                 semantic_attr = self.map_semantic(semantic) if semantic else ""
-                code += f"    {field_type} {field_name}{semantic_attr};\n"
+                code += (
+                    f"    {field_type} {field_name}{semantic_attr}"
+                    f"{interpolation_attr};\n"
+                )
                 dependencies.update(self.metal_struct_type_dependencies(field_type))
             return code, dependencies
 
@@ -2768,8 +2807,10 @@ class MetalCodeGen:
             if resource_array_declaration is not None:
                 abi_attr = self.format_metal_struct_member_abi_attributes(member)
                 semantic_attr = self.map_semantic(semantic) if semantic else ""
+                interpolation_attr = self.metal_interpolation_attribute_suffix(member)
                 return (
-                    f"    {resource_array_declaration}{abi_attr}{semantic_attr};\n",
+                    f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
+                    f"{interpolation_attr};\n",
                     set(),
                 )
 
@@ -2779,27 +2820,30 @@ class MetalCodeGen:
                 getattr(member, "vtype", "float"),
             )
             semantic_attr = self.map_semantic(semantic) if semantic else ""
+            interpolation_attr = self.metal_interpolation_attribute_suffix(member)
             mapped_type = self.map_type(element_type)
             dependencies.update(self.metal_struct_type_dependencies(mapped_type))
             if member.size:
                 if self.metal_array_semantic_attribute_precedes_extent(semantic):
                     return (
                         f"    {mapped_type} {member.name}{semantic_attr}"
-                        f"[{member.size}];\n",
+                        f"{interpolation_attr}[{member.size}];\n",
                         dependencies,
                     )
                 return (
                     f"    {mapped_type} {member.name}[{member.size}]"
-                    f"{semantic_attr};\n",
+                    f"{semantic_attr}{interpolation_attr};\n",
                     dependencies,
                 )
             if self.metal_array_semantic_attribute_precedes_extent(semantic):
                 return (
-                    f"    {mapped_type} {member.name}{semantic_attr}[1024];\n",
+                    f"    {mapped_type} {member.name}{semantic_attr}"
+                    f"{interpolation_attr}[1024];\n",
                     dependencies,
                 )
             return (
-                f"    {mapped_type} {member.name}[1024]{semantic_attr};\n",
+                f"    {mapped_type} {member.name}[1024]{semantic_attr}"
+                f"{interpolation_attr};\n",
                 dependencies,
             )
 
@@ -2808,6 +2852,7 @@ class MetalCodeGen:
             semantic = default_member_semantics.get(member.name)
         abi_attr = self.format_metal_struct_member_abi_attributes(member)
         semantic_attr = self.map_semantic(semantic) if semantic else ""
+        interpolation_attr = self.metal_interpolation_attribute_suffix(member)
 
         if hasattr(member, "member_type"):
             if self.is_array_type_node(member.member_type):
@@ -2816,7 +2861,8 @@ class MetalCodeGen:
                 )
                 if resource_array_declaration is not None:
                     return (
-                        f"    {resource_array_declaration}{abi_attr}{semantic_attr};\n",
+                        f"    {resource_array_declaration}{abi_attr}{semantic_attr}"
+                        f"{interpolation_attr};\n",
                         set(),
                     )
             address_space_declaration = self.format_address_space_parameter_declaration(
@@ -2832,7 +2878,8 @@ class MetalCodeGen:
                     )
                 )
                 return (
-                    f"    {address_space_declaration}{abi_attr}{semantic_attr};\n",
+                    f"    {address_space_declaration}{abi_attr}{semantic_attr}"
+                    f"{interpolation_attr};\n",
                     dependencies,
                 )
             if str(type(member.member_type)).find("ArrayType") != -1:
@@ -2853,16 +2900,21 @@ class MetalCodeGen:
                         array_size = array_size[1:-1]
                     return (
                         f"    {base_type} {member.name}{abi_attr}{semantic_attr}"
-                        f"[{array_size}];\n",
+                        f"{interpolation_attr}[{array_size}];\n",
                         dependencies,
                     )
                 if member.member_type.size is None:
                     base_type, _ = split_array_type_suffix(member_type)
                     return (
-                        f"    {base_type} {member.name}[1024]{abi_attr}{semantic_attr};\n",
+                        f"    {base_type} {member.name}[1024]{abi_attr}"
+                        f"{semantic_attr}{interpolation_attr};\n",
                         dependencies,
                     )
-                return f"    {declaration}{abi_attr}{semantic_attr};\n", dependencies
+                return (
+                    f"    {declaration}{abi_attr}{semantic_attr}"
+                    f"{interpolation_attr};\n",
+                    dependencies,
+                )
 
             member_type_str = self.convert_type_node_to_string(member.member_type)
             member_type = self.map_resource_type_with_format(member_type_str, member)
@@ -2873,7 +2925,8 @@ class MetalCodeGen:
 
         dependencies.update(self.metal_struct_type_dependencies(member_type))
         return (
-            f"    {member_type} {member.name}{abi_attr}{semantic_attr};\n",
+            f"    {member_type} {member.name}{abi_attr}{semantic_attr}"
+            f"{interpolation_attr};\n",
             dependencies,
         )
 
@@ -15661,6 +15714,7 @@ class MetalCodeGen:
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_metal_address_space_attribute(attr)
                 or self.is_metal_struct_member_abi_attribute(attr)
+                or self.metal_interpolation_attribute_name(attr) is not None
             ):
                 continue
             if hasattr(attr, "name"):

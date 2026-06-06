@@ -258,6 +258,36 @@ class HipToCrossGLConverter:
         "width",
     }
     CROSSGL_RESERVED_IDENTIFIERS = {"in"}
+    CPP_SCALAR_TYPE_ALIASES = {
+        **{
+            f"std::{name}": name
+            for name in (
+                "int8_t",
+                "uint8_t",
+                "int16_t",
+                "uint16_t",
+                "int32_t",
+                "uint32_t",
+                "int64_t",
+                "uint64_t",
+                "size_t",
+            )
+        },
+        **{
+            f"cuda::std::{name}": name
+            for name in (
+                "int8_t",
+                "uint8_t",
+                "int16_t",
+                "uint16_t",
+                "int32_t",
+                "uint32_t",
+                "int64_t",
+                "uint64_t",
+                "size_t",
+            )
+        },
+    }
 
     def __init__(self):
         self.indent_level = 0
@@ -6333,6 +6363,7 @@ class HipToCrossGLConverter:
 
         hip_type = self.strip_type_qualifiers(hip_type)
         hip_type = self.strip_union_type_keyword(hip_type)
+        hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
         cooperative_group_type = self.convert_cooperative_group_type(hip_type)
         if cooperative_group_type is not None:
             return cooperative_group_type

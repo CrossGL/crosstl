@@ -15767,6 +15767,42 @@ class TestHipCodeGen:
         assert "int64_t(" not in result
         assert "uint32_t(" not in result
 
+    def test_rocm_docs_warp_size_std_fixed_width_types_conversion(self):
+        # Reduced from the ROCm HIP C++ language extensions block_reduce example.
+        code = """
+        __global__ void block_reduce(
+            int* input,
+            std::uint64_t* mask,
+            int* output,
+            std::size_t size) {
+            const std::uint32_t tid = threadIdx.x,
+                                lid = threadIdx.x % warpSize,
+                                bid = blockIdx.x;
+            std::uint64_t warp_mask = 1ull << lid;
+            if (tid < size && (mask[bid] & warp_mask)) {
+                output[tid] = input[tid];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "@group(0) @binding(1) var<storage, read_write> mask: array<u64>" in result
+        )
+        assert "u32 size" in result
+        assert "var tid: u32 = gl_LocalInvocationID.x;" in result
+        assert "var lid: u32 = (gl_LocalInvocationID.x % 32);" in result
+        assert "var bid: u32 = gl_WorkGroupID.x;" in result
+        assert "var warp_mask: u64 = (1ull << lid);" in result
+        assert "std::uint" not in result
+        assert "std::size_t" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_reference_host_helper_parameters_conversion(self):
         code = """
         void prepare(std::vector<float>& h) {

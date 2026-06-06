@@ -3977,6 +3977,9 @@ class VulkanSPIRVCodeGen:
                 image_operands = f" Sample %{args[2].id}"
 
             id_value = self.get_id()
+            self.require_storage_image_without_format_capability(
+                metadata, "StorageImageReadWithoutFormat"
+            )
             self.emit(
                 f"%{id_value} = OpImageRead %{result_type.id} "
                 f"%{image_id.id} %{coord_id.id}{image_operands}"
@@ -4022,6 +4025,9 @@ class VulkanSPIRVCodeGen:
             if texel_id is None:
                 return None
 
+            self.require_storage_image_without_format_capability(
+                metadata, "StorageImageWriteWithoutFormat"
+            )
             self.emit(
                 f"OpImageWrite %{image_id.id} %{coord_id.id} %{texel_id.id}"
                 f"{image_operands}"
@@ -10279,6 +10285,12 @@ class VulkanSPIRVCodeGen:
             f"; WARNING: {function_name} requires a scalar integer sample operand"
         )
         return False
+
+    def require_storage_image_without_format_capability(
+        self, metadata, capability: str
+    ):
+        if metadata.get("format", "Unknown") == "Unknown":
+            self.require_capability(capability)
 
     def convert_storage_image_value_operand(
         self,

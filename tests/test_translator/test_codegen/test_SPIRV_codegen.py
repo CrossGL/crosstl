@@ -15266,6 +15266,38 @@ class TestVulkanSPIRVCodeGen:
         assert f"= OpLoad {rgba16f_type.group(1)} {normalized_var}" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_unformatted_storage_image_load_store_declares_required_capabilities(
+        self, tmp_path
+    ):
+        source_code = """
+        shader UnformattedStorageImage {
+            image2D outputImage;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 color = imageLoad(outputImage, pixel);
+                    imageStore(outputImage, pixel, color);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert re.search(r"OpTypeImage %\d+ 2D 0 0 0 2 Unknown", spv_code)
+        assert "OpCapability StorageImageReadWithoutFormat" in spv_code
+        assert "OpCapability StorageImageWriteWithoutFormat" in spv_code
+        assert "OpImageRead" in spv_code
+        assert "OpImageWrite" in spv_code
+        assert "imageLoad" not in spv_code
+        assert "imageStore" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_resource_operations_emit_spirv_image_instructions(self):
         source_code = """
         shader Resources {
