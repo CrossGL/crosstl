@@ -766,6 +766,73 @@ def _format_artifact_matrix_summary(artifact_matrix):
     )
 
 
+def _format_artifact_matrix_rollup(label, counts):
+    if not isinstance(counts, Mapping):
+        return None
+
+    entries = []
+    for name, row in counts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(row, Mapping):
+            continue
+        expected_count = row.get("expectedArtifactCount")
+        emitted_count = row.get("emittedArtifactCount")
+        translated_count = row.get("translatedCount")
+        failed_count = row.get("failedCount")
+        missing_count = row.get("missingArtifactCount")
+        extra_count = row.get("extraArtifactCount")
+        complete = row.get("complete")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (
+                expected_count,
+                emitted_count,
+                translated_count,
+                failed_count,
+                missing_count,
+                extra_count,
+            )
+        ):
+            continue
+        if not isinstance(complete, bool):
+            continue
+        entries.append(
+            (
+                name,
+                expected_count,
+                emitted_count,
+                translated_count,
+                failed_count,
+                missing_count,
+                extra_count,
+                complete,
+            )
+        )
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: (-item[1], item[0]))
+    return f"{label}: " + ", ".join(
+        (
+            f"{name}={emitted_count}/{expected_count} emitted "
+            f"({translated_count} translated, {failed_count} failed, "
+            f"{missing_count} missing, {extra_count} extra, "
+            f"{'complete' if complete else 'incomplete'})"
+        )
+        for (
+            name,
+            expected_count,
+            emitted_count,
+            translated_count,
+            failed_count,
+            missing_count,
+            extra_count,
+            complete,
+        ) in entries
+    )
+
+
 def _format_artifact_identity_line(artifact):
     if not isinstance(artifact, Mapping):
         return None
@@ -1015,6 +1082,18 @@ def _format_project_report_inspection(payload):
     if artifact_matrix:
         lines.append(artifact_matrix)
     if isinstance(artifact_matrix_payload, Mapping):
+        artifact_matrix_by_target = _format_artifact_matrix_rollup(
+            "Artifact matrix by target",
+            artifact_matrix_payload.get("statusByTarget"),
+        )
+        if artifact_matrix_by_target:
+            lines.append(artifact_matrix_by_target)
+        artifact_matrix_by_variant = _format_artifact_matrix_rollup(
+            "Artifact matrix by variant",
+            artifact_matrix_payload.get("statusByVariant"),
+        )
+        if artifact_matrix_by_variant:
+            lines.append(artifact_matrix_by_variant)
         lines.extend(
             _format_artifact_sample_lines(
                 "Artifact matrix missing artifacts",

@@ -125,7 +125,8 @@ validation diagnostic-code,
 missing-capability, and artifact target and variant rollups, report
 source-backend, file-extension, and artifact target rollups, source-map count,
 granularity, target, and source-backend rollups, artifact matrix completion
-counts plus sampled missing and extra artifact identities,
+counts, target and variant completion rollups, plus sampled missing and extra
+artifact identities,
 include-directory status counts, inactive source-root and include-directory
 record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
@@ -310,12 +311,12 @@ Project reports are JSON documents with:
   metadata. Invalid project output directories are recorded as failed artifacts
   without writing files.
 - ``artifactMatrix``: translation-report metadata with expected, emitted,
-  translated, failed, missing, extra, and completion counts for the unit, target,
-  and variant matrix. Scan-only reports omit this object because they
-  intentionally contain no translated or failed artifacts. Report inspection
-  also includes sampled missing and extra artifact identities when report
-  metadata is sufficient, so incomplete batch outputs are visible without
-  opening every artifact record.
+  translated, failed, missing, extra, and completion counts plus target and
+  variant completion rollups for the unit, target, and variant matrix.
+  Scan-only reports omit this object because they intentionally contain no
+  translated or failed artifacts. Report inspection also includes sampled
+  missing and extra artifact identities when report metadata is sufficient, so
+  incomplete batch outputs are visible without opening every artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact
@@ -340,7 +341,8 @@ Project reports are JSON documents with:
   checks, full-report artifact matrix coverage and artifact define map checks,
   artifact define-processing metadata and rollup checks,
   artifact include-path processing metadata and rollup checks,
-  artifact matrix emitted/translated/failed/missing/extra/completion count checks,
+  artifact matrix emitted/translated/failed/missing/extra/completion count and
+  target/variant rollup checks,
   full-report source-map granularity, target, and source-backend rollup checks,
   source-remap target and source-backend rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact

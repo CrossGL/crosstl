@@ -1684,6 +1684,18 @@ def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatc
     monkeypatch.setattr(project_pipeline, "translate", write_artifact)
 
     payload = translate_project(load_project_config(repo)).to_json()
+    complete_cgl_row = {
+        "expectedArtifactCount": 4,
+        "emittedArtifactCount": 4,
+        "translatedCount": 4,
+        "failedCount": 0,
+        "missingArtifactCount": 0,
+        "extraArtifactCount": 0,
+        "complete": True,
+    }
+    complete_opengl_row = dict(complete_cgl_row)
+    complete_debug_row = dict(complete_cgl_row)
+    complete_release_row = dict(complete_cgl_row)
 
     assert payload["artifactMatrix"] == {
         "unitCount": 2,
@@ -1698,6 +1710,14 @@ def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatc
         "missingArtifactCount": 0,
         "extraArtifactCount": 0,
         "complete": True,
+        "statusByTarget": {
+            "cgl": complete_cgl_row,
+            "opengl": complete_opengl_row,
+        },
+        "statusByVariant": {
+            "debug": complete_debug_row,
+            "release": complete_release_row,
+        },
     }
     assert payload["summary"]["artifactCount"] == 8
     assert {
@@ -1830,6 +1850,7 @@ def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_p
     payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
     payload["artifactMatrix"]["emittedArtifactCount"] = 2
     payload["artifactMatrix"]["complete"] = False
+    payload["artifactMatrix"]["statusByTarget"] = {}
     report_path = repo / "out" / "invalid-artifact-matrix-rollup-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -1844,6 +1865,10 @@ def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_p
         in diagnostic["message"]
     )
     assert "artifactMatrix.complete must match artifact matrix" in diagnostic["message"]
+    assert (
+        "artifactMatrix.statusByTarget must match artifact matrix artifacts"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_missing_variant_artifact_matrix_entries(
@@ -8096,6 +8121,18 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "truncatedMissingArtifactCount": 0,
         "truncatedExtraArtifactCount": 0,
         "complete": True,
+        "statusByTarget": {
+            "cgl": {
+                "expectedArtifactCount": 1,
+                "emittedArtifactCount": 1,
+                "translatedCount": 1,
+                "failedCount": 0,
+                "missingArtifactCount": 0,
+                "extraArtifactCount": 0,
+                "complete": True,
+            }
+        },
+        "statusByVariant": {},
     }
     assert payload["validation"]["success"] is True
     assert payload["validation"]["toolchainStatusCounts"] == {
@@ -8778,6 +8815,10 @@ def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
         "Artifact matrix: 1 emitted of 1 expected "
         "(1 translated, 0 failed, 0 missing, 0 extra; variants=none)"
     ) in result.stdout
+    assert (
+        "Artifact matrix by target: cgl=1/1 emitted "
+        "(1 translated, 0 failed, 0 missing, 0 extra, complete)"
+    ) in result.stdout
 
 
 def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
@@ -8803,6 +8844,10 @@ def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
     assert (
         "Artifact matrix: 2 emitted of 2 expected "
         "(2 translated, 0 failed, 1 missing, 1 extra; variants=none)"
+    ) in result.stdout
+    assert (
+        "Artifact matrix by target: cgl=2/2 emitted "
+        "(2 translated, 0 failed, 1 missing, 1 extra, incomplete)"
     ) in result.stdout
     assert "Artifact matrix missing artifacts:" in result.stdout
     assert "- second.cgl -> cgl at out/cgl/second.cgl" in result.stdout

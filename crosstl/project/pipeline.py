@@ -2210,9 +2210,93 @@ def _artifact_matrix_report(
             "missingArtifactCount": len(missing_identities),
             "extraArtifactCount": len(extra_identities),
             "complete": not missing_identities and not extra_identities,
+            "statusByTarget": _artifact_matrix_status_by_field(
+                expected_identities,
+                artifacts,
+                missing_identities,
+                extra_identities,
+                "target",
+            ),
+            "statusByVariant": _artifact_matrix_status_by_field(
+                expected_identities,
+                artifacts,
+                missing_identities,
+                extra_identities,
+                "variant",
+            ),
         }
     )
     return payload
+
+
+def _artifact_matrix_status_row() -> dict[str, Any]:
+    return {
+        "expectedArtifactCount": 0,
+        "emittedArtifactCount": 0,
+        "translatedCount": 0,
+        "failedCount": 0,
+        "missingArtifactCount": 0,
+        "extraArtifactCount": 0,
+        "complete": True,
+    }
+
+
+def _artifact_matrix_identity_field(
+    identity: ArtifactIdentity, field_name: str
+) -> str | None:
+    if field_name == "target":
+        return identity[1]
+    if field_name == "variant":
+        return identity[3]
+    return None
+
+
+def _artifact_matrix_status_by_field(
+    expected_identities: set[ArtifactIdentity],
+    artifacts: Sequence[Mapping[str, Any]],
+    missing_identities: set[ArtifactIdentity],
+    extra_identities: set[ArtifactIdentity],
+    field_name: str,
+) -> dict[str, dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {}
+    for identity in expected_identities:
+        value = _artifact_matrix_identity_field(identity, field_name)
+        if value is None:
+            continue
+        rows.setdefault(value, _artifact_matrix_status_row())[
+            "expectedArtifactCount"
+        ] += 1
+    for artifact in artifacts:
+        identity = _artifact_identity(artifact)
+        if identity is None:
+            continue
+        value = _artifact_matrix_identity_field(identity, field_name)
+        if value is None:
+            continue
+        row = rows.setdefault(value, _artifact_matrix_status_row())
+        row["emittedArtifactCount"] += 1
+        status = artifact.get("status")
+        if status == "translated":
+            row["translatedCount"] += 1
+        elif status == "failed":
+            row["failedCount"] += 1
+    for identity in missing_identities:
+        value = _artifact_matrix_identity_field(identity, field_name)
+        if value is not None:
+            rows.setdefault(value, _artifact_matrix_status_row())[
+                "missingArtifactCount"
+            ] += 1
+    for identity in extra_identities:
+        value = _artifact_matrix_identity_field(identity, field_name)
+        if value is not None:
+            rows.setdefault(value, _artifact_matrix_status_row())[
+                "extraArtifactCount"
+            ] += 1
+    for row in rows.values():
+        row["complete"] = (
+            row["missingArtifactCount"] == 0 and row["extraArtifactCount"] == 0
+        )
+    return {name: rows[name] for name in sorted(rows)}
 
 
 def _artifact_source_map(
@@ -3358,31 +3442,52 @@ def _inspection_artifact_matrix_summary(
         1 for artifact in artifact_records if artifact.get("status") == "failed"
     )
     expected_count = fields["expectedArtifactCount"]
-    missing_identities, extra_identities = _inspection_artifact_matrix_identity_gaps(
+    (
+        expected_identities,
+        emitted_identities,
+    ) = _inspection_artifact_matrix_identity_sets(
         project,
         units,
         artifact_records,
     )
     identity_coverage_available = (
-        missing_identities is not None and extra_identities is not None
+        expected_identities is not None and emitted_identities is not None
     )
-    if missing_identities is None or extra_identities is None:
+    if expected_identities is None or emitted_identities is None:
+        missing_identities = None
+        extra_identities = None
         missing_count = max(0, expected_count - emitted_count)
         extra_count = max(0, emitted_count - expected_count)
+        status_by_target = {}
+        status_by_variant = {}
     else:
+        missing_identities = expected_identities - emitted_identities
+        extra_identities = emitted_identities - expected_identities
         missing_count = len(missing_identities)
         extra_count = len(extra_identities)
+        status_by_target = _artifact_matrix_status_by_field(
+            expected_identities,
+            artifact_records,
+            missing_identities,
+            extra_identities,
+            "target",
+        )
+        status_by_variant = _artifact_matrix_status_by_field(
+            expected_identities,
+            artifact_records,
+            missing_identities,
+            extra_identities,
+            "variant",
+        )
+    missing_identity_list = sorted(missing_identities or ())
+    extra_identity_list = sorted(extra_identities or ())
     missing_samples = [
         _artifact_identity_payload(identity)
-        for identity in (missing_identities or [])[
-            :ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT
-        ]
+        for identity in missing_identity_list[:ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT]
     ]
     extra_samples = [
         _artifact_identity_payload(identity)
-        for identity in (extra_identities or [])[
-            :ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT
-        ]
+        for identity in extra_identity_list[:ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT]
     ]
     return {
         "available": True,
@@ -3399,14 +3504,16 @@ def _inspection_artifact_matrix_summary(
         "truncatedMissingArtifactCount": max(0, missing_count - len(missing_samples)),
         "truncatedExtraArtifactCount": max(0, extra_count - len(extra_samples)),
         "complete": missing_count == 0 and extra_count == 0,
+        "statusByTarget": status_by_target,
+        "statusByVariant": status_by_variant,
     }
 
 
-def _inspection_artifact_matrix_identity_gaps(
+def _inspection_artifact_matrix_identity_sets(
     project: Any,
     units: Any,
     artifact_records: Sequence[Mapping[str, Any]],
-) -> tuple[list[ArtifactIdentity] | None, list[ArtifactIdentity] | None]:
+) -> tuple[set[ArtifactIdentity] | None, set[ArtifactIdentity] | None]:
     if not isinstance(project, Mapping) or not isinstance(units, list):
         return None, None
 
@@ -3457,9 +3564,7 @@ def _inspection_artifact_matrix_identity_gaps(
         for identity in (_artifact_identity(artifact),)
         if identity is not None
     }
-    missing = sorted(expected_identities - emitted_identities)
-    extra = sorted(emitted_identities - expected_identities)
-    return missing, extra
+    return expected_identities, emitted_identities
 
 
 def _artifact_identity_payload(identity: ArtifactIdentity) -> dict[str, Any]:
@@ -4320,8 +4425,10 @@ def _artifact_matrix_metadata_contract_reasons(
         "extraArtifactCount",
     )
     boolean_rollup_fields = ("identityCoverageAvailable", "complete")
+    mapping_rollup_fields = ("statusByTarget", "statusByVariant")
     require_rollups = required or any(
-        field in artifact_matrix for field in (*rollup_fields, *boolean_rollup_fields)
+        field in artifact_matrix
+        for field in (*rollup_fields, *boolean_rollup_fields, *mapping_rollup_fields)
     )
     if require_rollups and isinstance(artifacts, list):
         actual = _inspection_artifact_matrix_summary(
@@ -4348,6 +4455,15 @@ def _artifact_matrix_metadata_contract_reasons(
                     reasons.append(
                         f"artifactMatrix.{field_name} must match artifact matrix"
                     )
+            for field_name in mapping_rollup_fields:
+                reasons.extend(
+                    _mapping_field_contract_reasons(
+                        f"artifactMatrix.{field_name}",
+                        artifact_matrix.get(field_name),
+                        actual[field_name],
+                        "artifact matrix artifacts",
+                    )
+                )
     return reasons
 
 
