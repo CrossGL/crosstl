@@ -19282,6 +19282,9 @@ class VulkanSPIRVCodeGen:
         }
         return aliases.get(str(name).upper(), name)
 
+    def spirv_builtin_cache_name(self, name: str) -> str:
+        return self.spirv_builtin_alias(name)
+
     def stage_builtin_info(self, name: str):
         name = self.spirv_builtin_alias(name)
         builtins = {
@@ -19592,8 +19595,9 @@ class VulkanSPIRVCodeGen:
         if info is None:
             return None
 
-        if name in self.global_variables:
-            builtin_id = self.global_variables[name]
+        cache_name = self.spirv_builtin_cache_name(name)
+        if cache_name in self.global_variables:
+            builtin_id = self.global_variables[cache_name]
             self.mark_builtin_interface_variable(builtin_id)
             return builtin_id
 
@@ -19608,7 +19612,7 @@ class VulkanSPIRVCodeGen:
         else:
             builtin_id = self.register_builtin_input(name, type_id, builtin_name)
 
-        self.global_variables[name] = builtin_id
+        self.global_variables[cache_name] = builtin_id
         self.mark_builtin_interface_variable(builtin_id)
         return builtin_id
 
@@ -19624,7 +19628,9 @@ class VulkanSPIRVCodeGen:
         if storage_class is None:
             return None
 
-        cache_key = self.stage_builtin_cache_key(name, storage_spec, storage_class)
+        cache_key = self.stage_builtin_cache_key(
+            self.spirv_builtin_cache_name(name), storage_spec, storage_class
+        )
         if cache_key in self.global_variables:
             builtin_id = self.global_variables[cache_key]
             self.mark_fragment_depth_replacing_if_needed(builtin_name, storage_class)

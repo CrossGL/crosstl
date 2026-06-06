@@ -25415,6 +25415,105 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mixed_compute_builtin_aliases_share_interface_variable(self, tmp_path):
+        source_code = """
+        shader MixedComputeBuiltinAliases {
+            compute {
+                void main(uvec3 dispatchId @ SV_DispatchThreadID) {
+                    uvec3 globalId = gl_GlobalInvocationID;
+                    uint x = dispatchId.x + globalId.x;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        global_invocation_ids = re.findall(
+            r"OpDecorate (%\d+) BuiltIn GlobalInvocationId", spv_code
+        )
+        assert len(global_invocation_ids) == 1
+
+        entry_point = re.search(
+            r'OpEntryPoint GLCompute %\d+ "main"(?P<interfaces>[^\n]*)',
+            spv_code,
+        )
+        assert entry_point is not None
+        assert entry_point.group("interfaces").split() == global_invocation_ids
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mixed_stage_builtin_aliases_share_interface_variable(self, tmp_path):
+        source_code = """
+        shader MixedStageBuiltinAliases {
+            vertex {
+                void main() {
+                    SV_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                    gl_Position = SV_Position;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        position_ids = re.findall(r"OpDecorate (%\d+) BuiltIn Position", spv_code)
+        assert len(position_ids) == 1
+
+        entry_point = re.search(
+            r'OpEntryPoint Vertex %\d+ "main"(?P<interfaces>[^\n]*)',
+            spv_code,
+        )
+        assert entry_point is not None
+        assert entry_point.group("interfaces").split() == position_ids
+        assert re.search(rf"OpStore {re.escape(position_ids[0])} %\d+", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_context_sensitive_sv_position_alias_uses_stage_builtin(self, tmp_path):
+        source_code = """
+        shader StageSensitiveSVPosition {
+            vertex {
+                void main() {
+                    SV_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            fragment {
+                vec4 main(vec4 pixelPosition @ SV_Position) @ SV_Target {
+                    return pixelPosition;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        position_ids = re.findall(r"OpDecorate (%\d+) BuiltIn Position", spv_code)
+        frag_coord_ids = re.findall(r"OpDecorate (%\d+) BuiltIn FragCoord", spv_code)
+        assert len(position_ids) == 1
+        assert len(frag_coord_ids) == 1
+
+        fragment_entry = re.search(
+            r'OpEntryPoint Fragment %\d+ "main"(?P<interfaces>[^\n]*)',
+            spv_code,
+        )
+        assert fragment_entry is not None
+        fragment_interfaces = fragment_entry.group("interfaces").split()
+        assert frag_coord_ids[0] in fragment_interfaces
+        assert position_ids[0] not in fragment_interfaces
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_direct_return_semantics_lower_fragment_color_to_location_output(
         self, tmp_path
     ):

@@ -20,6 +20,7 @@ from ..ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReturnNode,
+    StructNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
@@ -167,6 +168,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.structs_by_name = {}
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
@@ -276,6 +278,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.enum_variant_constants = self.collect_cuda_enum_variant_constants(ast_node)
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
+        self.structs_by_name = self.collect_structs_by_name(ast_node)
         (
             self.struct_member_types,
             self.struct_member_image_accesses,
@@ -915,6 +918,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             member_types_by_struct[struct_name] = member_types
             member_accesses_by_struct[struct_name] = member_accesses
         return member_types_by_struct, member_accesses_by_struct
+
+    def collect_structs_by_name(self, root):
+        """Return plain struct declarations visible to CUDA expression lowering."""
+        return {
+            struct.name: struct
+            for struct in getattr(root, "structs", []) or []
+            if isinstance(struct, StructNode) and getattr(struct, "name", None)
+        }
 
     def collect_struct_query_metadata_members(self, root):
         """Collect struct resource members that need embedded query sidecars."""
@@ -2889,6 +2900,87 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if lowered is not None:
             return lowered
         return f"{operator}{operand}"
+
+    def visit_ConstructorNode(self, node):
+        """Lower braced AST constructors to CUDA aggregate/value constructors."""
+        constructor_type = self.type_name_string(
+            getattr(node, "constructor_type", None)
+        )
+        raw_args = list(getattr(node, "arguments", []) or [])
+        args = [self.visit(arg) for arg in raw_args]
+
+        if constructor_type in self.structs_by_name:
+            args = self.cuda_struct_constructor_brace_arguments(node, constructor_type)
+            mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
+            return f"{mapped_type}{{{', '.join(args)}}}"
+
+        vector_info = self.vector_type_info(constructor_type)
+        if vector_info:
+            splat_call = self.generate_vector_scalar_splat_call(
+                vector_info, raw_args, args
+            )
+            if splat_call is not None:
+                return splat_call
+            constructor_call = self.generate_vector_constructor_single_eval_call(
+                vector_info, raw_args, args
+            )
+            if constructor_call is not None:
+                return constructor_call
+            args = self.generate_vector_constructor_args(vector_info, raw_args, args)
+
+        mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
+        return f"{mapped_type}({', '.join(args)})"
+
+    def cuda_struct_constructor_brace_arguments(self, node, struct_name):
+        """Render struct constructor fields and embedded resource sidecars."""
+        positional_args = list(getattr(node, "arguments", []) or [])
+        named_args = dict(getattr(node, "named_arguments", {}) or {})
+        fields = list(self.struct_member_types.get(struct_name, {}).items())
+        field_names = [field_name for field_name, _field_type in fields]
+
+        if len(positional_args) > len(fields):
+            raise ValueError(
+                f"Struct constructor {struct_name} expects at most {len(fields)} "
+                f"arguments, got {len(positional_args)}"
+            )
+
+        unknown_names = sorted(set(named_args) - set(field_names))
+        if unknown_names:
+            raise ValueError(
+                f"Struct constructor {struct_name} has no field "
+                f"{', '.join(unknown_names)}"
+            )
+
+        rendered_args = []
+        metadata_members = self.struct_query_metadata_members.get(struct_name, set())
+        for index, (field_name, field_type) in enumerate(fields):
+            if index < len(positional_args):
+                raw_arg = positional_args[index]
+            else:
+                raw_arg = named_args.get(field_name)
+
+            if raw_arg is None:
+                rendered_arg = self.diagnostic_zero_value_for_type(field_type)
+            else:
+                rendered_arg = self.generate_expression_with_expected(
+                    raw_arg,
+                    field_type,
+                )
+            rendered_args.append(rendered_arg)
+
+            if field_name not in metadata_members:
+                continue
+            metadata_arg = (
+                self.query_metadata_expression(raw_arg) if raw_arg is not None else None
+            )
+            if metadata_arg is None:
+                metadata_arg = self.unavailable_query_metadata_argument(
+                    field_name,
+                    field_type,
+                )
+            rendered_args.append(metadata_arg)
+
+        return rendered_args
 
     def visit_FunctionCallNode(self, node):
         """Visit function call"""

@@ -1606,6 +1606,25 @@ def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
     ]
 
 
+def test_parse_compact_shaderlab_program_markers_import_embedded_hlsl():
+    ast = parse_code("""
+    Shader "Custom/CompactProgram" { SubShader { Pass { CGPROGRAM
+    #pragma vertex vert
+    #pragma fragment frag
+    struct v2f { float4 position : SV_POSITION; };
+    v2f vert(float4 position : POSITION) { v2f o; o.position = position; return o; }
+    float4 frag(v2f i) : SV_Target { return float4(1, 1, 1, 1); } ENDCG } } }
+    """)
+
+    pragmas = [node for node in ast.structs if isinstance(node, PragmaNode)]
+
+    assert [(pragma.directive, pragma.value) for pragma in pragmas] == [
+        ("vertex", "vert"),
+        ("fragment", "frag"),
+    ]
+    assert [function.name for function in ast.functions] == ["vert", "frag"]
+
+
 def test_skip_top_level_raw_text_from_public_raytracing_samples():
     ast = parse_code("""
     ToDo fix or remove

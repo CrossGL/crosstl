@@ -7,10 +7,10 @@ from crosstl.translator.ast import ShaderStage
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 
-def reverse_plain_glsl(source: str):
+def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"):
     register_default_sources()
     spec = SOURCE_REGISTRY.get("glsl")
-    ast = spec.parse(textwrap.dedent(source), file_path="/tmp/upstream-sample.glsl")
+    ast = spec.parse(textwrap.dedent(source), file_path=file_path)
     crossgl = spec.reverse_codegen_factory().generate(ast)
     return ast, crossgl, crosstl.translator.parse(crossgl)
 
@@ -248,6 +248,42 @@ def test_plain_glsl_registry_infers_stage_from_real_world_snippets(
     assert ShaderStage.VERTEX not in parsed.stages
     for expected in expected_crossgl:
         assert expected in crossgl
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected_shader_type", "expected_stage"),
+    [
+        (".mesh", "mesh", ShaderStage.MESH),
+        (".task", "task", ShaderStage.TASK),
+        (".rgen", "ray_generation", ShaderStage.RAY_GENERATION),
+        (".rint", "ray_intersection", ShaderStage.RAY_INTERSECTION),
+        (".rahit", "ray_any_hit", ShaderStage.RAY_ANY_HIT),
+        (".rchit", "ray_closest_hit", ShaderStage.RAY_CLOSEST_HIT),
+        (".rmiss", "ray_miss", ShaderStage.RAY_MISS),
+        (".rcall", "ray_callable", ShaderStage.RAY_CALLABLE),
+    ],
+)
+def test_plain_glsl_registry_infers_vulkan_stage_from_glslang_suffix(
+    suffix,
+    expected_shader_type,
+    expected_stage,
+):
+    source = """
+    #version 460 core
+
+    void main() {
+    }
+    """
+
+    ast, crossgl, parsed = reverse_plain_glsl(
+        source,
+        file_path=f"/tmp/upstream-sample{suffix}",
+    )
+
+    assert SOURCE_REGISTRY.get_by_extension(f"upstream-sample{suffix}").name == "opengl"
+    assert ast.shader_type == expected_shader_type
+    assert expected_stage in parsed.stages
+    assert f"{expected_shader_type} {{" in crossgl
 
 
 def test_plain_glsl_registry_keeps_vertex_output_varying_when_position_is_written():

@@ -584,25 +584,57 @@ class HLSLLexer:
         in_program_block = False
 
         for line in lines:
-            stripped = line.strip()
-            marker = stripped.split(None, 1)[0].upper() if stripped else ""
+            if in_program_block and not line:
+                extracted_lines.append(line)
+                continue
 
-            if not in_program_block:
-                if marker in SHADERLAB_PROGRAM_OPEN_MARKERS:
+            cursor = 0
+            while cursor < len(line):
+                segment = line[cursor:]
+
+                if not in_program_block:
+                    match = self._find_shaderlab_program_marker(
+                        segment, SHADERLAB_PROGRAM_OPEN_MARKERS
+                    )
+                    if match is None:
+                        break
                     found_program_block = True
                     in_program_block = True
-                continue
+                    cursor += match.end()
+                    continue
 
-            if marker in SHADERLAB_PROGRAM_CLOSE_MARKERS:
+                match = self._find_shaderlab_program_marker(
+                    segment, SHADERLAB_PROGRAM_CLOSE_MARKERS
+                )
+                if match is None:
+                    extracted_lines.append(segment)
+                    break
+
+                before_marker = segment[: match.start()]
+                extracted_lines.append(
+                    before_marker.rstrip() if before_marker.strip() else ""
+                )
                 in_program_block = False
-                extracted_lines.append("")
-                continue
-
-            extracted_lines.append(line)
+                cursor += match.end()
 
         if not found_program_block:
             return code
         return "\n".join(extracted_lines)
+
+    def _find_shaderlab_program_marker(self, text: str, markers):
+        for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
+            if match.group(0).upper() not in markers:
+                continue
+
+            before = text[: match.start()].rstrip()
+            after = text[match.end() : match.end() + 1]
+            if before and before[-1] not in "{;}":
+                continue
+            if after and not (after.isspace() or after in "{};"):
+                continue
+            return match
+
+        return None
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""

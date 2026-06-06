@@ -9513,10 +9513,11 @@ class MojoCodeGen:
         arg = args[0]
         arg_expr = self.generate_expression(arg)
         arg_type = self.expression_result_type(arg)
+        supported_float_dtypes = MOJO_FLOAT_DTYPES | {"DType.float16"}
         vector_info = self.vector_type_info(arg_type)
         if vector_info is not None:
             dtype, source_width, storage_width, _ = vector_info
-            if dtype in {"DType.float32", "DType.float64"}:
+            if dtype in supported_float_dtypes:
                 self.required_fract_helpers.add(
                     ("vector", dtype, source_width, storage_width)
                 )
@@ -9526,7 +9527,7 @@ class MojoCodeGen:
                 return f"{helper_name}({arg_expr})"
 
         dtype = self.expression_mojo_dtype(arg) or "DType.float32"
-        if dtype not in {"DType.float32", "DType.float64"}:
+        if dtype not in supported_float_dtypes:
             dtype = "DType.float32"
         self.required_fract_helpers.add(("scalar", dtype, 1, 1))
         return f"{self.fract_scalar_helper_name(dtype)}({arg_expr})"

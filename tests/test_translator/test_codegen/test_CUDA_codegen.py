@@ -1804,6 +1804,35 @@ class TestCudaCodeGen:
         assert "float3 position;" in cuda_code
         assert "float3 normal;" in cuda_code
 
+    def test_struct_brace_constructors_emit_cuda_aggregates(self):
+        source_code = """
+        shader TestShader {
+            struct Light {
+                vec3 color;
+                float intensity;
+            };
+
+            compute {
+                void main() {
+                    Light positional = Light{vec3(1.0, 0.5, 0.25), 2.0};
+                    Light named = Light{intensity: 4.0, color: vec3(0.25, 0.5, 1.0)};
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "Light positional = Light{make_float3(1.0, 0.5, 0.25), 2.0};" in cuda_code
+        )
+        assert "Light named = Light{make_float3(0.25, 0.5, 1.0), 4.0};" in cuda_code
+        assert "ConstructorNode(" not in cuda_code
+
     def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
         valid_code = """
         shader CudaStructSemantics {

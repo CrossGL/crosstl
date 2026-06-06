@@ -19193,6 +19193,34 @@ def test_fract_vec3_builtin_lowers_componentwise_and_preserves_padding():
     assert "fract(" not in generated_code
 
 
+def test_frac_half3_builtin_alias_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                half3 h = half3(1.25, 2.5, 3.75);
+                half3 f = frac(h);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_fract_f16_3_4(v: SIMD[DType.float16, 4]) "
+        "-> SIMD[DType.float16, 4]:"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float16, 4]("
+        "v[0] - floor(v[0]), v[1] - floor(v[1]), "
+        "v[2] - floor(v[2]), 0.0)"
+    ) in generated_code
+    assert "var f: SIMD[DType.float16, 4] = _crossgl_fract_f16_3_4(h)" in generated_code
+    assert "_crossgl_fract_f32(h)" not in generated_code
+    assert "frac(" not in generated_code
+
+
 def test_step_and_smoothstep_vector_helpers_cover_shader_threshold_patterns():
     code = """
     shader Thresholds {
