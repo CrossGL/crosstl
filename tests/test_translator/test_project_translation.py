@@ -2885,6 +2885,16 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         "debug": 1,
         "release": 1,
     }
+    assert inspection["sourceMaps"]["sourceMapArtifactCount"] == 2
+    assert {
+        artifact["variant"]
+        for artifact in inspection["sourceMaps"]["sourceMapArtifacts"]
+    } == {"debug", "release"}
+    assert inspection["sourceMaps"]["sourceRemapArtifactCount"] == 2
+    assert {
+        artifact["variant"]
+        for artifact in inspection["sourceMaps"]["sourceRemapArtifacts"]
+    } == {"debug", "release"}
     assert result.returncode == 0
     assert "Source maps by variant: debug=1, release=1" in result.stdout
     assert "Source remaps by variant: debug=1, release=1" in result.stdout
@@ -8653,7 +8663,34 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceMapCount": 1,
         "fileLevelSourceMapCount": 1,
         "fineGrainedSourceMapCount": 0,
+        "sourceMapArtifactCount": 1,
+        "truncatedSourceMapArtifactCount": 0,
+        "sourceMapArtifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "mappingGranularity": "file",
+                "sourceFile": "simple.cgl",
+                "generatedFile": "out/cgl/simple.cgl",
+                "mappingCount": 1,
+            }
+        ],
         "sourceRemapCount": 1,
+        "sourceRemapArtifactCount": 1,
+        "truncatedSourceRemapArtifactCount": 0,
+        "sourceRemapArtifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "sourceRemapPath": "out/cgl/simple.source-remap.json",
+                "generatedFile": "out/cgl/simple.cgl",
+                "mappingGranularity": "file",
+            }
+        ],
         "sourceMapsByGranularity": {"file": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
@@ -8906,7 +8943,34 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "sourceMapCount": 1,
         "fileLevelSourceMapCount": 1,
         "fineGrainedSourceMapCount": 0,
+        "sourceMapArtifactCount": 1,
+        "truncatedSourceMapArtifactCount": 0,
+        "sourceMapArtifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "mappingGranularity": "file",
+                "sourceFile": "simple.cgl",
+                "generatedFile": "out/cgl/simple.cgl",
+                "mappingCount": 1,
+            }
+        ],
         "sourceRemapCount": 1,
+        "sourceRemapArtifactCount": 1,
+        "truncatedSourceRemapArtifactCount": 0,
+        "sourceRemapArtifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "sourceRemapPath": "out/cgl/simple.source-remap.json",
+                "generatedFile": "out/cgl/simple.cgl",
+                "mappingGranularity": "file",
+            }
+        ],
         "sourceMapsByGranularity": {"file": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
@@ -9457,6 +9521,16 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source maps by source backend: cgl=1" in result.stdout
     assert "Source remaps by target: cgl=1" in result.stdout
     assert "Source remaps by source backend: cgl=1" in result.stdout
+    assert "Source map artifacts:" in result.stdout
+    assert (
+        "- simple.cgl -> out/cgl/simple.cgl "
+        "(sourceBackend=cgl, target=cgl, granularity=file, mappings=1)"
+    ) in result.stdout
+    assert "Source remap artifacts:" in result.stdout
+    assert (
+        "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
+        "(sourceBackend=cgl, target=cgl, granularity=file)"
+    ) in result.stdout
     assert "Artifact provenance by pipeline: single-file-translate=1" in result.stdout
     assert "Artifact provenance by intermediate: none=1" in result.stdout
     assert (

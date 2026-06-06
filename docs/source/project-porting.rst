@@ -317,8 +317,9 @@ Project reports are JSON documents with:
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level
   generated/original mapping for compiler ``--source-remap`` consumers. The
-  report records the sidecar path, hash, generated-file identity, and summary
-  rollups by target and source backend. The project pipeline does not claim
+  report records the sidecar path, hash, generated-file identity, summary
+  rollups by target and source backend, and bounded inspection samples for
+  source-map and source-remap artifacts. The project pipeline does not claim
   fine-grained source-map coverage yet.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate

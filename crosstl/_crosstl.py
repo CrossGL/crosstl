@@ -802,6 +802,121 @@ def _format_source_remap_counts(summary):
     return f"Source remaps: {source_remap_count}"
 
 
+def _format_source_map_artifact_line(artifact):
+    if not isinstance(artifact, Mapping):
+        return None
+
+    source = artifact.get("sourceFile") or artifact.get("source")
+    generated = artifact.get("generatedFile") or artifact.get("path")
+    if not isinstance(source, str) or not source:
+        return None
+    if not isinstance(generated, str) or not generated:
+        return None
+
+    details = []
+    source_backend = artifact.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    target = artifact.get("target")
+    if isinstance(target, str) and target:
+        details.append(f"target={target}")
+    variant = artifact.get("variant")
+    if isinstance(variant, str) and variant:
+        details.append(f"variant={variant}")
+    granularity = artifact.get("mappingGranularity")
+    if isinstance(granularity, str) and granularity:
+        details.append(f"granularity={granularity}")
+    mapping_count = artifact.get("mappingCount")
+    if (
+        isinstance(mapping_count, int)
+        and not isinstance(mapping_count, bool)
+        and mapping_count >= 0
+    ):
+        details.append(f"mappings={mapping_count}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"- {source} -> {generated}{suffix}"
+
+
+def _format_source_map_artifact_lines(source_maps):
+    if not isinstance(source_maps, Mapping):
+        return []
+    artifacts = source_maps.get("sourceMapArtifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Source map artifacts:"]
+    for artifact in artifacts:
+        line = _format_source_map_artifact_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = source_maps.get("truncatedSourceMapArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
+def _format_source_remap_artifact_line(artifact):
+    if not isinstance(artifact, Mapping):
+        return None
+
+    remap_path = artifact.get("sourceRemapPath")
+    generated = artifact.get("generatedFile") or artifact.get("path")
+    if not isinstance(remap_path, str) or not remap_path:
+        return None
+    if not isinstance(generated, str) or not generated:
+        return None
+
+    details = []
+    source_backend = artifact.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    target = artifact.get("target")
+    if isinstance(target, str) and target:
+        details.append(f"target={target}")
+    variant = artifact.get("variant")
+    if isinstance(variant, str) and variant:
+        details.append(f"variant={variant}")
+    granularity = artifact.get("mappingGranularity")
+    if isinstance(granularity, str) and granularity:
+        details.append(f"granularity={granularity}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"- {remap_path} -> {generated}{suffix}"
+
+
+def _format_source_remap_artifact_lines(source_maps):
+    if not isinstance(source_maps, Mapping):
+        return []
+    artifacts = source_maps.get("sourceRemapArtifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Source remap artifacts:"]
+    for artifact in artifacts:
+        line = _format_source_remap_artifact_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = source_maps.get("truncatedSourceRemapArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_artifact_matrix_summary(artifact_matrix):
     if not isinstance(artifact_matrix, Mapping):
         return None
@@ -1492,6 +1607,9 @@ def _format_project_report_inspection(payload):
     ):
         if line:
             lines.append(line)
+    source_map_payload = payload.get("sourceMaps")
+    lines.extend(_format_source_map_artifact_lines(source_map_payload))
+    lines.extend(_format_source_remap_artifact_lines(source_map_payload))
     units_by_source_backend = _format_count_rollup(
         "Units by source backend",
         summary.get("unitsBySourceBackend"),

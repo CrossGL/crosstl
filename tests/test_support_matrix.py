@@ -136,7 +136,10 @@ def test_project_report_inspection_is_first_class_support_feature():
             "test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps"
         ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
-        assert "source-map count and provenance rollups" in backend_support["notes"]
+        assert (
+            "source-map count, source-map artifact samples, source-remap artifact "
+            "samples, and provenance rollups"
+        ) in backend_support["notes"]
         assert "sampled missing and extra artifact identities" in (
             backend_support["notes"]
         )
@@ -644,6 +647,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert "source-remap summary rollups including variant rollups" in (
+            backend_support["notes"]
+        )
+        assert "bounded source-map and source-remap artifact inspection samples" in (
             backend_support["notes"]
         )
         assert (

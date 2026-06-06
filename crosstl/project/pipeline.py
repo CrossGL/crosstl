@@ -46,6 +46,7 @@ DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
+SOURCE_MAP_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -3693,7 +3694,10 @@ def inspect_project_report(
         "project": _inspection_project_summary(project),
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
     }
-    payload["sourceMaps"] = _inspection_source_map_summary(summary)
+    payload["sourceMaps"] = _inspection_source_map_summary(
+        summary,
+        report.get("artifacts"),
+    )
     payload["artifactProvenance"] = _inspection_artifact_provenance_summary(summary)
     payload["defineProcessing"] = _inspection_define_processing_summary(
         summary,
@@ -4332,7 +4336,63 @@ def _inspection_include_dependency_summary(
     }
 
 
-def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
+def _inspection_source_map_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    source_map = artifact.get("sourceMap")
+    if not isinstance(source_map, Mapping):
+        return None
+
+    sample: dict[str, Any] = {
+        "source": artifact.get("source"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+        "mappingGranularity": source_map.get("mappingGranularity"),
+    }
+    if "variant" in artifact:
+        sample["variant"] = artifact.get("variant")
+
+    source = source_map.get("source")
+    if isinstance(source, Mapping) and _is_non_empty_string(source.get("file")):
+        sample["sourceFile"] = source.get("file")
+
+    generated = source_map.get("generated")
+    if isinstance(generated, Mapping) and _is_non_empty_string(generated.get("file")):
+        sample["generatedFile"] = generated.get("file")
+
+    mappings = source_map.get("mappings")
+    if isinstance(mappings, list):
+        sample["mappingCount"] = len(mappings)
+
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_source_remap_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    source_remap = artifact.get("sourceRemap")
+    if not isinstance(source_remap, Mapping):
+        return None
+
+    sample: dict[str, Any] = {
+        "source": artifact.get("source"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+        "sourceRemapPath": source_remap.get("path"),
+        "generatedFile": source_remap.get("generatedFile"),
+        "mappingGranularity": source_remap.get("mappingGranularity"),
+    }
+    if "variant" in artifact:
+        sample["variant"] = artifact.get("variant")
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_source_map_summary(
+    summary: Any,
+    artifacts: Any = None,
+) -> dict[str, Any]:
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -4346,12 +4406,38 @@ def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
     if fine_grained_count > source_map_count:
         return {"available": False}
 
+    source_map_artifacts = []
+    source_remap_artifacts = []
+    for artifact in _record_sequence(artifacts):
+        if not isinstance(artifact, Mapping):
+            continue
+        source_map_artifact = _inspection_source_map_artifact(artifact)
+        if source_map_artifact:
+            source_map_artifacts.append(source_map_artifact)
+        source_remap_artifact = _inspection_source_remap_artifact(artifact)
+        if source_remap_artifact:
+            source_remap_artifacts.append(source_remap_artifact)
+
     file_level_count = source_map_count - fine_grained_count
     payload = {
         "available": True,
         "sourceMapCount": source_map_count,
         "fileLevelSourceMapCount": file_level_count,
         "fineGrainedSourceMapCount": fine_grained_count,
+        "sourceMapArtifactCount": len(source_map_artifacts),
+        "truncatedSourceMapArtifactCount": max(
+            0,
+            len(source_map_artifacts) - SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "sourceMapArtifacts": source_map_artifacts[:SOURCE_MAP_INSPECTION_SAMPLE_LIMIT],
+        "sourceRemapArtifactCount": len(source_remap_artifacts),
+        "truncatedSourceRemapArtifactCount": max(
+            0,
+            len(source_remap_artifacts) - SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "sourceRemapArtifacts": source_remap_artifacts[
+            :SOURCE_MAP_INSPECTION_SAMPLE_LIMIT
+        ],
     }
     source_remap_count = summary.get("sourceRemapCount")
     if (
