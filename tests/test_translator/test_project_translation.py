@@ -8252,6 +8252,15 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
     }
+    assert payload["includeDependencies"] == {
+        "available": True,
+        "dependencyCount": 0,
+        "byStatus": {},
+        "byKind": {},
+        "unresolvedDependencyCount": 0,
+        "truncatedUnresolvedDependencyCount": 0,
+        "unresolvedDependencies": [],
+    }
     assert payload["includePathProcessing"] == {
         "available": True,
         "byStatus": {"not-requested": 1},
@@ -8771,6 +8780,28 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert result.returncode == 0
     assert "Include dependencies by status: missing=1, resolved=1" in result.stdout
     assert "Include dependencies by kind: local=1, system=1" in result.stdout
+    assert "Include dependency issues:" in result.stdout
+    assert "- main.frag:3:1: missing local include missing.inc" in result.stdout
+
+    payload = inspect_project_report(report_path)
+    assert payload["includeDependencies"] == {
+        "available": True,
+        "dependencyCount": 2,
+        "byStatus": {"missing": 1, "resolved": 1},
+        "byKind": {"local": 1, "system": 1},
+        "unresolvedDependencyCount": 1,
+        "truncatedUnresolvedDependencyCount": 0,
+        "unresolvedDependencies": [
+            {
+                "source": "main.frag",
+                "include": "missing.inc",
+                "status": "missing",
+                "kind": "local",
+                "line": 3,
+                "column": 1,
+            }
+        ],
+    }
 
 
 def test_project_cli_inspect_report_text_includes_source_root_status(tmp_path):

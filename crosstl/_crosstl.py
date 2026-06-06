@@ -887,6 +887,56 @@ def _format_artifact_sample_lines(label, artifacts, truncated_count):
     return lines
 
 
+def _format_include_dependency_issue_line(dependency):
+    if not isinstance(dependency, Mapping):
+        return None
+
+    include = dependency.get("include")
+    status = dependency.get("status")
+    if not isinstance(include, str) or not include:
+        return None
+    if not isinstance(status, str) or not status:
+        return None
+
+    source = dependency.get("source")
+    location = source if isinstance(source, str) and source else "(unknown)"
+    line = dependency.get("line")
+    column = dependency.get("column")
+    if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+        location += f":{line}"
+        if isinstance(column, int) and not isinstance(column, bool) and column > 0:
+            location += f":{column}"
+
+    kind = dependency.get("kind")
+    kind_label = f" {kind}" if isinstance(kind, str) and kind else ""
+    return f"- {location}: {status}{kind_label} include {include}"
+
+
+def _format_include_dependency_issue_lines(include_dependencies):
+    if not isinstance(include_dependencies, Mapping):
+        return []
+    dependencies = include_dependencies.get("unresolvedDependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        return []
+
+    lines = ["Include dependency issues:"]
+    for dependency in dependencies:
+        line = _format_include_dependency_issue_line(dependency)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = include_dependencies.get("truncatedUnresolvedDependencyCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_external_corpus_accounting(summary):
     if not isinstance(summary, Mapping):
         return None
@@ -1188,6 +1238,9 @@ def _format_project_report_inspection(payload):
     )
     if include_dependencies_by_kind:
         lines.append(include_dependencies_by_kind)
+    lines.extend(
+        _format_include_dependency_issue_lines(payload.get("includeDependencies"))
+    )
     skipped_by_reason = _format_count_rollup(
         "Skipped by reason",
         summary.get("skippedByReason"),

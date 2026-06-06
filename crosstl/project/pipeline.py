@@ -43,6 +43,7 @@ UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
 ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT = 20
 EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
+INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -3305,6 +3306,7 @@ def inspect_project_report(
         "report": {"available": False, "valid": False},
         "sourceMaps": {"available": False},
         "defineProcessing": {"available": False},
+        "includeDependencies": {"available": False},
         "includePathProcessing": {"available": False},
         "artifactMatrix": {"available": False},
         "diagnosticCount": len(diagnostics),
@@ -3396,6 +3398,10 @@ def inspect_project_report(
     }
     payload["sourceMaps"] = _inspection_source_map_summary(summary)
     payload["defineProcessing"] = _inspection_define_processing_summary(summary)
+    payload["includeDependencies"] = _inspection_include_dependency_summary(
+        summary,
+        report.get("units"),
+    )
     payload["includePathProcessing"] = _inspection_include_path_processing_summary(
         summary
     )
@@ -3756,6 +3762,88 @@ def _inspection_include_path_processing_summary(summary: Any) -> dict[str, Any]:
             for source_backend, counts in by_source_backend.items()
             if isinstance(source_backend, str) and isinstance(counts, Mapping)
         },
+    }
+
+
+def _inspection_include_dependency_sample(
+    unit_path: Any,
+    dependency: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    include = dependency.get("include")
+    status = dependency.get("status")
+    if not _is_non_empty_string(include) or not _is_non_empty_string(status):
+        return None
+
+    sample: dict[str, Any] = {
+        "source": unit_path if _is_non_empty_string(unit_path) else None,
+        "include": include,
+        "status": status,
+    }
+    kind = dependency.get("kind")
+    if _is_non_empty_string(kind):
+        sample["kind"] = kind
+    for field_name in ("line", "column"):
+        value = dependency.get(field_name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            sample[field_name] = value
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_include_dependency_summary(
+    summary: Any,
+    units: Any,
+) -> dict[str, Any]:
+    if not isinstance(summary, Mapping):
+        return {"available": False}
+
+    dependency_count = summary.get("includeDependencyCount")
+    by_status = summary.get("includeDependenciesByStatus")
+    by_kind = summary.get("includeDependenciesByKind")
+    if (
+        not isinstance(dependency_count, int)
+        or isinstance(dependency_count, bool)
+        or dependency_count < 0
+        or not isinstance(by_status, Mapping)
+        or not isinstance(by_kind, Mapping)
+    ):
+        return {"available": False}
+
+    unresolved_dependencies = []
+    for unit in _record_sequence(units):
+        if not isinstance(unit, Mapping):
+            continue
+        dependencies = unit.get("includeDependencies")
+        if not isinstance(dependencies, list):
+            continue
+        for dependency in dependencies:
+            if not isinstance(dependency, Mapping):
+                continue
+            if dependency.get("status") not in {
+                "dynamic",
+                "missing",
+                "outside-project",
+            }:
+                continue
+            sample = _inspection_include_dependency_sample(
+                unit.get("path"),
+                dependency,
+            )
+            if sample:
+                unresolved_dependencies.append(sample)
+
+    return {
+        "available": True,
+        "dependencyCount": dependency_count,
+        "byStatus": dict(by_status),
+        "byKind": dict(by_kind),
+        "unresolvedDependencyCount": len(unresolved_dependencies),
+        "truncatedUnresolvedDependencyCount": max(
+            0,
+            len(unresolved_dependencies) - INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "unresolvedDependencies": unresolved_dependencies[
+            :INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT
+        ],
     }
 
 
