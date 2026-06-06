@@ -2544,8 +2544,15 @@ class MetalToCrossGLConverter:
                 return None
             return f"texelFetch({texture}, {coord}, {tail[0]})"
 
+        if self.is_sampled_buffer_texture_type(mapped_type):
+            return f"texelFetch({texture}, {coord})"
+
         lod = tail[0] if tail else "0"
         return f"texelFetch({texture}, {coord}, {lod})"
+
+    def is_sampled_buffer_texture_type(self, mapped_type):
+        mapped_type = self.resource_classification_type(mapped_type)
+        return mapped_type in {"samplerBuffer", "isamplerBuffer", "usamplerBuffer"}
 
     def is_sampled_texture_type(self, mapped_type):
         if mapped_type == "sampler":

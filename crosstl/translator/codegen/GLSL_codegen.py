@@ -581,7 +581,15 @@ class GLSLCodeGen:
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
-    GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {"clamp", "mix"}
+    GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
+        "clamp",
+        "floatBitsToInt",
+        "floatBitsToUint",
+        "intBitsToFloat",
+        "mix",
+        "uintBitsToFloat",
+    }
+    GLSL_BITCAST_FUNCTIONS = {"asfloat", "asint", "asuint"}
     GLSL_INTERPOLATION_FUNCTIONS = {
         "interpolateAtCentroid": 1,
         "interpolateAtSample": 2,
@@ -8319,6 +8327,12 @@ class GLSLCodeGen:
                 and func_name not in self.function_return_types
             ):
                 return self.expression_result_type(args[0])
+            if (
+                func_name in self.GLSL_BITCAST_FUNCTIONS
+                and args
+                and func_name not in self.function_return_types
+            ):
+                return self.glsl_bitcast_result_type(func_name, args[0])
             specialized_func_name = generic_function_call_name(self, func_name, args)
             if specialized_func_name in self.function_return_types:
                 return self.function_return_types[specialized_func_name]
@@ -9377,6 +9391,10 @@ class GLSLCodeGen:
             if reciprocal_call is not None:
                 return reciprocal_call
 
+            bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
+            if bitcast_call is not None:
+                return bitcast_call
+
             mul_call = self.generate_mul_call(original_func_name, expr.args)
             if mul_call is not None:
                 return mul_call
@@ -9516,6 +9534,61 @@ class GLSLCodeGen:
             value_type
         ):
             return f"(1.0 / {value})"
+        return None
+
+    def generate_bitcast_call(self, func_name, args):
+        if (
+            func_name not in self.GLSL_BITCAST_FUNCTIONS
+            or func_name in self.function_return_types
+        ):
+            return None
+        if len(args) != 1:
+            raise ValueError(f"OpenGL {func_name} alias requires 1 argument")
+
+        target = self.glsl_bitcast_target(func_name, args[0])
+        if target is None:
+            source_type = self.map_type(self.expression_result_type(args[0]))
+            raise ValueError(
+                f"OpenGL {func_name} alias cannot bitcast from {source_type}"
+            )
+
+        value = self.generate_expression(args[0])
+        return f"{target}({value})"
+
+    def glsl_bitcast_target(self, func_name, value_expr):
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        component_type = self.vector_component_type(value_type) or value_type
+        if func_name == "asfloat":
+            if component_type == "int":
+                return "intBitsToFloat"
+            if component_type == "uint":
+                return "uintBitsToFloat"
+        if func_name == "asint" and component_type == "float":
+            return "floatBitsToInt"
+        if func_name == "asuint" and component_type == "float":
+            return "floatBitsToUint"
+        return None
+
+    def glsl_bitcast_result_type(self, func_name, value_expr):
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        if self.glsl_bitcast_target(func_name, value_expr) is None:
+            return None
+
+        if func_name == "asfloat":
+            if value_type in {"int", "uint"}:
+                return "float"
+            if value_type.endswith(("2", "3", "4")):
+                return f"vec{value_type[-1]}"
+        if func_name == "asint":
+            if value_type == "float":
+                return "int"
+            if value_type.endswith(("2", "3", "4")):
+                return f"ivec{value_type[-1]}"
+        if func_name == "asuint":
+            if value_type == "float":
+                return "uint"
+            if value_type.endswith(("2", "3", "4")):
+                return f"uvec{value_type[-1]}"
         return None
 
     def generate_mul_call(self, func_name, args):

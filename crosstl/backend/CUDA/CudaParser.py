@@ -2475,7 +2475,7 @@ class CudaParser:
         if "__shared__" in qualifiers:
             return self.create_shared_memory_node(vtype, name, qualifiers)
         elif "__constant__" in qualifiers:
-            return ConstantMemoryNode(vtype, name, value)
+            return ConstantMemoryNode(vtype, name, value, qualifiers)
         else:
             return var
 
@@ -2537,7 +2537,7 @@ class CudaParser:
         if "__shared__" in declarator_qualifiers:
             return self.create_shared_memory_node(vtype, name, declarator_qualifiers)
         if "__constant__" in declarator_qualifiers:
-            return ConstantMemoryNode(vtype, name, value)
+            return ConstantMemoryNode(vtype, name, value, declarator_qualifiers)
         return VariableNode(vtype, name, value, declarator_qualifiers)
 
     def create_shared_memory_node(self, vtype, name, qualifiers):
@@ -2552,6 +2552,7 @@ class CudaParser:
             name,
             is_extern=is_extern,
             is_dynamic=is_dynamic,
+            qualifiers=qualifiers,
         )
 
     def has_unsized_array_dimension(self, vtype):

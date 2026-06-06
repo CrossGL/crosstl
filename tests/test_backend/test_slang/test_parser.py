@@ -1580,6 +1580,38 @@ def test_func_keyword_name_first_parameters_from_current_docs_parse():
     assert add.params[1].value == "1.0f"
 
 
+def test_func_keyword_name_first_direction_qualifiers_from_current_docs_parse():
+    # Source: Slang declarations docs, Parameters section, documents
+    # `func modify(x: in out int)` direction qualifiers.
+    code = """
+    func modify(x: in out int)
+    {
+        x++;
+    }
+
+    func setValue(result: out float, value: inout int)
+    {
+        result = float(value);
+        value = value + 1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    modify, set_value = ast.functions
+
+    assert modify.return_type == "void"
+    assert [(param.vtype, param.name, param.qualifiers) for param in modify.params] == [
+        ("int", "x", ["in", "out"]),
+    ]
+    assert [
+        (param.vtype, param.name, param.qualifiers) for param in set_value.params
+    ] == [
+        ("float", "result", ["out"]),
+        ("int", "value", ["inout"]),
+    ]
+
+
 def test_top_level_function_prototypes_from_slang_shaders_parse():
     code = """
     SceneResult Scene_GetDistance(vec3 vPos);

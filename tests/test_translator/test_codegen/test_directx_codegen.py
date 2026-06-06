@@ -6311,6 +6311,53 @@ def test_hlsl_bitcast_builtins_lower_to_native_as_intrinsics():
     assert "uintBitsToFloat" not in generated_code
 
 
+def test_hlsl_bit_count_lowers_to_countbits_intrinsic():
+    shader = """
+    shader HlslBitCountBuiltinLowering {
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uvec3 mask = uvec3(tid.x, tid.y, tid.z);
+                let vectorCounts = bitCount(mask);
+                uint countbits = tid.x;
+                let scalarCount = bitCount(tid.x) + countbits;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    # Microsoft HLSL docs list countbits(value) for uint scalar/vector inputs.
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/countbits
+    assert "uint3 vectorCounts = countbits(mask);" in generated_code
+    assert "uint countbits_ = tid.x;" in generated_code
+    assert "uint scalarCount = (countbits(tid.x) + countbits_);" in generated_code
+    assert "bitCount(" not in generated_code
+    assert "uint countbits = tid.x;" not in generated_code
+
+
+def test_hlsl_user_defined_bit_count_name_is_not_lowered():
+    shader = """
+    shader HlslUserBitCountName {
+        uint bitCount(uint value) {
+            return value + 7u;
+        }
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint adjusted = bitCount(tid.x);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint bitCount(uint value)" in generated_code
+    assert "uint adjusted = bitCount(tid.x);" in generated_code
+    assert "countbits(" not in generated_code
+
+
 def test_hlsl_user_defined_bitcast_names_are_not_lowered_or_inferred():
     shader = """
     shader HlslUserBitcastNames {

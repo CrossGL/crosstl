@@ -71,6 +71,13 @@ _COMMON_NODES = (
 # CUDA-specific nodes
 
 
+def _ensure_qualifier(qualifiers, required):
+    qualifiers = list(qualifiers or [])
+    if required not in qualifiers:
+        qualifiers.append(required)
+    return qualifiers
+
+
 class KernelNode(FunctionNode):
     """Node representing a CUDA kernel function (marked with __global__)"""
 
@@ -202,8 +209,13 @@ class SharedMemoryNode(VariableNode):
         size=None,
         is_extern=False,
         is_dynamic=False,
+        qualifiers=None,
     ):
-        super().__init__(vtype, name, qualifiers=["__shared__"])
+        super().__init__(
+            vtype,
+            name,
+            qualifiers=_ensure_qualifier(qualifiers, "__shared__"),
+        )
         self.size = size
         self.is_extern_shared_memory = is_extern
         self.is_dynamic_shared_memory = is_dynamic
@@ -217,8 +229,13 @@ class SharedMemoryNode(VariableNode):
 class ConstantMemoryNode(VariableNode):
     """Node representing constant memory variable declaration"""
 
-    def __init__(self, vtype, name, value=None):
-        super().__init__(vtype, name, value, qualifiers=["__constant__"])
+    def __init__(self, vtype, name, value=None, qualifiers=None):
+        super().__init__(
+            vtype,
+            name,
+            value,
+            qualifiers=_ensure_qualifier(qualifiers, "__constant__"),
+        )
 
     def __repr__(self):
         return f"ConstantMemoryNode(vtype={self.vtype}, name={self.name}, value={self.value})"

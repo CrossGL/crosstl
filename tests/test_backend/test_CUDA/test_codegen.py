@@ -231,6 +231,35 @@ class TestCudaCodeGen:
         assert "var g_uids: i32 = 0;" in result
         assert "var grid_dot_result: f64 = 0.0;" in result
 
+    def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
+        code = """
+        __device__ __constant__ float stencil[4];
+        __constant__ int offsets[4];
+
+        __global__ void apply_constants(float* out, const float* input) {
+            int idx = threadIdx.x;
+            out[idx] = input[idx] * stencil[0] + offsets[0];
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "@group(0) @binding(0) var<uniform> stencil: array<f32, 4>;" in result
+        assert "@group(0) @binding(1) var<uniform> offsets: array<i32, 4>;" in result
+        assert (
+            "@group(0) @binding(2) var<storage, read_write> out: array<f32>" in result
+        )
+        assert (
+            "@group(0) @binding(3) var<storage, read_write> input: array<f32>" in result
+        )
+        assert result.count("@group(0) @binding(0)") == 1
+        assert "__constant__" not in result
+
     def test_fixed_width_pointer_declaration_list_conversion(self):
         code = """
         __global__ void bit_extract_kernel(

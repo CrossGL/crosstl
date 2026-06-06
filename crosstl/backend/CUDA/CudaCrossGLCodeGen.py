@@ -177,6 +177,7 @@ class CudaToCrossGLConverter:
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
         self.namespace_aliases = {}
+        self.global_resource_binding_count = 0
 
     def generate(self, ast_node):
         self.output = []
@@ -197,6 +198,7 @@ class CudaToCrossGLConverter:
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
+        self.global_resource_binding_count = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -3782,8 +3784,9 @@ class CudaToCrossGLConverter:
                     storage_type = self.format_crossgl_type_syntax(
                         f"array<{element_type}>"
                     )
+                    binding = self.global_resource_binding_count + len(params)
                     params.append(
-                        f"@group(0) @binding({len(params)}) var<storage, read_write> {param_name}: {storage_type}"
+                        f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(
@@ -4116,13 +4119,21 @@ class CudaToCrossGLConverter:
         # Convert to uniform buffer in CrossGL
         var_type = self.convert_cuda_variable_type_to_crossgl(node.vtype, node.name)
         self.register_vector1_name(node.name, node.vtype)
+        binding = self.allocate_global_resource_binding()
         if node.value:
             value = self.visit(node.value)
             self.emit(
-                f"@group(0) @binding(0) var<uniform> {node.name}: {var_type} = {value};"
+                f"@group(0) @binding({binding}) var<uniform> {node.name}: {var_type} = {value};"
             )
         else:
-            self.emit(f"@group(0) @binding(0) var<uniform> {node.name}: {var_type};")
+            self.emit(
+                f"@group(0) @binding({binding}) var<uniform> {node.name}: {var_type};"
+            )
+
+    def allocate_global_resource_binding(self):
+        binding = self.global_resource_binding_count
+        self.global_resource_binding_count += 1
+        return binding
 
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)

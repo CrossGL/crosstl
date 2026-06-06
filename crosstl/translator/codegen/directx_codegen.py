@@ -518,6 +518,8 @@ class HLSLCodeGen:
         # GLSL atan(y, x) lowers to HLSL atan2(y, x); keep local symbols from
         # capturing that intrinsic because HLSL does not provide a namespace escape.
         "atan2",
+        # GLSL bitCount lowers to HLSL countbits.
+        "countbits",
     }
     HLSL_BITCAST_FUNCTION_TARGETS = {
         "floatBitsToInt": "int",
@@ -791,6 +793,7 @@ class HLSLCodeGen:
         }
         self.function_map = {
             "atomicAdd": "InterlockedAdd",
+            "bitCount": "countbits",
             "dFdx": "ddx",
             "dFdxCoarse": "ddx_coarse",
             "dFdxFine": "ddx_fine",
@@ -4218,6 +4221,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             bitcast_result_type = self.hlsl_bitcast_result_type(func_name, args)
             if bitcast_result_type is not None:
                 return bitcast_result_type
+            countbits_result_type = self.hlsl_countbits_result_type(func_name, args)
+            if countbits_result_type is not None:
+                return countbits_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if func_name == "dot" and args:
@@ -5292,6 +5298,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if suffix in {"2", "3", "4"}:
                     return f"{target_component}{suffix}"
         return target_component
+
+    def hlsl_countbits_result_type(self, func_name, args):
+        if func_name not in {"bitCount", "countbits"} or func_name in getattr(
+            self, "function_return_types", {}
+        ):
+            return None
+
+        source_type = self.map_type(
+            (self.expression_result_type(args[0]) if args else None) or "uint"
+        )
+        for component in ("uint", "int"):
+            if source_type == component:
+                return "uint"
+            if source_type.startswith(component):
+                suffix = source_type[len(component) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"uint{suffix}"
+        return "uint"
 
     def hlsl_function_name_is_shadowed(self, func_name):
         return func_name in self.local_variable_types or func_name in getattr(

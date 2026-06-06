@@ -440,7 +440,8 @@ def test_codegen_resource_alias_references_preserve_array_family_lowering():
     assert "typedef usamplerBuffer UIntBuffer;" not in crossgl
     assert "typedef sampler2DArrayShadow DepthArray;" not in crossgl
     assert "texture(tex, s, vec4(dir, layer))" in crossgl
-    assert "texelFetch(tex, index, 0)" in crossgl
+    assert "texelFetch(tex, index)" in crossgl
+    assert "texelFetch(tex, index, 0)" not in crossgl
     assert "textureCompare(tex, s, vec3(uv, layer), depth)" in crossgl
     assert "textureLod(tex, s, dir, layer)" not in crossgl
     assert "textureCompareOffset(tex, s, uv, layer, depth)" not in crossgl
