@@ -9709,6 +9709,68 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     }
 
 
+def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    (repo / "out" / "opengl" / "simple.glsl").write_text(
+        "void main() {}\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "sarif",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    run = payload["runs"][0]
+    assert run["tool"]["driver"]["name"] == "CrossTL project validation"
+    assert run["invocations"][0]["executionSuccessful"] is False
+    assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
+    assert run["tool"]["driver"]["rules"] == [
+        {
+            "id": "project.validate.generated-hash-mismatch",
+            "name": "project.validate.generated-hash-mismatch",
+        }
+    ]
+    assert len(run["results"]) == 1
+    sarif_result = run["results"][0]
+    assert sarif_result["ruleId"] == "project.validate.generated-hash-mismatch"
+    assert sarif_result["level"] == "error"
+    assert sarif_result["message"]["text"] == (
+        "Generated artifact hash does not match report: out/opengl/simple.glsl"
+    )
+    assert sarif_result["locations"][0]["physicalLocation"] == {
+        "artifactLocation": {"uri": "simple.cgl"},
+        "region": {
+            "endColumn": 1,
+            "endLine": 1,
+            "startColumn": 1,
+            "startLine": 1,
+        },
+    }
+    assert sarif_result["properties"] == {
+        "target": "opengl",
+        "missingCapabilities": ["artifact.manifest"],
+    }
+
+
 def test_project_cli_validate_project_reports_invalid_report_shape(tmp_path):
     report_path = tmp_path / "invalid-report.json"
     report_path.write_text(json.dumps({"kind": "not-a-report"}), encoding="utf-8")

@@ -7460,7 +7460,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "opengl": {
@@ -7489,7 +7490,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "metal": {
@@ -7518,7 +7520,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "vulkan": {
@@ -7547,7 +7550,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "cuda": {
@@ -7576,7 +7580,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "hip": {
@@ -7605,7 +7610,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "mojo": {
@@ -7634,7 +7640,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "rust": {
@@ -7663,7 +7670,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         },
         "slang": {
@@ -7692,7 +7700,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics"
           ]
         }
       }

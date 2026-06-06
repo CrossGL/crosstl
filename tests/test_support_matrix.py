@@ -574,6 +574,10 @@ def test_project_diagnostics_document_location_path_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_validate_project_sarif_reports_generated_diagnostics"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_diagnostic_locations_outside_project"
         ) in backend_support["evidence"]
 
