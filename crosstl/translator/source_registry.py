@@ -180,6 +180,12 @@ class SourceRegistry:
 
     def get_by_extension(self, path_or_ext: str) -> SourceSpec | None:
         """Return the source spec registered for a file path or extension."""
+        compound_unsupported_message = _compound_unsupported_extension_message(
+            path_or_ext
+        )
+        if compound_unsupported_message:
+            raise ValueError(compound_unsupported_message)
+
         ext = path_or_ext
         if path_or_ext:
             looks_like_path = os.path.basename(path_or_ext) != path_or_ext
@@ -235,6 +241,33 @@ WGSL_SOURCE_UNSUPPORTED_MESSAGE = (
     "WGSL/WebGPU source files (.wgsl, .wesl) are not supported yet; provide a "
     "registered CrossGL or native backend source file first."
 )
+
+_COMPOUND_UNSUPPORTED_EXTENSION_MESSAGES = {
+    ".spv.json": BINARY_SPIRV_UNSUPPORTED_MESSAGE,
+    ".spirv.json": BINARY_SPIRV_UNSUPPORTED_MESSAGE,
+    ".air.json": METAL_BINARY_UNSUPPORTED_MESSAGE,
+    ".metallib.json": METAL_BINARY_UNSUPPORTED_MESSAGE,
+    ".cso.json": DIRECTX_BINARY_UNSUPPORTED_MESSAGE,
+    ".dxbc.json": DIRECTX_BINARY_UNSUPPORTED_MESSAGE,
+    ".dxil.json": DIRECTX_BINARY_UNSUPPORTED_MESSAGE,
+    ".ptx.json": CUDA_ARTIFACT_UNSUPPORTED_MESSAGE,
+    ".cubin.json": CUDA_ARTIFACT_UNSUPPORTED_MESSAGE,
+    ".fatbin.json": CUDA_ARTIFACT_UNSUPPORTED_MESSAGE,
+    ".hsaco.json": HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
+    ".wgsl.json": WGSL_SOURCE_UNSUPPORTED_MESSAGE,
+    ".wesl.json": WGSL_SOURCE_UNSUPPORTED_MESSAGE,
+}
+
+
+def _compound_unsupported_extension_message(path_or_ext: str) -> str | None:
+    if not path_or_ext:
+        return None
+    normalized = path_or_ext.strip().lower()
+    basename = os.path.basename(normalized)
+    for suffix, message in _COMPOUND_UNSUPPORTED_EXTENSION_MESSAGES.items():
+        if normalized == suffix or basename.endswith(suffix):
+            return message
+    return None
 
 
 def _load_cgl():

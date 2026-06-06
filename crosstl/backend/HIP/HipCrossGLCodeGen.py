@@ -4725,6 +4725,10 @@ class HipToCrossGLConverter:
         if integer_intrinsic is not None:
             return integer_intrinsic
 
+        float_intrinsic = self.format_hip_float_intrinsic_call(function_name, args)
+        if float_intrinsic is not None:
+            return float_intrinsic
+
         sync_vote_intrinsic = self.format_hip_sync_vote_intrinsic_call(
             function_name, args
         )
@@ -5143,6 +5147,22 @@ class HipToCrossGLConverter:
         else:
             mask = f"((1u << {width}) - 1u)"
         return f"(({value} >> {offset}) & {mask})"
+
+    def format_hip_float_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name == "__saturatef" and len(args) == 1:
+            return f"clamp({args[0]}, 0.0f, 1.0f)"
+
+        if (
+            function_name
+            in {"__fdividef", "__fdiv_rd", "__fdiv_rn", "__fdiv_ru", "__fdiv_rz"}
+            and len(args) == 2
+        ):
+            return f"({args[0]} / {args[1]})"
+
+        return None
 
     def format_hip_byte_perm(self, left, right, selector):
         selector_value = self.parse_hip_integer_literal(selector)

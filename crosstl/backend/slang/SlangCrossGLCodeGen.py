@@ -437,6 +437,11 @@ class SlangToCrossGLConverter:
             "SV_Depth5": "Out_Depth5",
             "SV_Depth6": "Out_Depth6",
             "SV_Depth7": "Out_Depth7",
+            "SV_ViewID": "gl_ViewID",
+            "SV_RenderTargetArrayIndex": "gl_Layer",
+            "SV_ViewportArrayIndex": "gl_ViewportIndex",
+            "SV_ClipDistance": "gl_ClipDistance",
+            "SV_CullDistance": "gl_CullDistance",
         }
         self.hlsl_system_semantic_map = {
             semantic.lower(): mapped
@@ -2162,6 +2167,18 @@ class SlangToCrossGLConverter:
             )
             if depth_match:
                 mapped_semantic = "Out_Depth"
+        if mapped_semantic is None:
+            for hlsl_prefix, crossgl_semantic in (
+                ("SV_CLIPDISTANCE", "gl_ClipDistance"),
+                ("SV_CULLDISTANCE", "gl_CullDistance"),
+            ):
+                semantic_upper = str(semantic).upper()
+                if not semantic_upper.startswith(hlsl_prefix):
+                    continue
+                suffix = semantic_upper[len(hlsl_prefix) :]
+                if not suffix or suffix.isdigit():
+                    mapped_semantic = crossgl_semantic
+                    break
         if mapped_semantic is None:
             for hlsl_prefix, crossgl_prefix in (
                 ("NORMAL", "in_Normal"),

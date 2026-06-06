@@ -1044,6 +1044,30 @@ def test_external_hip_kittens_fast_exp_vector_codegen_reparse():
     assert "__expf" not in crossgl
 
 
+def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
+    # HIP math API documents CUDA-compatible single-precision intrinsics such
+    # as __fdividef and __saturatef.
+    source = """
+    __device__ float normalized_weight(float weight, float normalizer) {
+        float scaled = __fdividef(weight, normalizer);
+        float rounded = __fdiv_rn(weight, normalizer);
+        return __saturatef(scaled + rounded);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].value.name == "__fdividef"
+    assert body[1].value.name == "__fdiv_rn"
+    assert body[2].value.name == "__saturatef"
+    assert "var scaled: f32 = (weight / normalizer);" in crossgl
+    assert "var rounded: f32 = (weight / normalizer);" in crossgl
+    assert "return clamp((scaled + rounded), 0.0f, 1.0f);" in crossgl
+    for raw_name in ("__fdividef", "__fdiv_rn", "__saturatef"):
+        assert raw_name not in crossgl
+
+
 def test_external_hip_fp16_scalar_conversion_codegen_reparse():
     source = """
     __global__ void add_half_precision(__half* in1,

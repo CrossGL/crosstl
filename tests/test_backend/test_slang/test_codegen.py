@@ -514,6 +514,49 @@ def test_target_and_depth_system_semantics_codegen_canonicalizes_dynamic_variant
     cgl_translator.parse(generated_code)
 
 
+def test_raster_system_semantics_codegen_canonicalizes_layer_viewport_and_distances():
+    code = """
+    struct RasterOutput
+    {
+        float4 position : SV_Position;
+        uint view : sv_viewid;
+        uint layer : sv_rendertargetarrayindex;
+        uint viewport : SV_VIEWPORTARRAYINDEX;
+        float clip : SV_ClipDistance3;
+        float cull : sv_culldistance2;
+    };
+
+    [shader("vertex")]
+    RasterOutput vertexMain(float4 position : POSITION)
+    {
+        RasterOutput output;
+        output.position = position;
+        output.view = 0;
+        output.layer = 1;
+        output.viewport = 2;
+        output.clip = 1.0;
+        output.cull = 0.0;
+        return output;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint view @ gl_ViewID;" in generated_code
+    assert "uint layer @ gl_Layer;" in generated_code
+    assert "uint viewport @ gl_ViewportIndex;" in generated_code
+    assert "float clip @ gl_ClipDistance;" in generated_code
+    assert "float cull @ gl_CullDistance;" in generated_code
+    assert "@ sv_viewid" not in generated_code
+    assert "@ sv_rendertargetarrayindex" not in generated_code
+    assert "@ SV_VIEWPORTARRAYINDEX" not in generated_code
+    assert "@ SV_ClipDistance3" not in generated_code
+    assert "@ sv_culldistance2" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_interpolation_qualifiers_codegen_remains_parseable_crossgl():
     code = """
     struct VSOutput

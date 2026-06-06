@@ -2566,6 +2566,8 @@ class MetalToCrossGLConverter:
             key = f"{name}({args[0]})" if args else name
             out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
+                out = self.dynamic_fragment_output_semantic(name, args)
+            if out is None:
                 if args:
                     out = f"{name}({', '.join(args)})"
                 else:
@@ -2573,6 +2575,14 @@ class MetalToCrossGLConverter:
             if out:
                 outputs.append(f"@{out}")
         return " ".join(outputs)
+
+    def dynamic_fragment_output_semantic(self, name, args):
+        if name == "color" and args and re.fullmatch(r"\d+", args[0]):
+            index = int(args[0])
+            return "gl_FragColor" if index == 0 else f"gl_FragColor{index}"
+        if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
+            return "gl_FragDepth"
+        return None
 
     def generate_switch_statement(self, node, indent, is_main):
         expression = self.generate_expression(node.expression, is_main)

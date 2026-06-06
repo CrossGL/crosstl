@@ -5438,6 +5438,52 @@ def test_codegen_multiview_and_viewport_semantics():
         assert expected in output
 
 
+def test_codegen_case_insensitive_raster_system_semantics_reparse():
+    code = textwrap.dedent("""
+        struct VSOutput {
+            float4 position : sv_position;
+            uint view : sv_viewid;
+            uint layer : sv_rendertargetarrayindex;
+            uint viewport : SV_VIEWPORTARRAYINDEX;
+            float clip : sv_clipdistance3;
+            float cull : SV_CULLDISTANCE2;
+        };
+
+        VSOutput VSMain(float4 position : POSITION) {
+            VSOutput output;
+            output.position = position;
+            output.view = 0;
+            output.layer = 1;
+            output.viewport = 2;
+            output.clip = 1.0;
+            output.cull = 0.0;
+            return output;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    for expected in [
+        "vec4 position @ gl_Position;",
+        "uint view @ gl_ViewID;",
+        "uint layer @ gl_Layer;",
+        "uint viewport @ gl_ViewportIndex;",
+        "float clip @ gl_ClipDistance;",
+        "float cull @ gl_CullDistance;",
+    ]:
+        assert expected in output
+    for raw_semantic in [
+        "@ sv_position",
+        "@ sv_viewid",
+        "@ sv_rendertargetarrayindex",
+        "@ SV_VIEWPORTARRAYINDEX",
+        "@ sv_clipdistance3",
+        "@ SV_CULLDISTANCE2",
+    ]:
+        assert raw_semantic not in output
+    parse_crossgl(output)
+
+
 def test_codegen_interlocked_compare_exchange_mapping():
     code = textwrap.dedent("""
         RWTexture2D<uint> tex : register(u0);
