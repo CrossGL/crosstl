@@ -2088,6 +2088,8 @@ class HipParser:
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
+        elif self.is_decltype_type_start():
+            type_parts.append(self.parse_decltype_type_name())
         elif (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
@@ -2140,6 +2142,8 @@ class HipParser:
         self.skip_cpp_attributes()
         if self.is_implicit_int_current_type(saw_integral_sign):
             type_parts.append("int")
+        elif self.is_decltype_type_start():
+            type_parts.append(self.parse_decltype_type_name())
         elif (
             self.is_builtin_type_token()
             or self.match(*self.VECTOR_TYPE_TOKENS)
@@ -2166,6 +2170,68 @@ class HipParser:
 
     def is_implicit_int_current_type(self, saw_integral_sign):
         return self.is_implicit_int_type_at_pos(self.pos, saw_integral_sign)
+
+    def is_decltype_type_start(self):
+        return self.is_decltype_type_start_at_pos(self.pos)
+
+    def is_decltype_type_start_at_pos(self, index):
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index].type == "IDENTIFIER"
+            and self.tokens[index].value == "decltype"
+            and self.tokens[index + 1].type == "LPAREN"
+        )
+
+    def skip_decltype_type_at_pos(self, index):
+        if not self.is_decltype_type_start_at_pos(index):
+            return None
+
+        index += 1
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            elif token_type == "EOF":
+                return None
+            index += 1
+
+        return None
+
+    def parse_decltype_type_name(self):
+        self.consume("IDENTIFIER")
+        self.consume("LPAREN")
+        parts = []
+        depth = 1
+
+        while depth > 0:
+            if self.current_token is None:
+                raise SyntaxError("Unterminated decltype type")
+
+            token_type = self.current_token.type
+            token_value = self.current_token.value
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated decltype type")
+            if token_type == "LPAREN":
+                depth += 1
+                parts.append(token_value)
+                self.consume("LPAREN")
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.consume("RPAREN")
+                    break
+                parts.append(token_value)
+                self.consume("RPAREN")
+            else:
+                parts.append(token_value)
+                self.consume(token_type)
+
+        return f"decltype({self.format_template_parts(parts)})"
 
     def parse_postfix_type_qualifiers(self, type_parts):
         while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
@@ -3955,6 +4021,8 @@ class HipParser:
         token = self.tokens[index]
         if token.type in self.ELABORATED_TYPE_TOKENS:
             return True
+        if self.is_decltype_type_start_at_pos(index):
+            return True
         if self.is_type_token(token, allow_identifier=False):
             return True
 
@@ -4299,6 +4367,12 @@ class HipParser:
         if self.is_implicit_int_type_at_pos(index, saw_integral_sign):
             type_token = "INT"
             type_value = "int"
+        elif self.is_decltype_type_start_at_pos(index):
+            type_token = "IDENTIFIER"
+            type_value = "decltype"
+            index = self.skip_decltype_type_at_pos(index)
+            if index is None:
+                return None
         elif self.is_type_token(self.tokens[index]):
             type_token = self.tokens[index].type
             type_value = self.tokens[index].value
@@ -4343,6 +4417,7 @@ class HipParser:
             or type_token != "IDENTIFIER"
             or has_qualified_suffix
             or type_value == "auto"
+            or type_value == "decltype"
             or type_token in self.ELABORATED_TYPE_TOKENS
             or self.is_identifier_type_name(type_value)
             or self.is_probable_identifier_type_name(type_value)

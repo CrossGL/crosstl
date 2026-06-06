@@ -532,6 +532,26 @@ class TestHipParser:
         assert body[1].name == "bandwidth_achieved"
         assert isinstance(body[1].value, BinaryOpNode)
 
+    def test_cpp14_decltype_auto_device_function_parse(self):
+        code = """
+        template <typename T>
+        __device__ decltype(auto) forward_value(T&& value) {
+            decltype(value) copy = value;
+            return copy;
+        }
+        """
+        ast = self.parse_code(code)
+
+        function = ast.statements[0]
+        copy = function.body[0]
+
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "decltype(auto)"
+        assert function.params == [{"type": "T &&", "name": "value"}]
+        assert isinstance(copy, VariableNode)
+        assert copy.vtype == "decltype(value)"
+        assert copy.name == "copy"
+
     def test_public_rocm_template_braced_construction_and_global_calls_parse(self):
         code = """
         void host(float ref, float error) {

@@ -1221,6 +1221,7 @@ class GLSLToCrossGLConverter:
     ):
         return self.shader_type == "fragment" and (
             len(self.outputs) > 1
+            or any(getattr(output, "is_array", False) for output in self.outputs)
             or fragment_writes_depth
             or fragment_writes_sample_mask
         )
@@ -1718,7 +1719,10 @@ class GLSLToCrossGLConverter:
             for output_var in self.outputs:
                 result += (
                     self.indent_str
-                    + self.generate_variable_declaration(output_var)
+                    + self.generate_variable_declaration(
+                        output_var,
+                        array_before_attributes=True,
+                    )
                     + ";\n"
                 )
             result += "\n"

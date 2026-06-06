@@ -377,6 +377,24 @@ def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     assert body[2].left.array_sizes == ["8"]
 
 
+def test_parse_comma_separated_pointer_declarators_keep_own_suffixes():
+    code = """
+    void main() {
+        thread float *a, *b;
+        thread float *c, d;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert [(decl.name, decl.vtype, decl.qualifiers) for decl in body] == [
+        ("a", "float*", ["thread"]),
+        ("b", "float*", ["thread"]),
+        ("c", "float*", ["thread"]),
+        ("d", "float", ["thread"]),
+    ]
+
+
 def test_parse_gnu_attribute_before_global_constant_multiline_initializer():
     code = """
     __attribute__((unused)) constant float VALUES[2] = {

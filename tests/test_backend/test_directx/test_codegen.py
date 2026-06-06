@@ -1477,6 +1477,22 @@ def test_codegen_control_flow_roundtrip():
     assert ShaderStage.FRAGMENT in shader_ast.stages
 
 
+def test_codegen_for_loop_multiple_declarators_emit_single_type():
+    output = generate_crossgl("""
+        float4 main(float2 uv : TEXCOORD0) : SV_Target0 {
+            float accum = 0.0;
+            for (int left = 0, right = 3; left < right; ++left) {
+                accum += uv.x;
+            }
+            return float4(accum, uv.y, 0.0, 1.0);
+        }
+    """)
+
+    assert "for (int left = 0, right = 3; left < right; ++left)" in output
+    assert "for (int left = 0, int right = 3;" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_geometry_stage():
     output = generate_crossgl(GEOMETRY_HLSL)
     lowered = output.lower()

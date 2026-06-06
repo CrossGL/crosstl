@@ -790,6 +790,7 @@ EXTERNAL_FIXTURES = [
             "import PixelStatsShared;",
             "sampler2D gStatsRayCount[uint(PixelStatsRayType::Count)];",
             "image2D gStatsRayCountTotal;",
+            "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
             "totalRays += gStatsRayCount[i][pixel];",
         ],
     },

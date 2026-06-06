@@ -2,6 +2,8 @@ from crosstl import translate
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 class TestCudaCodeGen:
@@ -171,6 +173,26 @@ class TestCudaCodeGen:
 
         assert "// CUDA to CrossGL conversion" in result
         assert "// Function: add" in result
+
+    def test_cpp14_decltype_auto_device_function_conversion_reparse(self):
+        code = """
+        template <typename T>
+        __device__ decltype(auto) forward_value(T&& value) {
+            decltype(value) copy = value;
+            return copy;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "auto forward_value(T value)" in result
+        assert "var copy: auto = value;" in result
+        assert "decltype(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_public_cuda_template_disambiguator_call_conversion(self):
         code = """

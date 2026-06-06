@@ -440,6 +440,26 @@ class TestHipCodeGen:
         assert "f32 fast_add(f32 a, f32 b)" in result
         assert "f32 slow_sub(f32 a, f32 b)" in result
 
+    def test_cpp14_decltype_auto_device_function_conversion_reparse(self):
+        code = """
+        template <typename T>
+        __device__ decltype(auto) forward_value(T&& value) {
+            decltype(value) copy = value;
+            return copy;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "auto forward_value(T value)" in result
+        assert "var copy: auto = value;" in result
+        assert "decltype(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_device_function_body_emitted_when_kernel_calls_it(self):
         code = """
         __device__ float add(float a, float b) {
