@@ -7565,6 +7565,15 @@ def _validation_artifact_contract_reasons(
     if identity is not None and declared_artifacts_by_identity is not None:
         referenced_artifact = declared_artifacts_by_identity.get(identity)
     if (
+        "sourceBackend" not in artifact
+        and referenced_artifact is not None
+        and _is_non_empty_string(referenced_artifact[1].get("sourceBackend"))
+    ):
+        reasons.append(
+            f"{prefix}.sourceBackend must be recorded when "
+            f"report.artifacts[{referenced_artifact[0]}].sourceBackend is recorded"
+        )
+    if (
         "sourceBackend" in artifact
         and referenced_artifact is not None
         and _is_non_empty_string(artifact.get("sourceBackend"))
@@ -7754,6 +7763,15 @@ def _toolchain_run_contract_reasons(
     referenced_artifact: DeclaredArtifact | None = None
     if identity is not None and declared_artifacts_by_identity is not None:
         referenced_artifact = declared_artifacts_by_identity.get(identity)
+    if (
+        "sourceBackend" not in run
+        and referenced_artifact is not None
+        and _is_non_empty_string(referenced_artifact[1].get("sourceBackend"))
+    ):
+        reasons.append(
+            f"{prefix}.sourceBackend must be recorded when "
+            f"report.artifacts[{referenced_artifact[0]}].sourceBackend is recorded"
+        )
     if (
         "sourceBackend" in run
         and referenced_artifact is not None
