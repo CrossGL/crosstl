@@ -3693,7 +3693,55 @@ def _unit_contract_reasons(
     return reasons
 
 
-def _skipped_contract_reasons(index: int, skipped: Any) -> list[str]:
+def _skipped_source_override_contract_reasons(
+    index: int,
+    skipped: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+    *,
+    require_declared_override: bool,
+) -> list[str]:
+    prefix = f"skipped[{index}].sourceOverride"
+    reason = skipped.get("reason")
+    if "sourceOverride" not in skipped:
+        if require_declared_override and reason == "unsupported-source-override":
+            return [
+                f"{prefix} must be recorded for unsupported-source-override records"
+            ]
+        return []
+
+    source_override = skipped.get("sourceOverride")
+    if not _is_non_empty_string(source_override):
+        return [f"{prefix} must be a string"]
+    if not require_declared_override or not isinstance(project, Mapping):
+        return []
+
+    skipped_path = skipped.get("path")
+    source_overrides = project.get("sourceOverrides")
+    if (
+        not _is_non_empty_string(skipped_path)
+        or not _is_repository_relative_report_path(skipped_path)
+        or not _valid_string_mapping(source_overrides)
+    ):
+        return []
+
+    matching_override = any(
+        source_override == backend and fnmatch.fnmatch(skipped_path, pattern)
+        for pattern, backend in source_overrides.items()
+    )
+    if not matching_override:
+        return [
+            f"{prefix} must match project.sourceOverrides for skipped[{index}].path"
+        ]
+    return []
+
+
+def _skipped_contract_reasons(
+    index: int,
+    skipped: Any,
+    *,
+    project: Mapping[str, Any] | None = None,
+    require_declared_source_override: bool = False,
+) -> list[str]:
     prefix = f"skipped[{index}]"
     if not isinstance(skipped, Mapping):
         return [f"{prefix} must be an object"]
@@ -3704,10 +3752,14 @@ def _skipped_contract_reasons(index: int, skipped: Any) -> list[str]:
     )
     if not _is_non_empty_string(skipped.get("reason")):
         reasons.append(f"{prefix}.reason must be a string")
-    if "sourceOverride" in skipped and not _is_non_empty_string(
-        skipped.get("sourceOverride")
-    ):
-        reasons.append(f"{prefix}.sourceOverride must be a string")
+    reasons.extend(
+        _skipped_source_override_contract_reasons(
+            index,
+            skipped,
+            project,
+            require_declared_override=require_declared_source_override,
+        )
+    )
     return reasons
 
 
@@ -5337,7 +5389,14 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.append("skipped must be a list")
         else:
             for index, skipped_record in enumerate(skipped):
-                reasons.extend(_skipped_contract_reasons(index, skipped_record))
+                reasons.extend(
+                    _skipped_contract_reasons(
+                        index,
+                        skipped_record,
+                        project=project if isinstance(project, Mapping) else None,
+                        require_declared_source_override=has_summary,
+                    )
+                )
             reasons.extend(_duplicate_path_contract_reasons("skipped", skipped))
             if isinstance(units, list):
                 reasons.extend(_unit_skipped_path_contract_reasons(units, skipped))

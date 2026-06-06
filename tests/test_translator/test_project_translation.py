@@ -796,6 +796,62 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     assert "unknown-backend" in payload["diagnostics"][0]["message"]
 
 
+@pytest.mark.parametrize(
+    ("skipped_override", "message"),
+    [
+        (
+            None,
+            (
+                "skipped[0].sourceOverride must be recorded for "
+                "unsupported-source-override records"
+            ),
+        ),
+        (
+            "other-backend",
+            (
+                "skipped[0].sourceOverride must match project.sourceOverrides "
+                "for skipped[0].path"
+            ),
+        ),
+    ],
+)
+def test_validate_project_report_rejects_inconsistent_skipped_source_overrides(
+    tmp_path,
+    skipped_override,
+    message,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+
+            [project.sources]
+            "gpu/*.shader" = "unknown-backend"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(load_project_config(repo)).to_report().to_json()
+    if skipped_override is None:
+        payload["skipped"][0].pop("sourceOverride")
+    else:
+        payload["skipped"][0]["sourceOverride"] = skipped_override
+    report_path = repo / "scan-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert message in diagnostic["message"]
+
+
 def test_scan_project_reports_unsupported_source_override_without_matches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

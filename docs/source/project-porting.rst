@@ -242,6 +242,10 @@ Project reports are JSON documents with:
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides.
+- ``skipped``: repository-relative files intentionally left untranslated with
+  reason codes and source override metadata when an override selected an
+  unsupported source backend. Full reports require skipped source override
+  metadata to match the configured source override map.
 - ``artifacts``: attempted outputs with source path, source backend, target,
   applied define map, optional variant name, target/variant-scoped output path
   with the target backend suffix, status, source hash, generated artifact hash,

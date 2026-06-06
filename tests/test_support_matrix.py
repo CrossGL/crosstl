@@ -178,9 +178,17 @@ def test_project_repo_scan_documents_source_root_status():
     for backend_support in feature["support"].values():
         assert "source-root status counts" in backend_support["notes"]
         assert "roots that resolve to non-directory paths" in (backend_support["notes"])
+        assert "validates skipped source override provenance" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_source_roots_that_are_not_directories"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_skipped_source_"
+            "overrides"
         ) in backend_support["evidence"]
 
 
@@ -430,7 +438,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "unregistered or non-canonical unit source backend names" in (
             backend_support["notes"]
         )
-        assert "inconsistent unit source override provenance" in (
+        assert "inconsistent unit and skipped source override provenance" in (
             backend_support["notes"]
         )
         assert "artifact source hashes that do not match declared" in (
@@ -456,6 +464,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_inconsistent_unit_source_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_skipped_source_"
+            "overrides"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -489,7 +502,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]
-        assert "source override provenance" in backend_support["notes"]
+        assert "unit and skipped source override provenance" in (
+            backend_support["notes"]
+        )
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
@@ -674,6 +689,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_inconsistent_unit_source_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_skipped_source_"
+            "overrides"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
