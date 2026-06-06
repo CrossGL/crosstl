@@ -3689,6 +3689,10 @@ class HLSLToCrossGLConverter:
             if mapped is None:
                 mapped = self.semantic_map_upper.get(semantic_upper)
             if mapped is None:
+                texcoord_match = re.fullmatch(r"TEXCOORD(\d+)", semantic_upper)
+                if texcoord_match:
+                    mapped = f"TexCoord{texcoord_match.group(1)}"
+            if mapped is None:
                 for hlsl_prefix, crossgl_semantic in (
                     ("SV_CLIPDISTANCE", "gl_ClipDistance"),
                     ("SV_CULLDISTANCE", "gl_CullDistance"),

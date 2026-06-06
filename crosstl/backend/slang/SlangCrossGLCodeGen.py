@@ -443,6 +443,36 @@ class SlangToCrossGLConverter:
             for semantic, mapped in self.semantic_map.items()
             if semantic.lower().startswith("sv_")
         }
+        self.hlsl_passthrough_system_semantic_map = {
+            semantic.lower(): semantic
+            for semantic in (
+                "SV_Barycentrics",
+                "SV_Coverage",
+                "SV_DispatchThreadID",
+                "SV_GroupID",
+                "SV_GroupIndex",
+                "SV_GroupThreadID",
+                "SV_InstanceID",
+                "SV_IsFrontFace",
+                "SV_PrimitiveID",
+                "SV_SampleIndex",
+                "SV_VertexID",
+            )
+        }
+        self.interpolation_qualifiers = {
+            "centroid",
+            "flat",
+            "linear",
+            "linear_centroid",
+            "linear_noperspective",
+            "linear_noperspective_centroid",
+            "linear_sample",
+            "nointerpolation",
+            "noperspective",
+            "pervertex",
+            "sample",
+            "smooth",
+        }
 
     def generate(self, ast):
         self.raise_for_unsupported_conformance_constructs(ast)
@@ -814,7 +844,7 @@ class SlangToCrossGLConverter:
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):
         if not preserve_qualifiers:
             return ""
-        allowed_qualifiers = {"in", "out", "inout"}
+        allowed_qualifiers = {"in", "out", "inout"} | self.interpolation_qualifiers
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(param, "qualifiers", []) or []
@@ -1034,7 +1064,7 @@ class SlangToCrossGLConverter:
         return declaration
 
     def format_struct_member_qualifiers(self, member):
-        allowed_qualifiers = {"static", "const"}
+        allowed_qualifiers = {"static", "const"} | self.interpolation_qualifiers
         qualifiers = [
             qualifier
             for qualifier in getattr(member, "qualifiers", []) or []
@@ -2109,6 +2139,10 @@ class SlangToCrossGLConverter:
         mapped_semantic = self.semantic_map.get(semantic)
         if mapped_semantic is None:
             mapped_semantic = self.hlsl_system_semantic_map.get(str(semantic).lower())
+        if mapped_semantic is None:
+            mapped_semantic = self.hlsl_passthrough_system_semantic_map.get(
+                str(semantic).lower()
+            )
         return f"@ {mapped_semantic or semantic}"
 
     def map_ray_payload_access_semantic(self, semantic):

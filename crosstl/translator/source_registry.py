@@ -199,6 +199,14 @@ BINARY_SPIRV_UNSUPPORTED_MESSAGE = (
     "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
     "assembly (.spvasm) or disassemble the binary with spirv-dis first."
 )
+METAL_BINARY_UNSUPPORTED_MESSAGE = (
+    "Compiled Metal artifacts (.air, .metallib) are not supported; provide "
+    "Metal source (.metal) first."
+)
+DIRECTX_BINARY_UNSUPPORTED_MESSAGE = (
+    "Compiled DirectX shader binaries (.cso, .dxbc, .dxil) are not supported; "
+    "provide HLSL source (.hlsl, .hlsli, .fx, .fxh) first."
+)
 
 
 def _load_cgl():
@@ -438,6 +446,11 @@ def register_default_sources() -> None:
         )
     )
     _register_unsupported_extension(".spv", BINARY_SPIRV_UNSUPPORTED_MESSAGE)
+    _register_unsupported_extension(".spirv", BINARY_SPIRV_UNSUPPORTED_MESSAGE)
+    for ext in (".air", ".metallib"):
+        _register_unsupported_extension(ext, METAL_BINARY_UNSUPPORTED_MESSAGE)
+    for ext in (".cso", ".dxbc", ".dxil"):
+        _register_unsupported_extension(ext, DIRECTX_BINARY_UNSUPPORTED_MESSAGE)
     _register(
         SourceSpec(
             name="mojo",

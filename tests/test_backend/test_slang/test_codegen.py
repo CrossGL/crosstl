@@ -366,6 +366,58 @@ def test_texcoord7_semantic_codegen_matches_directx_common_semantics():
     cgl_translator.parse(generated_code)
 
 
+def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names():
+    code = """
+    [shader("compute")]
+    void main(uint3 tid : SV_DISPATCHTHREADID, uint gid : SV_GROUPINDEX)
+    {
+        return;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uvec3 tid @ SV_DispatchThreadID" in generated_code
+    assert "uint gid @ SV_GroupIndex" in generated_code
+    assert "@ SV_DISPATCHTHREADID" not in generated_code
+    assert "@ SV_GROUPINDEX" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_interpolation_qualifiers_codegen_remains_parseable_crossgl():
+    code = """
+    struct VSOutput
+    {
+        float4 Pos : SV_POSITION;
+        nointerpolation uint TextureIndex;
+        linear centroid float2 Uv : TEXCOORD0;
+        sample float4 CoverageColor : COLOR1;
+    };
+
+    [shader("fragment")]
+    float4 main(centroid noperspective float2 uv : TEXCOORD1,
+                linear sample float4 color : COLOR2) : SV_TARGET
+    {
+        return color;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "nointerpolation uint TextureIndex;" in generated_code
+    assert "linear centroid vec2 Uv @ TexCoord0;" in generated_code
+    assert "sample vec4 CoverageColor @ Color1;" in generated_code
+    assert "centroid noperspective vec2 uv @ TexCoord1" in generated_code
+    assert "linear sample vec4 color @ Color2" in generated_code
+    assert "@ SV_POSITION" not in generated_code
+    assert "@ SV_TARGET" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_entry_parameter_storage_qualifiers_codegen_matches_directx_signature_shape():
     code = """
     [shader("fragment")]

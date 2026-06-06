@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 import crosstl
@@ -171,12 +173,49 @@ def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     assert "gl_Position" not in generated
 
 
+UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS = {
+    "shader.spv": "Binary SPIR-V input files",
+    "shader.spirv": "Binary SPIR-V input files",
+    "shader.air": "Compiled Metal artifacts",
+    "shader.metallib": "Compiled Metal artifacts",
+    "shader.cso": "Compiled DirectX shader binaries",
+    "shader.dxbc": "Compiled DirectX shader binaries",
+    "shader.dxil": "Compiled DirectX shader binaries",
+}
+
+
 def test_spirv_source_inference_distinguishes_assembly_from_binary():
     register_default_sources()
 
     assert SOURCE_REGISTRY.get_by_extension("shader.spvasm").name == "vulkan"
     with pytest.raises(ValueError, match="Binary SPIR-V input files"):
         SOURCE_REGISTRY.get_by_extension("shader.spv")
+
+
+@pytest.mark.parametrize(
+    ("filename", "diagnostic"),
+    sorted(UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS.items()),
+)
+def test_known_generated_artifact_extensions_are_not_source_files(filename, diagnostic):
+    register_default_sources()
+
+    with pytest.raises(ValueError, match=re.escape(diagnostic)):
+        SOURCE_REGISTRY.get_by_extension(filename)
+    assert filename[filename.rfind(".") :] not in SOURCE_REGISTRY.extensions()
+
+
+@pytest.mark.parametrize(
+    ("filename", "diagnostic"),
+    sorted(UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS.items()),
+)
+def test_translate_reports_specific_diagnostic_for_generated_artifacts(
+    tmp_path, filename, diagnostic
+):
+    artifact_path = tmp_path / filename
+    artifact_path.write_bytes(b"\x03\x02#shader-binary")
+
+    with pytest.raises(ValueError, match=re.escape(diagnostic)):
+        crosstl.translate(str(artifact_path), backend="cgl", format_output=False)
 
 
 def test_translate_decodes_legacy_hlsl_comment_bytes_with_replacement(tmp_path):

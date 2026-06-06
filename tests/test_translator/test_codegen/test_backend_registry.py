@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 
@@ -6,7 +7,13 @@ import crosstl.translator.codegen as codegen
 from crosstl.formatter import CodeFormatter, ShaderLanguage
 from crosstl.translator import parse
 from crosstl.translator.plugin_loader import discover_backend_plugins
-from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
+from crosstl.translator.source_registry import (
+    BINARY_SPIRV_UNSUPPORTED_MESSAGE,
+    DIRECTX_BINARY_UNSUPPORTED_MESSAGE,
+    METAL_BINARY_UNSUPPORTED_MESSAGE,
+    SOURCE_REGISTRY,
+    register_default_sources,
+)
 
 SMOKE_SHADER = """
 shader main {
@@ -178,6 +185,27 @@ def test_source_registry_recognizes_slang_real_world_extensions(extension):
     assert (
         SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "slang"
     )
+
+
+@pytest.mark.parametrize(
+    ("extension", "message"),
+    (
+        (".spv", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
+        (".spirv", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
+        (".air", METAL_BINARY_UNSUPPORTED_MESSAGE),
+        (".metallib", METAL_BINARY_UNSUPPORTED_MESSAGE),
+        (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        (".dxbc", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        (".dxil", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+    ),
+)
+def test_source_registry_known_binary_artifacts_raise_clear_diagnostic(
+    extension, message
+):
+    register_default_sources()
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension}")
 
 
 @pytest.mark.parametrize(

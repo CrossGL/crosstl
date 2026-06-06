@@ -676,8 +676,18 @@ class MetalToCrossGLConverter:
             return option.args
         return None
 
+    def resource_classification_type(self, mapped_type):
+        if not mapped_type:
+            return mapped_type
+        base = str(mapped_type).strip()
+        while base.endswith("*") or base.endswith("&"):
+            base = base[:-1].strip()
+        return base
+
     def sampled_array_coordinate_constructor(self, texture_expr):
-        mapped_type = self.expression_mapped_type(texture_expr)
+        mapped_type = self.resource_classification_type(
+            self.expression_mapped_type(texture_expr)
+        )
         return {
             "sampler1DArray": "vec2",
             "isampler1DArray": "vec2",
@@ -702,7 +712,9 @@ class MetalToCrossGLConverter:
     def texture_compare_method_base_arguments(
         self, obj_expr, method_args, is_main=False
     ):
-        mapped_type = self.expression_mapped_type(obj_expr)
+        mapped_type = self.resource_classification_type(
+            self.expression_mapped_type(obj_expr)
+        )
         if mapped_type == "sampler2DArrayShadow" and len(method_args) >= 4:
             sampler = self.generate_expression(method_args[0], is_main)
             coord = self.generate_expression(method_args[1], is_main)

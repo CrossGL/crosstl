@@ -724,6 +724,28 @@ def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     parse_crossgl(crossgl)
 
 
+def test_codegen_canonicalizes_high_texcoord_interpolation_metadata():
+    crossgl = generate_crossgl("""
+        struct PSInput {
+            linear float2 uv8 : TEXCOORD8;
+            centroid linear float2 uv12 : TEXCOORD12;
+            sample linear float4 color10 : TEXCOORD10;
+            nointerpolation uint id11 : TEXCOORD11;
+        };
+
+        float4 PSMain(linear float2 uv9 : TEXCOORD9) : SV_Target0 {
+            return float4(uv9, 0.0, 1.0);
+        }
+    """)
+
+    assert "vec2 uv8 @ TexCoord8 @ smooth;" in crossgl
+    assert "vec2 uv12 @ TexCoord12 @ smooth @ centroid;" in crossgl
+    assert "vec4 color10 @ TexCoord10 @ smooth @ sample;" in crossgl
+    assert "uint id11 @ TexCoord11 @ flat;" in crossgl
+    assert "vec2 uv9 @ TexCoord9 @ smooth" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_contextual_shared_storage_modifier():
     crossgl = generate_crossgl("""
         shared float cachedWeight;

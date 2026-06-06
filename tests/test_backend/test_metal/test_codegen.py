@@ -337,6 +337,41 @@ def test_codegen_texture2d_array_alias_preserves_sample_slice():
     parse_crossgl(crossgl)
 
 
+def test_codegen_resource_alias_references_preserve_array_family_lowering():
+    code = """
+    using CubeArray = texturecube_array<float>;
+    typedef texture_buffer<uint> UIntBuffer;
+    using DepthArray = depth2d_array<float>;
+
+    float4 sampleCube(thread CubeArray& tex, sampler s, float3 dir, uint layer) {
+        return tex.sample(s, dir, layer);
+    }
+
+    uint4 readBuffer(thread UIntBuffer& tex, uint index) {
+        return tex.read(index);
+    }
+
+    float compareDepth(thread DepthArray& tex,
+                       sampler s,
+                       float2 uv,
+                       uint layer,
+                       float depth) {
+        return tex.sample_compare(s, uv, layer, depth);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef samplerCubeArray CubeArray;" not in crossgl
+    assert "typedef usamplerBuffer UIntBuffer;" not in crossgl
+    assert "typedef sampler2DArrayShadow DepthArray;" not in crossgl
+    assert "texture(tex, s, vec4(dir, layer))" in crossgl
+    assert "texelFetch(tex, index, 0)" in crossgl
+    assert "textureCompare(tex, s, vec3(uv, layer), depth)" in crossgl
+    assert "textureLod(tex, s, dir, layer)" not in crossgl
+    assert "textureCompareOffset(tex, s, uv, layer, depth)" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_storage_texture_alias_uses_image_read_write():
     code = """
     typedef texture2d<float, access::read_write> RWColor;
