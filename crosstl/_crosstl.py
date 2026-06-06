@@ -956,6 +956,13 @@ def _format_project_report_inspection(payload):
     )
     if define_processing:
         lines.append(define_processing)
+    include_path_processing = _format_count_rollup(
+        "Include path processing",
+        summary.get("includePathProcessingByStatus"),
+        include_zero=False,
+    )
+    if include_path_processing:
+        lines.append(include_path_processing)
     artifact_matrix_payload = payload.get("artifactMatrix")
     artifact_matrix = _format_artifact_matrix_summary(artifact_matrix_payload)
     if artifact_matrix:

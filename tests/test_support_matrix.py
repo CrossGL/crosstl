@@ -307,7 +307,18 @@ def test_project_include_resolution_documents_status_reporting():
         assert "only active existing repository-contained resolved paths" in (
             backend_support["notes"]
         )
+        assert "include-path processing status" in backend_support["notes"]
+        assert "source frontend support metadata" in backend_support["notes"]
+        assert "forged artifact include-path processing metadata" in (
+            backend_support["notes"]
+        )
+        assert "include-path processing summary rollup mismatches" in (
+            backend_support["notes"]
+        )
         assert "text inspection identifies inactive include directories by path" in (
+            backend_support["notes"]
+        )
+        assert "include dependency and include-path processing rollups" in (
             backend_support["notes"]
         )
         assert "includeDependencies records" in backend_support["notes"]
@@ -341,6 +352,20 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_include_dependency_resolution_"
             "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_include_path_processing_"
+            "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_include_path_processing_summary_"
+            "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_translation_pipeline.py::def "
+            "test_source_registry_reports_lexer_option_support"
         ) in backend_support["evidence"]
 
 

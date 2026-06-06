@@ -1269,6 +1269,16 @@ def test_translate_project_applies_include_dirs_and_defines(tmp_path):
     assert payload["summary"]["translatedCount"] == 1
     assert payload["diagnosticCounts"]["error"] == 0
     assert payload["diagnosticCounts"]["warning"] == 0
+    assert payload["artifacts"][0]["includePathProcessing"] == {
+        "status": "forwarded",
+        "frontend": "lexer",
+        "supportsIncludePaths": True,
+        "includePathCount": 1,
+    }
+    assert payload["summary"]["includePathProcessingByStatus"] == {"forwarded": 1}
+    assert payload["summary"]["includePathProcessingBySourceBackend"] == {
+        "opengl": {"forwarded": 1}
+    }
     assert "project_color" in output.read_text(encoding="utf-8")
 
 
@@ -1323,6 +1333,16 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
     payload = report.to_json()
 
     assert captured_include_paths == [[str(include_dir.resolve())]]
+    assert payload["artifacts"][0]["includePathProcessing"] == {
+        "status": "not-supported",
+        "frontend": "lexer",
+        "supportsIncludePaths": False,
+        "includePathCount": 1,
+    }
+    assert payload["summary"]["includePathProcessingByStatus"] == {"not-supported": 1}
+    assert payload["summary"]["includePathProcessingBySourceBackend"] == {
+        "cgl": {"not-supported": 1}
+    }
     assert payload["project"]["includeDirs"] == [
         "includes",
         "missing-includes",
@@ -2015,6 +2035,77 @@ def test_validate_project_report_rejects_define_processing_summary_mismatches(
     assert (
         "summary.defineProcessingBySourceBackend must match "
         "artifact define processing"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_artifact_include_path_processing_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["artifacts"][0]["includePathProcessing"]["supportsIncludePaths"] = True
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].includePathProcessing.status must match include path count "
+        "and source frontend support"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].includePathProcessing.supportsIncludePaths must match "
+        "artifacts[0].sourceBackend"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_include_path_processing_summary_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["summary"]["includePathProcessingByStatus"] = {"forwarded": 1}
+    payload["summary"]["includePathProcessingBySourceBackend"] = {
+        "cgl": {"forwarded": 1}
+    }
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "summary.includePathProcessingByStatus must match "
+        "artifact include path processing"
+    ) in diagnostic["message"]
+    assert (
+        "summary.includePathProcessingBySourceBackend must match "
+        "artifact include path processing"
     ) in diagnostic["message"]
 
 
@@ -7907,6 +7998,11 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
     }
+    assert payload["includePathProcessing"] == {
+        "available": True,
+        "byStatus": {"not-requested": 1},
+        "bySourceBackend": {"cgl": {"not-requested": 1}},
+    }
     assert payload["artifactMatrix"] == {
         "available": True,
         "unitCount": 1,
@@ -8568,6 +8664,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
     assert "Source remaps: 1" in result.stdout
     assert "Define processing: not-requested=1" in result.stdout
+    assert "Include path processing: not-requested=1" in result.stdout
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout
