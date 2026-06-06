@@ -396,6 +396,58 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_INT8_INTERFACE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from fragment shader code using
+; GL_EXT_shader_explicit_arithmetic_types_int8 vector interfaces.
+OpCapability Shader
+OpCapability Int8
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %signed8_in %unsigned8_in %signed8_out %unsigned8_out %signed8_scalar_out %unsigned8_scalar_out
+OpExecutionMode %main OriginUpperLeft
+OpName %signed8_in "signed8In"
+OpName %unsigned8_in "unsigned8In"
+OpName %signed8_out "signed8Out"
+OpName %unsigned8_out "unsigned8Out"
+OpName %signed8_scalar_out "signed8ScalarOut"
+OpName %unsigned8_scalar_out "unsigned8ScalarOut"
+OpDecorate %signed8_in Location 0
+OpDecorate %unsigned8_in Location 1
+OpDecorate %signed8_out Location 0
+OpDecorate %unsigned8_out Location 1
+OpDecorate %signed8_scalar_out Location 2
+OpDecorate %unsigned8_scalar_out Location 3
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%char = OpTypeInt 8 1
+%uchar = OpTypeInt 8 0
+%v4char = OpTypeVector %char 4
+%v2uchar = OpTypeVector %uchar 2
+%ptr_input_v4char = OpTypePointer Input %v4char
+%ptr_input_v2uchar = OpTypePointer Input %v2uchar
+%ptr_output_v4char = OpTypePointer Output %v4char
+%ptr_output_v2uchar = OpTypePointer Output %v2uchar
+%ptr_output_char = OpTypePointer Output %char
+%ptr_output_uchar = OpTypePointer Output %uchar
+%signed8_in = OpVariable %ptr_input_v4char Input
+%unsigned8_in = OpVariable %ptr_input_v2uchar Input
+%signed8_out = OpVariable %ptr_output_v4char Output
+%unsigned8_out = OpVariable %ptr_output_v2uchar Output
+%signed8_scalar_out = OpVariable %ptr_output_char Output
+%unsigned8_scalar_out = OpVariable %ptr_output_uchar Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_signed8 = OpLoad %v4char %signed8_in
+%loaded_unsigned8 = OpLoad %v2uchar %unsigned8_in
+%signed_component = OpCompositeExtract %char %loaded_signed8 0
+%unsigned_component = OpCompositeExtract %uchar %loaded_unsigned8 1
+OpStore %signed8_out %loaded_signed8
+OpStore %unsigned8_out %loaded_unsigned8
+OpStore %signed8_scalar_out %signed_component
+OpStore %unsigned8_scalar_out %unsigned_component
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -3684,6 +3736,31 @@ def test_glslang_int16_int64_interface_codegen_reparse():
     assert "uint unsigned64Out" not in generated_code
     assert "signed64Out = wide_signed;" not in generated_code
     assert "unsigned64Out = wide_unsigned;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_int8_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_INT8_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "vec4<i8> signed8In @input @location(0);" in generated_code
+    assert "vec2<u8> unsigned8In @input @location(1);" in generated_code
+    assert "vec4<i8> signed8Out @output @location(0);" in generated_code
+    assert "vec2<u8> unsigned8Out @output @location(1);" in generated_code
+    assert "i8 signed8ScalarOut @output @location(2);" in generated_code
+    assert "u8 unsigned8ScalarOut @output @location(3);" in generated_code
+    assert "signed8Out = signed8In;" in generated_code
+    assert "unsigned8Out = unsigned8In;" in generated_code
+    assert "signed8ScalarOut = signed8In[0];" in generated_code
+    assert "unsigned8ScalarOut = unsigned8In[1];" in generated_code
+    assert "ivec4 signed8In" not in generated_code
+    assert "uvec2 unsigned8In" not in generated_code
+    assert "int signed8ScalarOut" not in generated_code
+    assert "uint unsigned8ScalarOut" not in generated_code
+    assert "signed8ScalarOut = signed_component;" not in generated_code
+    assert "unsigned8ScalarOut = unsigned_component;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

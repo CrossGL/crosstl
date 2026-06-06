@@ -3697,6 +3697,21 @@ class HLSLToCrossGLConverter:
                 if color_match:
                     mapped = f"Color{color_match.group(1)}"
             if mapped is None:
+                target_match = re.fullmatch(r"SV_TARGET(\d*)", semantic_upper)
+                if target_match:
+                    target_index = target_match.group(1)
+                    mapped = (
+                        f"gl_FragData[{target_index}]"
+                        if target_index
+                        else "gl_FragColor"
+                    )
+            if mapped is None:
+                depth_match = re.fullmatch(
+                    r"SV_DEPTH(?:GREATEREQUAL|LESSEQUAL)?", semantic_upper
+                )
+                if depth_match:
+                    mapped = "gl_FragDepth"
+            if mapped is None:
                 for hlsl_prefix, crossgl_prefix in (
                     ("NORMAL", "Normal"),
                     ("TANGENT", "Tangent"),

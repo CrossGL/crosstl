@@ -49,6 +49,7 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.gsh") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.geometry") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.metal") == ShaderLanguage.METAL
+        assert formatter.detect_language("shader.msl") == ShaderLanguage.METAL
         assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.vulkan") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.slangh") == ShaderLanguage.SLANG

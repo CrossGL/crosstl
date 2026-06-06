@@ -4715,6 +4715,12 @@ class HipToCrossGLConverter:
         if complex_intrinsic is not None:
             return complex_intrinsic
 
+        type_cast_intrinsic = self.format_hip_type_cast_intrinsic_call(
+            function_name, args
+        )
+        if type_cast_intrinsic is not None:
+            return type_cast_intrinsic
+
         integer_intrinsic = self.format_hip_integer_intrinsic_call(function_name, args)
         if integer_intrinsic is not None:
             return integer_intrinsic
@@ -5062,6 +5068,24 @@ class HipToCrossGLConverter:
             ],
             scalar_type,
         )
+
+    def format_hip_type_cast_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        bit_reinterpret_intrinsics = {
+            "__double_as_longlong": "doubleBitsToLong",
+            "__float_as_int": "floatBitsToInt",
+            "__float_as_uint": "floatBitsToUint",
+            "__int_as_float": "intBitsToFloat",
+            "__longlong_as_double": "longBitsToDouble",
+            "__uint_as_float": "uintBitsToFloat",
+        }
+        mapped_name = bit_reinterpret_intrinsics.get(function_name)
+        if mapped_name is not None and len(args) == 1:
+            return f"{mapped_name}({args[0]})"
+
+        return None
 
     def format_hip_integer_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

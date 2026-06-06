@@ -71,6 +71,10 @@ NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
         "shader.slangh",
         NATIVE_SOURCE_SNIPPETS["slang"][1],
     ),
+    "metal_msl": (
+        "shader.msl",
+        NATIVE_SOURCE_SNIPPETS["metal"][1],
+    ),
 }
 
 
@@ -288,11 +292,13 @@ def test_glsl_real_world_stage_filename_conventions_translate_to_crossgl(
     assert expected_crossgl in generated
 
 
-UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS = {
+UNSUPPORTED_SOURCE_EXTENSION_DIAGNOSTICS = {
     "shader.spv": "Binary SPIR-V input files",
     "shader.spirv": "Binary SPIR-V input files",
     "shader.air": "Compiled Metal artifacts",
     "shader.metallib": "Compiled Metal artifacts",
+    "shader.wgsl": "WGSL/WebGPU source files",
+    "shader.wesl": "WGSL/WebGPU source files",
     "shader.cso": "Compiled DirectX shader binaries",
     "shader.dxbc": "Compiled DirectX shader binaries",
     "shader.dxil": "Compiled DirectX shader binaries",
@@ -313,9 +319,9 @@ def test_spirv_source_inference_distinguishes_assembly_from_binary():
 
 @pytest.mark.parametrize(
     ("filename", "diagnostic"),
-    sorted(UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS.items()),
+    sorted(UNSUPPORTED_SOURCE_EXTENSION_DIAGNOSTICS.items()),
 )
-def test_known_generated_artifact_extensions_are_not_source_files(filename, diagnostic):
+def test_known_unsupported_source_extensions_are_not_source_files(filename, diagnostic):
     register_default_sources()
 
     with pytest.raises(ValueError, match=re.escape(diagnostic)):
@@ -325,9 +331,9 @@ def test_known_generated_artifact_extensions_are_not_source_files(filename, diag
 
 @pytest.mark.parametrize(
     ("filename", "diagnostic"),
-    sorted(UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS.items()),
+    sorted(UNSUPPORTED_SOURCE_EXTENSION_DIAGNOSTICS.items()),
 )
-def test_translate_reports_specific_diagnostic_for_generated_artifacts(
+def test_translate_reports_specific_diagnostic_for_unsupported_source_extensions(
     tmp_path, filename, diagnostic
 ):
     artifact_path = tmp_path / filename

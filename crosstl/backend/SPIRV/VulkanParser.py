@@ -348,6 +348,7 @@ class VulkanParser:
         "tessellation_evaluation",
         "threadgroup",
         "trait",
+        "i8",
         "u8",
         "u16",
         "u32",
@@ -4825,7 +4826,7 @@ class VulkanParser:
     def spirv_int_type_name(self, width, signedness):
         if width == "1":
             return "bool"
-        if width in {"16", "64"}:
+        if width in {"8", "16", "64"}:
             prefix = "u" if signedness == "0" else "i"
             return f"{prefix}{width}"
         if signedness == "0":
@@ -4840,7 +4841,7 @@ class VulkanParser:
         if mapped_type:
             return mapped_type
 
-        if component_type in {"i16", "u16", "i64", "u64"}:
+        if component_type in {"i8", "u8", "i16", "u16", "i64", "u64"}:
             return f"vec{component_count}<{component_type}>"
 
         return f"{component_type}{component_count}"

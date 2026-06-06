@@ -1794,6 +1794,32 @@ def test_codegen_sv_target_index_roundtrips_to_hlsl_semantic():
     assert "gl_FragData" not in regenerated_hlsl
 
 
+def test_codegen_canonicalizes_dynamic_render_target_and_depth_semantics():
+    output = generate_crossgl("""
+        struct PSOutput {
+            float4 color : SV_Target8;
+            float depth : SV_DEPTHGREATEREQUAL;
+        };
+
+        [shader("fragment")]
+        PSOutput PSMain(float2 uv : TEXCOORD0, out float fallbackDepth : SV_DEPTHLESSEQUAL) {
+            PSOutput output;
+            output.color = float4(uv, 0.0, 1.0);
+            output.depth = 1.0;
+            fallbackDepth = output.depth;
+            return output;
+        }
+    """)
+
+    assert "vec4 color @ gl_FragData[8];" in output
+    assert "float depth @ gl_FragDepth;" in output
+    assert "out float fallbackDepth @ gl_FragDepth" in output
+    assert "@ SV_Target8" not in output
+    assert "@ SV_DEPTHGREATEREQUAL" not in output
+    assert "@ SV_DEPTHLESSEQUAL" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_register_bindings_emitted():
     output = generate_crossgl(REGISTER_BINDINGS_HLSL)
     assert "@ register" in output

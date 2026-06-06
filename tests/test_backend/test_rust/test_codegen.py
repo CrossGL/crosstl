@@ -1333,6 +1333,21 @@ def test_rust_gpu_glam_squared_norm_methods_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_glam_length_recip_method_codegen_reparse():
+    # glam exposes reciprocal length as a Vec method used in normalization math.
+    code = """
+    fn reciprocal_length(normal: Vec3<f32>) -> f32 {
+        normal.length_recip()
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return (1.0 / length(normal));" in result
+    assert ".length_recip(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

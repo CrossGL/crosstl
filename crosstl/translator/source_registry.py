@@ -231,6 +231,10 @@ HIP_ARTIFACT_UNSUPPORTED_MESSAGE = (
     "Compiled HIP/ROCm artifacts (.hsaco) are not supported; provide HIP source "
     "(.hip) first."
 )
+WGSL_SOURCE_UNSUPPORTED_MESSAGE = (
+    "WGSL/WebGPU source files (.wgsl, .wesl) are not supported yet; provide a "
+    "registered CrossGL or native backend source file first."
+)
 
 
 def _load_cgl():
@@ -456,7 +460,7 @@ def register_default_sources() -> None:
     _register(
         SourceSpec(
             name="metal",
-            extensions=(".metal",),
+            extensions=(".metal", ".msl"),
             load_lexer_parser=_load_metal,
             reverse_codegen_factory=_reverse_metal,
             aliases=("metal", "msl"),
@@ -525,6 +529,8 @@ def register_default_sources() -> None:
     for ext in (".ptx", ".cubin", ".fatbin"):
         _register_unsupported_extension(ext, CUDA_ARTIFACT_UNSUPPORTED_MESSAGE)
     _register_unsupported_extension(".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE)
+    for ext in (".wgsl", ".wesl"):
+        _register_unsupported_extension(ext, WGSL_SOURCE_UNSUPPORTED_MESSAGE)
     _register(
         SourceSpec(
             name="mojo",
