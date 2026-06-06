@@ -15992,6 +15992,31 @@ class TestHipCodeGen:
         assert "var q: ptr<auto> = data;" in result
         assert "var r: ptr<auto> = data;" in result
 
+    def test_public_rocm_graph_api_newline_after_parenthesized_deref_conversion(self):
+        # Upstream: ROCm/rocm-examples,
+        # HIP-Doc/Tutorials/graph_api/src/main_graph_creation.hip.
+        code = """
+        void host() {
+            auto backwardLeafNode = *(
+                std::find_if(std::begin(backwardFFTNodes),
+                             std::end(backwardFFTNodes),
+                             is_leaf));
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "var backwardLeafNode: auto = (*std::find_if("
+            "std::begin(backwardFFTNodes), std::end(backwardFFTNodes), is_leaf));"
+            in result
+        )
+
     def test_device_lambda_expression_conversion(self):
         code = """
         void host() {

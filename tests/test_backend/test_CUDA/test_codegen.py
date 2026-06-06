@@ -116,6 +116,31 @@ class TestCudaCodeGen:
         assert "Pair" in result
         assert "__align__" not in result
 
+    def test_cuda_vector_types_header_struct_attribute_conversion(self):
+        code = """
+        struct __device_builtin__ __builtin_align__(16) float4 {
+            float x, y, z, w;
+        };
+        typedef __device_builtin__ struct float4 float4;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "struct float4 {" in result
+        assert "f32 x;" in result
+        assert "f32 y;" in result
+        assert "f32 z;" in result
+        assert "f32 w;" in result
+        assert "typedef struct float4 float4;" in result
+        assert "__device_builtin__" not in result
+        assert "__builtin_align__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_grid_constant_kernel_parameter_conversion(self):
         code = """
         __global__ void kernelLargeParam(__grid_constant__ const int scale,

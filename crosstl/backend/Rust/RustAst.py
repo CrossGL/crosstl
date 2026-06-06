@@ -195,6 +195,7 @@ class ImplNode(ASTNode):
         generics=None,
         where_clauses=None,
         type_aliases=None,
+        is_negative=False,
     ):
         self.struct_name = struct_name
         self.methods = methods
@@ -203,9 +204,15 @@ class ImplNode(ASTNode):
         self.generics = generics or []
         self.where_clauses = where_clauses or []
         self.type_aliases = type_aliases or []
+        self.is_negative = is_negative
 
     def __repr__(self):
         if self.trait_name:
+            if self.is_negative:
+                return (
+                    f"ImplNode(negative trait={self.trait_name}, "
+                    f"for={self.struct_name})"
+                )
             return f"ImplNode(trait={self.trait_name}, for={self.struct_name}, methods={len(self.methods)})"
         return f"ImplNode(for={self.struct_name}, methods={len(self.methods)})"
 

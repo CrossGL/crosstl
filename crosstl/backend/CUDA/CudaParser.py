@@ -203,6 +203,12 @@ class CudaParser:
         "DEVICE",
         "MANAGED",
     }
+    CUDA_DECLARATION_ATTRIBUTE_IDENTIFIERS = {
+        "__device_builtin__",
+        "__device_builtin_",
+        "__cudart_builtin__",
+        "__VECTOR_TYPE_DEPRECATED__",
+    }
     CUDA_STORAGE_QUALIFIER_TOKENS = {
         "SHARED",
         "CONSTANT",
@@ -1223,6 +1229,7 @@ class CudaParser:
 
     def parse_typedef_alias(self):
         self.eat("TYPEDEF")
+        self.parse_cuda_declaration_attributes()
         if self.current_token[0] == "STRUCT":
             return self.parse_typedef_struct_alias()
         if self.current_token[0] == "ENUM":
@@ -1249,7 +1256,7 @@ class CudaParser:
         if self.current_token[0] == "LPAREN":
             return self.parse_function_pointer_type_alias_declarator(alias_type)
 
-        name = self.eat("IDENTIFIER")[1]
+        name = self.parse_name_component()
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
@@ -1269,11 +1276,11 @@ class CudaParser:
 
     def parse_typedef_struct_alias(self):
         self.eat("STRUCT")
-        attributes = self.parse_alignment_attributes()
+        attributes = self.parse_cuda_struct_attribute_prefix()
 
         tag_name = None
-        if self.current_token[0] == "IDENTIFIER":
-            tag_name = self.eat("IDENTIFIER")[1]
+        if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
+            tag_name = self.parse_name_component()
 
         if self.current_token[0] != "LBRACE":
             alias = self.parse_type_alias_declarator(
@@ -1352,6 +1359,48 @@ class CudaParser:
             self.eat("RPAREN")
             attributes.append(f"{name}({args})")
         return attributes
+
+    def parse_cuda_declaration_attributes(self):
+        while self.is_cuda_declaration_attribute_identifier():
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_parentheses()
+
+    def parse_cuda_struct_attribute_prefix(self):
+        attributes = []
+        while True:
+            before_index = self.current_index
+            self.parse_cuda_declaration_attributes()
+            attributes.extend(self.parse_alignment_attributes())
+            if self.current_index == before_index:
+                return attributes
+
+    def is_cuda_declaration_attribute_identifier_at_index(self, index):
+        return (
+            index < len(self.tokens)
+            and self.tokens[index][0] == "IDENTIFIER"
+            and self.tokens[index][1] in self.CUDA_DECLARATION_ATTRIBUTE_IDENTIFIERS
+        )
+
+    def is_cuda_declaration_attribute_identifier(self):
+        return self.is_cuda_declaration_attribute_identifier_at_index(
+            self.current_index
+        )
+
+    def skip_cuda_declaration_attributes_at_index(self, index):
+        while self.is_cuda_declaration_attribute_identifier_at_index(index):
+            index += 1
+            if index < len(self.tokens) and self.tokens[index][0] == "LPAREN":
+                index = self.skip_balanced_tokens_at_index(index, "LPAREN", "RPAREN")
+        return index
+
+    def skip_cuda_struct_attribute_prefix_at_index(self, index):
+        while True:
+            before_index = index
+            index = self.skip_cuda_declaration_attributes_at_index(index)
+            index = self.skip_alignment_attributes_at_index(index)
+            if index == before_index:
+                return index
 
     def is_cpp_attribute_specifier_start(self):
         return self.is_cpp_attribute_specifier_start_at_index(self.current_index)
@@ -1565,8 +1614,11 @@ class CudaParser:
         if self.current_token[0] not in {"CLASS", "STRUCT", "UNION"}:
             return False
 
-        index = self.skip_alignment_attributes_at_index(self.current_index + 1)
-        if index >= len(self.tokens) or self.tokens[index][0] != "IDENTIFIER":
+        index = self.skip_cuda_struct_attribute_prefix_at_index(self.current_index + 1)
+        if (
+            index >= len(self.tokens)
+            or self.tokens[index][0] not in self.NAME_COMPONENT_TOKENS
+        ):
             return False
 
         index += 1
@@ -1589,8 +1641,8 @@ class CudaParser:
 
     def parse_struct(self):
         self.eat(self.current_token[0])
-        attributes = self.parse_alignment_attributes()
-        name = self.eat("IDENTIFIER")[1]
+        attributes = self.parse_cuda_struct_attribute_prefix()
+        name = self.parse_name_component()
         if self.current_token[0] == "LESS_THAN":
             name += self.parse_template_suffix()
         self.struct_names.add(name)
@@ -1962,13 +2014,13 @@ class CudaParser:
         if self.current_token[0] not in {"STRUCT", "UNION"}:
             return False
 
-        index = self.skip_alignment_attributes_at_index(self.current_index + 1)
+        index = self.skip_cuda_struct_attribute_prefix_at_index(self.current_index + 1)
         return index < len(self.tokens) and self.tokens[index][0] == "LBRACE"
 
     def parse_anonymous_aggregate_member(self):
         aggregate_type = self.current_token[1]
         self.eat(self.current_token[0])
-        attributes = self.parse_alignment_attributes()
+        attributes = self.parse_cuda_struct_attribute_prefix()
         self.eat("LBRACE")
         members = self.parse_struct_members()
         self.eat("RBRACE")

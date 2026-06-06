@@ -3513,6 +3513,7 @@ class HipParser:
                 return CastNode(target_type, expr)
 
             self.consume("LPAREN")
+            self.skip_newlines()
             expr = self.parse_expression()
             self.consume("RPAREN")
             return expr

@@ -29,7 +29,7 @@ class MojoParser:
         "deinit",
     }
     REFERENCE_TYPE_PREFIXES = {"ref"}
-    FUNCTION_EFFECT_IDENTIFIERS = {"abi", "capturing", "raises", "unified"}
+    FUNCTION_EFFECT_IDENTIFIERS = {"abi", "capturing", "raises", "thin", "unified"}
 
     def __init__(self, tokens):
         self.tokens = tokens

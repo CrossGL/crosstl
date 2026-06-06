@@ -38,7 +38,7 @@ class TestCudaLexer:
         ]
 
     def test_cuda_alignment_attribute_tokens(self):
-        code = "__align__(8) alignas(16)"
+        code = "__align__(8) alignas(16) __builtin_align__(32)"
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
@@ -50,6 +50,10 @@ class TestCudaLexer:
             ("ALIGNAS", "alignas"),
             ("LPAREN", "("),
             ("NUMBER", "16"),
+            ("RPAREN", ")"),
+            ("ALIGNAS", "__builtin_align__"),
+            ("LPAREN", "("),
+            ("NUMBER", "32"),
             ("RPAREN", ")"),
             ("EOF", ""),
         ]

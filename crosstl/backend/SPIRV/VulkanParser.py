@@ -2176,17 +2176,39 @@ class VulkanParser:
                 continue
 
             cases = []
-            case_labels = set()
+            case_groups = []
+            current_group = None
+            closed_case_labels = set()
             for operand_index in range(0, len(case_operands), 2):
                 literal = case_operands[operand_index]
                 target_label = case_operands[operand_index + 1]
-                if target_label not in labels or target_label in case_labels:
+                if target_label not in labels:
                     return None
-                case_labels.add(target_label)
+
+                if (
+                    current_group is not None
+                    and current_group["target_label"] == target_label
+                ):
+                    group = current_group
+                else:
+                    if target_label in closed_case_labels:
+                        return None
+                    if current_group is not None:
+                        closed_case_labels.add(current_group["target_label"])
+                    group = {"target_label": target_label, "literals": []}
+                    current_group = group
+                    case_groups.append(group)
+
+                group["literals"].append(literal)
+
+            if default_label in {group["target_label"] for group in case_groups}:
+                return None
+
+            for group in case_groups:
                 case_body = self.spirv_assembly_switch_case_body(
                     raw_instructions,
                     labels,
-                    target_label,
+                    group["target_label"],
                     merge_label,
                     expressions,
                     names,
@@ -2199,10 +2221,9 @@ class VulkanParser:
                 )
                 if case_body is None:
                     return None
-                cases.append(CaseNode(literal, case_body))
-
-            if default_label in case_labels:
-                return None
+                for literal in group["literals"][:-1]:
+                    cases.append(CaseNode(literal, []))
+                cases.append(CaseNode(group["literals"][-1], case_body))
             default_body = self.spirv_assembly_switch_case_body(
                 raw_instructions,
                 labels,

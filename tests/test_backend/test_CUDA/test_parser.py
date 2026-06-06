@@ -2807,6 +2807,34 @@ class TestCudaParser:
         assert ast.kernels[0].params[0].vtype == "Pair *"
         assert ast.kernels[0].params[0].name == "pairs"
 
+    def test_cuda_vector_types_header_struct_attributes_parse(self):
+        code = """
+        struct __VECTOR_TYPE_DEPRECATED__("use float4_16a")
+               __device_builtin__ __builtin_align__(16) float4 {
+            float x, y, z, w;
+        };
+        typedef __device_builtin__ struct float4 float4;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        vector = ast.structs[0]
+        assert isinstance(vector, StructNode)
+        assert vector.name == "float4"
+        assert vector.attributes == ["__builtin_align__(16)"]
+        assert [(member.vtype, member.name) for member in vector.members] == [
+            ("float", "x"),
+            ("float", "y"),
+            ("float", "z"),
+            ("float", "w"),
+        ]
+        assert len(ast.typedefs) == 1
+        assert ast.typedefs[0].alias_type == "struct float4"
+        assert ast.typedefs[0].name == "float4"
+
     def test_aligned_anonymous_aggregate_members_parse(self):
         code = """
         struct Packet {

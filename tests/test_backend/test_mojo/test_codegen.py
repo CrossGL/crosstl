@@ -162,6 +162,29 @@ def test_function_type_parameter_codegen_from_modular_gpu_reduction():
     assert "Unhandled expression" not in generated_code
 
 
+def test_thin_function_type_parameter_codegen_from_official_parameter_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/parameters/
+    # "Parameters at a glance" documents noncapturing comparator function types
+    # with an explicit `thin` effect.
+    code = """
+    def invoke_compare(
+        lhs: Scalar[dtype],
+        rhs: Scalar[dtype],
+        compare: def(Scalar[dtype], Scalar[dtype]) thin -> Int,
+    ) -> Int:
+        return compare(lhs, rhs)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "int invoke_compare(Scalar[dtype] lhs, Scalar[dtype] rhs, "
+        "def(Scalar[dtype], Scalar[dtype]) thin -> Int compare)"
+    ) in generated_code
+    assert "return compare(lhs, rhs);" in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_variadic_and_reference_parameter_codegen_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

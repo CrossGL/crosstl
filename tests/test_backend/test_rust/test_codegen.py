@@ -7373,6 +7373,20 @@ def test_impl_block_conversion():
         pytest.fail(f"Impl block conversion failed: {e}")
 
 
+def test_negative_trait_impl_codegen_from_rust_reference():
+    # Source: https://doc.rust-lang.org/reference/items/implementations.html
+    code = """
+    struct ShaderHandle;
+
+    impl !Send for ShaderHandle {}
+    """
+
+    result = parse_and_generate(code)
+
+    assert "struct ShaderHandle {" in result
+    assert "// Negative implementation for Send on ShaderHandle" in result
+
+
 def test_references_conversion():
     code = """
     fn test_references() {
