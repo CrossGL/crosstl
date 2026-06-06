@@ -252,7 +252,8 @@ Project reports include configured define and variant names and values, and
 artifact records include the applied define map used for that translation
 attempt. Review reports before sharing them outside the repository if those
 values include private build metadata. Compact inspection summaries list
-configured variant names without printing define names or values.
+configured variant names and per-variant define counts without printing define
+names or values.
 
 Report Shape
 ------------
@@ -265,8 +266,9 @@ Project reports are JSON documents with:
   records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
-  variant maps, and counts for source roots, include patterns, exclude
-  patterns, source overrides, include directories, defines, and variants.
+  variant maps, per-variant define counts, and counts for source roots,
+  include patterns, exclude patterns, source overrides, include directories,
+  defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
@@ -345,9 +347,10 @@ Project reports are JSON documents with:
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata, target normalization, and config
-  count checks including compact variant-name inspection summaries, unit and
-  skipped record shape checks, artifact record shape checks, source and
-  generated hash checks, duplicate artifact identity checks, required
+  count checks including compact variant-name and variant-define-count
+  inspection summaries, unit and skipped record shape checks, artifact record
+  shape checks, source and generated hash checks, duplicate artifact identity
+  checks, required
   source/generated hash status fields for summarized validation artifacts,
   aggregate validation artifact and hash-status summary counts, direct
   validation report artifact target, variant, hash-status, toolchain status,

@@ -184,6 +184,15 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     return result
 
 
+def _variant_define_counts(variants: Mapping[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for name, defines in variants.items():
+        if not _is_non_empty_string(name) or not isinstance(defines, Mapping):
+            continue
+        counts[name] = len(defines)
+    return dict(sorted(counts.items()))
+
+
 def _normalized_targets(targets: Sequence[str]) -> list[str]:
     discover_backend_plugins()
     normalized_targets = []
@@ -2042,6 +2051,7 @@ class ProjectPortabilityReport:
                     for name, defines in sorted(self.config.variants.items())
                 },
                 "variantCount": len(self.config.variants),
+                "variantDefineCounts": _variant_define_counts(self.config.variants),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
             "summary": {
@@ -3885,6 +3895,7 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         "includeDirStatusCounts",
         "defineCount",
         "variantCount",
+        "variantDefineCounts",
         "externalCorpusManifest",
     ):
         if field_name in project:
@@ -3894,6 +3905,8 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         summary["variantNames"] = sorted(
             name for name in variants if isinstance(name, str) and name
         )
+        if "variantDefineCounts" not in summary:
+            summary["variantDefineCounts"] = _variant_define_counts(variants)
     return summary
 
 
@@ -6201,6 +6214,30 @@ def _project_metadata_contract_reasons(
             reasons.append("project.variantCount must be a non-negative integer")
         elif variants_is_mapping and variant_count != len(variants):
             reasons.append("project.variantCount must match project.variants")
+
+    if _optional_project_field(
+        project, "variantDefineCounts", required=require_full_metadata
+    ):
+        variant_define_counts = project.get("variantDefineCounts")
+        if variants_is_mapping:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "project.variantDefineCounts",
+                    variant_define_counts,
+                    _variant_define_counts(variants),
+                    "project.variants",
+                )
+            )
+        elif not isinstance(variant_define_counts, Mapping):
+            reasons.append("project.variantDefineCounts must be an object")
+        elif any(
+            not _is_non_empty_string(name) or not _is_non_negative_int(count)
+            for name, count in variant_define_counts.items()
+        ):
+            reasons.append(
+                "project.variantDefineCounts must map variant names to "
+                "non-negative integers"
+            )
 
     if _optional_project_field(
         project, "externalCorpusManifest", required=require_full_metadata

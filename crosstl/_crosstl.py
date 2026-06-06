@@ -722,6 +722,15 @@ def _format_project_variant_names(project):
     return "Project variants: " + ", ".join(names)
 
 
+def _format_project_variant_define_counts(project):
+    if not isinstance(project, Mapping):
+        return None
+    return _format_count_rollup(
+        "Project variant define counts",
+        project.get("variantDefineCounts"),
+    )
+
+
 def _format_project_config_path(project):
     if not isinstance(project, Mapping) or "config" not in project:
         return None
@@ -1301,6 +1310,10 @@ def _format_project_report_inspection(payload):
     project_variant_names = _format_project_variant_names(project)
     if project_variant_names:
         lines.insert(project_insert_index, project_variant_names)
+        project_insert_index += 1
+    project_variant_define_counts = _format_project_variant_define_counts(project)
+    if project_variant_define_counts:
+        lines.insert(project_insert_index, project_variant_define_counts)
     project_status_lines = []
     source_root_status = _format_count_rollup(
         "Source roots by status",

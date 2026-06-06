@@ -492,6 +492,7 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert payload["project"]["defineCount"] == 1
     assert payload["project"]["variants"] == {"debug": {"USE_FAST_PATH": "0"}}
     assert payload["project"]["variantCount"] == 1
+    assert payload["project"]["variantDefineCounts"] == {"debug": 1}
 
 
 def test_project_config_resolves_relative_config_path_from_root(tmp_path):
@@ -3534,6 +3535,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                     "sourceOverrideCount": 2,
                     "variants": {"debug": "not a define map", "": {"MODE": 1}},
                     "variantCount": "1",
+                    "variantDefineCounts": {"debug": 1},
                 },
                 "artifacts": [],
             }
@@ -3581,6 +3583,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     assert "project.variantCount must be a non-negative integer" in (
         diagnostic["message"]
     )
+    assert "project.variantDefineCounts must match project.variants" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
@@ -3599,6 +3604,7 @@ def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
                     "defines": {"": "1"},
                     "sourceOverrides": {"": "cgl"},
                     "variants": {"debug": {"": "1"}},
+                    "variantDefineCounts": {"debug": 1},
                 },
                 "artifacts": [],
             }
@@ -3648,6 +3654,7 @@ def test_validate_project_report_rejects_project_config_count_mismatches(tmp_pat
                     "defineCount": 0,
                     "variants": {},
                     "variantCount": 0,
+                    "variantDefineCounts": {},
                 },
                 "artifacts": [],
             }
@@ -4777,6 +4784,7 @@ def test_validate_project_report_rejects_validation_records_with_undeclared_vari
                     "targets": ["opengl"],
                     "outputDir": "out",
                     "variants": {"debug": {}},
+                    "variantDefineCounts": {"debug": 0},
                 },
                 "artifacts": [],
                 "validation": {
@@ -7347,6 +7355,7 @@ def _write_opengl_toolchain_report(repo, *, variant=None):
     }
     if variant is not None:
         project["variants"] = {variant: {}}
+        project["variantDefineCounts"] = {variant: 0}
     artifact_record = {
         "source": "simple.cgl",
         "target": "opengl",
@@ -8908,7 +8917,12 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "includeDirs=0, defines=1, variants=2" in result.stdout
     )
     assert payload["report"]["project"]["variantNames"] == ["debug", "release"]
+    assert payload["report"]["project"]["variantDefineCounts"] == {
+        "debug": 1,
+        "release": 1,
+    }
     assert "Project variants: debug, release" in result.stdout
+    assert "Project variant define counts: debug=1, release=1" in result.stdout
     assert (
         "Artifacts by variant: debug=1 artifact (1 translated, 0 failed), "
         "release=1 artifact (1 translated, 0 failed)"

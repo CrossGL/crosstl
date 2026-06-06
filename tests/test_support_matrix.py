@@ -392,8 +392,9 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "records each artifact applied define map" in backend_support["notes"]
         assert "define-processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
-        assert "inspection summaries expose variant names without define values" in (
-            backend_support["notes"]
+        assert (
+            "inspection summaries expose variant names and per-variant define counts"
+            in backend_support["notes"]
         )
         assert (
             "define-processing status, source-backend, and variant rollups"
@@ -402,9 +403,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "not-supported define-processing artifact samples" in (
             backend_support["notes"]
         )
-        assert "malformed define/variant metadata including empty mapping keys" in (
-            backend_support["notes"]
-        )
+        assert (
+            "malformed define/variant metadata including empty mapping keys and "
+            "forged variant define counts"
+        ) in backend_support["notes"]
         assert "artifact define maps that do not match base defines merged" in (
             backend_support["notes"]
         )
