@@ -190,6 +190,16 @@ Existing include directories that remain inside the repository, plus configured
 defines, are passed to source frontends that expose preprocessor options. CLI
 include and define overrides are merged with this configuration before scan or
 translation.
+During scan, project reports also record ``#include`` directives discovered in
+translation units. Each dependency record keeps the include target, local,
+system, or dynamic kind, line and column, and a status of ``resolved``,
+``missing``, ``system``, ``dynamic``, or ``outside-project``. Resolved
+dependencies record the repository-relative resolved path and whether the match
+came from the source directory or a configured include directory. Unresolved
+system includes are recorded without warning because they often refer to SDK or
+toolchain headers. Missing local includes, dynamic include expressions, and
+include paths that resolve outside the repository emit structured
+``include.resolution`` diagnostics.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one
@@ -242,11 +252,13 @@ Project reports are JSON documents with:
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
   backend, variant, target backend, source-map granularity, source-map target,
-  source-map source backend, diagnostic code (``diagnosticsByCode``), and
-  missing capability (``missingCapabilityCounts``).
+  source-map source backend, include dependency kind, include dependency
+  status, diagnostic code (``diagnosticsByCode``), and missing capability
+  (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
-  overrides.
+  overrides. Units that contain ``#include`` directives also include
+  ``includeDependencies`` records for project-level include triage.
 - ``skipped``: repository-relative files intentionally left untranslated with
   reason codes and source override metadata when an override selected an
   unsupported source backend. Full reports require skipped source override
@@ -321,6 +333,7 @@ Project reports are JSON documents with:
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact and
   toolchain target coverage and status consistency checks,
+  include dependency record shape and include dependency summary consistency,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   translated artifact existence checks, escaped output directory and

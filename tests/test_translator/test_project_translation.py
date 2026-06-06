@@ -605,6 +605,163 @@ def test_scan_project_reports_include_dir_files_without_hiding_units(tmp_path):
     assert payload["project"]["includeDirStatusCounts"] == {"not-directory": 1}
 
 
+def test_scan_project_records_include_dependency_resolution(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (include_dir / "shared.inc").write_text("vec4 shared_color();\n", encoding="utf-8")
+    (tmp_path / "outside.inc").write_text("vec4 outside_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #include "local.inc"
+            #include <shared.inc>
+            #include <cuda_runtime.h>
+            #include "missing.inc"
+            #include PROJECT_HEADER
+            #include "../../outside.inc"
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert [unit["path"] for unit in payload["units"]] == ["shaders/main.frag"]
+    dependencies = payload["units"][0]["includeDependencies"]
+    assert dependencies == [
+        {
+            "include": "local.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "shaders/local.inc",
+            "resolvedFrom": "source",
+        },
+        {
+            "include": "shared.inc",
+            "kind": "system",
+            "status": "resolved",
+            "line": 3,
+            "column": 1,
+            "resolvedPath": "includes/shared.inc",
+            "resolvedFrom": "include-dir",
+        },
+        {
+            "include": "cuda_runtime.h",
+            "kind": "system",
+            "status": "system",
+            "line": 4,
+            "column": 1,
+        },
+        {
+            "include": "missing.inc",
+            "kind": "local",
+            "status": "missing",
+            "line": 5,
+            "column": 1,
+        },
+        {
+            "include": "PROJECT_HEADER",
+            "kind": "dynamic",
+            "status": "dynamic",
+            "line": 6,
+            "column": 1,
+        },
+        {
+            "include": "../../outside.inc",
+            "kind": "local",
+            "status": "outside-project",
+            "line": 7,
+            "column": 1,
+        },
+    ]
+    assert payload["summary"]["includeDependencyCount"] == 6
+    assert payload["summary"]["includeDependenciesByKind"] == {
+        "dynamic": 1,
+        "local": 3,
+        "system": 2,
+    }
+    assert payload["summary"]["includeDependenciesByStatus"] == {
+        "dynamic": 1,
+        "missing": 1,
+        "outside-project": 1,
+        "resolved": 2,
+        "system": 1,
+    }
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.dynamic-include": 1,
+        "project.scan.include-outside-project": 1,
+        "project.scan.missing-include": 1,
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 3}
+
+
+def test_validate_project_report_rejects_malformed_include_dependency_records(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    dependency = payload["units"][0]["includeDependencies"][0]
+    dependency["kind"] = "module"
+    dependency["status"] = "resolved"
+    dependency["line"] = 0
+    dependency["resolvedPath"] = "../outside.inc"
+    dependency["resolvedFrom"] = "workspace"
+    payload["summary"]["includeDependencyCount"] = 2
+    payload["summary"]["includeDependenciesByKind"] = {"module": 1}
+    report_path = repo / "bad-include-dependencies-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].includeDependencies[0].kind must be one of" in (
+        diagnostic["message"]
+    )
+    assert "units[0].includeDependencies[0].line must be a positive integer" in (
+        diagnostic["message"]
+    )
+    assert (
+        "units[0].includeDependencies[0].resolvedPath must be repository-relative"
+        in (diagnostic["message"])
+    )
+    assert (
+        "units[0].includeDependencies[0].resolvedFrom must be source or include-dir"
+        in (diagnostic["message"])
+    )
+    assert "summary.includeDependencyCount must match unit include dependencies" in (
+        diagnostic["message"]
+    )
+    assert "summary.includeDependenciesByKind must match unit include dependencies" in (
+        diagnostic["message"]
+    )
+
+
 def test_project_config_rejects_malformed_variant_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -7680,6 +7837,56 @@ def test_project_cli_inspect_report_text_includes_include_dir_status(tmp_path):
     }
     assert payload["report"]["project"]["includeDirStatus"][0]["status"] == "active"
     assert payload["report"]["project"]["includeDirStatus"][1]["status"] == "missing"
+
+
+def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (include_dir / "shared.inc").write_text("vec4 shared_color();\n", encoding="utf-8")
+    (repo / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #include <shared.inc>
+            #include "missing.inc"
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Include dependencies by status: missing=1, resolved=1" in result.stdout
+    assert "Include dependencies by kind: local=1, system=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_source_root_status(tmp_path):

@@ -157,6 +157,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "variant-name summaries" in backend_support["notes"]
         assert "source-root status" in backend_support["notes"]
         assert "include-directory status rollups" in backend_support["notes"]
+        assert "include dependency status and kind rollups" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_root_status"
@@ -164,6 +165,10 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_include_dir_status"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_include_dependency_rollups"
         ) in backend_support["evidence"]
         assert "sampled missing or undiscovered entries" in (backend_support["notes"])
         assert "inactive source-root and include-directory record details" in (
@@ -305,9 +310,21 @@ def test_project_include_resolution_documents_status_reporting():
         assert "text inspection identifies inactive include directories by path" in (
             backend_support["notes"]
         )
+        assert "includeDependencies records" in backend_support["notes"]
+        assert "include dependency record shape and summary rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_include_dir_files_without_hiding_units"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_records_include_dependency_resolution"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_malformed_include_dependency_records"
         ) in backend_support["evidence"]
 
 

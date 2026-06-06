@@ -991,6 +991,20 @@ def _format_project_report_inspection(payload):
     )
     if units_by_source_override:
         lines.append(units_by_source_override)
+    include_dependencies_by_status = _format_count_rollup(
+        "Include dependencies by status",
+        summary.get("includeDependenciesByStatus"),
+        include_zero=False,
+    )
+    if include_dependencies_by_status:
+        lines.append(include_dependencies_by_status)
+    include_dependencies_by_kind = _format_count_rollup(
+        "Include dependencies by kind",
+        summary.get("includeDependenciesByKind"),
+        include_zero=False,
+    )
+    if include_dependencies_by_kind:
+        lines.append(include_dependencies_by_kind)
     skipped_by_reason = _format_count_rollup(
         "Skipped by reason",
         summary.get("skippedByReason"),

@@ -6,6 +6,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -87,10 +88,16 @@ SOURCE_ROOT_STATUSES = frozenset(
 INCLUDE_DIR_STATUSES = frozenset(
     ("active", "missing", "not-directory", "outside-project")
 )
+INCLUDE_DEPENDENCY_KINDS = frozenset(("dynamic", "local", "system"))
+INCLUDE_DEPENDENCY_STATUSES = frozenset(
+    ("dynamic", "missing", "outside-project", "resolved", "system")
+)
 VALIDATION_TOOLCHAIN_RUN_STATUSES = frozenset(("ok", "failed"))
 VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
+INCLUDE_DIRECTIVE_RE = re.compile(r"^\s*#\s*include\s+(?P<body>.+?)\s*$")
+INCLUDE_LITERAL_RE = re.compile(r'^(?P<open>["<])(?P<path>[^">]+)(?P<close>[">])')
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -409,6 +416,54 @@ def _skipped_counts_by_source_override(
             continue
         counts[source_override] = counts.get(source_override, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _include_dependency_records(
+    units: Sequence[ProjectTranslationUnit],
+) -> list[Mapping[str, Any]]:
+    return [
+        dependency
+        for unit in units
+        for dependency in unit.include_dependencies
+        if isinstance(dependency, Mapping)
+    ]
+
+
+def _include_dependency_counts_by_field(
+    records: Sequence[Mapping[str, Any]],
+    field_name: str,
+    allowed_values: frozenset[str],
+) -> dict[str, int]:
+    counts = {value: 0 for value in sorted(allowed_values)}
+    for record in records:
+        value = record.get(field_name)
+        if isinstance(value, str) and value in counts:
+            counts[value] += 1
+    return {value: count for value, count in counts.items() if count}
+
+
+def _include_dependency_count(units: Sequence[ProjectTranslationUnit]) -> int:
+    return len(_include_dependency_records(units))
+
+
+def _include_dependency_counts_by_kind(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _include_dependency_records(units),
+        "kind",
+        INCLUDE_DEPENDENCY_KINDS,
+    )
+
+
+def _include_dependency_counts_by_status(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _include_dependency_records(units),
+        "status",
+        INCLUDE_DEPENDENCY_STATUSES,
+    )
 
 
 def _artifact_counts_by_target(
@@ -904,6 +959,178 @@ def _frontend_include_dirs(config: ProjectConfig) -> list[str]:
     return include_dirs
 
 
+def _strip_include_line_comment(value: str) -> str:
+    return value.split("//", 1)[0].strip()
+
+
+def _include_literal(value: str) -> tuple[str, str] | None:
+    match = INCLUDE_LITERAL_RE.match(value)
+    if not match:
+        return None
+    delimiter = match.group("open")
+    close = match.group("close")
+    if delimiter == '"' and close != '"':
+        return None
+    if delimiter == "<" and close != ">":
+        return None
+    kind = "local" if delimiter == '"' else "system"
+    include_path = match.group("path").strip()
+    if not include_path:
+        return None
+    return kind, include_path
+
+
+def _include_search_roots(
+    config: ProjectConfig, source_path: Path, kind: str
+) -> list[tuple[str, Path]]:
+    roots: list[tuple[str, Path]] = []
+    if kind == "local":
+        roots.append(("source", source_path.parent.resolve()))
+    roots.extend(
+        ("include-dir", Path(include_dir).resolve())
+        for include_dir in _frontend_include_dirs(config)
+    )
+    return roots
+
+
+def _include_target_is_absolute(include_path: str) -> bool:
+    return (
+        Path(include_path).is_absolute()
+        or PureWindowsPath(include_path).is_absolute()
+        or bool(PureWindowsPath(include_path).drive)
+    )
+
+
+def _resolve_include_dependency(
+    config: ProjectConfig,
+    source_path: Path,
+    kind: str,
+    include_path: str,
+) -> tuple[str, str | None, str | None]:
+    if _include_target_is_absolute(include_path):
+        return "outside-project", None, None
+
+    outside_project = False
+    for source, root in _include_search_roots(config, source_path, kind):
+        candidate = (root / include_path).resolve()
+        if not _is_relative_to(candidate, config.root):
+            outside_project = True
+            continue
+        if candidate.is_file():
+            return "resolved", _relpath(candidate, config.root), source
+
+    if outside_project:
+        return "outside-project", None, None
+    if kind == "system":
+        return "system", None, None
+    return "missing", None, None
+
+
+def _scan_include_dependencies(
+    config: ProjectConfig, unit_path: Path, relative_path: str
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    dependencies: list[dict[str, Any]] = []
+    diagnostics: list[ProjectDiagnostic] = []
+
+    try:
+        lines = unit_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="warning",
+                code="project.scan.include-read-failed",
+                message=f"Could not scan include directives in {relative_path}: {exc}",
+                location=SourceLocation(file=relative_path),
+                missing_capabilities=["include.resolution"],
+            )
+        )
+        return dependencies, diagnostics
+
+    for line_number, line in enumerate(lines, start=1):
+        directive = INCLUDE_DIRECTIVE_RE.match(line)
+        if not directive:
+            continue
+        raw_body = directive.group("body").strip()
+        column = max(1, line.find("#") + 1)
+        location = SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        )
+        literal = _include_literal(raw_body)
+        if literal is None:
+            body = _strip_include_line_comment(raw_body) or raw_body
+            dependency = {
+                "include": body,
+                "kind": "dynamic",
+                "status": "dynamic",
+                "line": line_number,
+                "column": column,
+            }
+            dependencies.append(dependency)
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.scan.dynamic-include",
+                    message=(
+                        "Include directive uses a dynamic target that cannot be "
+                        f"resolved during project scan: {body}"
+                    ),
+                    location=location,
+                    missing_capabilities=["include.resolution"],
+                )
+            )
+            continue
+
+        kind, include_path = literal
+        status, resolved_path, resolved_from = _resolve_include_dependency(
+            config, unit_path, kind, include_path
+        )
+        dependency = {
+            "include": include_path,
+            "kind": kind,
+            "status": status,
+            "line": line_number,
+            "column": column,
+        }
+        if resolved_path:
+            dependency["resolvedPath"] = resolved_path
+        if resolved_from:
+            dependency["resolvedFrom"] = resolved_from
+        dependencies.append(dependency)
+        if status == "missing":
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.scan.missing-include",
+                    message=(
+                        f"Include directive in {relative_path}:{line_number} "
+                        f"could not be resolved: {include_path}"
+                    ),
+                    location=location,
+                    missing_capabilities=["include.resolution"],
+                )
+            )
+        elif status == "outside-project":
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.scan.include-outside-project",
+                    message=(
+                        f"Include directive in {relative_path}:{line_number} "
+                        "resolves outside the repository or uses an absolute "
+                        f"path: {include_path}"
+                    ),
+                    location=location,
+                    missing_capabilities=["include.resolution"],
+                )
+            )
+
+    return dependencies, diagnostics
+
+
 def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
     path = Path(source_root)
     if not path.is_absolute():
@@ -1314,6 +1541,7 @@ class ProjectTranslationUnit:
     extension: str
     source_hash: Mapping[str, str]
     source_override: str | None = None
+    include_dependencies: Sequence[Mapping[str, Any]] = ()
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -1325,6 +1553,10 @@ class ProjectTranslationUnit:
         }
         if self.source_override:
             payload["sourceOverride"] = self.source_override
+        if self.include_dependencies:
+            payload["includeDependencies"] = [
+                dict(dependency) for dependency in self.include_dependencies
+            ]
         return payload
 
 
@@ -1445,6 +1677,13 @@ class ProjectPortabilityReport:
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
                 "unitsByExtension": _unit_counts_by_extension(self.units),
                 "unitsBySourceOverride": _unit_counts_by_source_override(self.units),
+                "includeDependencyCount": _include_dependency_count(self.units),
+                "includeDependenciesByKind": _include_dependency_counts_by_kind(
+                    self.units
+                ),
+                "includeDependenciesByStatus": _include_dependency_counts_by_status(
+                    self.units
+                ),
                 "skippedByReason": _skipped_counts_by_reason(self.skipped),
                 "skippedByExtension": _skipped_counts_by_extension(self.skipped),
                 "skippedBySourceOverride": _skipped_counts_by_source_override(
@@ -1641,6 +1880,10 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
             )
             continue
 
+        include_dependencies, include_diagnostics = _scan_include_dependencies(
+            config, path, relative_path
+        )
+        diagnostics.extend(include_diagnostics)
         units.append(
             ProjectTranslationUnit(
                 path=path,
@@ -1649,6 +1892,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
                 extension=path.suffix.lower(),
                 source_hash=_source_hash(path),
                 source_override=override,
+                include_dependencies=include_dependencies,
             )
         )
 
@@ -3191,6 +3435,42 @@ def _payload_unit_counts_by_source_override(units: Sequence[Any]) -> dict[str, i
     return dict(sorted(counts.items()))
 
 
+def _payload_include_dependency_records(
+    units: Sequence[Any],
+) -> list[Mapping[str, Any]]:
+    records: list[Mapping[str, Any]] = []
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            continue
+        dependencies = unit.get("includeDependencies")
+        if not isinstance(dependencies, list):
+            continue
+        records.extend(
+            dependency for dependency in dependencies if isinstance(dependency, Mapping)
+        )
+    return records
+
+
+def _payload_include_dependency_counts_by_kind(
+    units: Sequence[Any],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _payload_include_dependency_records(units),
+        "kind",
+        INCLUDE_DEPENDENCY_KINDS,
+    )
+
+
+def _payload_include_dependency_counts_by_status(
+    units: Sequence[Any],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _payload_include_dependency_records(units),
+        "status",
+        INCLUDE_DEPENDENCY_STATUSES,
+    )
+
+
 def _payload_skipped_counts_by_reason(skipped: Sequence[Any]) -> dict[str, int]:
     records = [record for record in skipped if isinstance(record, Mapping)]
     return _skipped_counts_by_reason(records)
@@ -3779,6 +4059,78 @@ def _unit_source_override_contract_reasons(
     return []
 
 
+def _include_dependency_contract_reasons(
+    unit_index: int,
+    dependency_index: int,
+    dependency: Any,
+) -> list[str]:
+    prefix = f"units[{unit_index}].includeDependencies[{dependency_index}]"
+    if not isinstance(dependency, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = []
+    include_value = dependency.get("include")
+    if not _is_non_empty_string(include_value):
+        reasons.append(f"{prefix}.include must be a string")
+
+    kind = dependency.get("kind")
+    if kind not in INCLUDE_DEPENDENCY_KINDS:
+        reasons.append(
+            "{}.kind must be one of {}".format(
+                prefix, ", ".join(sorted(INCLUDE_DEPENDENCY_KINDS))
+            )
+        )
+
+    status = dependency.get("status")
+    if status not in INCLUDE_DEPENDENCY_STATUSES:
+        reasons.append(
+            "{}.status must be one of {}".format(
+                prefix, ", ".join(sorted(INCLUDE_DEPENDENCY_STATUSES))
+            )
+        )
+
+    for field_name in ("line", "column"):
+        value = dependency.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            reasons.append(f"{prefix}.{field_name} must be a positive integer")
+
+    resolved_path = dependency.get("resolvedPath")
+    if status == "resolved":
+        reasons.extend(
+            _repository_path_contract_reasons(f"{prefix}.resolvedPath", resolved_path)
+        )
+    elif "resolvedPath" in dependency:
+        reasons.append(
+            f"{prefix}.resolvedPath must be omitted unless status is resolved"
+        )
+
+    resolved_from = dependency.get("resolvedFrom")
+    if "resolvedFrom" in dependency and resolved_from not in {"source", "include-dir"}:
+        reasons.append(f"{prefix}.resolvedFrom must be source or include-dir")
+    if status == "resolved" and "resolvedFrom" not in dependency:
+        reasons.append(f"{prefix}.resolvedFrom must be recorded for resolved includes")
+
+    return reasons
+
+
+def _unit_include_dependencies_contract_reasons(
+    index: int, unit: Mapping[str, Any]
+) -> list[str]:
+    if "includeDependencies" not in unit:
+        return []
+
+    dependencies = unit.get("includeDependencies")
+    if not isinstance(dependencies, list):
+        return [f"units[{index}].includeDependencies must be a list"]
+
+    reasons = []
+    for dependency_index, dependency in enumerate(dependencies):
+        reasons.extend(
+            _include_dependency_contract_reasons(index, dependency_index, dependency)
+        )
+    return reasons
+
+
 def _unit_contract_reasons(
     index: int,
     unit: Any,
@@ -3835,6 +4187,7 @@ def _unit_contract_reasons(
             check_current_file=check_current_source_hash,
         )
     )
+    reasons.extend(_unit_include_dependencies_contract_reasons(index, unit))
     return reasons
 
 
@@ -5163,6 +5516,33 @@ def _summary_contract_reasons(
                     summary.get("unitsBySourceOverride"),
                     _payload_unit_counts_by_source_override(units),
                     "units",
+                )
+            )
+        if "includeDependencyCount" in summary:
+            reasons.extend(
+                _count_field_contract_reasons(
+                    "summary.includeDependencyCount",
+                    summary.get("includeDependencyCount"),
+                    len(_payload_include_dependency_records(units)),
+                    "unit include dependencies",
+                )
+            )
+        if "includeDependenciesByKind" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.includeDependenciesByKind",
+                    summary.get("includeDependenciesByKind"),
+                    _payload_include_dependency_counts_by_kind(units),
+                    "unit include dependencies",
+                )
+            )
+        if "includeDependenciesByStatus" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.includeDependenciesByStatus",
+                    summary.get("includeDependenciesByStatus"),
+                    _payload_include_dependency_counts_by_status(units),
+                    "unit include dependencies",
                 )
             )
     if isinstance(skipped, list):

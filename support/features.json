@@ -4456,7 +4456,7 @@
       "support": {
         "directx": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4465,12 +4465,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "opengl": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4479,12 +4482,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "metal": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4493,12 +4499,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "vulkan": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4507,12 +4516,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "cuda": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4521,12 +4533,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "hip": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4535,12 +4550,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "mojo": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4549,12 +4567,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "rust": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4563,12 +4584,15 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "slang": {
           "status": "partial",
-          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path. Include semantics remain backend-dependent, so this remains partial project support.",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, scans #include directives into per-unit includeDependencies records with local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, and source/include-dir resolution source, emits structured diagnostics for missing local, dynamic, and outside-project include directives, validates include dependency record shape and summary rollups, applies CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, and text inspection identifies inactive include directories by path plus include dependency status and kind rollups. Include semantics remain backend-dependent, so this remains partial project support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
             "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
@@ -4577,7 +4601,10 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         }
       }
@@ -6026,7 +6053,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6049,12 +6076,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6077,12 +6105,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6105,12 +6134,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6133,12 +6163,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6161,12 +6192,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6189,12 +6221,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6217,12 +6250,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6245,12 +6279,13 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, and include-directory status rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries for generated portability reports, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata, invalid-report markers, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override, skipped-reason, skipped-extension, skipped source-override, and artifact target rollups, validation hash-status, diagnostic-code, missing-capability, toolchain-status, toolchain-run, and artifact target and variant rollups, source-map count and provenance rollups, artifact matrix completion counts plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status and kind rollups, inactive source-root and include-directory record details, migration scope, non-goals, action counts, actions, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
@@ -6273,7 +6308,8 @@
             "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups"
           ]
         }
       }
