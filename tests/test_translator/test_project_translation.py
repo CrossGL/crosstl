@@ -1742,6 +1742,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     assert validation["validation"]["artifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "opengl",
             "path": "translated/opengl/debug/simple.glsl",
             "exists": True,
@@ -1754,6 +1755,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         },
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "opengl",
             "path": "translated/opengl/release/simple.glsl",
             "exists": True,
@@ -1765,6 +1767,9 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "variant": "release",
         },
     ]
+    assert validation["artifactStatusBySourceBackend"] == {
+        "cgl": {"artifactCount": 2, "okCount": 2, "failedCount": 0}
+    }
     assert validation["validation"]["summary"] == {
         "artifactCount": 2,
         "okCount": 2,
@@ -3424,6 +3429,7 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     assert payload["validation"]["artifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "cgl",
             "path": "out/cgl/simple.cgl",
             "exists": True,
@@ -3444,6 +3450,9 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
     assert payload["artifactStatusByTarget"] == {
+        "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert payload["artifactStatusBySourceBackend"] == {
         "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }
     assert payload["artifactStatusByVariant"] == {}
@@ -3497,6 +3506,104 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     assert diagnostic["location"]["file"] == "simple.cgl"
     assert diagnostic["target"] == "cgl"
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+
+
+def test_validate_project_report_groups_artifact_status_by_source_backend(tmp_path):
+    repo = tmp_path / "repo"
+    output_dir = repo / "out" / "cgl"
+    output_dir.mkdir(parents=True)
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "shader.frag").write_text(
+        "#version 450\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+        encoding="utf-8",
+    )
+    (output_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["cgl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "target": "cgl",
+                        "path": "out/cgl/simple.cgl",
+                        "status": "translated",
+                    },
+                    {
+                        "source": "shader.frag",
+                        "sourceBackend": "opengl",
+                        "target": "cgl",
+                        "path": "out/cgl/shader.cgl",
+                        "status": "translated",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+    text_result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert payload["success"] is False
+    assert payload["artifactStatusBySourceBackend"] == {
+        "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0},
+        "opengl": {"artifactCount": 1, "okCount": 0, "failedCount": 1},
+    }
+    assert payload["validation"]["artifacts"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "cgl",
+            "path": "out/cgl/simple.cgl",
+            "exists": True,
+            "status": "ok",
+            "sourceHashStatus": "not-recorded",
+            "generatedHashStatus": "not-recorded",
+            "sourceMapStatus": "not-recorded",
+            "sourceRemapStatus": "not-recorded",
+        },
+        {
+            "source": "shader.frag",
+            "sourceBackend": "opengl",
+            "target": "cgl",
+            "path": "out/cgl/shader.cgl",
+            "exists": False,
+            "status": "failed",
+            "sourceHashStatus": "not-recorded",
+            "generatedHashStatus": "missing",
+            "sourceMapStatus": "not-recorded",
+            "sourceRemapStatus": "not-recorded",
+        },
+    ]
+    assert text_result.returncode == 1
+    assert (
+        "Validation artifacts by source backend: "
+        "cgl=1 artifact (1 ok, 0 failed), "
+        "opengl=1 artifact (0 ok, 1 failed)"
+    ) in text_result.stdout
 
 
 def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
@@ -3689,6 +3796,7 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
     assert payload["validation"]["artifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
             "exists": True,
@@ -4614,6 +4722,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "exists": "yes",
                             "status": "missing",
                             "variant": "",
+                            "sourceBackend": "",
                             "sourceHashStatus": "ready",
                             "generatedHashStatus": "ready",
                             "sourceMapStatus": "ready",
@@ -4698,6 +4807,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.artifacts[0].variant must be a string" in (diagnostic["message"])
+    assert "validation.artifacts[0].sourceBackend must be a string" in (
+        diagnostic["message"]
+    )
     assert "validation.artifacts[0].sourceHashStatus must be one of" in (
         diagnostic["message"]
     )
@@ -7976,6 +8088,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert inspection["validation"]["artifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
             "status": "ok",
@@ -9651,11 +9764,19 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             "failedCount": 0,
         }
     }
+    assert payload["validation"]["artifactStatusBySourceBackend"] == {
+        "cgl": {
+            "artifactCount": 1,
+            "okCount": 1,
+            "failedCount": 0,
+        }
+    }
     assert payload["validation"]["artifactCount"] == 1
     assert payload["validation"]["truncatedArtifactCount"] == 0
     assert payload["validation"]["artifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "cgl",
             "path": "out/cgl/simple.cgl",
             "status": "ok",
@@ -10232,10 +10353,17 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
         "release": {"artifactCount": 1, "okCount": 0, "failedCount": 1},
     }
     assert validation["artifactStatusByVariant"] == expected_payload
+    assert validation["artifactStatusBySourceBackend"] == {
+        "cgl": {"artifactCount": 2, "okCount": 1, "failedCount": 1}
+    }
+    assert payload["validation"]["artifactStatusBySourceBackend"] == {
+        "cgl": {"artifactCount": 2, "okCount": 1, "failedCount": 1}
+    }
     assert payload["validation"]["artifactStatusByVariant"] == expected_payload
     assert payload["failedArtifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "cgl",
             "path": "out/cgl/release/simple.cgl",
             "variant": "release",
@@ -10250,11 +10378,17 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
     assert result.returncode == 1
     assert expected_rollup in result.stdout
     assert (
+        "Validation artifacts by source backend: " "cgl=2 artifacts (1 ok, 1 failed)"
+    ) in result.stdout
+    assert (
         "- simple.cgl -> cgl (variant: release) at "
         "out/cgl/release/simple.cgl: validation failed "
         "(generated hash: mismatch)"
     ) in result.stdout
     assert validation_text.returncode == 1
+    assert (
+        "Validation artifacts by source backend: " "cgl=2 artifacts (1 ok, 1 failed)"
+    ) in validation_text.stdout
     assert expected_rollup in validation_text.stdout
 
 
@@ -10907,6 +11041,7 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
     assert payload["failedArtifacts"] == [
         {
             "source": "simple.cgl",
+            "sourceBackend": "cgl",
             "target": "cgl",
             "path": "out/cgl/simple.cgl",
             "exists": True,
@@ -10924,6 +11059,13 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
             "failedCount": 1,
         }
     }
+    assert payload["validation"]["artifactStatusBySourceBackend"] == {
+        "cgl": {
+            "artifactCount": 1,
+            "okCount": 0,
+            "failedCount": 1,
+        }
+    }
     assert payload["validation"]["diagnosticsByCode"] == {
         "project.validate.generated-hash-mismatch": 1
     }
@@ -10933,6 +11075,10 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
     assert "Validation artifacts: 0 ok, 1 failed" in result.stdout
     assert (
         "Validation artifacts by target: cgl=1 artifact (0 ok, 1 failed)"
+        in result.stdout
+    )
+    assert (
+        "Validation artifacts by source backend: cgl=1 artifact (0 ok, 1 failed)"
         in result.stdout
     )
     assert (

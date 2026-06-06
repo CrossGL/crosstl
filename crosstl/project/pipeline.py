@@ -3258,6 +3258,34 @@ def _validation_artifact_status_by_target(
     return {target: counts[target] for target in sorted(counts)}
 
 
+def _validation_artifact_status_by_source_backend(
+    artifact_checks: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact_check in artifact_checks:
+        if not isinstance(artifact_check, Mapping):
+            continue
+        source_backend = artifact_check.get("sourceBackend")
+        if not isinstance(source_backend, str) or not source_backend.strip():
+            continue
+        source_backend_name = source_backend.strip()
+        row = counts.setdefault(
+            source_backend_name,
+            {
+                "artifactCount": 0,
+                "okCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["artifactCount"] += 1
+        status = artifact_check.get("status")
+        if status == "ok":
+            row["okCount"] += 1
+        elif status == "failed":
+            row["failedCount"] += 1
+    return {source_backend: counts[source_backend] for source_backend in sorted(counts)}
+
+
 def _validation_artifact_status_by_variant(
     artifact_checks: Sequence[Any],
 ) -> dict[str, dict[str, int]]:
@@ -3724,6 +3752,8 @@ def _validate_artifacts(
         }
         if artifact.get("variant") is not None:
             artifact_check["variant"] = artifact["variant"]
+        if artifact.get("sourceBackend") is not None:
+            artifact_check["sourceBackend"] = artifact["sourceBackend"]
         artifact_checks.append(artifact_check)
 
     for toolchain in toolchains:
@@ -3916,6 +3946,9 @@ def inspect_project_report(
         else []
     )
     artifact_status_by_target = validation_report.get("artifactStatusByTarget")
+    artifact_status_by_source_backend = validation_report.get(
+        "artifactStatusBySourceBackend"
+    )
     artifact_status_by_variant = validation_report.get("artifactStatusByVariant")
     toolchain_status_counts = validation_report.get("toolchainStatusCounts")
     toolchain_run_status_counts = validation_report.get("toolchainRunStatusCounts")
@@ -3968,6 +4001,13 @@ def inspect_project_report(
                 dict(artifact_status_by_target)
                 if isinstance(artifact_status_by_target, Mapping)
                 else _validation_artifact_status_by_target(
+                    _record_sequence(validation_artifacts)
+                )
+            ),
+            "artifactStatusBySourceBackend": (
+                dict(artifact_status_by_source_backend)
+                if isinstance(artifact_status_by_source_backend, Mapping)
+                else _validation_artifact_status_by_source_backend(
                     _record_sequence(validation_artifacts)
                 )
             ),
@@ -4134,6 +4174,7 @@ def inspect_project_report(
                         field_name: failed[field_name]
                         for field_name in (
                             "exists",
+                            "sourceBackend",
                             "sourceHashStatus",
                             "generatedHashStatus",
                             "sourceMapStatus",
@@ -4346,6 +4387,7 @@ def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
 
     sample = {
         "source": artifact.get("source"),
+        "sourceBackend": artifact.get("sourceBackend"),
         "target": artifact.get("target"),
         "path": artifact.get("path"),
         "status": artifact.get("status"),
@@ -5031,6 +5073,8 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         "target": artifact.get("target"),
         "path": artifact.get("path"),
     }
+    if "sourceBackend" in artifact:
+        failed["sourceBackend"] = artifact.get("sourceBackend")
     if "variant" in artifact:
         failed["variant"] = artifact.get("variant")
     if "error" in artifact:
@@ -5148,6 +5192,9 @@ def _validation_report_payload(
             _payload_missing_capability_counts(diagnostics) or {}
         ),
         "artifactStatusByTarget": _validation_artifact_status_by_target(
+            validation_artifacts
+        ),
+        "artifactStatusBySourceBackend": _validation_artifact_status_by_source_backend(
             validation_artifacts
         ),
         "artifactStatusByVariant": _validation_artifact_status_by_variant(
@@ -7231,6 +7278,14 @@ def _validation_artifact_contract_reasons(
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
             reasons.append(f"{prefix}.variant must be listed in project.variants")
+    if "sourceBackend" in artifact:
+        reasons.extend(
+            _source_backend_contract_reasons(
+                f"{prefix}.sourceBackend",
+                artifact.get("sourceBackend"),
+                require_registered=True,
+            )
+        )
     identity = _artifact_identity(artifact)
     if (
         identity is not None

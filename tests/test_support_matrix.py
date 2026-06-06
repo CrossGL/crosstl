@@ -837,9 +837,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
-        assert "direct validation report artifact target, artifact variant" in (
-            backend_support["notes"]
-        )
+        assert (
+            "direct validation report artifact target, artifact source backend, "
+            "artifact variant"
+        ) in backend_support["notes"]
         assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "source-root status record and count consistency" in (
@@ -884,6 +885,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_validation_variant_"
             "rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_groups_artifact_status_by_source_"
+            "backend"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -933,6 +939,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
             in backend_support["notes"]
         )
         assert "direct validation report artifact target" in backend_support["notes"]
+        assert "artifact source backend" in backend_support["notes"]
         assert "toolchain run status" in backend_support["notes"]
         assert "toolchain run target" in backend_support["notes"]
         assert "toolchain run source backend" in backend_support["notes"]

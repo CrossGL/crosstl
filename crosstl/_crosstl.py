@@ -530,6 +530,10 @@ def _format_project_validation_report(payload):
             payload.get("artifactStatusByTarget"),
         ),
         _format_validation_artifact_rollup(
+            "Validation artifacts by source backend",
+            payload.get("artifactStatusBySourceBackend"),
+        ),
+        _format_validation_artifact_rollup(
             "Validation artifacts by variant",
             payload.get("artifactStatusByVariant"),
         ),
@@ -1701,6 +1705,9 @@ def _format_project_report_inspection(payload):
     validation_artifact_status_by_target = payload.get("validation", {}).get(
         "artifactStatusByTarget"
     )
+    validation_artifact_status_by_source_backend = payload.get("validation", {}).get(
+        "artifactStatusBySourceBackend"
+    )
     validation_artifact_status_by_variant = payload.get("validation", {}).get(
         "artifactStatusByVariant"
     )
@@ -2108,6 +2115,12 @@ def _format_project_report_inspection(payload):
         )
         if validation_artifacts_by_target:
             lines.append(validation_artifacts_by_target)
+        validation_artifacts_by_source_backend = _format_validation_artifact_rollup(
+            "Validation artifacts by source backend",
+            validation_artifact_status_by_source_backend,
+        )
+        if validation_artifacts_by_source_backend:
+            lines.append(validation_artifacts_by_source_backend)
         validation_artifacts_by_variant = _format_validation_artifact_rollup(
             "Validation artifacts by variant",
             validation_artifact_status_by_variant,

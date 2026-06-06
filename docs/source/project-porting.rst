@@ -103,10 +103,11 @@ Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository. Each smoke check is bounded by a short subprocess timeout, and
 timeouts are reported as failed toolchain runs. Validation reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
-preserved diagnostics, plus artifact target, hash-status, source-map status,
-source-remap status, toolchain status, toolchain-run status,
-toolchain-run target, toolchain-run source backend, and toolchain-run variant
-rollups for validation results. The default output is JSON; ``--format text``
+preserved diagnostics, plus artifact target, artifact source-backend,
+artifact variant, hash-status, source-map status, source-remap status,
+toolchain status, toolchain-run status, toolchain-run target, toolchain-run
+source backend, and toolchain-run variant rollups for validation results.
+The default output is JSON; ``--format text``
 prints a concise validation summary with the same rollups, and ``--format
 sarif`` emits validation diagnostics as SARIF.
 
@@ -122,9 +123,10 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
 Report inspection includes validation status, invalid/unavailable report status,
 project counts, project configuration path and counts, failed artifacts with
 variant labels when present, diagnostic code and missing-capability rollups,
-validation diagnostic-code, missing-capability, artifact target and variant,
-hash-status, source-map status, source-remap status, toolchain status, and
-toolchain-run rollups, report source-backend, file-extension, and artifact
+validation diagnostic-code, missing-capability, artifact target,
+artifact source-backend, artifact variant, hash-status, source-map status,
+source-remap status, toolchain status, and toolchain-run rollups, report
+source-backend, file-extension, and artifact
 target rollups, source-map count, granularity, target, and source-backend
 rollups, artifact matrix completion counts, target and variant completion
 rollups, sampled missing and extra artifact identities,
@@ -384,9 +386,9 @@ Project reports are JSON documents with:
   checks, required
   source/generated hash and source-map/source-remap status fields for
   summarized validation artifacts, aggregate validation artifact and validation
-  status summary counts, direct validation report artifact target, variant,
-  hash-status, source-map status, source-remap status, toolchain status, and
-  toolchain-run status rollups, bounded validation artifact and
+  status summary counts, direct validation report artifact target, source
+  backend, variant, hash-status, source-map status, source-remap status,
+  toolchain status, and toolchain-run status rollups, bounded validation artifact and
   validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, unit source
   hash shape and current-file
