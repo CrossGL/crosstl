@@ -1178,6 +1178,9 @@ class MojoParser:
         if self.current_token[0] in ["COMPTIME", "ALIAS"]:
             return self.parse_comptime_or_alias_statement()
 
+        if self.is_ref_binding_declaration_start():
+            return self.parse_ref_binding_declaration()
+
         if self.current_token[0] in ["LET", "VAR"]:
             var_type = self.current_token[0]
             self.eat(self.current_token[0])
@@ -1254,6 +1257,41 @@ class MojoParser:
         statement = self.parse_assignment()
         self.consume_statement_terminator()
         return statement
+
+    def is_ref_binding_declaration_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "ref"
+            and self.peek_token()[0] in self.IDENTIFIER_NAME_TOKENS
+        )
+
+    def parse_ref_binding_declaration(self):
+        self.eat("IDENTIFIER")
+        name = self.parse_identifier_tuple()
+
+        attributes = []
+        vtype = None
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            vtype = self.parse_type()
+            attributes.extend(self.parse_attributes(skip_trailing_newlines=False))
+
+        initial_value = None
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            initial_value = self.parse_expression_list_value()
+            attributes.extend(self.parse_attributes(skip_trailing_newlines=False))
+
+        self.consume_statement_terminator()
+        node = VariableDeclarationNode(
+            vtype,
+            name,
+            initial_value,
+            is_var=True,
+            attributes=attributes,
+        )
+        node.binding_convention = "ref"
+        return node
 
     def parse_identifier_tuple(self):
         identifiers = [VariableNode("", self.parse_identifier_name())]

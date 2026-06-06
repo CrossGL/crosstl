@@ -3446,6 +3446,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_MULTILINE_OPSOURCE_ASSEMBLY = """
+; Source syntax: https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Tools/+/refs/tags/vulkan-sdk-1.4.304.1/docs/syntax.md
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#OpSource
+; Reduced from the SPIRV-Tools literal string syntax where strings can contain
+; newlines and an OpSource instruction can carry source-level text.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %pos
+OpSource GLSL 450 "#version 450
+void main() {
+    gl_Position = vec4(0.0);
+}
+"
+OpName %pos "pos"
+OpDecorate %pos Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%pos = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_PTR_ACCESS_CHAIN_ASSEMBLY = """
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
@@ -5281,6 +5308,19 @@ def test_spirv_tools_gl_pervertex_access_chain_codegen():
     assert "float gl_ClipDistance[8] @output @gl_ClipDistance;" in generated_code
     assert "gl_Position = _ua_position;" in generated_code
     assert "value_19[0]" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_multiline_opsource_literal_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_MULTILINE_OPSOURCE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 pos @output @location(0);" in generated_code
+    assert "vertex {" in generated_code
+    assert "void main()" in generated_code
+    assert "OpSource" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

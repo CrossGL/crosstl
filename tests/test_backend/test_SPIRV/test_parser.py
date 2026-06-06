@@ -1408,6 +1408,33 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_MULTILINE_OPSOURCE_ASSEMBLY = """
+; Source syntax: https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Tools/+/refs/tags/vulkan-sdk-1.4.304.1/docs/syntax.md
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#OpSource
+; Reduced from the SPIRV-Tools literal string syntax where strings can contain
+; newlines and an OpSource instruction can carry source-level text.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %pos
+OpSource GLSL 450 "#version 450
+void main() {
+    gl_Position = vec4(0.0);
+}
+"
+OpName %pos "pos"
+OpDecorate %pos Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_output_v4float = OpTypePointer Output %v4float
+%pos = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_STRUCT_COMPOSITE_EXTRACT_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
@@ -2305,6 +2332,21 @@ def test_spirv_tools_gl_pervertex_access_chain_parse():
     assert assignment.left.name == "gl_Position"
     assert isinstance(assignment.right, VariableNode)
     assert assignment.right.name == "_ua_position"
+
+
+def test_spirv_assembly_multiline_opsource_literal_parse_from_spirv_tools_syntax():
+    tokens = tokenize_code(SPIRV_TOOLS_MULTILINE_OPSOURCE_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    assert ast.spirv_assembly is True
+    assert len(ast.functions) == 1
+    assert ast.functions[0].name == "main"
+    assert ast.functions[0].return_type == "void"
+    assert ast.functions[0].body and isinstance(ast.functions[0].body[0], ReturnNode)
+    assert [
+        (node.layout_type, node.data_type, node.variable_name, node.qualifiers)
+        for node in ast.global_variables
+    ] == [("OUT", "vec4", "pos", [("location", "0")])]
 
 
 def test_spirv_spec_struct_composite_extract_parse():

@@ -1740,6 +1740,39 @@ class TestHipCodeGen:
         assert "var two_dim: vec3<u32> = vec3<u32>(16, 8, 1);" in result
         assert "var three_dim: vec3<u32> = vec3<u32>(16, 8, 4);" in result
 
+    def test_rocm_docs_dim3_brace_initializer_defaults_conversion_reparse(self):
+        # Source: ROCm HIP C++ language extensions, dim3.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/develop/how-to/hip_cpp_language_extensions.html#dim3
+        code = """
+        void launch() {
+            dim3 declared_default;
+            dim3 empty_braces{};
+            dim3 explicit_empty = {};
+            dim3 grid{16};
+            dim3 block = {32, 2};
+            dim3 volume{4, 8, 16};
+            kernel<<<grid, block>>>();
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var declared_default: vec3<u32> = vec3<u32>(1, 1, 1);" in result
+        assert "var empty_braces: vec3<u32> = vec3<u32>(1, 1, 1);" in result
+        assert "var explicit_empty: vec3<u32> = vec3<u32>(1, 1, 1);" in result
+        assert "var grid: vec3<u32> = vec3<u32>(16, 1, 1);" in result
+        assert "var block: vec3<u32> = vec3<u32>(32, 2, 1);" in result
+        assert "var volume: vec3<u32> = vec3<u32>(4, 8, 16);" in result
+        assert "// Kernel launch: kernel<<<grid, block>>>()" in result
+        assert " = {};" not in result
+        assert " = {16};" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_constructor_style_vector_declaration_conversion(self):
         code = """
         hipTextureObject_t globalTex;

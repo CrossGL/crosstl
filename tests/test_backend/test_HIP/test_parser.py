@@ -1518,6 +1518,31 @@ class TestHipParser:
         assert body[4].vtype == "uchar2"
         assert body[4].value.name == "uchar2"
 
+    def test_rocm_docs_dim3_brace_initializers_parse_as_initializer_lists(self):
+        # Source: ROCm HIP C++ language extensions, dim3.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/develop/how-to/hip_cpp_language_extensions.html#dim3
+        code = """
+        void launch() {
+            dim3 empty_braces{};
+            dim3 explicit_empty = {};
+            dim3 grid{16};
+            dim3 block = {32, 2};
+            dim3 volume{4, 8, 16};
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        for declaration in body:
+            assert declaration.vtype == "dim3"
+            assert isinstance(declaration.value, InitializerListNode)
+
+        assert body[0].value.elements == []
+        assert body[1].value.elements == []
+        assert body[2].value.elements == ["16"]
+        assert body[3].value.elements == ["32", "2"]
+        assert body[4].value.elements == ["4", "8", "16"]
+
     def test_kernel_launch_parsing(self):
         code = """
         void host(float* data, int stream) {

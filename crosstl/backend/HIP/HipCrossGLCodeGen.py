@@ -4447,7 +4447,17 @@ class HipToCrossGLConverter:
         if "__managed__" in qualifiers:
             self.emit(f"// HIP managed memory: {output_name}")
 
+        dim3_default_value = self.format_hip_dim3_default_initializer(node)
+        if dim3_default_value is not None:
+            self.emit(f"var {output_name}: {var_type} = {dim3_default_value};")
+            return
+
         if hasattr(node, "value") and node.value:
+            dim3_brace_value = self.format_hip_dim3_brace_initializer(node)
+            if dim3_brace_value is not None:
+                self.emit(f"var {output_name}: {var_type} = {dim3_brace_value};")
+                return
+
             runtime_status = self.format_hip_runtime_status_expression(node.value)
             if runtime_status is not None:
                 comments, value = runtime_status
@@ -5841,6 +5851,27 @@ class HipToCrossGLConverter:
 
         padded_args = list(args) + ["1"] * (3 - len(args))
         return f"vec3<u32>({', '.join(padded_args)})"
+
+    def format_hip_dim3_default_initializer(self, node):
+        if not self.is_dim3_variable_declaration(node):
+            return None
+        if getattr(node, "value", None) is not None:
+            return None
+        return self.format_hip_dim3_constructor_call("dim3", [])
+
+    def format_hip_dim3_brace_initializer(self, node):
+        if not self.is_dim3_variable_declaration(node):
+            return None
+
+        value = getattr(node, "value", None)
+        if not isinstance(value, InitializerListNode) or len(value.elements) > 3:
+            return None
+
+        args = [self.visit(element) for element in value.elements]
+        return self.format_hip_dim3_constructor_call("dim3", args)
+
+    def is_dim3_variable_declaration(self, node):
+        return self.strip_type_qualifiers(getattr(node, "vtype", "")) == "dim3"
 
     def format_lambda_call(self, args):
         if not args:
