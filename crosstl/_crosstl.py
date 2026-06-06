@@ -1359,6 +1359,13 @@ def _format_project_report_inspection(payload):
     )
     if define_processing:
         lines.append(define_processing)
+    define_processing_by_source_backend = _format_nested_count_rollup(
+        "Define processing by source backend",
+        summary.get("defineProcessingBySourceBackend"),
+        include_zero=False,
+    )
+    if define_processing_by_source_backend:
+        lines.append(define_processing_by_source_backend)
     define_processing_by_variant = _format_nested_count_rollup(
         "Define processing by variant",
         summary.get("defineProcessingByVariant"),

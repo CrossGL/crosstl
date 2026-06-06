@@ -396,8 +396,8 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "define-processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
         assert (
-            "inspection summaries expose variant names and per-variant define counts"
-            in backend_support["notes"]
+            "inspection summaries and text output expose variant names "
+            "and per-variant define counts" in backend_support["notes"]
         )
         assert (
             "define-processing status, source-backend, and variant rollups"

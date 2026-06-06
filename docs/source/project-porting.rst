@@ -194,9 +194,10 @@ include and define overrides are merged with this configuration before scan or
 translation. Translation artifacts record ``defineProcessing`` metadata so
 reports distinguish define maps that were forwarded to the source lexer from
 define maps that were not requested or could not be consumed by that frontend.
-Summary and inspection payloads also include define-processing rollups by named
-variant when variants are configured, so variant-specific preprocessing gaps are
-visible without reading every artifact record.
+Summary, inspection payloads, and text reports also include define-processing
+rollups by source backend and by named variant when variants are configured, so
+frontend-specific and variant-specific preprocessing gaps are visible without
+reading every artifact record.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
 not be consumed by the selected source frontend. Include-path processing

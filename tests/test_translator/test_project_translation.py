@@ -1595,6 +1595,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "release": {"not-requested": 1},
     }
     assert result.returncode == 0
+    assert "Define processing by source backend: cgl=(forwarded=2)" in result.stdout
     assert (
         "Define processing by variant: debug=(forwarded=1), release=(forwarded=1)"
     ) in result.stdout
@@ -1796,6 +1797,9 @@ def test_translate_project_records_define_processing_without_frontend_support(
     }
     assert result.returncode == 0
     assert "Define processing: not-supported=1" in result.stdout
+    assert (
+        "Define processing by source backend: rust=(not-supported=1)" in result.stdout
+    )
     assert "Define processing issues:" in result.stdout
     assert (
         "- shader.rs -> cgl at translated/cgl/shader.cgl: "
@@ -9380,6 +9384,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
     assert "Source remaps: 1" in result.stdout
     assert "Define processing: not-requested=1" in result.stdout
+    assert "Define processing by source backend: cgl=(not-requested=1)" in result.stdout
     assert "Include path processing: not-requested=1" in result.stdout
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
