@@ -788,6 +788,48 @@ def test_parse_defaulted_function_constant_preserves_attribute():
     assert constant.right == "true"
 
 
+def test_parse_global_multi_declarators_from_msl_cxx_declaration_semantics():
+    # Apple documents MSL as C++-based; top-level declarations therefore use
+    # C++ init-declarator-list semantics rather than requiring one name per line.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant float exposure = 1.0f, gamma = 2.2f;
+    constant bool useToneMap [[function_constant(0)]],
+                  useDither [[function_constant(1)]] = true;
+
+    fragment float4 fragment_main() {
+        return float4(exposure + gamma + float(useToneMap || useDither));
+    }
+    """
+    ast = parse_ok(code)
+    exposure, gamma, use_tone_map, use_dither = ast.global_variables
+
+    assert isinstance(exposure, AssignmentNode)
+    assert exposure.left.name == "exposure"
+    assert exposure.left.vtype == "float"
+    assert exposure.left.qualifiers == ["constant"]
+    assert exposure.right == "1.0f"
+
+    assert isinstance(gamma, AssignmentNode)
+    assert gamma.left.name == "gamma"
+    assert gamma.left.vtype == "float"
+    assert gamma.left.qualifiers == ["constant"]
+    assert gamma.right == "2.2f"
+
+    assert use_tone_map.name == "useToneMap"
+    assert use_tone_map.vtype == "bool"
+    assert use_tone_map.attributes[0].name == "function_constant"
+    assert use_tone_map.attributes[0].args == ["0"]
+
+    assert isinstance(use_dither, AssignmentNode)
+    assert use_dither.left.name == "useDither"
+    assert use_dither.left.attributes[0].name == "function_constant"
+    assert use_dither.left.attributes[0].args == ["1"]
+    assert use_dither.right == "true"
+
+
 def test_parse_mlx_steel_const_function_constant_macro_qualifier():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx

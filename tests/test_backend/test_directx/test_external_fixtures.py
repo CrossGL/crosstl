@@ -432,7 +432,7 @@ EXTERNAL_FIXTURES = [
             "type uint32_t3 = uvec3;",
             "type uint16_t3 = u16vec3;",
             "@ numthreads(1, 1, 1)",
-            "u16vec3 dims = uint16_t3(gl_WorkGroupSize());",
+            "u16vec3 dims = u16vec3(gl_WorkGroupSize());",
         ),
     ),
     ExternalFixture(

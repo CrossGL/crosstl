@@ -53,8 +53,11 @@ TYPE_TOKENS = {
     "MIN12INT",
     "MIN16UINT",
     "FLOAT16_T",
+    "FLOAT32_T",
     "INT16_T",
+    "INT32_T",
     "UINT16_T",
+    "UINT32_T",
     "INT64_T",
     "UINT64_T",
     "FVECTOR",
@@ -220,8 +223,11 @@ SCALAR_CONSTRUCTOR_TOKENS = {
     "MIN12INT",
     "MIN16UINT",
     "FLOAT16_T",
+    "FLOAT32_T",
     "INT16_T",
+    "INT32_T",
     "UINT16_T",
+    "UINT32_T",
     "INT64_T",
     "UINT64_T",
 }
@@ -432,6 +438,19 @@ class HLSLParser:
             self.eat(token[0])
             return token[1]
         raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+
+    def parse_typedef_name(self):
+        if self.is_identifier_token(self.current_token[0]) or self.current_token[0] in {
+            "FVECTOR",
+            "IVECTOR",
+            "UVECTOR",
+            "BVECTOR",
+            "MATRIX",
+        }:
+            token = self.current_token
+            self.eat(token[0])
+            return token[1]
+        raise SyntaxError(f"Expected typedef name, got {self.current_token[0]}")
 
     def current_token_is_keyword(self, token_type, value):
         return self.current_token[0] == token_type or (
@@ -1244,7 +1263,7 @@ class HLSLParser:
         alias_type = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes = self.parse_attribute_list()
-        name = self.parse_identifier()
+        name = self.parse_typedef_name()
         array_sizes = self.parse_array_suffixes()
         self.eat("SEMICOLON")
         alias = TypeAliasNode(alias_type, name)

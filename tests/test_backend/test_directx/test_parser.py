@@ -1308,6 +1308,34 @@ def test_parse_exact_16_bit_scalar_types_from_hlsl_docs():
     assert function.body[0].value.type_name == "float16_t"
 
 
+def test_parse_exact_32_bit_scalar_types_from_hlsl_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    ast = parse_code("""
+    float32_t fullFloat;
+    int32_t signedWord;
+    uint32_t unsignedWord;
+
+    float32_t Promote(uint32_t seed) {
+        int32_t local = int32_t(seed);
+        return float32_t(local);
+    }
+    """)
+
+    assert [variable.vtype for variable in ast.global_variables] == [
+        "float32_t",
+        "int32_t",
+        "uint32_t",
+    ]
+    function = ast.functions[0]
+    assert function.return_type == "float32_t"
+    assert function.params[0].vtype == "uint32_t"
+    assert function.body[0].vtype == "int32_t"
+    assert isinstance(function.body[0].value, VectorConstructorNode)
+    assert function.body[0].value.type_name == "int32_t"
+    assert isinstance(function.body[1].value, VectorConstructorNode)
+    assert function.body[1].value.type_name == "float32_t"
+
+
 def test_parse_template_style_vector_matrix_types_and_constructors():
     ast = parse_code("""
     struct TemplateTypes {
@@ -3172,6 +3200,36 @@ def test_parse_min_precision_scalar_constructor_from_dxc_tests():
     assert branch.condition.op == "=="
     assert isinstance(branch.condition.right, VectorConstructorNode)
     assert branch.condition.right.type_name == "min16int"
+
+
+def test_parse_fixed_width_vector_alias_constructors_from_hlsl_docs():
+    # Sources:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    ast = parse_code("""
+        float16_t4 MakeHalf(float16_t value : TEXCOORD0) : SV_Target0 {
+            float16_t4 halfColor = float16_t4(value, value, value, value);
+            int32_t4 signedLanes = int32_t4(1, 2, 3, 4);
+            uint32_t2 unsignedPair = uint32_t2(1u, 2u);
+            return halfColor + float16_t4(
+                signedLanes.x, signedLanes.y, unsignedPair.x, unsignedPair.y
+            );
+        }
+    """)
+
+    half_color, signed_lanes, unsigned_pair, return_stmt = ast.functions[0].body
+
+    assert half_color.vtype == "float16_t4"
+    assert isinstance(half_color.value, VectorConstructorNode)
+    assert half_color.value.type_name == "float16_t4"
+    assert signed_lanes.vtype == "int32_t4"
+    assert isinstance(signed_lanes.value, VectorConstructorNode)
+    assert signed_lanes.value.type_name == "int32_t4"
+    assert unsigned_pair.vtype == "uint32_t2"
+    assert isinstance(unsigned_pair.value, VectorConstructorNode)
+    assert unsigned_pair.value.type_name == "uint32_t2"
+    assert isinstance(return_stmt.value.right, VectorConstructorNode)
+    assert return_stmt.value.right.type_name == "float16_t4"
 
 
 def test_parse_array_template_argument_from_dxc_buffer_tests():

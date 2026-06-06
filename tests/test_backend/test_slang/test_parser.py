@@ -143,6 +143,22 @@ def test_module_include_declarations_do_not_parse_as_globals():
     assert ast.global_vars == []
 
 
+def test_identifier_include_path_normalizes_slang_file_lookup_semantics():
+    # Slang modules docs: identifier-token file paths map dots to path
+    # separators and underscores to hyphens, e.g. dir.file_name -> dir/file-name.
+    code = """
+    module utils;
+    __include utils.tonemap_filter;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.modules == ["utils"]
+    assert ast.includes == ["utils/tonemap-filter"]
+    assert ast.global_vars == []
+
+
 def test_string_module_declarations_from_precompiled_module_tests():
     code = """
     module "precompiled-module-imported";

@@ -107,6 +107,32 @@ def test_parse_main_with_void_parameter_list():
     assert main.params == []
 
 
+def test_parse_function_header_with_newline_before_parameter_list_from_glsl_grammar():
+    # GLSL 4.60 grammar treats newlines as whitespace, so a function header can
+    # wrap between the identifier and the parameter list.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        vec4 build_color
+        (vec3 color)
+        {
+            return vec4(color, 1.0);
+        }
+
+        void main
+        ()
+        {
+            gl_Position = build_color(vec3(0.0));
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+
+    assert [function.name for function in ast.functions] == ["build_color", "main"]
+    assert ast.functions[0].params[0].name == "color"
+    assert ast.functions[1].qualifiers == ["vertex"]
+
+
 def test_parse_function_parameters_without_names():
     code = textwrap.dedent("""
         #version 400 core

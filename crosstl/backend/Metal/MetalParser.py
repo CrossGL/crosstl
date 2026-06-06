@@ -376,8 +376,9 @@ class MetalParser:
                     if struct is not None:
                         structs.append(struct)
                 else:
-                    global_variables.append(
-                        self.parse_global_variable(pre_alignas=alignas_specs)
+                    self.add_global_declaration(
+                        global_variables,
+                        self.parse_global_variable(pre_alignas=alignas_specs),
                     )
             elif self.current_token[0] == "ENUM":
                 enums.append(self.parse_enum())
@@ -401,14 +402,18 @@ class MetalParser:
                 if self.is_constant_buffer():
                     constants.append(self.parse_constant_buffer())
                 else:
-                    global_variables.append(self.parse_global_variable())
+                    self.add_global_declaration(
+                        global_variables, self.parse_global_variable()
+                    )
             elif self.current_token[0] == "ATTRIBUTE" or self.is_gnu_attribute_start():
                 if self.is_function_definition():
                     function = self.parse_function()
                     if function is not None:
                         functions.append(function)
                 else:
-                    global_variables.append(self.parse_global_variable())
+                    self.add_global_declaration(
+                        global_variables, self.parse_global_variable()
+                    )
             elif self.current_token[0] in STAGE_TOKENS or (
                 self.current_token[0] in TYPE_TOKENS
                 or self.current_token[0] in QUALIFIER_TOKENS
@@ -418,7 +423,9 @@ class MetalParser:
                     if function is not None:
                         functions.append(function)
                 else:
-                    global_variables.append(self.parse_global_variable())
+                    self.add_global_declaration(
+                        global_variables, self.parse_global_variable()
+                    )
             else:
                 self.eat(self.current_token[0])
 
@@ -431,6 +438,12 @@ class MetalParser:
             enums=enums,
             typedefs=typedefs,
         )
+
+    def add_global_declaration(self, global_variables, declaration):
+        if isinstance(declaration, list):
+            global_variables.extend(declaration)
+        else:
+            global_variables.append(declaration)
 
     def is_bare_macro_invocation(self):
         return (
@@ -1289,6 +1302,8 @@ class MetalParser:
         attributes = self.parse_attributes()
         alignas_specs = pre_alignas or self.parse_alignas_specifiers()
         vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
+        declaration_attributes = list(attributes)
+        base_vtype = self.base_type_for_remaining_declarators(vtype)
         name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         vtype = self.apply_declarator_type_suffix(vtype, type_suffix)
         var_attributes = self.parse_attributes()
@@ -1307,21 +1322,91 @@ class MetalParser:
         if self.current_token[0] == "EQUALS":
             self.eat("EQUALS")
             value = self.parse_expression()
+            node = AssignmentNode(var_node, value)
+            if self.current_token[0] == "COMMA":
+                return self.parse_remaining_global_variable_declarations(
+                    base_vtype,
+                    qualifiers,
+                    declaration_attributes,
+                    alignas_specs,
+                    [node],
+                )
             self.eat("SEMICOLON")
-            return AssignmentNode(var_node, value)
+            return node
 
         if self.current_token[0] == "LPAREN":
             args = self.parse_parenthesized_arguments()
+            node = AssignmentNode(var_node, VectorConstructorNode(vtype, args))
+            if self.current_token[0] == "COMMA":
+                return self.parse_remaining_global_variable_declarations(
+                    base_vtype,
+                    qualifiers,
+                    declaration_attributes,
+                    alignas_specs,
+                    [node],
+                )
             self.eat("SEMICOLON")
-            return AssignmentNode(var_node, VectorConstructorNode(vtype, args))
+            return node
 
         if self.current_token[0] == "LBRACE":
             value = self.parse_initializer_list()
+            node = AssignmentNode(var_node, value)
+            if self.current_token[0] == "COMMA":
+                return self.parse_remaining_global_variable_declarations(
+                    base_vtype,
+                    qualifiers,
+                    declaration_attributes,
+                    alignas_specs,
+                    [node],
+                )
             self.eat("SEMICOLON")
-            return AssignmentNode(var_node, value)
+            return node
+
+        if self.current_token[0] == "COMMA":
+            return self.parse_remaining_global_variable_declarations(
+                base_vtype,
+                qualifiers,
+                declaration_attributes,
+                alignas_specs,
+                [var_node],
+            )
 
         self.eat("SEMICOLON")
         return var_node
+
+    def parse_remaining_global_variable_declarations(
+        self, vtype, qualifiers, declaration_attributes, alignas_specs, nodes
+    ):
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            decl_type = self.apply_declarator_type_suffix(vtype, type_suffix)
+            attributes = list(declaration_attributes)
+            attributes.extend(self.parse_attributes())
+            var_node = VariableNode(
+                decl_type, name, qualifiers=list(qualifiers), attributes=attributes
+            )
+            var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
+            var_node.alignas = list(alignas_specs)
+            if "const" in qualifiers or "constexpr" in qualifiers:
+                var_node.is_const = True
+
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                nodes.append(AssignmentNode(var_node, self.parse_expression()))
+            elif self.current_token[0] == "LPAREN":
+                args = self.parse_parenthesized_arguments()
+                nodes.append(
+                    AssignmentNode(var_node, VectorConstructorNode(decl_type, args))
+                )
+            elif self.current_token[0] == "LBRACE":
+                nodes.append(AssignmentNode(var_node, self.parse_initializer_list()))
+            else:
+                nodes.append(var_node)
+
+        self.eat("SEMICOLON")
+        return nodes
 
     def parse_type_specifier(self, attributes=None):
         qualifiers = []

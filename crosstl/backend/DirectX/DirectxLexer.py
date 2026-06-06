@@ -109,12 +109,17 @@ TOKENS = tuple(
         (
             "MATRIX",
             r"\b(float|half|fixed|double|int|uint|bool|min16float|min10float|"
-            r"min16int|min12int|min16uint)[1-4]x[1-4]\b",
+            r"min16int|min12int|min16uint|float16_t|float32_t|int16_t|"
+            r"int32_t|int64_t|uint16_t|uint32_t|uint64_t)[1-4]x[1-4]\b",
         ),
         # Vector types (must come before scalar types)
-        ("FVECTOR", r"\b(float|half|fixed|double|min16float|min10float)[1-4]\b"),
-        ("IVECTOR", r"\b(int|min16int|min12int)[1-4]\b"),
-        ("UVECTOR", r"\b(uint|min16uint)[1-4]\b"),
+        (
+            "FVECTOR",
+            r"\b(float|half|fixed|double|min16float|min10float|float16_t|"
+            r"float32_t)[1-4]\b",
+        ),
+        ("IVECTOR", r"\b(int|min16int|min12int|int16_t|int32_t|int64_t)[1-4]\b"),
+        ("UVECTOR", r"\b(uint|min16uint|uint16_t|uint32_t|uint64_t)[1-4]\b"),
         ("BVECTOR", r"\bbool[1-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
@@ -132,8 +137,11 @@ TOKENS = tuple(
         ("MIN12INT", r"\bmin12int\b"),
         ("MIN16UINT", r"\bmin16uint\b"),
         ("FLOAT16_T", r"\bfloat16_t\b"),
+        ("FLOAT32_T", r"\bfloat32_t\b"),
         ("INT16_T", r"\bint16_t\b"),
+        ("INT32_T", r"\bint32_t\b"),
         ("UINT16_T", r"\buint16_t\b"),
+        ("UINT32_T", r"\buint32_t\b"),
         ("INT64_T", r"\bint64_t\b"),
         ("UINT64_T", r"\buint64_t\b"),
         # Control flow keywords
@@ -333,8 +341,11 @@ KEYWORDS = {
     "min12int": "MIN12INT",
     "min16uint": "MIN16UINT",
     "float16_t": "FLOAT16_T",
+    "float32_t": "FLOAT32_T",
     "int16_t": "INT16_T",
+    "int32_t": "INT32_T",
     "uint16_t": "UINT16_T",
+    "uint32_t": "UINT32_T",
     "int64_t": "INT64_T",
     "uint64_t": "UINT64_T",
     "return": "RETURN",
@@ -455,8 +466,11 @@ class TokenType(Enum):
     MIN12INT = auto()
     MIN16UINT = auto()
     FLOAT16_T = auto()
+    FLOAT32_T = auto()
     INT16_T = auto()
+    INT32_T = auto()
     UINT16_T = auto()
+    UINT32_T = auto()
     INT64_T = auto()
     UINT64_T = auto()
     RETURN = auto()
