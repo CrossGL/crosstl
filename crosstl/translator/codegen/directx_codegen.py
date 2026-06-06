@@ -348,6 +348,21 @@ class HLSLCodeGen:
         "memoryBarrier": "AllMemoryBarrier",
         "allMemoryBarrier": "AllMemoryBarrier",
     }
+    HLSL_DERIVATIVE_INTRINSICS = {
+        "dFdx": "ddx",
+        "dFdy": "ddy",
+        "dFdxCoarse": "ddx_coarse",
+        "dFdxFine": "ddx_fine",
+        "dFdyCoarse": "ddy_coarse",
+        "dFdyFine": "ddy_fine",
+        "ddx": "ddx",
+        "ddy": "ddy",
+        "ddx_coarse": "ddx_coarse",
+        "ddx_fine": "ddx_fine",
+        "ddy_coarse": "ddy_coarse",
+        "ddy_fine": "ddy_fine",
+        "fwidth": "fwidth",
+    }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
         "RAY_FLAG_FORCE_OPAQUE": 0x01,
@@ -546,6 +561,7 @@ class HLSLCodeGen:
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
         self.hlsl_synchronization_function_names = {}
+        self.hlsl_derivative_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.resource_array_size_hints = {}
@@ -868,6 +884,7 @@ class HLSLCodeGen:
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
         self.hlsl_synchronization_function_names = {}
+        self.hlsl_derivative_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_hlsl_inverse_helpers = set()
@@ -1125,6 +1142,9 @@ class HLSLCodeGen:
         )
         self.hlsl_synchronization_function_names = (
             self.collect_hlsl_synchronization_function_names(functions)
+        )
+        self.hlsl_derivative_function_names = (
+            self.collect_hlsl_derivative_function_names(functions)
         )
         (
             self.resource_array_size_hints,
@@ -3318,6 +3338,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             self.validate_hlsl_feedback_texture_stage_calls(func, effective_shader_type)
             self.validate_hlsl_synchronization_stage_calls(func, effective_shader_type)
+            self.validate_hlsl_derivative_stage_calls(func, effective_shader_type)
         waveops_helper_lanes_attribute = (
             self.generate_hlsl_waveops_include_helper_lanes_attribute(
                 func, effective_shader_type
@@ -18314,6 +18335,84 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "RasterizerOrderedStructuredBuffer",
             "RasterizerOrderedByteAddressBuffer",
         }
+
+    def is_hlsl_derivative_builtin_call_name(self, callee, shadowed_names=None):
+        if callee not in self.HLSL_DERIVATIVE_INTRINSICS:
+            return False
+        if shadowed_names is None:
+            shadowed_names = getattr(self, "function_return_types", {})
+        return callee not in shadowed_names
+
+    def collect_hlsl_derivative_function_names(self, functions):
+        named_functions = {
+            func.name: func
+            for func in functions or []
+            if getattr(func, "name", None) is not None
+        }
+        requirements = {}
+        calls_by_function = {}
+
+        for func_name, func in named_functions.items():
+            callees = set()
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                callee = self.function_call_name(node)
+                if self.is_hlsl_derivative_builtin_call_name(callee, named_functions):
+                    requirements[func_name] = callee
+                elif callee in named_functions:
+                    callees.add(callee)
+            if callees:
+                calls_by_function[func_name] = callees
+
+        changed = True
+        while changed:
+            changed = False
+            for func_name, callees in calls_by_function.items():
+                if func_name in requirements:
+                    continue
+                for callee in callees:
+                    required_builtin = requirements.get(callee)
+                    if required_builtin is not None:
+                        requirements[func_name] = required_builtin
+                        changed = True
+                        break
+
+        return requirements
+
+    def hlsl_derivative_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            if self.is_hlsl_derivative_builtin_call_name(callee):
+                calls.append((callee, callee))
+            elif callee in self.hlsl_derivative_function_names:
+                calls.append((callee, self.hlsl_derivative_function_names[callee]))
+        return calls
+
+    def validate_hlsl_derivative_stage_calls(self, func, shader_type):
+        if shader_type in {None, "fragment"}:
+            return
+
+        calls = self.hlsl_derivative_calls(func)
+        if not calls:
+            return
+
+        callee, builtin_name = calls[0]
+        intrinsic = self.HLSL_DERIVATIVE_INTRINSICS[builtin_name]
+        if callee == builtin_name:
+            detail = (
+                f"'{builtin_name}' emits {intrinsic}, which is only valid in "
+                "fragment/pixel stages"
+            )
+        else:
+            detail = (
+                f"'{callee}' reaches '{builtin_name}', which emits {intrinsic} "
+                "and is only valid in fragment/pixel stages"
+            )
+        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
 
     def is_hlsl_synchronization_builtin_call_name(self, callee, shadowed_names=None):
         if callee not in self.HLSL_SYNCHRONIZATION_INTRINSICS:

@@ -25640,7 +25640,7 @@ def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile(tmp_pa
 
     assert "// CrossGL parameter semantic: vertexId: vertex_id" in generated_code
     assert "// CrossGL parameter semantic: instanceId: instance_id" in generated_code
-    assert "// CrossGL parameter semantic: fragCoord: position" in generated_code
+    assert "// CrossGL parameter semantic: fragCoord: frag_coord" in generated_code
     assert "// CrossGL parameter semantic: front: front_facing" in generated_code
     assert (
         "// CrossGL parameter semantic: globalId: global_invocation_id"
@@ -25658,6 +25658,25 @@ def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile(tmp_pa
         "pub fn compute_main(globalId: Vec3<u32>, localId: Vec3<u32>, lane: u32)"
         in generated_code
     )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_fragment_coord_semantic_uses_frag_coord_metadata(tmp_path):
+    # rust-gpu exposes fragment coordinates as the `frag_coord` builtin.
+    code = """
+    shader FragCoordBuiltin {
+        fragment {
+            vec4 main(vec4 fragCoord @ gl_FragCoord) @ gl_FragColor {
+                return vec4(fragCoord.x, fragCoord.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "// CrossGL parameter semantic: fragCoord: frag_coord" in generated_code
+    assert "// CrossGL parameter semantic: fragCoord: position" not in generated_code
+    assert "pub fn main(fragCoord: Vec4<f32>) -> Vec4<f32>" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

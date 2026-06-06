@@ -556,6 +556,64 @@ def test_directx_user_defined_fine_derivative_name_is_not_lowered():
     assert "ddx_fine(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    "builtin",
+    [
+        "dFdx",
+        "dFdy",
+        "dFdxFine",
+        "dFdxCoarse",
+        "dFdyFine",
+        "dFdyCoarse",
+        "fwidth",
+    ],
+)
+def test_directx_derivative_builtins_reject_non_fragment_stages(builtin):
+    shader = f"""
+    shader BadDerivativeStage {{
+        compute {{
+            void main() {{
+                float derivative = {builtin}(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"DirectX compute stage cannot call {re.escape(builtin)}; "
+            r".*only valid in fragment/pixel stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_derivative_builtins_reject_transitive_non_fragment_stage_calls():
+    shader = """
+    shader BadTransitiveDerivativeStage {
+        float screenDerivative(float value) {
+            return dFdx(value);
+        }
+
+        compute {
+            void main() {
+                float derivative = screenDerivative(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"DirectX compute stage cannot call screenDerivative; "
+            r"'screenDerivative' reaches 'dFdx'.*only valid in fragment/pixel stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
 def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
     shader = """
     shader Float16IRSmoke {

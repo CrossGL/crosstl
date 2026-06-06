@@ -23145,6 +23145,38 @@ def test_texture_resource_declarations_emit_slang_typed_textures():
     assert "uimage2D" not in generated_code
 
 
+def test_slang_texture_resource_generic_aliases_normalize_element_types():
+    code = """
+    shader TextureResourceGenericAliases {
+        Texture2D<vec4> albedo @binding(0);
+        RWTexture2D<uvec4> outputImage @binding(1);
+        Sampler2D<vec4> combinedSampler @binding(2);
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] Texture2D<float4> albedo : register(t0);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWTexture2D<uint4> outputImage : register(u1);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] Sampler2D<float4> combinedSampler : register(t2);"
+        in generated_code
+    )
+    assert "Texture2D<vec4>" not in generated_code
+    assert "RWTexture2D<uvec4>" not in generated_code
+    assert "Sampler2D<vec4>" not in generated_code
+
+
 def test_sampler_state_declarations_emit_slang_sampler_types():
     code = """
     shader SamplerStateDeclarations {

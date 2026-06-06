@@ -4147,9 +4147,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def structured_buffer_atomic_operations(self):
         """Return generic atomic mappings for RWStructuredBuffer element targets."""
         integer_kinds = {"int", "uint"}
+        add_kinds = {*integer_kinds, "uint64", "float"}
         add_exchange_kinds = {*integer_kinds, "float"}
         return {
-            "atomicAdd": ("atomicAdd", 2, add_exchange_kinds, "int/uint/float"),
+            "atomicAdd": ("atomicAdd", 2, add_kinds, "int/uint/u64/float"),
             "atomicSub": ("atomicSub", 2, integer_kinds, "int/uint"),
             "atomicMin": ("atomicMin", 2, integer_kinds, "int/uint"),
             "atomicMax": ("atomicMax", 2, integer_kinds, "int/uint"),
@@ -4454,6 +4455,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         mapped_type = self.convert_crossgl_type_to_cuda(type_name)
         if type_name in {"uint", "u32"} or mapped_type in {"uint", "unsigned int"}:
             return "uint"
+        if type_name in {"u64", "uint64", "uint64_t"} or mapped_type in {
+            "unsigned long long",
+            "unsigned long long int",
+        }:
+            return "uint64"
         if type_name in {"int", "i32"} or mapped_type == "int":
             return "int"
         if type_name in {"float", "f32"} or mapped_type == "float":

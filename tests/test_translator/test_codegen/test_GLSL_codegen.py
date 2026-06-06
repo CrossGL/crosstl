@@ -2819,6 +2819,36 @@ def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin():
     assert "fragColor = gl_FragCoord;" in generated_code
 
 
+def test_glsl_fragment_struct_builtin_input_aliases_to_glsl_builtin():
+    code = """
+    shader StructFragmentBuiltinInput {
+        struct FSInput {
+            bool frontFacing @gl_FrontFacing;
+            vec2 uv @TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @gl_FragColor {
+                return input.frontFacing ? vec4(input.uv, 0.0, 1.0) : vec4(0.0);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "in bool frontFacing;" not in fragment_code
+    assert "flat in bool frontFacing;" not in fragment_code
+    assert "layout(location = 5) in vec2 uv;" in fragment_code
+    assert (
+        "fragColor = (gl_FrontFacing ? vec4(uv, 0.0, 1.0) : vec4(0.0));"
+        in fragment_code
+    )
+    assert "input.frontFacing" not in fragment_code
+
+
 def test_glsl_fragment_sample_builtin_parameter_aliases_to_inputs():
     code = """
     shader FragmentSampleBuiltinAliases {

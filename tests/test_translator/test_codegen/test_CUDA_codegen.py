@@ -6407,7 +6407,7 @@ class TestCudaCodeGen:
         )
         assert (
             "uint2 badVector = /* unsupported CUDA atomic call: atomicAdd on "
-            "uint2 requires supported scalar int/uint/float target */ "
+            "uint2 requires supported scalar int/uint/u64/float target */ "
             "make_uint2(0u, 0u);" in cuda_code
         )
         assert "atomicAdd(sharedCounters[" not in cuda_code
@@ -6415,6 +6415,37 @@ class TestCudaCodeGen:
         assert "atomicAdd(&&" not in cuda_code
         assert "atomicCompareExchange(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_u64_plain_pointer_atomic_add_emits_cuda_64_bit_atomic(self, tmp_path):
+        source_code = """
+        shader Atomic64CUDA {
+            compute {
+                void main(u64* counters, uint index, u64 value) {
+                    u64 direct = atomicAdd(counters, value);
+                    u64 indexed = atomicAdd(counters[index], value);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            'extern "C" __global__ void compute_main('
+            "unsigned long long* counters, uint index, "
+            "unsigned long long value)" in cuda_code
+        )
+        assert "unsigned long long direct = atomicAdd(counters, value);" in cuda_code
+        assert (
+            "unsigned long long indexed = atomicAdd(&counters[index], value);"
+            in cuda_code
+        )
+        assert "unsupported CUDA atomic call" not in cuda_code
+        assert "atomicAdd(counters[index]" not in cuda_code
+
+        if shutil.which("nvcc") is not None:
+            compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_plain_pointer_reference_atomics_emit_cuda_diagnostics(self, tmp_path):
         source_code = """
@@ -6522,7 +6553,7 @@ class TestCudaCodeGen:
         )
         assert (
             "uint2 blockedVector = /* unsupported CUDA atomic call: atomicAdd on "
-            "uint2* requires supported scalar int/uint/float target */ "
+            "uint2* requires supported scalar int/uint/u64/float target */ "
             "make_uint2(0u, 0u);" in cuda_code
         )
         assert (
@@ -6549,7 +6580,7 @@ class TestCudaCodeGen:
         )
         assert (
             "uint2 blockedVectorMember = /* unsupported CUDA atomic call: "
-            "atomicAdd on uint2* requires supported scalar int/uint/float target "
+            "atomicAdd on uint2* requires supported scalar int/uint/u64/float target "
             "*/ make_uint2(0u, 0u);" in cuda_code
         )
         assert "atomicAdd(readonly" not in cuda_code
@@ -6856,12 +6887,12 @@ class TestCudaCodeGen:
         assert (
             "uint2 vectorOld = /* unsupported CUDA structured buffer atomic: "
             "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
-            "int/uint/float target */ make_uint2(0u, 0u);" in cuda_code
+            "int/uint/u64/float target */ make_uint2(0u, 0u);" in cuda_code
         )
         assert (
             "uint2 vectorAddressOld = /* unsupported CUDA structured buffer atomic: "
             "atomicAdd on RWStructuredBuffer<uint2> requires supported scalar "
-            "int/uint/float target */ make_uint2(0u, 0u);" in cuda_code
+            "int/uint/u64/float target */ make_uint2(0u, 0u);" in cuda_code
         )
         assert "atomicAdd(&&" not in cuda_code
         assert "atomicCAS(&&" not in cuda_code

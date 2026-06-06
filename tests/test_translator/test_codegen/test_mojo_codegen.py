@@ -26450,5 +26450,28 @@ def test_mojo_assert_keyword_bindings_escape_in_declarations_and_calls():
     assert "return assert(input)" not in generated_code
 
 
+def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
+    code = """
+    shader MojoComptimeKeyword {
+        const int comptime = 2;
+
+        int comptime(int var) {
+            int ref = var + comptime;
+            return ref;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "alias comptime_ = 2" in generated_code
+    assert "fn comptime_(var_: Int32) -> Int32:" in generated_code
+    assert "var ref_: Int32 = (var_ + comptime_)" in generated_code
+    assert "return ref_" in generated_code
+    assert "alias comptime = 2" not in generated_code
+    assert "fn comptime(" not in generated_code
+    assert "var ref:" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()
