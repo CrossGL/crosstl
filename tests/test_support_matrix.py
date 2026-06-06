@@ -215,6 +215,9 @@ def test_project_repo_scan_documents_source_root_status():
             backend_support["notes"]
         )
         assert "scan/report CLI source override rollups" in (backend_support["notes"])
+        assert "validation rejects missing scan summary rollups" in (
+            backend_support["notes"]
+        )
         assert "text inspection identifies inactive source roots by path" in (
             backend_support["notes"]
         )
@@ -226,6 +229,10 @@ def test_project_repo_scan_documents_source_root_status():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_inconsistent_skipped_source_"
             "overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_scan_summary_rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -394,6 +401,9 @@ def test_project_include_resolution_documents_status_reporting():
         assert "summary rollups including source-backend, source-backend status" in (
             backend_support["notes"]
         )
+        assert "missing include dependency summary rollups" in (
+            backend_support["notes"]
+        )
         assert "current status, resolved path, resolved include hash" in (
             backend_support["notes"]
         )
@@ -439,6 +449,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_processing_variant_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_scan_summary_rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_translation_pipeline.py::def "

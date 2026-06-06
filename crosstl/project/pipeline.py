@@ -8213,78 +8213,70 @@ def _summary_contract_reasons(
                 "units",
             )
         )
-        if "unitsByExtension" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.unitsByExtension",
-                    summary.get("unitsByExtension"),
-                    _payload_unit_counts_by_extension(units),
-                    "units",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.unitsByExtension",
+                summary.get("unitsByExtension"),
+                _payload_unit_counts_by_extension(units),
+                "units",
             )
-        if "unitsBySourceOverride" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.unitsBySourceOverride",
-                    summary.get("unitsBySourceOverride"),
-                    _payload_unit_counts_by_source_override(units),
-                    "units",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.unitsBySourceOverride",
+                summary.get("unitsBySourceOverride"),
+                _payload_unit_counts_by_source_override(units),
+                "units",
             )
-        if "includeDependencyCount" in summary:
-            reasons.extend(
-                _count_field_contract_reasons(
-                    "summary.includeDependencyCount",
-                    summary.get("includeDependencyCount"),
-                    len(_payload_include_dependency_records(units)),
-                    "unit include dependencies",
-                )
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.includeDependencyCount",
+                summary.get("includeDependencyCount"),
+                len(_payload_include_dependency_records(units)),
+                "unit include dependencies",
             )
-        if "includeDependenciesByKind" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.includeDependenciesByKind",
-                    summary.get("includeDependenciesByKind"),
-                    _payload_include_dependency_counts_by_kind(units),
-                    "unit include dependencies",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependenciesByKind",
+                summary.get("includeDependenciesByKind"),
+                _payload_include_dependency_counts_by_kind(units),
+                "unit include dependencies",
             )
-        if "includeDependenciesByStatus" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.includeDependenciesByStatus",
-                    summary.get("includeDependenciesByStatus"),
-                    _payload_include_dependency_counts_by_status(units),
-                    "unit include dependencies",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependenciesByStatus",
+                summary.get("includeDependenciesByStatus"),
+                _payload_include_dependency_counts_by_status(units),
+                "unit include dependencies",
             )
-        if "includeDependenciesByResolvedFrom" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.includeDependenciesByResolvedFrom",
-                    summary.get("includeDependenciesByResolvedFrom"),
-                    _payload_include_dependency_counts_by_resolved_from(units),
-                    "unit include dependencies",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependenciesByResolvedFrom",
+                summary.get("includeDependenciesByResolvedFrom"),
+                _payload_include_dependency_counts_by_resolved_from(units),
+                "unit include dependencies",
             )
-        if "includeDependenciesBySourceBackend" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.includeDependenciesBySourceBackend",
-                    summary.get("includeDependenciesBySourceBackend"),
-                    _payload_include_dependency_counts_by_source_backend(units),
-                    "unit include dependencies",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependenciesBySourceBackend",
+                summary.get("includeDependenciesBySourceBackend"),
+                _payload_include_dependency_counts_by_source_backend(units),
+                "unit include dependencies",
             )
-        if "includeDependenciesBySourceBackendStatus" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.includeDependenciesBySourceBackendStatus",
-                    summary.get("includeDependenciesBySourceBackendStatus"),
-                    _payload_include_dependency_counts_by_source_backend_status(units),
-                    "unit include dependencies",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependenciesBySourceBackendStatus",
+                summary.get("includeDependenciesBySourceBackendStatus"),
+                _payload_include_dependency_counts_by_source_backend_status(units),
+                "unit include dependencies",
             )
+        )
     if isinstance(skipped, list):
         reasons.extend(
             _count_field_contract_reasons(
@@ -8302,24 +8294,22 @@ def _summary_contract_reasons(
                 "skipped",
             )
         )
-        if "skippedByExtension" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.skippedByExtension",
-                    summary.get("skippedByExtension"),
-                    _payload_skipped_counts_by_extension(skipped),
-                    "skipped",
-                )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.skippedByExtension",
+                summary.get("skippedByExtension"),
+                _payload_skipped_counts_by_extension(skipped),
+                "skipped",
             )
-        if "skippedBySourceOverride" in summary:
-            reasons.extend(
-                _mapping_field_contract_reasons(
-                    "summary.skippedBySourceOverride",
-                    summary.get("skippedBySourceOverride"),
-                    _payload_skipped_counts_by_source_override(skipped),
-                    "skipped",
-                )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.skippedBySourceOverride",
+                summary.get("skippedBySourceOverride"),
+                _payload_skipped_counts_by_source_override(skipped),
+                "skipped",
             )
+        )
     if isinstance(project, Mapping):
         targets = project.get("targets", [])
         if isinstance(targets, list):
