@@ -40,6 +40,7 @@ REPORT_PACKAGE_NAME = "crosstl"
 UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
 ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT = 20
+EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
 DEFAULT_OUTPUT_DIR = "crosstl-out"
 OUTPUT_DIR_OUTSIDE_PROJECT_CODE = "project.config.output-dir-outside-project"
@@ -2294,6 +2295,38 @@ def _validation_diagnostics(
     return diagnostics
 
 
+def _inspection_external_corpus_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for field_name in ("id", "path", "sourceBackend"):
+        value = entry.get(field_name)
+        if isinstance(value, str):
+            payload[field_name] = value
+    targets = entry.get("targets")
+    if isinstance(targets, list):
+        payload["targets"] = [target for target in targets if isinstance(target, str)]
+    return payload
+
+
+def _inspection_external_corpus_sample(
+    entries: Sequence[Any],
+    *,
+    present: bool,
+    discovered: bool,
+) -> tuple[list[dict[str, Any]], int, int]:
+    sampled_entries = [
+        _inspection_external_corpus_entry(entry)
+        for entry in entries
+        if isinstance(entry, Mapping)
+        and entry.get("present") is present
+        and entry.get("discovered") is discovered
+    ]
+    return (
+        sampled_entries[:EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT],
+        len(sampled_entries),
+        max(0, len(sampled_entries) - EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT),
+    )
+
+
 def inspect_project_report(
     report_path: str | os.PathLike[str],
     *,
@@ -2479,11 +2512,32 @@ def inspect_project_report(
     external_corpus = report.get("externalCorpus")
     if isinstance(external_corpus, Mapping):
         external_summary = external_corpus.get("summary")
+        external_entries = _record_sequence(external_corpus.get("entries"))
+        missing_entries, missing_entry_count, truncated_missing_entry_count = (
+            _inspection_external_corpus_sample(
+                external_entries,
+                present=False,
+                discovered=False,
+            )
+        )
+        undiscovered_entries, undiscovered_entry_count, truncated_undiscovered_count = (
+            _inspection_external_corpus_sample(
+                external_entries,
+                present=True,
+                discovered=False,
+            )
+        )
         payload["externalCorpus"] = {
             "status": external_corpus.get("status"),
             "summary": (
                 dict(external_summary) if isinstance(external_summary, Mapping) else {}
             ),
+            "missingEntryCount": missing_entry_count,
+            "truncatedMissingEntryCount": truncated_missing_entry_count,
+            "missingEntries": missing_entries,
+            "undiscoveredPresentEntryCount": undiscovered_entry_count,
+            "truncatedUndiscoveredPresentEntryCount": truncated_undiscovered_count,
+            "undiscoveredPresentEntries": undiscovered_entries,
         }
     return payload
 

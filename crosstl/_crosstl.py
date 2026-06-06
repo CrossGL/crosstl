@@ -720,6 +720,54 @@ def _format_external_corpus_accounting(summary):
     )
 
 
+def _format_external_corpus_entry(entry):
+    if not isinstance(entry, Mapping):
+        return None
+
+    path = entry.get("path")
+    if not isinstance(path, str) or not path:
+        path = "(unknown)"
+    details = []
+    entry_id = entry.get("id")
+    if isinstance(entry_id, str) and entry_id:
+        details.append(entry_id)
+    source_backend = entry.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(source_backend)
+    targets = entry.get("targets")
+    if isinstance(targets, list):
+        target_names = [target for target in targets if isinstance(target, str)]
+        if target_names:
+            details.append("targets=" + ",".join(target_names))
+    if not details:
+        return path
+    return f"{path} ({'; '.join(details)})"
+
+
+def _format_external_corpus_entry_samples(label, entries, truncated_count):
+    if not isinstance(entries, list) or not entries:
+        return None
+
+    formatted_entries = [
+        formatted_entry
+        for formatted_entry in (
+            _format_external_corpus_entry(entry) for entry in entries
+        )
+        if formatted_entry
+    ]
+    if not formatted_entries:
+        return None
+
+    suffix = ""
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        suffix = f"; +{truncated_count} more"
+    return f"{label}: " + ", ".join(formatted_entries) + suffix
+
+
 def _format_report_status(report, validation_diagnostic_codes):
     if isinstance(report, Mapping) and report.get("valid") is False:
         return "Report: invalid" if report.get("available") else "Report: unavailable"
@@ -996,6 +1044,20 @@ def _format_project_report_inspection(payload):
             corpus_accounting = _format_external_corpus_accounting(external_summary)
             if corpus_accounting:
                 lines.append(corpus_accounting)
+            missing_entries = _format_external_corpus_entry_samples(
+                "External corpus missing entries",
+                external_corpus.get("missingEntries"),
+                external_corpus.get("truncatedMissingEntryCount"),
+            )
+            if missing_entries:
+                lines.append(missing_entries)
+            undiscovered_entries = _format_external_corpus_entry_samples(
+                "External corpus undiscovered present entries",
+                external_corpus.get("undiscoveredPresentEntries"),
+                external_corpus.get("truncatedUndiscoveredPresentEntryCount"),
+            )
+            if undiscovered_entries:
+                lines.append(undiscovered_entries)
             corpus_sources = _format_count_rollup(
                 "External corpus sources",
                 external_summary.get("entriesBySourceBackend"),

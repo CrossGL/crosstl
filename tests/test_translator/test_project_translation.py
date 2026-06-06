@@ -7819,8 +7819,13 @@ def test_project_cli_inspect_report_text_includes_report_rollups(tmp_path):
 
 def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_path):
     repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "src").mkdir(parents=True)
+    (repo / "fixtures").mkdir()
+    (repo / "src" / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "fixtures" / "undiscovered.cgl").write_text(
+        SIMPLE_CROSSL,
+        encoding="utf-8",
+    )
     (repo / "corpus.json").write_text(
         json.dumps(
             {
@@ -7828,7 +7833,7 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
                 "entries": [
                     {
                         "id": "repo/simple",
-                        "path": "simple.cgl",
+                        "path": "src/simple.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
                     },
@@ -7837,6 +7842,12 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
                         "path": "missing.hlsl",
                         "sourceBackend": "directx",
                         "targets": ["cgl", "opengl"],
+                    },
+                    {
+                        "id": "repo/undiscovered",
+                        "path": "fixtures/undiscovered.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
                     },
                     {
                         "id": "repo/outside",
@@ -7852,6 +7863,7 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
             [project]
+            source_roots = ["src"]
             targets = ["cgl"]
             external_corpus_manifest = "corpus.json"
             """).strip(),
@@ -7877,17 +7889,45 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
         check=False,
     )
 
+    payload = inspect_project_report(report_path)
+
+    assert payload["externalCorpus"]["missingEntries"] == [
+        {
+            "id": "repo/missing",
+            "path": "missing.hlsl",
+            "sourceBackend": "directx",
+            "targets": ["cgl", "opengl"],
+        }
+    ]
+    assert payload["externalCorpus"]["undiscoveredPresentEntries"] == [
+        {
+            "id": "repo/undiscovered",
+            "path": "fixtures/undiscovered.cgl",
+            "sourceBackend": "cgl",
+            "targets": ["cgl"],
+        }
+    ]
+    assert payload["externalCorpus"]["truncatedMissingEntryCount"] == 0
+    assert payload["externalCorpus"]["truncatedUndiscoveredPresentEntryCount"] == 0
     assert result.returncode == 0
     assert (
-        "External corpus: ok; 2 entries, 1 present, 1 missing, 1 invalid"
+        "External corpus: ok; 3 entries, 2 present, 1 missing, 1 invalid"
         in result.stdout
     )
     assert (
-        "External corpus coverage: 1 discovered, 0 present but undiscovered; "
-        "3 manifest entries, 2 valid"
+        "External corpus coverage: 1 discovered, 1 present but undiscovered; "
+        "4 manifest entries, 3 valid"
     ) in result.stdout
-    assert "External corpus sources: cgl=1, directx=1" in result.stdout
-    assert "External corpus targets: cgl=2, opengl=1" in result.stdout
+    assert (
+        "External corpus missing entries: "
+        "missing.hlsl (repo/missing; directx; targets=cgl,opengl)"
+    ) in result.stdout
+    assert (
+        "External corpus undiscovered present entries: "
+        "fixtures/undiscovered.cgl (repo/undiscovered; cgl; targets=cgl)"
+    ) in result.stdout
+    assert "External corpus sources: cgl=2, directx=1" in result.stdout
+    assert "External corpus targets: cgl=3, opengl=1" in result.stdout
     assert (
         "External corpus artifacts: cgl=1 artifact (1 translated, 0 failed)"
     ) in result.stdout
