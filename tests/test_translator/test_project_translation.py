@@ -754,6 +754,8 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
     assert output.exists()
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["unitsBySourceOverride"] == {"cgl": 1}
+    assert payload["summary"]["skippedBySourceOverride"] == {}
     assert payload["units"][0]["sourceOverride"] == "cgl"
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
     assert payload["artifacts"][0]["path"] == "translated/opengl/gpu/kernel.glsl"
@@ -786,6 +788,8 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
             "sourceOverride": "unknown-backend",
         }
     ]
+    assert payload["summary"]["unitsBySourceOverride"] == {}
+    assert payload["summary"]["skippedBySourceOverride"] == {"unknown-backend": 1}
     assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
         "project.config.unsupported-source-override",
         "project.scan.empty",
@@ -5472,7 +5476,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "missingCapabilityCounts": {},
                     "unitsBySourceBackend": {"metal": 1},
                     "unitsByExtension": {".metal": 1},
+                    "unitsBySourceOverride": {"cgl": 2},
                     "skippedByExtension": {".txt": 1},
+                    "skippedBySourceOverride": {"cgl": 1},
                     "artifactsBySourceBackend": {
                         "unknown": {
                             "artifactCount": 1,
@@ -5551,7 +5557,11 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     assert "summary.skippedCount must match skipped length" in diagnostic["message"]
     assert "summary.skippedByReason must match skipped" in diagnostic["message"]
     assert "summary.unitsByExtension must match units" in diagnostic["message"]
+    assert "summary.unitsBySourceOverride must match units" in diagnostic["message"]
     assert "summary.skippedByExtension must match skipped" in diagnostic["message"]
+    assert "summary.skippedBySourceOverride must match skipped" in (
+        diagnostic["message"]
+    )
     assert "summary.targetCount must match project.targets length" in (
         diagnostic["message"]
     )
@@ -6745,6 +6755,7 @@ def test_project_cli_translate_project_applies_source_backend_overrides(tmp_path
     assert payload["project"]["sourceOverrides"] == {"gpu/*.shader": "cgl"}
     assert payload["project"]["sourceOverrideCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["unitsBySourceOverride"] == {"cgl": 1}
     assert payload["units"][0]["sourceOverride"] == "cgl"
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
 
@@ -7631,6 +7642,50 @@ def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_pat
     assert result.returncode == 0
     assert "Skipped by reason: unsupported-extension=1" in result.stdout
     assert "Skipped by extension: .txt=1" in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_source_override_rollups(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (shader_dir / "unsupported.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            include = ["**/*"]
+            targets = ["cgl"]
+
+            [project.sources]
+            "gpu/kernel.shader" = "cgl"
+            "gpu/unsupported.shader" = "unknown-backend"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Units by source override: cgl=1" in result.stdout
+    assert "Skipped by source override: unknown-backend=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):

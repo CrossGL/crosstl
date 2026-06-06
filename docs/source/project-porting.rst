@@ -236,9 +236,10 @@ Project reports are JSON documents with:
   patterns, source overrides, include directories, defines, and variants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, unit file extension, skipped reason, skipped file
-  extension, artifact source backend, variant, target backend, source-map
-  granularity, source-map target, source-map source backend, diagnostic code
-  (``diagnosticsByCode``), and missing capability (``missingCapabilityCounts``).
+  extension, unit source override, skipped source override, artifact source
+  backend, variant, target backend, source-map granularity, source-map target,
+  source-map source backend, diagnostic code (``diagnosticsByCode``), and
+  missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides.

@@ -216,6 +216,10 @@ def test_project_report_inspection_documents_rollups():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_override_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_marks_invalid_reports"
         ) in backend_support["evidence"]
         assert (
@@ -226,6 +230,8 @@ def test_project_report_inspection_documents_rollups():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_truncated_sections"
         ) in backend_support["evidence"]
+        assert "source-override" in backend_support["notes"]
+        assert "skipped source-override" in backend_support["notes"]
         assert "migration scope, non-goals, action counts, actions" in (
             backend_support["notes"]
         )
@@ -447,6 +453,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "single file-level source-map mapping" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
+        assert "unit and skipped source override rollups" in (backend_support["notes"])
         assert "source-relative target/variant layout" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -469,6 +476,14 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_inconsistent_skipped_source_"
             "overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_override_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_summary_counts"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -503,6 +518,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]
         assert "unit and skipped source override provenance" in (
+            backend_support["notes"]
+        )
+        assert "summary rollups including source override counts" in (
             backend_support["notes"]
         )
         assert "unit extension/path consistency" in backend_support["notes"]
@@ -694,6 +712,14 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_inconsistent_skipped_source_"
             "overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_override_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_inconsistent_summary_counts"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

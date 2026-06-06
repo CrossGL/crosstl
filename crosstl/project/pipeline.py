@@ -361,6 +361,18 @@ def _unit_counts_by_extension(
     return dict(sorted(counts.items()))
 
 
+def _unit_counts_by_source_override(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for unit in units:
+        source_override = unit.source_override
+        if not _is_non_empty_string(source_override):
+            continue
+        counts[source_override] = counts.get(source_override, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _skipped_counts_by_reason(
     skipped: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -383,6 +395,18 @@ def _skipped_counts_by_extension(
             continue
         extension = _extension_rollup_key(Path(path).suffix.lower())
         counts[extension] = counts.get(extension, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _skipped_counts_by_source_override(
+    skipped: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in skipped:
+        source_override = record.get("sourceOverride")
+        if not _is_non_empty_string(source_override):
+            continue
+        counts[source_override] = counts.get(source_override, 0) + 1
     return dict(sorted(counts.items()))
 
 
@@ -1419,8 +1443,12 @@ class ProjectPortabilityReport:
                 "missingCapabilityCounts": _missing_capability_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
                 "unitsByExtension": _unit_counts_by_extension(self.units),
+                "unitsBySourceOverride": _unit_counts_by_source_override(self.units),
                 "skippedByReason": _skipped_counts_by_reason(self.skipped),
                 "skippedByExtension": _skipped_counts_by_extension(self.skipped),
+                "skippedBySourceOverride": _skipped_counts_by_source_override(
+                    self.skipped
+                ),
                 "artifactsBySourceBackend": _artifact_counts_by_source_backend(
                     self.artifacts
                 ),
@@ -3053,6 +3081,18 @@ def _payload_unit_counts_by_extension(units: Sequence[Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _payload_unit_counts_by_source_override(units: Sequence[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            continue
+        source_override = unit.get("sourceOverride")
+        if not _is_non_empty_string(source_override):
+            continue
+        counts[source_override] = counts.get(source_override, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _payload_skipped_counts_by_reason(skipped: Sequence[Any]) -> dict[str, int]:
     records = [record for record in skipped if isinstance(record, Mapping)]
     return _skipped_counts_by_reason(records)
@@ -3061,6 +3101,13 @@ def _payload_skipped_counts_by_reason(skipped: Sequence[Any]) -> dict[str, int]:
 def _payload_skipped_counts_by_extension(skipped: Sequence[Any]) -> dict[str, int]:
     records = [record for record in skipped if isinstance(record, Mapping)]
     return _skipped_counts_by_extension(records)
+
+
+def _payload_skipped_counts_by_source_override(
+    skipped: Sequence[Any],
+) -> dict[str, int]:
+    records = [record for record in skipped if isinstance(record, Mapping)]
+    return _skipped_counts_by_source_override(records)
 
 
 def _payload_artifact_records(artifacts: Sequence[Any]) -> list[Mapping[str, Any]]:
@@ -5011,6 +5058,15 @@ def _summary_contract_reasons(
                     "units",
                 )
             )
+        if "unitsBySourceOverride" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.unitsBySourceOverride",
+                    summary.get("unitsBySourceOverride"),
+                    _payload_unit_counts_by_source_override(units),
+                    "units",
+                )
+            )
     if isinstance(skipped, list):
         reasons.extend(
             _count_field_contract_reasons(
@@ -5034,6 +5090,15 @@ def _summary_contract_reasons(
                     "summary.skippedByExtension",
                     summary.get("skippedByExtension"),
                     _payload_skipped_counts_by_extension(skipped),
+                    "skipped",
+                )
+            )
+        if "skippedBySourceOverride" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.skippedBySourceOverride",
+                    summary.get("skippedBySourceOverride"),
+                    _payload_skipped_counts_by_source_override(skipped),
                     "skipped",
                 )
             )
