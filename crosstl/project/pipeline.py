@@ -7767,10 +7767,12 @@ def _toolchain_run_contract_reasons(
         )
 
     command = run.get("command")
-    if not isinstance(command, list) or any(
-        not _is_non_empty_string(part) for part in command
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not _is_non_empty_string(part) for part in command)
     ):
-        reasons.append(f"{prefix}.command must be a list of strings")
+        reasons.append(f"{prefix}.command must be a non-empty list of strings")
 
     returncode = run.get("returncode")
     if not isinstance(returncode, int) or isinstance(returncode, bool):

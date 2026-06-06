@@ -5151,8 +5151,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert "validation.toolchainRuns[0].variant must be a string" in (
         diagnostic["message"]
     )
-    assert "validation.toolchainRuns[0].command must be a list of strings" in (
-        diagnostic["message"]
+    assert (
+        "validation.toolchainRuns[0].command must be a non-empty list of strings"
+        in diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].returncode must be an integer" in (
         diagnostic["message"]
@@ -5167,6 +5168,63 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[2] must be an object" in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_empty_toolchain_run_command(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "empty-toolchain-run-command-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "sourceBackend": "cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/simple.glsl",
+                            "command": [],
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns[0].command must be a non-empty list of strings"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_inconsistent_toolchain_status(tmp_path):
