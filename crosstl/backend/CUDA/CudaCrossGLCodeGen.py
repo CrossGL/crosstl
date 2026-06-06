@@ -176,6 +176,7 @@ class CudaToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
+        self.namespace_aliases = {}
 
     def generate(self, ast_node):
         self.output = []
@@ -195,6 +196,7 @@ class CudaToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
+        self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -5738,11 +5740,39 @@ class CudaToCrossGLConverter:
 
         start = text.find("<")
         if start == -1 or not text.endswith(">"):
-            return text, []
+            return self.resolve_namespace_alias_name(text), []
 
-        base_name = text[:start].strip()
+        base_name = self.resolve_namespace_alias_name(text[:start].strip())
         args = self.split_cpp_template_args(text[start + 1 : -1])
         return base_name, args
+
+    def resolve_namespace_alias_name(self, name):
+        if not isinstance(name, str) or not self.namespace_aliases:
+            return name
+
+        resolved = name
+        for _ in range(len(self.namespace_aliases)):
+            next_resolved = self.resolve_namespace_alias_name_once(resolved)
+            if next_resolved == resolved:
+                break
+            resolved = next_resolved
+        return resolved
+
+    def resolve_namespace_alias_name_once(self, name):
+        leading_scope = name.startswith("::")
+        lookup_name = name[2:] if leading_scope else name
+        alias, separator, suffix = lookup_name.partition("::")
+        if not separator:
+            return name
+
+        target = self.namespace_aliases.get(alias)
+        if target is None:
+            return name
+
+        resolved = f"{target}::{suffix}"
+        if leading_scope and not resolved.startswith("::"):
+            resolved = f"::{resolved}"
+        return resolved
 
     def split_cpp_template_args(self, args_text):
         args = []
@@ -5901,7 +5931,7 @@ class CudaToCrossGLConverter:
     def normalize_cuda_builtin_function_name(self, func_name):
         if not isinstance(func_name, str):
             return func_name
-        normalized_name = func_name
+        normalized_name = self.resolve_namespace_alias_name(func_name)
         if normalized_name.startswith("::"):
             normalized_name = normalized_name[2:]
         for namespace in ("cuda::std::", "std::"):

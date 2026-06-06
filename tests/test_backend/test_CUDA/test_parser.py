@@ -3584,6 +3584,25 @@ class TestCudaParser:
             assert declaration.value.name.object == owner
             assert declaration.value.name.member == member
 
+    def test_namespace_alias_metadata_is_preserved_for_codegen(self):
+        code = """
+        namespace cstd = cuda::std;
+
+        __device__ float kernel(float x, float y) {
+            return cstd::fminf(x, y);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        value = ast.functions[0].body[0].value
+
+        assert ast.namespace_aliases == {"cstd": "cuda::std"}
+        assert isinstance(value, FunctionCallNode)
+        assert value.name == "cstd::fminf"
+
     def test_cooperative_groups_async_copy_wait_parsing(self):
         code = """
         namespace cg = cooperative_groups;

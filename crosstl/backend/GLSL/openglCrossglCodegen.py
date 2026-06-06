@@ -224,6 +224,29 @@ class GLSLToCrossGLConverter:
         "rayQueryGetIntersectionObjectToWorldEXT",
         "rayQueryGetIntersectionWorldToObjectEXT",
     }
+    SHADOW_TEXTURE_COMPARE_FUNCTIONS = {
+        "texture": "textureCompare",
+        "textureLod": "textureCompareLod",
+        "textureLodOffset": "textureCompareLodOffset",
+        "textureGrad": "textureCompareGrad",
+        "textureGradOffset": "textureCompareGradOffset",
+        "textureOffset": "textureCompareOffset",
+    }
+    SHADOW_TEXTURE_NATIVE_ARG_COUNTS = {
+        "texture": 2,
+        "textureLod": 3,
+        "textureLodOffset": 4,
+        "textureGrad": 4,
+        "textureGradOffset": 5,
+        "textureOffset": 3,
+    }
+    SHADOW_SAMPLER_PACKED_COORD_SWIZZLES = {
+        "sampler1DArrayShadow": ("xy", "z"),
+        "sampler2DShadow": ("xy", "z"),
+        "sampler2DArrayShadow": ("xyz", "w"),
+        "sampler2DRectShadow": ("xy", "z"),
+        "samplerCubeShadow": ("xyz", "w"),
+    }
     VERTEX_BUILTIN_OUTPUT_TYPES = {
         "gl_Position": "vec4",
         "gl_PointSize": "float",
@@ -636,8 +659,16 @@ class GLSLToCrossGLConverter:
         return None
 
     def expression_is_shadow_sampler(self, expr):
+        return self.expression_shadow_sampler_type(expr) is not None
+
+    def expression_shadow_sampler_type(self, expr):
         resource_type = self.expression_resource_type(expr)
-        return bool(resource_type and str(resource_type).endswith("Shadow"))
+        if not resource_type:
+            return None
+        resource_type = str(resource_type).split("[", 1)[0]
+        if resource_type.endswith("Shadow"):
+            return resource_type
+        return None
 
     def shadow_gather_import_name(self, name, args):
         if not args or not self.expression_is_shadow_sampler(args[0]):
@@ -649,6 +680,94 @@ class GLSLToCrossGLConverter:
         if name == "textureGatherOffsets" and len(args) >= 4:
             return "textureGatherCompareOffsets"
         return name
+
+    def shadow_texture_compare_call(self, name, args):
+        if name not in self.SHADOW_TEXTURE_COMPARE_FUNCTIONS or not args:
+            return None
+
+        sampler_type = self.expression_shadow_sampler_type(args[0])
+        if sampler_type not in self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES:
+            return None
+
+        if len(args) != self.SHADOW_TEXTURE_NATIVE_ARG_COUNTS[name]:
+            return None
+
+        coord_expr, compare_expr = self.shadow_texture_compare_coord_ref(
+            args[1], sampler_type
+        )
+        call_args = [
+            self.generate_expression(args[0]),
+            coord_expr,
+            compare_expr,
+            *[self.generate_expression(arg) for arg in args[2:]],
+        ]
+        return self.SHADOW_TEXTURE_COMPARE_FUNCTIONS[name], call_args
+
+    def shadow_texture_compare_coord_ref(self, coord_ref, sampler_type):
+        coord_swizzle, compare_swizzle = self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES[
+            sampler_type
+        ]
+        constructor_split = self.shadow_texture_constructor_coord_ref(
+            coord_ref, coord_swizzle
+        )
+        if constructor_split is not None:
+            return constructor_split
+
+        coord_expr = self.generate_expression(coord_ref)
+        return (
+            self.swizzle_expression(coord_expr, coord_swizzle),
+            self.swizzle_expression(coord_expr, compare_swizzle),
+        )
+
+    def shadow_texture_constructor_coord_ref(self, coord_ref, coord_swizzle):
+        if not isinstance(coord_ref, FunctionCallNode):
+            return None
+
+        constructor_name = self.function_call_name(coord_ref)
+        if constructor_name not in {"vec3", "vec4", "dvec3", "dvec4"}:
+            return None
+
+        args = list(getattr(coord_ref, "args", []) or [])
+        if len(args) == 2:
+            return self.generate_expression(args[0]), self.generate_expression(args[1])
+
+        if coord_swizzle == "xy" and len(args) == 3:
+            return (
+                "vec2("
+                + ", ".join(self.generate_expression(arg) for arg in args[:2])
+                + ")",
+                self.generate_expression(args[2]),
+            )
+
+        if coord_swizzle == "xyz":
+            if len(args) == 3:
+                return (
+                    "vec3("
+                    + ", ".join(self.generate_expression(arg) for arg in args[:2])
+                    + ")",
+                    self.generate_expression(args[2]),
+                )
+            if len(args) == 4:
+                return (
+                    "vec3("
+                    + ", ".join(self.generate_expression(arg) for arg in args[:3])
+                    + ")",
+                    self.generate_expression(args[3]),
+                )
+
+        return None
+
+    def swizzle_expression(self, expression, swizzle):
+        identifier_or_member = (
+            r"^[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\[[^\]]+\])?"
+            r"(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
+        )
+        if re.match(identifier_or_member, expression):
+            return f"{expression}.{swizzle}"
+        if expression.startswith("(") and expression.endswith(")"):
+            return f"{expression}.{swizzle}"
+        return f"({expression}).{swizzle}"
 
     def combined_sampler_constructor_parts(self, node):
         if not isinstance(node, FunctionCallNode) or len(node.args) != 2:
@@ -2369,6 +2488,11 @@ class GLSLToCrossGLConverter:
         ray_query_call = self.generate_ray_query_method_call(name, node.args)
         if ray_query_call is not None:
             return ray_query_call
+
+        shadow_texture_call = self.shadow_texture_compare_call(name, node.args)
+        if shadow_texture_call is not None:
+            compare_name, compare_args = shadow_texture_call
+            return f"{compare_name}({', '.join(compare_args)})"
 
         name = self.shadow_gather_import_name(name, node.args)
 

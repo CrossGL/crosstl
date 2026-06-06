@@ -1967,6 +1967,53 @@ def test_mojo_import_alias_math_and_simd_builtins_lower_to_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_mojo_from_import_alias_math_and_simd_builtins_lower_to_crossgl():
+    code = """
+    from math import fmod as wrap
+    from simd import dot as dot2, normalize as normalized
+
+    fn main():
+        let wrapped = wrap(5.0, 2.0)
+        let projected = dot2(lhs, rhs)
+        let normal = normalized(lhs)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let wrapped = mod(5.0, 2.0);" in generated_code
+    assert "let projected = dot(lhs, rhs);" in generated_code
+    assert "let normal = normalize(lhs);" in generated_code
+    assert "wrap(" not in generated_code
+    assert "dot2(" not in generated_code
+    assert "normalized(" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
+def test_user_defined_from_import_alias_call_does_not_lower_to_builtin():
+    code = """
+    from simd import dot as project
+
+    fn project(lhs: Float32, rhs: Float32) -> Float32:
+        return lhs + rhs
+
+    fn main():
+        let result = project(lhs, rhs)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float project(float lhs, float rhs)" in generated_code
+    assert "let result = project(lhs, rhs);" in generated_code
+    assert "let result = dot(lhs, rhs);" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
 def test_user_defined_lerp_call_does_not_lower_to_mix():
     code = """
     fn lerp(x: Float32) -> Float32:

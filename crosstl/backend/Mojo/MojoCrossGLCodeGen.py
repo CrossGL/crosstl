@@ -115,6 +115,7 @@ class MojoToCrossGLConverter:
         self.user_function_names = set()
         self.user_function_arities = {}
         self.imported_module_aliases = {}
+        self.imported_function_aliases = {}
         self.scoped_value_names = []
         self.function_body_depth = 0
         self.type_map = {
@@ -247,6 +248,9 @@ class MojoToCrossGLConverter:
         self.user_function_arities = self.collect_user_function_arities(ast)
         self.user_function_names = set(self.user_function_arities)
         self.imported_module_aliases = self.collect_imported_module_aliases(ast)
+        self.imported_function_aliases = self.collect_imported_function_aliases(
+            getattr(ast, "includes", []) or []
+        )
         self.scoped_value_names = []
         global_value_names = [
             getattr(variable, "name", None)
@@ -381,7 +385,51 @@ class MojoToCrossGLConverter:
                 aliases[self.map_identifier_name(alias)] = module_name
         return aliases
 
+    def collect_imported_function_aliases(self, imports):
+        aliases = {}
+        for import_node in imports:
+            aliases.update(self.imported_function_aliases_from_node(import_node))
+        return aliases
+
+    def imported_function_aliases_from_node(self, import_node):
+        aliases = {}
+        if not getattr(import_node, "items", None):
+            return aliases
+
+        module_name = getattr(
+            import_node, "module_name", getattr(import_node, "module", None)
+        )
+        if module_name not in {"math", "simd"}:
+            return aliases
+
+        for item in import_node.items:
+            import_name, alias = self.split_import_item_alias(item)
+            if not import_name or import_name == "*":
+                continue
+
+            local_name = alias or import_name
+            resolved_name = f"{module_name}.{import_name}"
+            if resolved_name in self.function_map:
+                aliases[self.map_identifier_name(local_name)] = resolved_name
+        return aliases
+
+    def split_import_item_alias(self, item):
+        if not isinstance(item, str):
+            return item, None
+
+        parts = item.split(" as ", 1)
+        if len(parts) == 2:
+            return parts[0].strip(), parts[1].strip()
+        return item.strip(), None
+
     def resolve_imported_function_name(self, func_name):
+        if isinstance(func_name, str):
+            alias = self.imported_function_aliases.get(
+                self.map_identifier_name(func_name)
+            )
+            if alias:
+                return alias
+
         if not isinstance(func_name, str) or "." not in func_name:
             return func_name
 

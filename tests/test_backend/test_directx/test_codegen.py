@@ -1086,6 +1086,21 @@ def test_codegen_namespace_block_scoped_call_imports_to_parseable_crossgl():
     parse_crossgl(crossgl)
 
 
+def test_codegen_hlsl_namespace_intrinsics_import_to_parseable_crossgl():
+    crossgl = generate_crossgl("""
+        float4 main(float4 color : COLOR0) : SV_Target0 {
+            float a = hlsl::saturate(color.x);
+            float b = ::hlsl::lerp(a, color.y, 0.5);
+            return float4(b, a, 0.0, 1.0);
+        }
+    """)
+
+    assert "hlsl::" not in crossgl
+    assert "a = clamp(color.x, 0.0, 1.0);" in crossgl
+    assert "b = mix(a, color.y, 0.5);" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_array_template_argument_from_dxc_buffer_tests():
     crossgl = generate_crossgl("""
         StructuredBuffer<float[2]> ArrBuf : register(t3);

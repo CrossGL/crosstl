@@ -69,6 +69,13 @@ def translate(
     Returns:
         str: The translated shader code
     """
+    file_path = os.fspath(file_path)
+    if not isinstance(file_path, str):
+        raise TypeError(
+            "Shader file path must be a string or path-like object returning str, "
+            f"got {type(file_path)}"
+        )
+
     register_default_sources()
     discover_backend_plugins()
     backend = (backend or "cgl").strip().lower()

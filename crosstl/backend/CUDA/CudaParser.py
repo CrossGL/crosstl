@@ -317,6 +317,7 @@ class CudaParser:
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
         self.type_aliases = set()
+        self.namespace_aliases = {}
         self.struct_names = self.collect_struct_names()
         self.user_function_names = self.collect_user_function_names()
 
@@ -495,9 +496,11 @@ class CudaParser:
             else:
                 self.eat(self.current_token[0])
 
-        return ShaderNode(
+        shader = ShaderNode(
             includes, functions, structs, global_variables, kernels, typedefs=typedefs
         )
+        shader.namespace_aliases = dict(self.namespace_aliases)
+        return shader
 
     def peek_function(self):
         saved_index = self.current_index
@@ -1545,9 +1548,17 @@ class CudaParser:
 
     def parse_namespace_alias(self):
         self.eat("NAMESPACE")
-        self.eat("IDENTIFIER")
+        alias = self.eat("IDENTIFIER")[1]
         self.eat("ASSIGN")
-        self.skip_until_semicolon()
+        target_parts = []
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            token_type, token_value = self.current_token
+            target_parts.append(token_value)
+            self.eat(token_type)
+
+        target = "".join(target_parts).strip()
+        if alias and target:
+            self.namespace_aliases[alias] = target
         return None
 
     def is_struct_or_class_declaration_start(self):

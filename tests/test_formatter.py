@@ -250,6 +250,16 @@ def test_format_shader_code():
         assert format_shader_code("code", "rs") == "formatted_code"
         assert format_shader_code("code", "cu") == "formatted_code"
         assert format_shader_code("code", "slangh") == "formatted_code"
+        assert format_shader_code("code", " HLSL ") == "formatted_code"
+        assert format_shader_code("code", ".hlsl") == "formatted_code"
+        assert format_shader_code("code", "out.HLSL") == "formatted_code"
+        assert format_shader_code("code", "shader.frag") == "formatted_code"
+        assert format_shader_code("code", "shader.msl") == "formatted_code"
+        assert format_shader_code("code", ".spvasm") == "formatted_code"
+        assert format_shader_code("code", "kernel.cuda") == "formatted_code"
+        assert format_shader_code("code", "target.rust") == "formatted_code"
+        assert format_shader_code("code", "module.slangh") == "formatted_code"
+        assert format_shader_code("code", ".hip") == "formatted_code"
 
         format_shader_code("code", "metal", "output.metal")
         mock_instance.format_code.assert_called_with(
@@ -269,4 +279,14 @@ def test_format_shader_code():
         format_shader_code("code", "vulkan", "output.spvasm")
         mock_instance.format_code.assert_called_with(
             "code", ShaderLanguage.SPIRV, "output.spvasm"
+        )
+
+        format_shader_code("code", "shader.frag", "output.frag")
+        mock_instance.format_code.assert_called_with(
+            "code", ShaderLanguage.GLSL, "output.frag"
+        )
+
+        format_shader_code("code", ".hlsl", "output.hlsl")
+        mock_instance.format_code.assert_called_with(
+            "code", ShaderLanguage.HLSL, "output.hlsl"
         )

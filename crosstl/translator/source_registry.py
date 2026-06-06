@@ -24,6 +24,16 @@ def _normalize_extension(ext: str) -> str:
     return ext if ext.startswith(".") else f".{ext}"
 
 
+def _coerce_path_or_extension(path_or_ext: str | os.PathLike[str]) -> str:
+    path_or_ext = os.fspath(path_or_ext)
+    if not isinstance(path_or_ext, str):
+        raise TypeError(
+            "Source path or extension must be a string or path-like object "
+            f"returning str, got {type(path_or_ext)}"
+        )
+    return path_or_ext
+
+
 def _extract_tokens(lexer) -> Any:
     if hasattr(lexer, "tokens") and lexer.tokens:
         return lexer.tokens
@@ -178,8 +188,11 @@ class SourceRegistry:
             return None
         return self._by_name.get(resolved)
 
-    def get_by_extension(self, path_or_ext: str) -> SourceSpec | None:
+    def get_by_extension(
+        self, path_or_ext: str | os.PathLike[str]
+    ) -> SourceSpec | None:
         """Return the source spec registered for a file path or extension."""
+        path_or_ext = _coerce_path_or_extension(path_or_ext)
         compound_unsupported_message = _compound_unsupported_extension_message(
             path_or_ext
         )

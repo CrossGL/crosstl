@@ -312,7 +312,7 @@ def format_shader_code(code, backend, output_path=None):
     if not backend:
         return code
 
-    backend_key = backend.lower()
+    backend_key = backend.strip().lower()
     if backend_key in ["cgl", "crossgl"]:
         return code
 
@@ -338,8 +338,55 @@ def format_shader_code(code, backend, output_path=None):
         "slang": ShaderLanguage.SLANG,
         "slangh": ShaderLanguage.SLANG,
     }
+    extension_language_map = {
+        ".hlsl": ShaderLanguage.HLSL,
+        ".hlsli": ShaderLanguage.HLSL,
+        ".fx": ShaderLanguage.HLSL,
+        ".fxh": ShaderLanguage.HLSL,
+        ".glsl": ShaderLanguage.GLSL,
+        ".vert": ShaderLanguage.GLSL,
+        ".vsh": ShaderLanguage.GLSL,
+        ".vertex": ShaderLanguage.GLSL,
+        ".frag": ShaderLanguage.GLSL,
+        ".fsh": ShaderLanguage.GLSL,
+        ".fragment": ShaderLanguage.GLSL,
+        ".comp": ShaderLanguage.GLSL,
+        ".csh": ShaderLanguage.GLSL,
+        ".compute": ShaderLanguage.GLSL,
+        ".geom": ShaderLanguage.GLSL,
+        ".gsh": ShaderLanguage.GLSL,
+        ".geometry": ShaderLanguage.GLSL,
+        ".tese": ShaderLanguage.GLSL,
+        ".tesc": ShaderLanguage.GLSL,
+        ".mesh": ShaderLanguage.GLSL,
+        ".task": ShaderLanguage.GLSL,
+        ".rgen": ShaderLanguage.GLSL,
+        ".rint": ShaderLanguage.GLSL,
+        ".rahit": ShaderLanguage.GLSL,
+        ".rchit": ShaderLanguage.GLSL,
+        ".rmiss": ShaderLanguage.GLSL,
+        ".rcall": ShaderLanguage.GLSL,
+        ".metal": ShaderLanguage.METAL,
+        ".msl": ShaderLanguage.METAL,
+        ".spvasm": ShaderLanguage.SPIRV,
+        ".vulkan": ShaderLanguage.SPIRV,
+        ".mojo": ShaderLanguage.MOJO,
+        ".rs": ShaderLanguage.RUST,
+        ".rust": ShaderLanguage.RUST,
+        ".cu": ShaderLanguage.CUDA,
+        ".cuh": ShaderLanguage.CUDA,
+        ".cuda": ShaderLanguage.CUDA,
+        ".hip": ShaderLanguage.HIP,
+        ".slang": ShaderLanguage.SLANG,
+        ".slangh": ShaderLanguage.SLANG,
+    }
 
     language = language_map.get(backend_key)
+    if language is None:
+        extension = (
+            backend_key if backend_key.startswith(".") else Path(backend_key).suffix
+        )
+        language = extension_language_map.get(extension)
     formatter = CodeFormatter()
 
     return formatter.format_code(code, language, output_path)

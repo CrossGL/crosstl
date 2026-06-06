@@ -1253,6 +1253,16 @@ class HLSLToCrossGLConverter:
             return name
         return self.function_identifier_renames.get(name, name)
 
+    def normalize_hlsl_intrinsic_name(self, name):
+        """Drop HLSL's intrinsic namespace so builtin lowering still applies."""
+        if not isinstance(name, str):
+            return name
+        if name.startswith("::"):
+            name = name[2:]
+        if name.startswith("hlsl::"):
+            return name.split("::", 1)[1]
+        return name
+
     def format_array_suffixes(self, node, is_main=False):
         sizes = getattr(node, "array_sizes", None)
         if not sizes:
@@ -2741,7 +2751,11 @@ class HLSLToCrossGLConverter:
         return "    " * indent + f"{self.generate_expression(stmt, is_main)};\n"
 
     def generate_clip_statement(self, stmt, indent=0, is_main=False):
-        if not isinstance(stmt.name, str) or stmt.name != "clip" or not stmt.args:
+        if (
+            not isinstance(stmt.name, str)
+            or self.normalize_hlsl_intrinsic_name(stmt.name) != "clip"
+            or not stmt.args
+        ):
             return None
         condition = self.generate_clip_condition(stmt.args[0], is_main)
         indent_text = "    " * indent
@@ -2752,7 +2766,10 @@ class HLSLToCrossGLConverter:
         )
 
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
-        if not isinstance(stmt.name, str) or stmt.name != "sincos":
+        if (
+            not isinstance(stmt.name, str)
+            or self.normalize_hlsl_intrinsic_name(stmt.name) != "sincos"
+        ):
             return None
         if len(stmt.args) != 3:
             return None
@@ -2788,7 +2805,9 @@ class HLSLToCrossGLConverter:
     def generate_function_call_statement_sequence(self, stmt, indent=0):
         if not isinstance(stmt.name, str):
             return None
-        sequence = self.function_statement_sequences.get(stmt.name)
+        sequence = self.function_statement_sequences.get(
+            self.normalize_hlsl_intrinsic_name(stmt.name)
+        )
         if sequence is None or stmt.args:
             return None
         indent_text = "    " * indent
@@ -3341,6 +3360,7 @@ class HLSLToCrossGLConverter:
                 if isinstance(expr.name, str)
                 else self.generate_expression(expr.name, is_main)
             )
+            func_name = self.normalize_hlsl_intrinsic_name(func_name)
             if func_name == "sizeof":
                 sizeof_value = self.generate_sizeof_expression(expr.args)
                 if sizeof_value is not None:
