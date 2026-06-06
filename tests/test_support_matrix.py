@@ -157,7 +157,9 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "variant-name summaries" in backend_support["notes"]
         assert "source-root status" in backend_support["notes"]
         assert "include-directory status rollups" in backend_support["notes"]
-        assert "include dependency status and kind rollups" in backend_support["notes"]
+        assert "include dependency status, kind, and resolution-source rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_root_status"
@@ -318,7 +320,7 @@ def test_project_include_resolution_documents_status_reporting():
         assert "text inspection identifies inactive include directories by path" in (
             backend_support["notes"]
         )
-        assert "include dependency and include-path processing rollups" in (
+        assert "include dependency status, kind, resolution-source" in (
             backend_support["notes"]
         )
         assert "resolved and unresolved include dependency samples" in (

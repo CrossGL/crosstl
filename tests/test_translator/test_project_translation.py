@@ -705,6 +705,10 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
         "resolved": 2,
         "system": 1,
     }
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {
+        "include-dir": 1,
+        "source": 1,
+    }
     assert payload["summary"]["diagnosticsByCode"] == {
         "project.scan.dynamic-include": 1,
         "project.scan.include-outside-project": 1,
@@ -734,6 +738,7 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     dependency["resolvedFrom"] = "workspace"
     payload["summary"]["includeDependencyCount"] = 2
     payload["summary"]["includeDependenciesByKind"] = {"module": 1}
+    payload["summary"]["includeDependenciesByResolvedFrom"] = {"workspace": 1}
     report_path = repo / "bad-include-dependencies-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -770,6 +775,10 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     assert "summary.includeDependenciesByKind must match unit include dependencies" in (
         diagnostic["message"]
     )
+    assert (
+        "summary.includeDependenciesByResolvedFrom must match unit include "
+        "dependencies"
+    ) in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_stale_include_dependency_resolution(
@@ -8419,6 +8428,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "dependencyCount": 0,
         "byStatus": {},
         "byKind": {},
+        "byResolvedFrom": {},
         "resolvedDependencyCount": 0,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [],
@@ -8953,6 +8963,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert result.returncode == 0
     assert "Include dependencies by status: missing=1, resolved=1" in result.stdout
     assert "Include dependencies by kind: local=1, system=1" in result.stdout
+    assert "Include dependencies by resolution source: include-dir=1" in result.stdout
     assert "Resolved include dependencies:" in result.stdout
     assert (
         "- main.frag:2:1: resolved system include shared.inc -> "
@@ -8967,6 +8978,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         "dependencyCount": 2,
         "byStatus": {"missing": 1, "resolved": 1},
         "byKind": {"local": 1, "system": 1},
+        "byResolvedFrom": {"include-dir": 1},
         "resolvedDependencyCount": 1,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [

@@ -96,6 +96,7 @@ INCLUDE_DEPENDENCY_KINDS = frozenset(("dynamic", "local", "system"))
 INCLUDE_DEPENDENCY_STATUSES = frozenset(
     ("dynamic", "missing", "outside-project", "resolved", "system")
 )
+INCLUDE_DEPENDENCY_RESOLUTION_SOURCES = frozenset(("include-dir", "source"))
 DEFINE_PROCESSING_STATUSES = frozenset(("forwarded", "not-requested", "not-supported"))
 INCLUDE_PATH_PROCESSING_STATUSES = frozenset(
     ("forwarded", "not-requested", "not-supported")
@@ -541,6 +542,16 @@ def _include_dependency_counts_by_status(
         _include_dependency_records(units),
         "status",
         INCLUDE_DEPENDENCY_STATUSES,
+    )
+
+
+def _include_dependency_counts_by_resolved_from(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _include_dependency_records(units),
+        "resolvedFrom",
+        INCLUDE_DEPENDENCY_RESOLUTION_SOURCES,
     )
 
 
@@ -1950,6 +1961,9 @@ class ProjectPortabilityReport:
                 ),
                 "includeDependenciesByStatus": _include_dependency_counts_by_status(
                     self.units
+                ),
+                "includeDependenciesByResolvedFrom": (
+                    _include_dependency_counts_by_resolved_from(self.units)
                 ),
                 "skippedByReason": _skipped_counts_by_reason(self.skipped),
                 "skippedByExtension": _skipped_counts_by_extension(self.skipped),
@@ -3957,6 +3971,7 @@ def _inspection_include_dependency_summary(
     dependency_count = summary.get("includeDependencyCount")
     by_status = summary.get("includeDependenciesByStatus")
     by_kind = summary.get("includeDependenciesByKind")
+    by_resolved_from = summary.get("includeDependenciesByResolvedFrom")
     if (
         not isinstance(dependency_count, int)
         or isinstance(dependency_count, bool)
@@ -4004,6 +4019,9 @@ def _inspection_include_dependency_summary(
         "dependencyCount": dependency_count,
         "byStatus": dict(by_status),
         "byKind": dict(by_kind),
+        "byResolvedFrom": (
+            dict(by_resolved_from) if isinstance(by_resolved_from, Mapping) else {}
+        ),
         "resolvedDependencyCount": len(resolved_dependencies),
         "truncatedResolvedDependencyCount": max(
             0,
@@ -4508,6 +4526,16 @@ def _payload_include_dependency_counts_by_status(
         _payload_include_dependency_records(units),
         "status",
         INCLUDE_DEPENDENCY_STATUSES,
+    )
+
+
+def _payload_include_dependency_counts_by_resolved_from(
+    units: Sequence[Any],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _payload_include_dependency_records(units),
+        "resolvedFrom",
+        INCLUDE_DEPENDENCY_RESOLUTION_SOURCES,
     )
 
 
@@ -6879,6 +6907,15 @@ def _summary_contract_reasons(
                     "summary.includeDependenciesByStatus",
                     summary.get("includeDependenciesByStatus"),
                     _payload_include_dependency_counts_by_status(units),
+                    "unit include dependencies",
+                )
+            )
+        if "includeDependenciesByResolvedFrom" in summary:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "summary.includeDependenciesByResolvedFrom",
+                    summary.get("includeDependenciesByResolvedFrom"),
+                    _payload_include_dependency_counts_by_resolved_from(units),
                     "unit include dependencies",
                 )
             )

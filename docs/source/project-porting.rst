@@ -268,8 +268,8 @@ Project reports are JSON documents with:
   extension, unit source override, skipped source override, artifact source
   backend, variant, target backend, source-map granularity, source-map target,
   source-map source backend, include dependency kind, include dependency
-  status, diagnostic code (``diagnosticsByCode``), and missing capability
-  (``missingCapabilityCounts``).
+  status, include dependency resolution source, diagnostic code
+  (``diagnosticsByCode``), and missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides. Units that contain ``#include`` directives also include
