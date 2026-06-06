@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 809
+        "test_count": 812
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 715
+        "test_count": 718
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 789
+        "test_count": 792
       },
       "translator_codegen": {
         "exists": true,
@@ -1370,87 +1370,6 @@
       "feature": "Source provenance and source-map bridge",
       "feature_id": "project.source_provenance",
       "notes": "Project reports include configured source override maps, unit source hashes, artifact source hashes, relative paths, source backend names, intermediate CrossGL provenance, file-granularity artifact source-map anchors, and source-map summary rollups by granularity, target, and source backend plus unit and skipped source override rollups. Report validation accepts generated source maps, records per-artifact source hash status and aggregate hash-status counts, and rejects malformed project source override metadata, inconsistent unit and skipped source override provenance, unit source hash records that are missing, malformed, or no longer match the current source file, artifact source paths that are not repository-relative including drive-qualified Windows paths, artifact output paths that are outside project.outputDir or do not match the source-relative target/variant layout, artifact records whose sources are not declared translation units, unregistered or non-canonical unit source backend names, artifact source backend names that do not match declared units, source-map records, non-empty source-map mappings, single file-level source-map mapping, source-map span consistency, source-map anchor consistency, source-map summary rollups, artifact source hash records, artifact source hashes that do not match declared translation-unit source hashes, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, missing provenance in full reports, forged artifact pipeline provenance, intermediate provenance that does not match source and target backends, and provenance records before artifact validation. Fine-grained source maps are not implemented in the translator project pipeline yet.",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused DirectX reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused OpenGL reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Metal reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; no pinned reduced-corpus entry is currently declared for this backend. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused CUDA reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused HIP reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "Mojo",
-      "backend_id": "mojo",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; no pinned reduced-corpus entry is currently declared for this backend. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; no pinned reduced-corpus entry is currently declared for this backend. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-      "status": "partial"
-    },
-    {
-      "backend": "Slang",
-      "backend_id": "slang",
-      "category": "project",
-      "feature": "External corpus coverage",
-      "feature_id": "project.external_corpus_coverage",
-      "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Slang reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
       "status": "partial"
     }
   ],
@@ -8807,7 +8726,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
           "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused CUDA reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "status": "supported"
         },
         "directx": {
           "evidence": [
@@ -8820,7 +8739,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
           "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused DirectX reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "status": "supported"
         },
         "hip": {
           "evidence": [
@@ -8833,7 +8752,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
           "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused HIP reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "status": "supported"
         },
         "metal": {
           "evidence": [
@@ -8846,10 +8765,11 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
           "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Metal reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "status": "supported"
         },
         "mojo": {
           "evidence": [
+            "tests/test_backend/test_mojo/test_external_fixtures.py::def test_codegen_external_mojo_fixture_preserves_function_type_parameters",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
@@ -8857,8 +8777,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_external_corpus_entry_state_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; no pinned reduced-corpus entry is currently declared for this backend. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Mojo reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -8871,10 +8791,11 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
           "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused OpenGL reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "status": "supported"
         },
         "rust": {
           "evidence": [
+            "tests/test_backend/test_rust/test_external_fixtures.py::def test_codegen_external_rust_fixture_to_parseable_crossgl",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
@@ -8882,8 +8803,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_external_corpus_entry_state_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; no pinned reduced-corpus entry is currently declared for this backend. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Rust reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "status": "supported"
         },
         "slang": {
           "evidence": [
@@ -8896,10 +8817,11 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
           "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Slang reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "status": "supported"
         },
         "vulkan": {
           "evidence": [
+            "tests/test_backend/test_SPIRV/test_external_fixtures.py::def test_codegen_external_vulkan_fixture_to_parseable_crossgl",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
@@ -8907,8 +8829,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_external_corpus_entry_state_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries"
           ],
-          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The current pinned reduced-corpus manifest covers DirectX, OpenGL, Metal, CUDA, HIP, and Slang reductions; no pinned reduced-corpus entry is currently declared for this backend. CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
-          "status": "partial"
+          "notes": "Project reports can attach a repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries. The pinned reduced-corpus manifest includes a focused Vulkan SPIR-V reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "status": "supported"
         }
       }
     }
@@ -8933,77 +8855,77 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 45,
+    "backlog_count": 36,
     "feature_count": 54,
     "status_counts": {
       "cuda": {
         "diagnostic": 7,
-        "partial": 5,
-        "supported": 42,
+        "partial": 4,
+        "supported": 43,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "directx": {
         "diagnostic": 2,
-        "partial": 5,
-        "supported": 47,
+        "partial": 4,
+        "supported": 48,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "hip": {
         "diagnostic": 7,
-        "partial": 5,
-        "supported": 42,
+        "partial": 4,
+        "supported": 43,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "metal": {
         "diagnostic": 3,
-        "partial": 5,
-        "supported": 46,
+        "partial": 4,
+        "supported": 47,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "mojo": {
         "diagnostic": 5,
-        "partial": 5,
-        "supported": 44,
+        "partial": 4,
+        "supported": 45,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 2,
-        "partial": 5,
-        "supported": 47,
+        "partial": 4,
+        "supported": 48,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "rust": {
         "diagnostic": 4,
-        "partial": 5,
-        "supported": 45,
+        "partial": 4,
+        "supported": 46,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "slang": {
         "diagnostic": 3,
-        "partial": 5,
-        "supported": 46,
+        "partial": 4,
+        "supported": 47,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "vulkan": {
         "diagnostic": 2,
-        "partial": 5,
-        "supported": 47,
+        "partial": 4,
+        "supported": 48,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

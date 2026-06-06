@@ -31,6 +31,15 @@
       "sourceUrl": "https://github.com/donaldwuid/apple_metal_sample_code/blob/0bc50e5b3670b3169855ab260e8da5ff07b53749/MetalSampleCodeLibrary/MultipleTechniques/ModernRenderingWithMetal/Renderer/Shaders/AAPLMeshRenderer.metal"
     },
     {
+      "id": "vulkan-samples-timeline-semaphore-image-write",
+      "path": "shaders/timeline_semaphore/glsl/game_of_life_init.comp.spv",
+      "sourceBackend": "vulkan",
+      "targets": ["cgl"],
+      "repository": "https://github.com/KhronosGroup/Vulkan-Samples",
+      "commit": "ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a",
+      "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Samples/blob/ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a/shaders/timeline_semaphore/glsl/game_of_life_init.comp.spv"
+    },
+    {
       "id": "cuda-samples-simple-atomic-intrinsics",
       "path": "cpp/0_Introduction/simpleAtomicIntrinsics/simpleAtomicIntrinsics_kernel.cuh",
       "sourceBackend": "cuda",
@@ -47,6 +56,24 @@
       "repository": "https://github.com/ROCm/rocm-examples",
       "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
       "sourceUrl": "https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/HIP-Basic/bit_extract/main.hip"
+    },
+    {
+      "id": "modular-gpu-reduction-function-type-parameters",
+      "path": "mojo/stdlib/std/algorithm/backend/gpu/reduction.mojo",
+      "sourceBackend": "mojo",
+      "targets": ["cgl"],
+      "repository": "https://github.com/modular/modular",
+      "commit": "daa47bb846cc213723a54c51844ea4e923eb5e13",
+      "sourceUrl": "https://github.com/modular/modular/blob/daa47bb846cc213723a54c51844ea4e923eb5e13/mojo/stdlib/std/algorithm/backend/gpu/reduction.mojo"
+    },
+    {
+      "id": "rust-gpu-subgroup-local-transform-impl",
+      "path": "crates/spirv-std/src/arch/subgroup.rs",
+      "sourceBackend": "rust",
+      "targets": ["cgl"],
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "commit": "36e3348cdc2f824afec64b3b5af5d369d98a4c0d",
+      "sourceUrl": "https://github.com/Rust-GPU/rust-gpu/blob/36e3348cdc2f824afec64b3b5af5d369d98a4c0d/crates/spirv-std/src/arch/subgroup.rs"
     },
     {
       "id": "slang-default-parameter",
