@@ -1856,6 +1856,17 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
         "debug": {"not-requested": 1}
     }
     assert payload["artifactMatrix"]["variantCount"] == 1
+    assert payload["artifactMatrix"]["statusBySourceBackend"] == {
+        "cgl": {
+            "expectedArtifactCount": 1,
+            "emittedArtifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "missingArtifactCount": 0,
+            "extraArtifactCount": 0,
+            "complete": True,
+        }
+    }
     assert payload["artifactMatrix"]["statusByVariant"] == {
         "debug": {
             "expectedArtifactCount": 1,
@@ -2169,6 +2180,17 @@ def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatc
             "cgl": complete_cgl_row,
             "opengl": complete_opengl_row,
         },
+        "statusBySourceBackend": {
+            "cgl": {
+                "expectedArtifactCount": 8,
+                "emittedArtifactCount": 8,
+                "translatedCount": 8,
+                "failedCount": 0,
+                "missingArtifactCount": 0,
+                "extraArtifactCount": 0,
+                "complete": True,
+            }
+        },
         "statusByVariant": {
             "debug": complete_debug_row,
             "release": complete_release_row,
@@ -2276,6 +2298,9 @@ def test_translate_project_batches_real_units_targets_and_variants(tmp_path):
         "complete": True,
         "statusByTarget": {
             target: complete_row(len(units) * len(variants)) for target in targets
+        },
+        "statusBySourceBackend": {
+            "cgl": complete_row(len(units) * len(targets) * len(variants))
         },
         "statusByVariant": {
             variant: complete_row(len(units) * len(targets)) for variant in variants
@@ -2402,6 +2427,52 @@ def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_pa
     )
 
 
+def test_translate_project_artifact_matrix_rolls_up_source_backends(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "kernel.metal").write_text("kernel void k() {}", encoding="utf-8")
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, include_paths, defines
+        Path(save_shader).write_text(
+            f"// source backend: {source_backend}\n",
+            encoding="utf-8",
+        )
+        return ""
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+
+    complete_row = {
+        "expectedArtifactCount": 1,
+        "emittedArtifactCount": 1,
+        "translatedCount": 1,
+        "failedCount": 0,
+        "missingArtifactCount": 0,
+        "extraArtifactCount": 0,
+        "complete": True,
+    }
+    assert payload["summary"]["unitsBySourceBackend"] == {"cgl": 1, "metal": 1}
+    assert payload["artifactMatrix"]["statusBySourceBackend"] == {
+        "cgl": complete_row,
+        "metal": complete_row,
+    }
+
+
 def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2411,6 +2482,7 @@ def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_p
     payload["artifactMatrix"]["emittedArtifactCount"] = 2
     payload["artifactMatrix"]["complete"] = False
     payload["artifactMatrix"]["statusByTarget"] = {}
+    payload["artifactMatrix"]["statusBySourceBackend"] = {}
     report_path = repo / "out" / "invalid-artifact-matrix-rollup-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -2427,6 +2499,10 @@ def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_p
     assert "artifactMatrix.complete must match artifact matrix" in diagnostic["message"]
     assert (
         "artifactMatrix.statusByTarget must match artifact matrix artifacts"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifactMatrix.statusBySourceBackend must match artifact matrix artifacts"
         in diagnostic["message"]
     )
 
@@ -9730,6 +9806,17 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "complete": True,
             }
         },
+        "statusBySourceBackend": {
+            "cgl": {
+                "expectedArtifactCount": 1,
+                "emittedArtifactCount": 1,
+                "translatedCount": 1,
+                "failedCount": 0,
+                "missingArtifactCount": 0,
+                "extraArtifactCount": 0,
+                "complete": True,
+            }
+        },
         "statusByVariant": {},
     }
     assert payload["validation"]["success"] is True
@@ -9862,6 +9949,17 @@ def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps(tmp_
     assert artifact_matrix["complete"] is False
     assert artifact_matrix["missingArtifactCount"] == 1
     assert artifact_matrix["extraArtifactCount"] == 1
+    assert artifact_matrix["statusBySourceBackend"] == {
+        "cgl": {
+            "expectedArtifactCount": 2,
+            "emittedArtifactCount": 2,
+            "translatedCount": 2,
+            "failedCount": 0,
+            "missingArtifactCount": 1,
+            "extraArtifactCount": 1,
+            "complete": False,
+        }
+    }
     assert artifact_matrix["missingArtifacts"] == [
         {
             "source": "second.cgl",
@@ -9898,6 +9996,17 @@ def test_inspect_project_report_derives_missing_artifact_matrix_gaps(tmp_path):
     assert artifact_matrix["complete"] is False
     assert artifact_matrix["missingArtifactCount"] == 1
     assert artifact_matrix["extraArtifactCount"] == 1
+    assert artifact_matrix["statusBySourceBackend"] == {
+        "cgl": {
+            "expectedArtifactCount": 2,
+            "emittedArtifactCount": 2,
+            "translatedCount": 2,
+            "failedCount": 0,
+            "missingArtifactCount": 1,
+            "extraArtifactCount": 1,
+            "complete": False,
+        }
+    }
     assert artifact_matrix["missingArtifacts"] == [
         {
             "source": "second.cgl",
@@ -9935,6 +10044,17 @@ def test_inspect_project_report_derives_malformed_artifact_matrix_gaps(tmp_path)
     assert artifact_matrix["identityCoverageAvailable"] is True
     assert artifact_matrix["missingArtifactCount"] == 1
     assert artifact_matrix["extraArtifactCount"] == 1
+    assert artifact_matrix["statusBySourceBackend"] == {
+        "cgl": {
+            "expectedArtifactCount": 2,
+            "emittedArtifactCount": 2,
+            "translatedCount": 2,
+            "failedCount": 0,
+            "missingArtifactCount": 1,
+            "extraArtifactCount": 1,
+            "complete": False,
+        }
+    }
 
 
 def test_inspect_project_report_records_truncation_metadata(tmp_path):
@@ -10785,6 +10905,10 @@ def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
         "Artifact matrix by target: cgl=1/1 emitted "
         "(1 translated, 0 failed, 0 missing, 0 extra, complete)"
     ) in result.stdout
+    assert (
+        "Artifact matrix by source backend: cgl=1/1 emitted "
+        "(1 translated, 0 failed, 0 missing, 0 extra, complete)"
+    ) in result.stdout
 
 
 def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
@@ -10813,6 +10937,10 @@ def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
     ) in result.stdout
     assert (
         "Artifact matrix by target: cgl=2/2 emitted "
+        "(2 translated, 0 failed, 1 missing, 1 extra, incomplete)"
+    ) in result.stdout
+    assert (
+        "Artifact matrix by source backend: cgl=2/2 emitted "
         "(2 translated, 0 failed, 1 missing, 1 extra, incomplete)"
     ) in result.stdout
     assert "Artifact matrix missing artifacts:" in result.stdout

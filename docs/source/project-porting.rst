@@ -359,8 +359,9 @@ Project reports are JSON documents with:
   artifacts that carry error metadata. Invalid project output directories are
   recorded as failed artifacts without writing files.
 - ``artifactMatrix``: translation-report metadata with expected, emitted,
-  translated, failed, missing, extra, and completion counts plus target and
-  variant completion rollups for the unit, target, and variant matrix.
+  translated, failed, missing, extra, and completion counts plus target,
+  source-backend, and variant completion rollups for the unit, target, and
+  variant matrix.
   Scan-only reports omit this object because they intentionally contain no
   translated or failed artifacts. Report inspection also includes sampled
   missing and extra artifact identities from report-provided or derived matrix

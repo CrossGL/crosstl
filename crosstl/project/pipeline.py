@@ -2598,6 +2598,11 @@ def _artifact_matrix_report(
     }
     missing_identities = expected_identities - artifact_identities
     extra_identities = artifact_identities - expected_identities
+    source_backend_by_identity = _artifact_matrix_source_backend_by_identity(
+        expected_identities,
+        artifacts,
+        _artifact_matrix_unit_source_backends(units),
+    )
     payload.update(
         {
             "emittedArtifactCount": len(artifacts),
@@ -2617,6 +2622,14 @@ def _artifact_matrix_report(
                 missing_identities,
                 extra_identities,
                 "target",
+            ),
+            "statusBySourceBackend": _artifact_matrix_status_by_field(
+                expected_identities,
+                artifacts,
+                missing_identities,
+                extra_identities,
+                "sourceBackend",
+                source_backend_by_identity=source_backend_by_identity,
             ),
             "statusByVariant": _artifact_matrix_status_by_field(
                 expected_identities,
@@ -2643,10 +2656,14 @@ def _artifact_matrix_status_row() -> dict[str, Any]:
 
 
 def _artifact_matrix_identity_field(
-    identity: ArtifactIdentity, field_name: str
+    identity: ArtifactIdentity,
+    field_name: str,
+    source_backend_by_identity: Mapping[ArtifactIdentity, str] | None = None,
 ) -> str | None:
     if field_name == "target":
         return identity[1]
+    if field_name == "sourceBackend" and source_backend_by_identity is not None:
+        return source_backend_by_identity.get(identity)
     if field_name == "variant":
         return identity[3]
     return None
@@ -2658,10 +2675,16 @@ def _artifact_matrix_status_by_field(
     missing_identities: set[ArtifactIdentity],
     extra_identities: set[ArtifactIdentity],
     field_name: str,
+    *,
+    source_backend_by_identity: Mapping[ArtifactIdentity, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {}
     for identity in expected_identities:
-        value = _artifact_matrix_identity_field(identity, field_name)
+        value = _artifact_matrix_identity_field(
+            identity,
+            field_name,
+            source_backend_by_identity,
+        )
         if value is None:
             continue
         rows.setdefault(value, _artifact_matrix_status_row())[
@@ -2671,7 +2694,11 @@ def _artifact_matrix_status_by_field(
         identity = _artifact_identity(artifact)
         if identity is None:
             continue
-        value = _artifact_matrix_identity_field(identity, field_name)
+        value = _artifact_matrix_identity_field(
+            identity,
+            field_name,
+            source_backend_by_identity,
+        )
         if value is None:
             continue
         row = rows.setdefault(value, _artifact_matrix_status_row())
@@ -2682,13 +2709,21 @@ def _artifact_matrix_status_by_field(
         elif status == "failed":
             row["failedCount"] += 1
     for identity in missing_identities:
-        value = _artifact_matrix_identity_field(identity, field_name)
+        value = _artifact_matrix_identity_field(
+            identity,
+            field_name,
+            source_backend_by_identity,
+        )
         if value is not None:
             rows.setdefault(value, _artifact_matrix_status_row())[
                 "missingArtifactCount"
             ] += 1
     for identity in extra_identities:
-        value = _artifact_matrix_identity_field(identity, field_name)
+        value = _artifact_matrix_identity_field(
+            identity,
+            field_name,
+            source_backend_by_identity,
+        )
         if value is not None:
             rows.setdefault(value, _artifact_matrix_status_row())[
                 "extraArtifactCount"
@@ -2698,6 +2733,48 @@ def _artifact_matrix_status_by_field(
             row["missingArtifactCount"] == 0 and row["extraArtifactCount"] == 0
         )
     return {name: rows[name] for name in sorted(rows)}
+
+
+def _artifact_matrix_unit_source_backends(units: Sequence[Any]) -> dict[str, str]:
+    source_backends: dict[str, str] = {}
+    for unit in units:
+        if isinstance(unit, ProjectTranslationUnit):
+            source = unit.relative_path
+            source_backend = unit.source_backend
+        elif isinstance(unit, Mapping):
+            source = unit.get("path")
+            source_backend = unit.get("sourceBackend")
+        else:
+            continue
+        if (
+            _is_non_empty_string(source)
+            and _is_repository_relative_report_path(source)
+            and _is_non_empty_string(source_backend)
+        ):
+            source_backends.setdefault(source, source_backend)
+    return source_backends
+
+
+def _artifact_matrix_source_backend_by_identity(
+    expected_identities: set[ArtifactIdentity],
+    artifacts: Sequence[Mapping[str, Any]],
+    source_backend_by_source: Mapping[str, str],
+) -> dict[ArtifactIdentity, str]:
+    source_backend_by_identity = {
+        identity: source_backend_by_source[identity[0]]
+        for identity in expected_identities
+        if identity[0] in source_backend_by_source
+    }
+    for artifact in artifacts:
+        identity = _artifact_identity(artifact)
+        if identity is None:
+            continue
+        source_backend = artifact.get("sourceBackend")
+        if not _is_non_empty_string(source_backend):
+            source_backend = source_backend_by_source.get(identity[0])
+        if _is_non_empty_string(source_backend):
+            source_backend_by_identity[identity] = source_backend
+    return source_backend_by_identity
 
 
 def _artifact_source_map(
@@ -4330,18 +4407,32 @@ def _inspection_artifact_matrix_summary(
         missing_count = max(0, expected_count - emitted_count)
         extra_count = max(0, emitted_count - expected_count)
         status_by_target = {}
+        status_by_source_backend = {}
         status_by_variant = {}
     else:
         missing_identities = expected_identities - emitted_identities
         extra_identities = emitted_identities - expected_identities
         missing_count = len(missing_identities)
         extra_count = len(extra_identities)
+        source_backend_by_identity = _artifact_matrix_source_backend_by_identity(
+            expected_identities,
+            artifact_records,
+            _artifact_matrix_unit_source_backends(_record_sequence(units)),
+        )
         status_by_target = _artifact_matrix_status_by_field(
             expected_identities,
             artifact_records,
             missing_identities,
             extra_identities,
             "target",
+        )
+        status_by_source_backend = _artifact_matrix_status_by_field(
+            expected_identities,
+            artifact_records,
+            missing_identities,
+            extra_identities,
+            "sourceBackend",
+            source_backend_by_identity=source_backend_by_identity,
         )
         status_by_variant = _artifact_matrix_status_by_field(
             expected_identities,
@@ -4377,6 +4468,7 @@ def _inspection_artifact_matrix_summary(
         "truncatedExtraArtifactCount": max(0, extra_count - len(extra_samples)),
         "complete": missing_count == 0 and extra_count == 0,
         "statusByTarget": status_by_target,
+        "statusBySourceBackend": status_by_source_backend,
         "statusByVariant": status_by_variant,
     }
 
@@ -5879,7 +5971,11 @@ def _artifact_matrix_metadata_contract_reasons(
         "extraArtifactCount",
     )
     boolean_rollup_fields = ("identityCoverageAvailable", "complete")
-    mapping_rollup_fields = ("statusByTarget", "statusByVariant")
+    mapping_rollup_fields = (
+        "statusByTarget",
+        "statusBySourceBackend",
+        "statusByVariant",
+    )
     require_rollups = required or any(
         field in artifact_matrix
         for field in (*rollup_fields, *boolean_rollup_fields, *mapping_rollup_fields)

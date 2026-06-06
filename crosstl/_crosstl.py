@@ -1859,6 +1859,12 @@ def _format_project_report_inspection(payload):
         )
         if artifact_matrix_by_target:
             lines.append(artifact_matrix_by_target)
+        artifact_matrix_by_source_backend = _format_artifact_matrix_rollup(
+            "Artifact matrix by source backend",
+            artifact_matrix_payload.get("statusBySourceBackend"),
+        )
+        if artifact_matrix_by_source_backend:
+            lines.append(artifact_matrix_by_source_backend)
         artifact_matrix_by_variant = _format_artifact_matrix_rollup(
             "Artifact matrix by variant",
             artifact_matrix_payload.get("statusByVariant"),
