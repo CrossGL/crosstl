@@ -9,7 +9,9 @@ from crosstl.translator import parse
 from crosstl.translator.plugin_loader import discover_backend_plugins
 from crosstl.translator.source_registry import (
     BINARY_SPIRV_UNSUPPORTED_MESSAGE,
+    CUDA_ARTIFACT_UNSUPPORTED_MESSAGE,
     DIRECTX_BINARY_UNSUPPORTED_MESSAGE,
+    HIP_ARTIFACT_UNSUPPORTED_MESSAGE,
     METAL_BINARY_UNSUPPORTED_MESSAGE,
     SOURCE_REGISTRY,
     register_default_sources,
@@ -201,6 +203,10 @@ def test_source_registry_recognizes_slang_real_world_extensions(extension):
         (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxbc", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
         (".dxil", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),
+        (".ptx", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        (".cubin", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        (".fatbin", CUDA_ARTIFACT_UNSUPPORTED_MESSAGE),
+        (".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE),
     ),
 )
 def test_source_registry_known_binary_artifacts_raise_clear_diagnostic(

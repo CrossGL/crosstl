@@ -427,6 +427,40 @@ def test_codegen_access_qualified_texture_buffer_uses_image_buffer():
     parse_crossgl(crossgl)
 
 
+def test_codegen_integer_texture_element_aliases_preserve_sampler_and_image_family():
+    code = """
+    using UShortColor = texture2d<ushort>;
+    typedef metal::texture2d<short, metal::access::read_write> SignedStorage;
+
+    ushort4 sampleUnsigned(UShortColor tex, sampler s, float2 uv) {
+        return tex.sample(s, uv);
+    }
+
+    short4 readSigned(SignedStorage tex, uint2 p) {
+        return tex.read(p);
+    }
+
+    void writeUnsigned(texture2d<ushort, access::write> tex,
+                       uint2 p,
+                       ushort4 value) {
+        tex.write(value, p);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef usampler2D UShortColor;" not in crossgl
+    assert "typedef iimage2D SignedStorage;" not in crossgl
+    assert "u16vec4 sampleUnsigned(usampler2D tex, sampler s, vec2 uv)" in crossgl
+    assert "i16vec4 readSigned(iimage2D tex @readwrite, uvec2 p)" in crossgl
+    assert "void writeUnsigned(uimage2D tex @writeonly" in crossgl
+    assert "texture(tex, s, uv)" in crossgl
+    assert "return imageLoad(tex, p);" in crossgl
+    assert "imageStore(tex, p, value);" in crossgl
+    assert "texture2d<ushort>" not in crossgl
+    assert "i16vec4 readSigned(image2D tex @readwrite" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     code = """
     #include <metal_stdlib>

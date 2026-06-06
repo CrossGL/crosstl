@@ -3693,6 +3693,10 @@ class HLSLToCrossGLConverter:
                 if texcoord_match:
                     mapped = f"TexCoord{texcoord_match.group(1)}"
             if mapped is None:
+                color_match = re.fullmatch(r"COLOR(\d+)", semantic_upper)
+                if color_match:
+                    mapped = f"Color{color_match.group(1)}"
+            if mapped is None:
                 for hlsl_prefix, crossgl_semantic in (
                     ("SV_CLIPDISTANCE", "gl_ClipDistance"),
                     ("SV_CULLDISTANCE", "gl_CullDistance"),

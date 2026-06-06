@@ -4733,7 +4733,14 @@ class HipToCrossGLConverter:
         if isinstance(function_name, str) and function_name.startswith("::"):
             function_name = function_name[2:]
 
-        if function_name != "__ldg":
+        if function_name not in {
+            "__ldca",
+            "__ldcg",
+            "__ldcs",
+            "__ldcv",
+            "__ldg",
+            "__ldlu",
+        }:
             return None
 
         if (

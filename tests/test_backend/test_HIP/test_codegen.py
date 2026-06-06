@@ -962,6 +962,36 @@ class TestHipCodeGen:
         assert "__ldg" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_hip_cache_load_family_address_operands_codegen_reparse(self):
+        code = """
+        __global__ void cached_loads(const float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldca(&input[idx]);
+            output[idx + 1] = __ldcg(&input[idx + 1]);
+            output[idx + 2] = __ldcs(&input[idx + 2]);
+            output[idx + 3] = __ldcv(&input[idx + 3]);
+            output[idx + 4] = __ldlu(&input[idx + 4]);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[idx] = input[idx];" in result
+        assert "output[(idx + 1)] = input[(idx + 1)];" in result
+        assert "output[(idx + 2)] = input[(idx + 2)];" in result
+        assert "output[(idx + 3)] = input[(idx + 3)];" in result
+        assert "output[(idx + 4)] = input[(idx + 4)];" in result
+        assert "__ldca" not in result
+        assert "__ldcg" not in result
+        assert "__ldcs" not in result
+        assert "__ldcv" not in result
+        assert "__ldlu" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_hip_ldg_non_address_operand_emits_expression_safe_diagnostic(self):
         code = """
         __global__ void read_only(float* input, float* output) {
@@ -981,6 +1011,27 @@ class TestHipCodeGen:
             "supported in CrossGL */ 0"
         ) in result
         assert "__ldg(input + idx)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_cache_load_family_non_address_operand_emits_safe_diagnostic(self):
+        code = """
+        __global__ void cached_loads(float* input, float* output) {
+            int idx = threadIdx.x;
+            output[idx] = __ldcg(input + idx);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "/* hip load cache intrinsic __ldcg((input + idx)) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert "__ldcg(input + idx)" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):

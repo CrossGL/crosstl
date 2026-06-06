@@ -224,6 +224,10 @@ UNSUPPORTED_ARTIFACT_EXTENSION_DIAGNOSTICS = {
     "shader.cso": "Compiled DirectX shader binaries",
     "shader.dxbc": "Compiled DirectX shader binaries",
     "shader.dxil": "Compiled DirectX shader binaries",
+    "shader.ptx": "Generated CUDA/NVIDIA artifacts",
+    "shader.cubin": "Generated CUDA/NVIDIA artifacts",
+    "shader.fatbin": "Generated CUDA/NVIDIA artifacts",
+    "shader.hsaco": "Compiled HIP/ROCm artifacts",
 }
 
 

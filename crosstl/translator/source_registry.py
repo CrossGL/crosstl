@@ -207,6 +207,14 @@ DIRECTX_BINARY_UNSUPPORTED_MESSAGE = (
     "Compiled DirectX shader binaries (.cso, .dxbc, .dxil) are not supported; "
     "provide HLSL source (.hlsl, .hlsli, .fx, .fxh) first."
 )
+CUDA_ARTIFACT_UNSUPPORTED_MESSAGE = (
+    "Generated CUDA/NVIDIA artifacts (.ptx, .cubin, .fatbin) are not supported; "
+    "provide CUDA source (.cu, .cuh, .cuda) first."
+)
+HIP_ARTIFACT_UNSUPPORTED_MESSAGE = (
+    "Compiled HIP/ROCm artifacts (.hsaco) are not supported; provide HIP source "
+    "(.hip) first."
+)
 
 
 def _load_cgl():
@@ -490,6 +498,9 @@ def register_default_sources() -> None:
         _register_unsupported_extension(ext, METAL_BINARY_UNSUPPORTED_MESSAGE)
     for ext in (".cso", ".dxbc", ".dxil"):
         _register_unsupported_extension(ext, DIRECTX_BINARY_UNSUPPORTED_MESSAGE)
+    for ext in (".ptx", ".cubin", ".fatbin"):
+        _register_unsupported_extension(ext, CUDA_ARTIFACT_UNSUPPORTED_MESSAGE)
+    _register_unsupported_extension(".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE)
     _register(
         SourceSpec(
             name="mojo",

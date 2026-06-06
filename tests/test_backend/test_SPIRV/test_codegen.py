@@ -291,6 +291,54 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_FLOAT16_INTERFACE_ASSEMBLY = """
+; Source tool: glslangValidator -V -H, reduced from fragment shader code using
+; GL_EXT_shader_explicit_arithmetic_types_float16 / Float16 storage.
+OpCapability Shader
+OpCapability Float16
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_half %input_matrix %half_out %matrix_out %float_out
+OpExecutionMode %main OriginUpperLeft
+OpName %input_half "inputHalf"
+OpName %input_matrix "inputMatrix"
+OpName %half_out "halfOut"
+OpName %matrix_out "matrixOut"
+OpName %float_out "floatOut"
+OpDecorate %input_half Location 0
+OpDecorate %input_matrix Location 1
+OpDecorate %half_out Location 0
+OpDecorate %float_out Location 1
+OpDecorate %matrix_out Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%half = OpTypeFloat 16
+%float = OpTypeFloat 32
+%v2half = OpTypeVector %half 2
+%v4half = OpTypeVector %half 4
+%mat2half = OpTypeMatrix %v2half 2
+%ptr_input_v4half = OpTypePointer Input %v4half
+%ptr_input_mat2half = OpTypePointer Input %mat2half
+%ptr_output_v4half = OpTypePointer Output %v4half
+%ptr_output_mat2half = OpTypePointer Output %mat2half
+%ptr_output_float = OpTypePointer Output %float
+%input_half = OpVariable %ptr_input_v4half Input
+%input_matrix = OpVariable %ptr_input_mat2half Input
+%half_out = OpVariable %ptr_output_v4half Output
+%matrix_out = OpVariable %ptr_output_mat2half Output
+%float_out = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4half %input_half
+%loaded_matrix = OpLoad %mat2half %input_matrix
+%component = OpCompositeExtract %half %loaded 0
+%wide = OpFConvert %float %component
+OpStore %half_out %loaded
+OpStore %matrix_out %loaded_matrix
+OpStore %float_out %wide
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRECISE_DOT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -3533,6 +3581,27 @@ def test_glslang_fconvert_codegen_reparse():
     assert "double doubleOut @output @location(0);" in generated_code
     assert "doubleOut = double(inputValue);" in generated_code
     assert "doubleOut = converted;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_float16_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_FLOAT16_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "half4 inputHalf @input @location(0);" in generated_code
+    assert "half2x2 inputMatrix @input @location(1);" in generated_code
+    assert "half4 halfOut @output @location(0);" in generated_code
+    assert "float floatOut @output @location(1);" in generated_code
+    assert "half2x2 matrixOut @output @location(2);" in generated_code
+    assert "halfOut = inputHalf;" in generated_code
+    assert "matrixOut = inputMatrix;" in generated_code
+    assert "floatOut = float(inputHalf[0]);" in generated_code
+    assert "float4 inputHalf" not in generated_code
+    assert "float4 halfOut" not in generated_code
+    assert "half2 inputMatrix" not in generated_code
+    assert "floatOut = wide;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

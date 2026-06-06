@@ -2147,6 +2147,10 @@ class SlangToCrossGLConverter:
             texcoord_match = re.fullmatch(r"TEXCOORD(\d+)", str(semantic).upper())
             if texcoord_match:
                 mapped_semantic = f"TexCoord{texcoord_match.group(1)}"
+        if mapped_semantic is None:
+            color_match = re.fullmatch(r"COLOR(\d+)", str(semantic).upper())
+            if color_match:
+                mapped_semantic = f"Color{color_match.group(1)}"
         return f"@ {mapped_semantic or semantic}"
 
     def map_ray_payload_access_semantic(self, semantic):

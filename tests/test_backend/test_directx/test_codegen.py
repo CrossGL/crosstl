@@ -746,6 +746,27 @@ def test_codegen_canonicalizes_high_texcoord_interpolation_metadata():
     parse_crossgl(crossgl)
 
 
+def test_codegen_canonicalizes_high_color_interpolation_metadata():
+    crossgl = generate_crossgl("""
+        struct PSInput {
+            sample float4 debugAlbedo : COLOR8;
+            nointerpolation uint materialId : COLOR11;
+        };
+
+        float4 PSMain(linear float4 packedColor : COLOR9) : SV_Target0 {
+            return packedColor;
+        }
+    """)
+
+    assert "vec4 debugAlbedo @ Color8 @ sample;" in crossgl
+    assert "uint materialId @ Color11 @ flat;" in crossgl
+    assert "vec4 packedColor @ Color9 @ smooth" in crossgl
+    assert "@ COLOR8" not in crossgl
+    assert "@ COLOR9" not in crossgl
+    assert "@ COLOR11" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_contextual_shared_storage_modifier():
     crossgl = generate_crossgl("""
         shared float cachedWeight;

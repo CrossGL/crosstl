@@ -393,6 +393,33 @@ def test_high_texcoord_semantic_codegen_matches_hlsl_varying_packing():
     cgl_translator.parse(generated_code)
 
 
+def test_high_color_semantic_codegen_matches_hlsl_varying_packing():
+    code = """
+    struct VertexOutput {
+        float4 debugAlbedo : COLOR8;
+        uint materialId : COLOR11;
+    };
+
+    [shader("fragment")]
+    float4 fragmentMain(VertexOutput input, float4 fallbackColor : COLOR9) : SV_Target0
+    {
+        return input.debugAlbedo + fallbackColor;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 debugAlbedo @ Color8;" in generated_code
+    assert "uint materialId @ Color11;" in generated_code
+    assert "vec4 fallbackColor @ Color9" in generated_code
+    assert "@ COLOR8" not in generated_code
+    assert "@ COLOR9" not in generated_code
+    assert "@ COLOR11" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_uppercase_passthrough_hlsl_system_semantics_codegen_canonicalizes_names():
     code = """
     [shader("compute")]

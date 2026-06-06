@@ -3975,6 +3975,20 @@ class RustToCrossGLConverter:
             return f"distance({obj}, {args[0]})"
 
         if (
+            method_name == "reflect"
+            and len(args) == 1
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"reflect({obj}, {args[0]})"
+
+        if (
+            method_name == "refract"
+            and len(args) == 2
+            and self.map_type(receiver_type) in self.VECTOR_COMPONENT_COUNTS
+        ):
+            return f"refract({obj}, {args[0]}, {args[1]})"
+
+        if (
             method_name == "perp_dot"
             and len(args) == 1
             and self.map_type(receiver_type) == "vec2"

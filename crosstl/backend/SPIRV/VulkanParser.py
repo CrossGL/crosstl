@@ -97,6 +97,9 @@ class VulkanParser:
         "Volatile": "volatile",
     }
     SPIRV_VECTOR_TYPES = {
+        ("half", "2"): "half2",
+        ("half", "3"): "half3",
+        ("half", "4"): "half4",
         ("float", "2"): "vec2",
         ("float", "3"): "vec3",
         ("float", "4"): "vec4",
@@ -4804,6 +4807,9 @@ class VulkanParser:
         if not component_type or not row_count or not column_count:
             return None
 
+        if component_type == "half":
+            return f"half{column_count}x{row_count}"
+
         prefix = {"double": "dmat", "float": "mat"}.get(component_type)
         if prefix is None:
             return None
@@ -4813,6 +4819,8 @@ class VulkanParser:
         return f"{prefix}{column_count}x{row_count}"
 
     def spirv_float_type_name(self, width):
+        if width == "16":
+            return "half"
         if width == "64":
             return "double"
         return "float"

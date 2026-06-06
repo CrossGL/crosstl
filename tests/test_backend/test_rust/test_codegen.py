@@ -1295,6 +1295,25 @@ def test_rust_gpu_mouse_shader_perp_dot_method_codegen_from_upstream_example():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_glam_reflect_refract_methods_codegen_reparse():
+    # Common glam method-form lighting/refraction idiom used by Rust GPU shaders.
+    code = """
+    fn shade(view_dir: Vec3<f32>, normal: Vec3<f32>, eta: f32) -> Vec3<f32> {
+        let reflected = view_dir.reflect(normal);
+        let refracted = view_dir.refract(normal, eta);
+        reflected + refracted
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "reflected = reflect(view_dir, normal);" in result
+    assert "refracted = refract(view_dir, normal, eta);" in result
+    assert ".reflect(" not in result
+    assert ".refract(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

@@ -1970,6 +1970,10 @@ class MetalToCrossGLConverter:
             if self.should_elide_resource_access_qualifier(base_name, generic_args):
                 base = f"{base_name}<{generic_args[0].strip()}>"
 
+        sampled_resource_type = self.map_sampled_texture_type(base)
+        if sampled_resource_type:
+            return f"{sampled_resource_type}{suffix}"
+
         mapped = self.type_map.get(base, base)
         return f"{mapped}{suffix}"
 
@@ -2032,6 +2036,56 @@ class MetalToCrossGLConverter:
         if base_name in self.pixel_data_type_wrappers and len(generic_args) == 1:
             return generic_args[0].strip()
         return None
+
+    def map_sampled_texture_type(self, metal_type):
+        base_name, generic_args = self.generic_type_parts(metal_type)
+        if not base_name or not generic_args:
+            return None
+
+        resource_type = {
+            "texture1d": "sampler1D",
+            "texture1d_array": "sampler1DArray",
+            "texture2d": "sampler2D",
+            "texture2d_array": "sampler2DArray",
+            "texture2d_ms": "sampler2DMS",
+            "texture2d_ms_array": "sampler2DMSArray",
+            "texture3d": "sampler3D",
+            "texturecube": "samplerCube",
+            "texturecube_array": "samplerCubeArray",
+            "texture_buffer": "samplerBuffer",
+            "depth2d": "sampler2DShadow",
+            "depth2d_array": "sampler2DArrayShadow",
+            "depthcube": "samplerCubeShadow",
+            "depthcube_array": "samplerCubeArrayShadow",
+            "depth2d_ms": "sampler2DMS",
+            "depth2d_ms_array": "sampler2DMSArray",
+        }.get(base_name)
+        if resource_type is None:
+            return None
+        if base_name.startswith("depth"):
+            return resource_type
+
+        integer_prefix = self.integer_resource_prefix(generic_args[0])
+        if integer_prefix is None:
+            if self.is_float_resource_element(generic_args[0]):
+                return resource_type
+            return None
+        return f"{integer_prefix}{resource_type}"
+
+    def integer_resource_prefix(self, metal_type):
+        mapped = self.map_type(str(metal_type).strip())
+        if mapped in {"uint", "uint8", "uint16", "uint64"}:
+            return "u"
+        if mapped in {"int", "int8", "int16", "int64"}:
+            return "i"
+        return None
+
+    def is_float_resource_element(self, metal_type):
+        return self.map_type(str(metal_type).strip()) in {
+            "float",
+            "float16",
+            "double",
+        }
 
     def should_elide_resource_access_qualifier(self, base_name, generic_args):
         if len(generic_args) < 2 or not self.is_metal_resource_type_name(base_name):
@@ -2218,9 +2272,10 @@ class MetalToCrossGLConverter:
             return None
 
         element_type = generic_args[0].strip()
-        if element_type.startswith("uint"):
+        integer_prefix = self.integer_resource_prefix(element_type)
+        if integer_prefix == "u":
             return f"u{image_type}"
-        if element_type.startswith("int"):
+        if integer_prefix == "i":
             return f"i{image_type}"
         return image_type
 
