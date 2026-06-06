@@ -2892,6 +2892,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSL_STD450_STRUCT_EXTINST_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/GLSL.std.450.html
+; Reduced from GLSL.std.450 ModfStruct and FrexpStruct extended instructions.
+OpCapability Shader
+%std450 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %output_value
+OpExecutionMode %main OriginUpperLeft
+OpName %ModfResult "ModfResult"
+OpMemberName %ModfResult 0 "fractional"
+OpMemberName %ModfResult 1 "whole"
+OpName %FrexpResult "FrexpResult"
+OpMemberName %FrexpResult 0 "significand"
+OpMemberName %FrexpResult 1 "exponent"
+OpName %input_value "inputValue"
+OpName %output_value "outputValue"
+OpDecorate %input_value Location 0
+OpDecorate %output_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%ModfResult = OpTypeStruct %float %float
+%FrexpResult = OpTypeStruct %float %int
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_float = OpTypePointer Output %float
+%input_value = OpVariable %ptr_input_float Input
+%output_value = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %float %input_value
+%modf_parts = OpExtInst %ModfResult %std450 ModfStruct %loaded
+%fractional = OpCompositeExtract %float %modf_parts 0
+%frexp_parts = OpExtInst %FrexpResult %std450 52 %loaded
+%significand = OpCompositeExtract %float %frexp_parts 0
+%combined = OpFAdd %float %fractional %significand
+OpStore %output_value %combined
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_NONSEMANTIC_DEBUG_PRINTF_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
@@ -5095,6 +5136,27 @@ def test_numeric_glsl_std450_sqrt_extinst_codegen():
     assert "float outputValue @output @location(0);" in generated_code
     assert "outputValue = sqrt(inputValue);" in generated_code
     assert "spirv_GLSL_std_450_instruction_31" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glsl_std450_struct_extinst_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSL_STD450_STRUCT_EXTINST_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "struct ModfResult" in generated_code
+    assert "float fractional;" in generated_code
+    assert "float whole;" in generated_code
+    assert "struct FrexpResult" in generated_code
+    assert "float significand;" in generated_code
+    assert "int exponent;" in generated_code
+    assert (
+        "outputValue = (modf(inputValue).fractional + frexp(inputValue).significand);"
+        in generated_code
+    )
+    assert "spirv_GLSL_std_450_ModfStruct" not in generated_code
+    assert "spirv_GLSL_std_450_instruction_52" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

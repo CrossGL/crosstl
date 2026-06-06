@@ -4573,7 +4573,7 @@ class CudaToCrossGLConverter:
         if function_name in {"__clz", "__clzll"} and len(args) == 1:
             return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
-            return f"reverseBits({args[0]})"
+            return f"bitfieldReverse({args[0]})"
         if function_name in {"__hadd", "__uhadd"} and len(args) == 2:
             return self.format_integer_average_floor(args[0], args[1])
         if function_name in {"__rhadd", "__urhadd"} and len(args) == 2:

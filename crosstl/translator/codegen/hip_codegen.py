@@ -4174,7 +4174,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         source_component = self.scalar_component_type(source_type)
         if source_component in {"int", "uint"}:
-            return "uint" if func_name == "bitCount" else source_component
+            if func_name == "bitCount":
+                return "uint"
+            if func_name == "bitfieldReverse":
+                return source_type or source_component
+            return source_component
         return "uint"
 
     def generate_hip_integer_bit_call(self, func_name, raw_args, args):
@@ -4209,6 +4213,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             args[0],
             source_component,
             self.scalar_component_type(result_type),
+            source_type,
+            result_type,
         )
 
     def require_hip_integer_bit_vector_helper(
@@ -4248,18 +4254,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         value,
         source_component=None,
         result_component=None,
+        source_type=None,
+        result_type=None,
     ):
+        bit_width = self.hip_integer_bit_width(source_type)
+        unsigned_cast_type = "unsigned long long" if bit_width == 64 else "unsigned int"
+        signed_cast_type = "long long" if bit_width == 64 else "int"
         unsigned_value = (
-            f"static_cast<unsigned int>({value})"
+            f"static_cast<{unsigned_cast_type}>({value})"
             if source_component == "int"
             else value
         )
         if operation == "bitCount":
             return f"__popc({unsigned_value})"
         if operation == "bitfieldReverse":
-            reversed_value = f"__brev({unsigned_value})"
+            intrinsic_name = "__brevll" if bit_width == 64 else "__brev"
+            reversed_value = f"{intrinsic_name}({unsigned_value})"
             if result_component == "int":
-                return f"static_cast<int>({reversed_value})"
+                return f"static_cast<{signed_cast_type}>({reversed_value})"
             return reversed_value
         if operation == "findLSB":
             return f"(__ffs({value}) - 1)"
@@ -4271,6 +4283,22 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 )
             return f"(({value}) == 0 ? -1 : (31 - __clz({value})))"
         return f"{operation}({value})"
+
+    def hip_integer_bit_width(self, type_name):
+        if type_name is None:
+            return 32
+        type_text = self.type_name_string(type_name)
+        mapped_type = self.map_type(type_text)
+        if type_text in {"i64", "int64", "int64_t", "u64", "uint64", "uint64_t"}:
+            return 64
+        if mapped_type in {
+            "long long",
+            "long long int",
+            "unsigned long long",
+            "unsigned long long int",
+        }:
+            return 64
+        return 32
 
     def require_hip_vector_bitcast_helper(self, source_info, result_info):
         helper_name = self.sanitize_helper_name(

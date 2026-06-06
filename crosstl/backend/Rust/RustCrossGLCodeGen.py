@@ -1346,7 +1346,10 @@ class RustToCrossGLConverter:
         raw_function_name = self.function_call_name(expression.name)
         if raw_function_name is None:
             return None
-        builtin_return_type = self.infer_builtin_function_return_type(raw_function_name)
+        builtin_return_type = self.infer_builtin_function_return_type(
+            raw_function_name,
+            expression.args,
+        )
         if builtin_return_type is not None:
             return builtin_return_type
         associated_return_type = self.infer_impl_associated_function_call_return_type(
@@ -1393,11 +1396,20 @@ class RustToCrossGLConverter:
 
         return self.infer_impl_method_return_type(match, expression.args)
 
-    def infer_builtin_function_return_type(self, function_name):
+    def infer_builtin_function_return_type(self, function_name, args=None):
         if not isinstance(function_name, str):
             return None
 
         function_name = self.resolve_imported_module_path(function_name)
+        primitive_bitcast_return_type = (
+            self.infer_primitive_float_bitcast_associated_return_type(
+                function_name,
+                args,
+            )
+        )
+        if primitive_bitcast_return_type is not None:
+            return primitive_bitcast_return_type
+
         if "::" in function_name:
             type_name, method_name = function_name.rsplit("::", 1)
             if method_name in {"new", "splat", "from"}:
@@ -1412,6 +1424,12 @@ class RustToCrossGLConverter:
     def infer_builtin_method_return_type(self, method_name, receiver_type, args):
         if method_name == "extend" and len(args) == 1:
             return self.extended_vector_constructor(receiver_type)
+        if (
+            method_name == "to_bits"
+            and not args
+            and self.is_primitive_f32_receiver_type(receiver_type)
+        ):
+            return "uint"
         return None
 
     def infer_impl_method_return_type(self, match, arg_values):
@@ -3923,6 +3941,14 @@ class RustToCrossGLConverter:
             )
             if associated_call is not None:
                 return args_code, associated_call
+            primitive_bitcast_call = (
+                self.format_primitive_float_bitcast_associated_call(
+                    expression.name,
+                    args,
+                )
+            )
+            if primitive_bitcast_call is not None:
+                return args_code, primitive_bitcast_call
             return args_code, f"{self.map_function(expression.name)}({', '.join(args)})"
 
         name_code, name = self.generate_try_expression(
@@ -3955,6 +3981,15 @@ class RustToCrossGLConverter:
 
         if method_name == "len" and not args:
             return f"{obj}.length"
+
+        primitive_bitcast_call = self.format_primitive_float_bitcast_method_call(
+            method_name,
+            obj,
+            args,
+            receiver_type,
+        )
+        if primitive_bitcast_call is not None:
+            return primitive_bitcast_call
 
         derivative_method = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(method_name)
         if derivative_method is not None and not args:
@@ -4311,6 +4346,59 @@ class RustToCrossGLConverter:
         if return_type is not None:
             self.add_value_type(call, return_type)
         return call
+
+    def format_primitive_float_bitcast_method_call(
+        self,
+        method_name,
+        obj,
+        args,
+        receiver_type,
+    ):
+        if (
+            method_name != "to_bits"
+            or args
+            or not self.is_primitive_f32_receiver_type(receiver_type)
+        ):
+            return None
+        return f"floatBitsToUint({obj})"
+
+    def format_primitive_float_bitcast_associated_call(self, function_name, args):
+        if (
+            self.infer_primitive_float_bitcast_associated_return_type(
+                function_name,
+                args,
+            )
+            is None
+        ):
+            return None
+        return f"uintBitsToFloat({args[0]})"
+
+    def infer_primitive_float_bitcast_associated_return_type(
+        self,
+        function_name,
+        args=None,
+    ):
+        if args is not None and len(args) != 1:
+            return None
+
+        function_name = self.resolve_imported_module_path(function_name)
+        parsed = self.parse_associated_function_path(function_name)
+        if parsed is None:
+            return None
+
+        type_name, method_name, method_type_args = parsed
+        if method_name != "from_bits" or method_type_args:
+            return None
+        if not self.is_primitive_f32_receiver_type(type_name):
+            return None
+        return "float"
+
+    def is_primitive_f32_receiver_type(self, receiver_type):
+        if not isinstance(receiver_type, str):
+            return False
+
+        receiver_type = self.normalize_receiver_type(receiver_type)
+        return receiver_type == "f32" or self.map_type(receiver_type) == "float"
 
     def lookup_impl_method_receiver_match(self, obj, method_name):
         receiver_type = self.lookup_value_type(obj)
@@ -8138,6 +8226,14 @@ class RustToCrossGLConverter:
             )
             if associated_call is not None:
                 return args_code, associated_call
+            primitive_bitcast_call = (
+                self.format_primitive_float_bitcast_associated_call(
+                    expression.name,
+                    args,
+                )
+            )
+            if primitive_bitcast_call is not None:
+                return args_code, primitive_bitcast_call
             expression_call = self.format_unary_expression_intrinsic_call(
                 expression.name,
                 args,
@@ -8195,6 +8291,14 @@ class RustToCrossGLConverter:
                 )
                 if associated_call is not None:
                     return associated_call
+                primitive_bitcast_call = (
+                    self.format_primitive_float_bitcast_associated_call(
+                        expr.name,
+                        arg_values,
+                    )
+                )
+                if primitive_bitcast_call is not None:
+                    return primitive_bitcast_call
                 expression_call = self.format_unary_expression_intrinsic_call(
                     expr.name,
                     arg_values,
