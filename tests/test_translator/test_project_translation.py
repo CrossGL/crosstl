@@ -1964,7 +1964,7 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
 
     monkeypatch.setattr(project_pipeline, "translate", write_defines)
 
-    report = translate_project(load_project_config(repo), variants=["debug"])
+    report = translate_project(load_project_config(repo), variants=["debug", "debug"])
     payload = report.to_json()
     report_path = repo / "translated" / "portability-report.json"
     report.write_json(report_path)
@@ -9268,6 +9268,8 @@ def test_project_cli_translate_project_limits_named_variants_to_selected(tmp_pat
             "crosstl._crosstl",
             "translate-project",
             str(repo),
+            "--variant",
+            "debug",
             "--variant",
             "debug",
         ],

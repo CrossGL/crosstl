@@ -471,6 +471,9 @@ def test_project_macro_variants_document_artifact_define_maps():
             backend_support["notes"]
         )
         assert "scoped runs for selected declared variants" in backend_support["notes"]
+        assert "de-duplicates repeated selections before artifact planning" in (
+            backend_support["notes"]
+        )
         assert (
             "malformed define/variant metadata including empty mapping keys and "
             "forged variant define counts"
