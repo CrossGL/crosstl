@@ -8717,6 +8717,43 @@ def test_project_cli_report_records_include_dir_and_define_overrides(tmp_path):
     assert payload["summary"]["unitCount"] == 1
 
 
+def test_project_cli_report_applies_source_backend_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    output = tmp_path / "portability-report.json"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            str(repo),
+            "--source-override",
+            "gpu/*.shader=cgl",
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result.stdout == f"Wrote {output}\n"
+    assert payload["project"]["sourceOverrides"] == {"gpu/*.shader": "cgl"}
+    assert payload["project"]["sourceOverrideCount"] == 1
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["unitsBySourceOverride"] == {"cgl": 1}
+    assert payload["units"][0]["path"] == "gpu/kernel.shader"
+    assert payload["units"][0]["sourceBackend"] == "cgl"
+    assert payload["units"][0]["sourceOverride"] == "cgl"
+
+
 def test_project_cli_translate_project_applies_include_dir_and_define_overrides(
     tmp_path,
 ):
