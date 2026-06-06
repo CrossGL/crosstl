@@ -148,6 +148,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "configurable diagnostic and failed-artifact truncation" in (
             backend_support["notes"]
         )
+        assert "failed-artifact variant labels" in backend_support["notes"]
         assert "skipped-reason" in backend_support["notes"]
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]

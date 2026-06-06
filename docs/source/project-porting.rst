@@ -118,7 +118,8 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --max-failed-artifacts 20
 
 Report inspection includes validation status, invalid/unavailable report status,
-project counts, project configuration path and counts, failed artifacts,
+project counts, project configuration path and counts, failed artifacts with
+variant labels when present,
 diagnostic code and missing-capability rollups, validation diagnostic-code,
 missing-capability, and artifact target and variant rollups, report
 source-backend, file-extension, and artifact target rollups, source-map count,

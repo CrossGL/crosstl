@@ -1115,9 +1115,13 @@ def _format_project_report_inspection(payload):
         for artifact in failed_artifacts:
             if not isinstance(artifact, Mapping):
                 continue
+            variant = artifact.get("variant")
+            variant_label = (
+                f"(variant: {variant}) " if isinstance(variant, str) and variant else ""
+            )
             description = (
                 f"- {artifact.get('source')} -> {artifact.get('target')} "
-                f"at {artifact.get('path')}"
+                f"{variant_label}at {artifact.get('path')}"
             )
             if artifact.get("error"):
                 description = f"{description}: {artifact.get('error')}"

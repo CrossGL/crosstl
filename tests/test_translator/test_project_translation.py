@@ -7609,8 +7609,25 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
     }
     assert validation["artifactStatusByVariant"] == expected_payload
     assert payload["validation"]["artifactStatusByVariant"] == expected_payload
+    assert payload["failedArtifacts"] == [
+        {
+            "source": "simple.cgl",
+            "target": "cgl",
+            "path": "out/cgl/release/simple.cgl",
+            "variant": "release",
+            "exists": True,
+            "sourceHashStatus": "ok",
+            "generatedHashStatus": "mismatch",
+            "validationStatus": "failed",
+        }
+    ]
     assert result.returncode == 1
     assert expected_rollup in result.stdout
+    assert (
+        "- simple.cgl -> cgl (variant: release) at "
+        "out/cgl/release/simple.cgl: validation failed "
+        "(generated hash: mismatch)"
+    ) in result.stdout
     assert validation_text.returncode == 1
     assert expected_rollup in validation_text.stdout
 
