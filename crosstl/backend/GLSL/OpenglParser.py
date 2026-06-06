@@ -347,6 +347,7 @@ FRAGMENT_BUILTINS = {
     "gl_FragColor",
     "gl_FragDepth",
     "gl_FrontFacing",
+    "gl_HelperInvocation",
     "gl_PointCoord",
     "gl_SampleID",
     "gl_SamplePosition",

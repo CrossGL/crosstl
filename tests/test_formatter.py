@@ -241,9 +241,15 @@ def test_format_shader_code():
         mock_instance.format_code.return_value = "formatted_code"
 
         assert format_shader_code("code", "metal") == "formatted_code"
+        assert format_shader_code("code", "msl") == "formatted_code"
         assert format_shader_code("code", "directx") == "formatted_code"
+        assert format_shader_code("code", "dx") == "formatted_code"
         assert format_shader_code("code", "opengl") == "formatted_code"
+        assert format_shader_code("code", "ogl") == "formatted_code"
         assert format_shader_code("code", "vulkan") == "formatted_code"
+        assert format_shader_code("code", "rs") == "formatted_code"
+        assert format_shader_code("code", "cu") == "formatted_code"
+        assert format_shader_code("code", "slangh") == "formatted_code"
 
         format_shader_code("code", "metal", "output.metal")
         mock_instance.format_code.assert_called_with(

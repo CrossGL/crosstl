@@ -1933,6 +1933,40 @@ def test_mojo_generated_builtin_names_lower_to_crossgl():
     assert "magnitude(" not in generated_code
 
 
+def test_mojo_import_alias_math_and_simd_builtins_lower_to_crossgl():
+    code = """
+    import math as m
+    import simd as s
+
+    fn main():
+        let x: Float32 = 4.0
+        let bounded = m.clamp(m.sqrt(x), m.min(low, high), m.max(low, high))
+        let magnitude = m.abs(x)
+        let projected = s.dot(lhs, rhs)
+        let perpendicular = s.cross(lhs, rhs)
+        let normal = s.normalize(lhs)
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let bounded = clamp(sqrt(x), min(low, high), max(low, high));" in (
+        generated_code
+    )
+    assert "let magnitude = abs(x);" in generated_code
+    assert "let projected = dot(lhs, rhs);" in generated_code
+    assert "let perpendicular = cross(lhs, rhs);" in generated_code
+    assert "let normal = normalize(lhs);" in generated_code
+    assert "m.clamp(" not in generated_code
+    assert "m.sqrt(" not in generated_code
+    assert "s.dot(" not in generated_code
+    assert "s.cross(" not in generated_code
+    assert "s.normalize(" not in generated_code
+
+    parse_crossgl(generated_code)
+
+
 def test_user_defined_lerp_call_does_not_lower_to_mix():
     code = """
     fn lerp(x: Float32) -> Float32:

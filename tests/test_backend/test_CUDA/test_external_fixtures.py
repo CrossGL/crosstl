@@ -1271,6 +1271,42 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
         assert raw_name not in crossgl
 
 
+def test_cuda_math_api_qualified_scalar_math_aliases_codegen_reparse():
+    source = """
+    __device__ float qualified_aliases(float x, float y, float z) {
+        float roots = ::sqrtf(x) + ::rsqrtf(y);
+        float extrema = std::fminf(x, y) + std::fmaxf(x, y);
+        float magnitude = ::cuda::std::fabs(x);
+        float fused = ::std::fmaf(x, y, z);
+        return roots + extrema + magnitude + fused;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert_crossgl_reparse(crossgl)
+    assert "var roots: f32 = (sqrt(x) + inversesqrt(y));" in crossgl
+    assert "var extrema: f32 = (min(x, y) + max(x, y));" in crossgl
+    assert "var magnitude: f32 = abs(x);" in crossgl
+    assert "var fused: f32 = fma(x, y, z);" in crossgl
+    for raw_name in {
+        "::sqrtf",
+        "::rsqrtf",
+        "std::fminf",
+        "std::fmaxf",
+        "::cuda::std::fabs",
+        "::std::fmaf",
+        "cuda::std::fabs",
+        "std::fmaf",
+        "sqrtf",
+        "rsqrtf",
+        "fminf",
+        "fmaxf",
+        "fmaf",
+    }:
+        assert raw_name not in crossgl
+
+
 def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
     source = """
     __device__ int shfl_sync(int var, int srcLane) {

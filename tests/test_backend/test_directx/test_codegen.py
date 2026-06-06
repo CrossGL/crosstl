@@ -2280,6 +2280,52 @@ def test_codegen_byte_address_vector_method_mapping():
     assert "buffer_store4(" not in regenerated_hlsl
 
 
+def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
+    code = textwrap.dedent("""
+        ByteAddressBuffer rawInput : register(t0);
+        RWByteAddressBuffer rawOutput : register(u0);
+
+        float4 main(uint offset : TEXCOORD0) : SV_Target0 {
+            uint status = 0;
+            uint scalar = rawInput.Load(offset, status);
+            uint2 pair = rawInput.Load2(offset + 8u, status);
+            uint4 quad = rawOutput.Load4(offset + 16u, status);
+            rawOutput.Store(offset + 4u, scalar);
+            bool mapped = CheckAccessFullyMapped(status);
+            return mapped ? float4(quad) : float4(pair, scalar, scalar);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        "unsupported DirectX tiled-resource status for Load: " "dropped status output"
+    ) in crossgl
+    assert (
+        "unsupported DirectX tiled-resource status for Load2: " "dropped status output"
+    ) in crossgl
+    assert (
+        "unsupported DirectX tiled-resource status for Load4: " "dropped status output"
+    ) in crossgl
+    assert "buffer_load(rawInput, offset)" in crossgl
+    assert "buffer_load2(rawInput, offset + 8)" in crossgl
+    assert "buffer_load4(rawOutput, offset + 16)" in crossgl
+    assert "texelFetch(rawInput" not in crossgl
+    assert "texelFetch(rawOutput" not in crossgl
+
+    parsed = parse_crossgl(crossgl)
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parsed)
+
+    assert "uint scalar = rawInput.Load(offset);" in regenerated_hlsl
+    assert "uint2 pair = rawInput.Load2((offset + 8));" in regenerated_hlsl
+    assert "uint4 quad = rawOutput.Load4((offset + 16));" in regenerated_hlsl
+    assert "rawOutput.Store((offset + 4), scalar);" in regenerated_hlsl
+    assert "bool mapped = true;" in regenerated_hlsl
+    assert "texelFetch(" not in regenerated_hlsl
+    assert "CheckAccessFullyMapped(" not in regenerated_hlsl
+    assert ", status)" not in regenerated_hlsl
+
+
 def test_codegen_wave_ops_passthrough():
     output = generate_crossgl(WAVE_OPS_HLSL)
     for intrinsic in [

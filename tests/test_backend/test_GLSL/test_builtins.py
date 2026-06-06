@@ -28,8 +28,9 @@ def test_fragment_builtins_parse():
     layout(location = 0) out vec4 fragColor;
     void main() {
         vec2 p = gl_FragCoord.xy;
+        bool helper = gl_HelperInvocation;
         if (gl_FrontFacing) {
-            fragColor = vec4(p, 0.0, 1.0);
+            fragColor = helper ? vec4(0.0) : vec4(p, 0.0, 1.0);
         } else {
             fragColor = vec4(0.0);
         }

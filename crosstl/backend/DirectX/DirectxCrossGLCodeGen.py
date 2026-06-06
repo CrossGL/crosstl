@@ -480,6 +480,23 @@ class HLSLToCrossGLConverter:
             buffer_function = self.buffer_method_map[member]
             resource_base = self.raw_type_base(resource_type)
             dropped_parameters = []
+            if self.is_byte_address_buffer_type(resource_type):
+                if arg_count == 2:
+                    dropped_parameters.append("status output")
+                return with_dropped_parameters(
+                    {
+                        "member": member,
+                        "function": buffer_function,
+                        "texture_function": texture_function,
+                        "buffer_function": buffer_function,
+                        "component": None,
+                        "usage": "regular",
+                        "buffer_when_max_args": 1,
+                        "resource_type": resource_type,
+                        "diagnostic_kind": "tiled_resource_status",
+                    },
+                    dropped_parameters,
+                )
             is_multisample = resource_base in {
                 "Texture2DMS",
                 "Texture2DMSArray",
@@ -896,6 +913,27 @@ class HLSLToCrossGLConverter:
                 "GatherCmpBlue": "gather_compare",
                 "GatherCmpAlpha": "gather_compare",
             }.get(member)
+            return descriptor
+
+        if member in {"Load2", "Load3", "Load4"} and self.is_byte_address_buffer_type(
+            resource_type
+        ):
+            descriptor = {
+                "member": member,
+                "function": self.buffer_method_map[member],
+                "texture_function": None,
+                "buffer_function": self.buffer_method_map[member],
+                "component": None,
+                "usage": None,
+                "buffer_when_max_args": None,
+                "resource_type": resource_type,
+                "resource": "buffer",
+                "operation": "load",
+                "diagnostic_kind": "tiled_resource_status",
+            }
+            if arg_count == 2:
+                descriptor["drop_trailing_args"] = 1
+                descriptor["dropped_parameters"] = ["status output"]
             return descriptor
 
         if member in self.buffer_method_map:
@@ -1746,6 +1784,13 @@ class HLSLToCrossGLConverter:
             "RWByteAddressBuffer",
             "RasterizerOrderedBuffer",
             "RasterizerOrderedStructuredBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+        }
+
+    def is_byte_address_buffer_type(self, type_name):
+        return self.raw_type_base(type_name) in {
+            "ByteAddressBuffer",
+            "RWByteAddressBuffer",
             "RasterizerOrderedByteAddressBuffer",
         }
 

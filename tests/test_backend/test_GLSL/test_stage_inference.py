@@ -125,6 +125,25 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
         ),
         pytest.param(
             """
+            #version 450 core
+
+            void main() {
+                if (gl_HelperInvocation) {
+                    discard;
+                }
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "if (gl_HelperInvocation) {",
+                "discard;",
+            ],
+            id="glslang-fragment-helper-invocation-builtin",
+        ),
+        pytest.param(
+            """
             #version 300 es
             precision highp float;
 
