@@ -207,8 +207,10 @@ artifact attempt per variant and passes base defines merged with the variant's
 define overrides to the source frontend. Variant artifacts are written under a
 variant path segment inside each target output directory, and the original
 variant name plus applied define map are recorded on the artifact and variant
-name is recorded on validation records. Native preprocessor behavior remains
-backend-dependent.
+name is recorded on validation records. CrossGL source translation applies
+object-like define expansion and conditional branch selection for
+``#if``/``#ifdef``/``#ifndef``/``#elif``/``#else``/``#endif`` when defines are
+provided. Native preprocessor behavior remains backend-dependent.
 
 Configuration scalar values and define/source-override maps are type checked
 when ``crosstl.toml`` is loaded. Define names, source override patterns, named

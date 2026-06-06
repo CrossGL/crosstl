@@ -220,6 +220,71 @@ def test_comment_tokens_are_skipped_as_trivia():
     assert ("COMPUTE", "compute") in tokens
 
 
+def test_preprocessor_directives_are_preserved_without_defines():
+    code = """
+    #ifdef USE_RED
+    float selected = RED_VALUE;
+    #endif
+    """
+
+    tokens = Lexer(code).get_tokens()
+
+    assert ("PREPROCESSOR", "#ifdef USE_RED") in tokens
+    assert ("IDENTIFIER", "RED_VALUE") in tokens
+
+
+def test_define_preprocessing_selects_active_branch_and_expands_macros():
+    code = """
+    #define RED_VALUE 1.0
+    #if USE_RED
+    float selected = RED_VALUE;
+    #else
+    float selected = BLUE_VALUE;
+    #endif
+    """
+
+    tokens = Lexer(
+        code,
+        defines={"BLUE_VALUE": "0.0", "USE_RED": "1"},
+    ).get_tokens()
+
+    assert ("PREPROCESSOR", "#if USE_RED") not in tokens
+    assert ("FLOAT_NUMBER", "1.0") in tokens
+    assert ("FLOAT_NUMBER", "0.0") not in tokens
+    assert ("IDENTIFIER", "RED_VALUE") not in tokens
+    assert ("IDENTIFIER", "BLUE_VALUE") not in tokens
+
+
+def test_define_preprocessing_supports_elif_and_undefined_macros():
+    code = """
+    #if USE_RED
+    float selected = 1.0;
+    #elif USE_BLUE
+    float selected = 2.0;
+    #else
+    float selected = 3.0;
+    #endif
+    """
+
+    tokens = Lexer(code, defines={"USE_BLUE": "1"}).get_tokens()
+
+    assert ("FLOAT_NUMBER", "1.0") not in tokens
+    assert ("FLOAT_NUMBER", "2.0") in tokens
+    assert ("FLOAT_NUMBER", "3.0") not in tokens
+
+
+def test_define_preprocessing_preserves_function_like_macros():
+    code = """
+    #define MIX(a, b) ((a) + (b))
+    float selected = MIX(1.0, 2.0);
+    """
+
+    tokens = Lexer(code, defines={}).get_tokens()
+
+    assert ("PREPROCESSOR", "#define MIX(a, b) ((a) + (b))") in tokens
+    assert ("IDENTIFIER", "MIX") in tokens
+
+
 def test_stage_and_ray_keywords_tokenization():
     code = """
     object { }

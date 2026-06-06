@@ -1451,6 +1451,63 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     )["defines"] == {"MODE": "base", "USE_FAST_PATH": "1"}
 
 
+def test_translate_project_named_variants_apply_crossgl_defines(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "macro.cgl").write_text(
+        textwrap.dedent("""
+            shader MacroShader {
+                fragment {
+                    vec4 main() @ gl_FragColor {
+            #if USE_RED
+                        return vec4(1.0, 0.0, 0.0, 1.0);
+            #else
+                        return vec4(0.0, 0.0, 1.0, 1.0);
+            #endif
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.defines]
+            USE_RED = "0"
+
+            [project.variants.debug]
+            USE_RED = "1"
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    debug_output = (repo / "translated" / "opengl" / "debug" / "macro.glsl").read_text(
+        encoding="utf-8"
+    )
+    release_output = (
+        repo / "translated" / "opengl" / "release" / "macro.glsl"
+    ).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert "fragColor = vec4(1.0, 0.0, 0.0, 1.0);" in debug_output
+    assert "fragColor = vec4(0.0, 0.0, 1.0, 1.0);" in release_output
+    assert "#if" not in debug_output
+    assert "#if" not in release_output
+
+
 def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()

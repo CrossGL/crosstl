@@ -361,6 +361,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "artifact define maps that do not match base defines merged" in (
             backend_support["notes"]
         )
+        assert "object-like define expansion" in backend_support["notes"]
+        assert "#if/#ifdef/#ifndef/#elif/#else/#endif branch selection" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
@@ -368,6 +372,14 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_project_config_counts"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_lexer.py::def "
+            "test_define_preprocessing_selects_active_branch_and_expands_macros"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_crossgl_defines"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
