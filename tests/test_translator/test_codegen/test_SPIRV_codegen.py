@@ -763,6 +763,48 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_hlsl_vector_aliases_lower_to_spirv_vector_types(self):
+        source_code = """
+        shader HlslVectorAliases {
+            compute {
+                void main() {
+                    float3 position = float3(1.0, 2.0, 3.0);
+                    int2 pixel = int2(1, 2);
+                    uint4 mask = uint4(1u, 2u, 3u, 4u);
+                    bool2 flags = bool2(true, false);
+                    float3 shifted = position + float3(0.5, 0.25, 0.125);
+                    int2 moved = pixel + int2(1, 2);
+                    uint4 copied = uint4(mask.xy, 3u, 4u);
+                    bool2 selected = bool2(flags.x, flags.y);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        bool_type = re.search(r"(%\d+) = OpTypeBool", spv_code)
+
+        assert float_type is not None
+        assert int_type is not None
+        assert uint_type is not None
+        assert bool_type is not None
+        assert re.search(
+            rf"OpTypeVector {re.escape(float_type.group(1))} 3\b", spv_code
+        )
+        assert re.search(rf"OpTypeVector {re.escape(int_type.group(1))} 2\b", spv_code)
+        assert re.search(rf"OpTypeVector {re.escape(uint_type.group(1))} 4\b", spv_code)
+        assert re.search(rf"OpTypeVector {re.escape(bool_type.group(1))} 2\b", spv_code)
+        assert "Unknown type float3" not in spv_code
+        assert "unknown function 'float3'" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_vector_constructs_have_exact_scalar_operands(spv_code)
+
     def test_vector_constructors_flatten_vector_and_swizzle_arguments(self):
         source_code = """
         shader VectorConstructorFlattening {

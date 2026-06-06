@@ -508,6 +508,45 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
+    shaderlab = textwrap.dedent("""
+        Shader "Custom/LegacyTex2D"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    CGPROGRAM
+                    sampler2D _MainTex;
+
+                    struct v2f {
+                        float4 position : SV_POSITION;
+                        float2 uv : TEXCOORD0;
+                    };
+
+                    float4 frag(v2f i) : SV_Target
+                    {
+                        return tex2D(_MainTex, i.uv);
+                    }
+                    ENDCG
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert "sampler2D _MainTex;" in crossgl
+    assert "return texture(_MainTex, i.uv);" in crossgl
+    assert "tex2D(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D _MainTex" in hlsl
+    assert "SamplerState _MainTexSampler" in hlsl
+    assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
+
+
 def test_codegen_pragma_once_from_directx_fallback_samples():
     hlsl = textwrap.dedent("""
         #pragma once

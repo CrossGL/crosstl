@@ -255,6 +255,9 @@ class HLSLToCrossGLConverter:
             "GatherCmpBlue": "2",
             "GatherCmpAlpha": "3",
         }
+        self.legacy_texture_function_sampler_types = {
+            "tex2D": {"sampler2D"},
+        }
         self.buffer_method_map = {
             "Load": "buffer_load",
             "Load2": "buffer_load2",
@@ -1071,6 +1074,19 @@ class HLSLToCrossGLConverter:
             f"/* unsupported DirectX texture overload extras for {member}: "
             f"dropped {parameters} */"
         )
+
+    def legacy_texture_function_call(self, func_name, raw_args, rendered_args):
+        expected_sampler_types = self.legacy_texture_function_sampler_types.get(
+            func_name
+        )
+        if expected_sampler_types is None or len(raw_args) != 2:
+            return None
+
+        sampler_type = self.raw_type_base(self.expression_raw_type(raw_args[0]))
+        if sampler_type not in expected_sampler_types:
+            return None
+
+        return f"texture({', '.join(rendered_args)})"
 
     def get_indent(self):
         return "    " * self.indentation
@@ -3228,6 +3244,11 @@ class HLSLToCrossGLConverter:
                 rendered_args = [
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
+            legacy_texture_call = self.legacy_texture_function_call(
+                func_name, expr.args, rendered_args
+            )
+            if legacy_texture_call is not None:
+                return legacy_texture_call
             bitcast_call = self.bitcast_intrinsic_expression(
                 func_name, expr.args, rendered_args
             )

@@ -9777,11 +9777,15 @@ class VulkanSPIRVCodeGen:
     def normalize_generic_vector_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
         match = re.fullmatch(r"vec([234])<([^>]+)>", compact)
-        if not match:
-            return compact
+        if match:
+            size, element_type = match.groups()
+            element_type = self.normalize_primitive_name(element_type)
+        else:
+            match = re.fullmatch(r"(float|double|int|uint|bool)([234])", compact)
+            if not match:
+                return compact
+            element_type, size = match.groups()
 
-        size, element_type = match.groups()
-        element_type = self.normalize_primitive_name(element_type)
         prefixes = {
             "float": "vec",
             "double": "dvec",

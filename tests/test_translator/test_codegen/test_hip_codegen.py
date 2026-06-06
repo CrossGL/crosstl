@@ -1411,6 +1411,43 @@ class TestHipCodeGen:
         assert "make_float3(make_float3(color.x, color.y, color.z))" not in hip_code
         assert "make_float2(make_float2(color.x, color.y))" not in hip_code
 
+    def test_typed_brace_vector_constructors_emit_hip_make_functions(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                vec2 makeUv() {
+                    return vec2(0.25, 0.5);
+                }
+
+                void main() {
+                    vec4 color = vec4{1.0, 0.5, 0.25, 1.0};
+                    vec2 uv = vec2{0.25, 0.5};
+                    vec4 packed = vec4{uv, 0.0, 1.0};
+                    vec4 fromCall = vec4{makeUv(), 0.0, 1.0};
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float4 color = make_float4(1.0, 0.5, 0.25, 1.0);" in hip_code
+        assert "float2 uv = make_float2(0.25, 0.5);" in hip_code
+        assert "float4 packed = make_float4(uv.x, uv.y, 0.0, 1.0);" in hip_code
+        assert (
+            "float4 fromCall = "
+            "cgl_float4_construct_float2_xy_float_float(makeUv(), 0.0, 1.0);"
+            in hip_code
+        )
+        assert "float4 color = float4{" not in hip_code
+        assert "float4 packed = float4{uv, 0.0, 1.0}" not in hip_code
+        assert "float4 packed = make_float4(uv, 0.0, 1.0)" not in hip_code
+        assert "make_float4(makeUv().x, makeUv().y, 0.0, 1.0)" not in hip_code
+
     def test_complex_scalar_vector_constructor_splats_use_hip_helpers(self):
         source_code = """
         shader TestShader {

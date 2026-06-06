@@ -3646,6 +3646,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         positional_args = list(getattr(node, "arguments", []) or [])
         named_args = dict(getattr(node, "named_arguments", {}) or {})
         rendered_args = [self.visit(arg) for arg in positional_args]
+
+        vector_info = self.vector_type_info(constructor_type)
+        if vector_info:
+            positional_args, rendered_args = self.hip_vector_constructor_arguments(
+                vector_info,
+                positional_args,
+                rendered_args,
+                named_args,
+            )
+            splat_call = self.generate_vector_scalar_splat_call(
+                vector_info, positional_args, rendered_args
+            )
+            if splat_call is not None:
+                return splat_call
+            constructor_call = self.generate_vector_constructor_single_eval_call(
+                vector_info, positional_args, rendered_args
+            )
+            if constructor_call is not None:
+                return constructor_call
+            rendered_args = self.generate_vector_constructor_args(
+                vector_info, positional_args, rendered_args
+            )
+            return f"{vector_info['constructor']}({', '.join(rendered_args)})"
+
         if named_args and constructor_type:
             fields = list(self.struct_member_types.get(constructor_type, {}).items())
             consumed = set()
@@ -3667,6 +3691,36 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if not mapped_type:
             return "{" + ", ".join(rendered_args) + "}"
         return f"{mapped_type}{{{', '.join(rendered_args)}}}"
+
+    def hip_vector_constructor_arguments(
+        self,
+        vector_info,
+        positional_args,
+        positional_exprs,
+        named_args,
+    ):
+        if not named_args:
+            return positional_args, positional_exprs
+
+        components = vector_info["components"]
+        if all(field_name in components for field_name in named_args):
+            ordered_named_args = [
+                named_args[component]
+                for component in components
+                if component in named_args
+            ]
+            ordered_named_exprs = [self.visit(arg) for arg in ordered_named_args]
+            return (
+                positional_args + ordered_named_args,
+                positional_exprs + ordered_named_exprs,
+            )
+
+        ordered_named_args = list(named_args.values())
+        ordered_named_exprs = [self.visit(arg) for arg in ordered_named_args]
+        return (
+            ordered_named_args + positional_args,
+            ordered_named_exprs + positional_exprs,
+        )
 
     def visit_FunctionCallNode(self, node) -> str:
         func_expr = (

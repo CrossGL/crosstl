@@ -3151,8 +3151,18 @@ def test_metal_simd_aliases_map_to_standard_metal_types():
             return input + inc;
         }
 
+        simd_half3 halfTint(simd_half3 input) {
+            simd_half3 bias = simd_half3(1.0, 2.0, 3.0);
+            return input + bias;
+        }
+
         simd_float4x4 passSquare(simd_float4x4 input) {
             simd_float4x4 m = simd_float4x4(1.0);
+            return input * m;
+        }
+
+        simd_half2x2 passHalfSquare(simd_half2x2 input) {
+            simd_half2x2 m = simd_half2x2(1.0);
             return input * m;
         }
 
@@ -3171,8 +3181,12 @@ def test_metal_simd_aliases_map_to_standard_metal_types():
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint2 unsignedPair(uint2 input)" in generated_code
     assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "half3 halfTint(half3 input)" in generated_code
+    assert "half3 bias = half3(1.0, 2.0, 3.0);" in generated_code
     assert "float4x4 passSquare(float4x4 input)" in generated_code
     assert "float4x4 m = float4x4(1.0);" in generated_code
+    assert "half2x2 passHalfSquare(half2x2 input)" in generated_code
+    assert "half2x2 m = half2x2(1.0);" in generated_code
     assert "float3x2 passMatrix(float3x2 input)" in generated_code
     assert "float3x2 m = float3x2(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
     assert "simd_" not in generated_code

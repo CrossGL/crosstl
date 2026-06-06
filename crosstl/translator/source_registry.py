@@ -269,8 +269,14 @@ _GLSL_EXTENSION_SHADER_TYPES = {
 
 
 def _glsl_shader_type_from_path(file_path: str) -> str | None:
-    _, ext = os.path.splitext(file_path)
-    return _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(ext))
+    stem, ext = os.path.splitext(file_path)
+    ext = _normalize_extension(ext)
+    if ext == ".glsl":
+        _, stage_ext = os.path.splitext(stem)
+        shader_type = _GLSL_EXTENSION_SHADER_TYPES.get(_normalize_extension(stage_ext))
+        if shader_type and shader_type != "auto":
+            return shader_type
+    return _GLSL_EXTENSION_SHADER_TYPES.get(ext)
 
 
 def _reverse_slang():

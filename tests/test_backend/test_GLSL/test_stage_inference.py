@@ -286,6 +286,36 @@ def test_plain_glsl_registry_infers_vulkan_stage_from_glslang_suffix(
     assert f"{expected_shader_type} {{" in crossgl
 
 
+@pytest.mark.parametrize(
+    ("suffix", "expected_shader_type", "expected_stage"),
+    [
+        (".rgen.glsl", "ray_generation", ShaderStage.RAY_GENERATION),
+        (".rchit.glsl", "ray_closest_hit", ShaderStage.RAY_CLOSEST_HIT),
+        (".mesh.glsl", "mesh", ShaderStage.MESH),
+    ],
+)
+def test_plain_glsl_registry_infers_vulkan_stage_from_compound_suffix(
+    suffix,
+    expected_shader_type,
+    expected_stage,
+):
+    source = """
+    #version 460 core
+
+    void main() {
+    }
+    """
+
+    ast, crossgl, parsed = reverse_plain_glsl(
+        source,
+        file_path=f"/tmp/upstream-sample{suffix}",
+    )
+
+    assert ast.shader_type == expected_shader_type
+    assert expected_stage in parsed.stages
+    assert f"{expected_shader_type} {{" in crossgl
+
+
 def test_plain_glsl_registry_keeps_vertex_output_varying_when_position_is_written():
     source = """
     #version 450

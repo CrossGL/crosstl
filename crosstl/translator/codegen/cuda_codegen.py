@@ -2916,6 +2916,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         vector_info = self.vector_type_info(constructor_type)
         if vector_info:
+            raw_args, args = self.cuda_vector_constructor_arguments(
+                node,
+                vector_info,
+                raw_args,
+                args,
+            )
             splat_call = self.generate_vector_scalar_splat_call(
                 vector_info, raw_args, args
             )
@@ -2927,9 +2933,41 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if constructor_call is not None:
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
+            return f"{vector_info['constructor']}({', '.join(args)})"
 
         mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
         return f"{mapped_type}({', '.join(args)})"
+
+    def cuda_vector_constructor_arguments(
+        self,
+        node,
+        vector_info,
+        positional_args,
+        positional_exprs,
+    ):
+        named_args = dict(getattr(node, "named_arguments", {}) or {})
+        if not named_args:
+            return positional_args, positional_exprs
+
+        components = vector_info["components"]
+        if all(field_name in components for field_name in named_args):
+            ordered_named_args = [
+                named_args[component]
+                for component in components
+                if component in named_args
+            ]
+            ordered_named_exprs = [self.visit(arg) for arg in ordered_named_args]
+            return (
+                positional_args + ordered_named_args,
+                positional_exprs + ordered_named_exprs,
+            )
+
+        ordered_named_args = list(named_args.values())
+        ordered_named_exprs = [self.visit(arg) for arg in ordered_named_args]
+        return (
+            ordered_named_args + positional_args,
+            ordered_named_exprs + positional_exprs,
+        )
 
     def cuda_struct_constructor_brace_arguments(self, node, struct_name):
         """Render struct constructor fields and embedded resource sidecars."""
