@@ -435,6 +435,10 @@ def _format_project_validation_report(payload):
             "Validation artifacts by target",
             payload.get("artifactStatusByTarget"),
         ),
+        _format_validation_artifact_rollup(
+            "Validation artifacts by variant",
+            payload.get("artifactStatusByVariant"),
+        ),
         _format_count_rollup(
             "Validation source hashes",
             payload.get("sourceHashStatusCounts"),
@@ -813,6 +817,9 @@ def _format_project_report_inspection(payload):
     validation_artifact_status_by_target = payload.get("validation", {}).get(
         "artifactStatusByTarget"
     )
+    validation_artifact_status_by_variant = payload.get("validation", {}).get(
+        "artifactStatusByVariant"
+    )
     validation_result = payload.get("validation", {}).get("result", {})
     validation_summary = (
         validation_result.get("summary")
@@ -1025,6 +1032,12 @@ def _format_project_report_inspection(payload):
         )
         if validation_artifacts_by_target:
             lines.append(validation_artifacts_by_target)
+        validation_artifacts_by_variant = _format_validation_artifact_rollup(
+            "Validation artifacts by variant",
+            validation_artifact_status_by_variant,
+        )
+        if validation_artifacts_by_variant:
+            lines.append(validation_artifacts_by_variant)
         source_hashes = _format_count_rollup(
             "Validation source hashes",
             validation_summary.get("sourceHashStatusCounts"),

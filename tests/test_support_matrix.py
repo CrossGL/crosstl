@@ -142,8 +142,8 @@ def test_project_report_inspection_is_first_class_support_feature():
         )
         assert (
             "validation hash-status, diagnostic-code, missing-capability, "
-            "toolchain-status, toolchain-run, and artifact target rollups"
-            in (backend_support["notes"])
+            "toolchain-status, toolchain-run, and artifact target and variant "
+            "rollups" in (backend_support["notes"])
         )
         assert "configurable diagnostic and failed-artifact truncation" in (
             backend_support["notes"]
@@ -229,6 +229,11 @@ def test_project_report_inspection_documents_rollups():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_override_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_validation_variant_"
+            "rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -548,6 +553,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
+        assert "direct validation report artifact target, artifact variant" in (
+            backend_support["notes"]
+        )
         assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "source-root status record and count consistency" in (
@@ -587,6 +595,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_validation_variant_"
+            "rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

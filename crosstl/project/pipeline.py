@@ -2019,6 +2019,34 @@ def _validation_artifact_status_by_target(
     return {target: counts[target] for target in sorted(counts)}
 
 
+def _validation_artifact_status_by_variant(
+    artifact_checks: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact_check in artifact_checks:
+        if not isinstance(artifact_check, Mapping):
+            continue
+        variant = artifact_check.get("variant")
+        if not isinstance(variant, str) or not variant.strip():
+            continue
+        variant_name = variant.strip()
+        row = counts.setdefault(
+            variant_name,
+            {
+                "artifactCount": 0,
+                "okCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["artifactCount"] += 1
+        status = artifact_check.get("status")
+        if status == "ok":
+            row["okCount"] += 1
+        elif status == "failed":
+            row["failedCount"] += 1
+    return {variant: counts[variant] for variant in sorted(counts)}
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -2357,6 +2385,7 @@ def inspect_project_report(
         else []
     )
     artifact_status_by_target = validation_report.get("artifactStatusByTarget")
+    artifact_status_by_variant = validation_report.get("artifactStatusByVariant")
     toolchain_status_counts = validation_report.get("toolchainStatusCounts")
     toolchain_run_status_counts = validation_report.get("toolchainRunStatusCounts")
     payload: dict[str, Any] = {
@@ -2385,6 +2414,13 @@ def inspect_project_report(
                 dict(artifact_status_by_target)
                 if isinstance(artifact_status_by_target, Mapping)
                 else _validation_artifact_status_by_target(
+                    _record_sequence(validation_artifacts)
+                )
+            ),
+            "artifactStatusByVariant": (
+                dict(artifact_status_by_variant)
+                if isinstance(artifact_status_by_variant, Mapping)
+                else _validation_artifact_status_by_variant(
                     _record_sequence(validation_artifacts)
                 )
             ),
@@ -2881,6 +2917,9 @@ def _validation_report_payload(
             _payload_missing_capability_counts(diagnostics) or {}
         ),
         "artifactStatusByTarget": _validation_artifact_status_by_target(
+            validation_artifacts
+        ),
+        "artifactStatusByVariant": _validation_artifact_status_by_variant(
             validation_artifacts
         ),
         "toolchainStatusCounts": _validation_toolchain_status_counts(

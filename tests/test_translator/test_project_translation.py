@@ -1160,6 +1160,10 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "failedCount": 0,
         },
     }
+    assert validation["artifactStatusByVariant"] == {
+        "debug": {"artifactCount": 1, "okCount": 1, "failedCount": 0},
+        "release": {"artifactCount": 1, "okCount": 1, "failedCount": 0},
+    }
     assert [artifact["variant"] for artifact in payload["artifacts"]] == [
         "debug",
         "release",
@@ -2049,6 +2053,7 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     assert payload["artifactStatusByTarget"] == {
         "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }
+    assert payload["artifactStatusByVariant"] == {}
     assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(ok=1)
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(ok=1)
     assert payload["toolchainStatusCounts"] == {
@@ -7514,6 +7519,100 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "release=1 artifact (1 translated, 0 failed)"
     ) in result.stdout
     assert "MODE" not in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_variant_output(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths
+        text = json.dumps({"defines": dict(defines or {})}, sort_keys=True)
+        Path(save_shader).write_text(text, encoding="utf-8")
+        return text
+
+    monkeypatch.setattr(project_pipeline, "translate", write_variant_output)
+
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    (repo / "out" / "cgl" / "release" / "simple.cgl").write_text(
+        "modified release artifact",
+        encoding="utf-8",
+    )
+
+    validation = validate_project_report(report_path)
+    payload = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    validation_text = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    expected_rollup = (
+        "Validation artifacts by variant: "
+        "debug=1 artifact (1 ok, 0 failed), "
+        "release=1 artifact (0 ok, 1 failed)"
+    )
+    expected_payload = {
+        "debug": {"artifactCount": 1, "okCount": 1, "failedCount": 0},
+        "release": {"artifactCount": 1, "okCount": 0, "failedCount": 1},
+    }
+    assert validation["artifactStatusByVariant"] == expected_payload
+    assert payload["validation"]["artifactStatusByVariant"] == expected_payload
+    assert result.returncode == 1
+    assert expected_rollup in result.stdout
+    assert validation_text.returncode == 1
+    assert expected_rollup in validation_text.stdout
 
 
 def test_project_cli_inspect_report_text_includes_include_dir_status(tmp_path):

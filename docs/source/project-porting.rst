@@ -120,10 +120,10 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
 Report inspection includes validation status, invalid/unavailable report status,
 project counts, project configuration path and counts, failed artifacts,
 diagnostic code and missing-capability rollups, validation diagnostic-code,
-missing-capability, and artifact target rollups, report source-backend,
-file-extension, and artifact target rollups, source-map count, granularity,
-target, and source-backend rollups, artifact matrix completion counts plus
-sampled missing and extra artifact identities,
+missing-capability, and artifact target and variant rollups, report
+source-backend, file-extension, and artifact target rollups, source-map count,
+granularity, target, and source-backend rollups, artifact matrix completion
+counts plus sampled missing and extra artifact identities,
 include-directory status counts, inactive source-root and include-directory
 record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
@@ -302,10 +302,10 @@ Project reports are JSON documents with:
   generated hash checks, duplicate artifact identity checks, required
   source/generated hash status fields for summarized validation artifacts,
   aggregate validation artifact and hash-status summary counts, direct
-  validation report artifact target, hash-status, toolchain status, and
-  toolchain-run status rollups, source-root and include-directory status record
-  and count consistency checks, unit source hash shape and current-file checks,
-  full-report artifact matrix coverage and artifact define map checks,
+  validation report artifact target, variant, hash-status, toolchain status,
+  and toolchain-run status rollups, source-root and include-directory status
+  record and count consistency checks, unit source hash shape and current-file
+  checks, full-report artifact matrix coverage and artifact define map checks,
   full-report source-map granularity, target, and source-backend rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact
   error metadata rejection, required artifact provenance and provenance value
