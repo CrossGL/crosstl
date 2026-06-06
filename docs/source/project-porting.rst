@@ -239,7 +239,8 @@ expressions, and include paths that resolve outside the repository emit
 structured ``include.resolution`` diagnostics.
 Report inspection samples both resolved include dependencies and unresolved
 include issues, including the source location, include kind, resolved path, and
-resolution source where available.
+resolution source where available. Define-backed include samples also retain
+the project define name that supplied the include target.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one

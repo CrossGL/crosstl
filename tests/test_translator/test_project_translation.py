@@ -10631,10 +10631,12 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     repo.mkdir()
     include_dir.mkdir()
     (include_dir / "shared.inc").write_text("vec4 shared_color();\n", encoding="utf-8")
+    (repo / "generated.inc").write_text("vec4 generated_color();\n", encoding="utf-8")
     (repo / "main.frag").write_text(
         textwrap.dedent("""
             #version 450
             #include <shared.inc>
+            #include PROJECT_HEADER
             #include "missing.inc"
             void main() {}
             """).strip(),
@@ -10645,6 +10647,9 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
             [project]
             targets = ["cgl"]
             include_dirs = ["includes"]
+
+            [project.defines]
+            PROJECT_HEADER = "\\"generated.inc\\""
             """).strip(),
         encoding="utf-8",
     )
@@ -10669,32 +10674,39 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     )
 
     assert result.returncode == 0
-    assert "Include dependencies by status: missing=1, resolved=1" in result.stdout
-    assert "Include dependencies by kind: local=1, system=1" in result.stdout
-    assert "Include dependencies by source backend: opengl=2" in result.stdout
+    assert "Include dependencies by status: resolved=2, missing=1" in result.stdout
+    assert "Include dependencies by kind: local=2, system=1" in result.stdout
+    assert "Include dependencies by source backend: opengl=3" in result.stdout
     assert (
         "Include dependencies by source backend status: "
-        "opengl=(missing=1, resolved=1)"
+        "opengl=(resolved=2, missing=1)"
     ) in result.stdout
-    assert "Include dependencies by resolution source: include-dir=1" in result.stdout
+    assert (
+        "Include dependencies by resolution source: include-dir=1, source=1"
+        in result.stdout
+    )
     assert "Resolved include dependencies:" in result.stdout
     assert (
         "- main.frag:2:1: resolved system include shared.inc -> "
         "includes/shared.inc (include-dir)"
     ) in result.stdout
+    assert (
+        "- main.frag:3:1: resolved local include generated.inc -> "
+        "generated.inc (source, define PROJECT_HEADER)"
+    ) in result.stdout
     assert "Include dependency issues:" in result.stdout
-    assert "- main.frag:3:1: missing local include missing.inc" in result.stdout
+    assert "- main.frag:4:1: missing local include missing.inc" in result.stdout
 
     payload = inspect_project_report(report_path)
     assert payload["includeDependencies"] == {
         "available": True,
-        "dependencyCount": 2,
-        "byStatus": {"missing": 1, "resolved": 1},
-        "byKind": {"local": 1, "system": 1},
-        "byResolvedFrom": {"include-dir": 1},
-        "bySourceBackend": {"opengl": 2},
-        "bySourceBackendStatus": {"opengl": {"missing": 1, "resolved": 1}},
-        "resolvedDependencyCount": 1,
+        "dependencyCount": 3,
+        "byStatus": {"missing": 1, "resolved": 2},
+        "byKind": {"local": 2, "system": 1},
+        "byResolvedFrom": {"include-dir": 1, "source": 1},
+        "bySourceBackend": {"opengl": 3},
+        "bySourceBackendStatus": {"opengl": {"missing": 1, "resolved": 2}},
+        "resolvedDependencyCount": 2,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [
             {
@@ -10706,7 +10718,18 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "column": 1,
                 "resolvedPath": "includes/shared.inc",
                 "resolvedFrom": "include-dir",
-            }
+            },
+            {
+                "source": "main.frag",
+                "include": "generated.inc",
+                "status": "resolved",
+                "kind": "local",
+                "line": 3,
+                "column": 1,
+                "resolvedPath": "generated.inc",
+                "resolvedFrom": "source",
+                "resolvedFromDefine": "PROJECT_HEADER",
+            },
         ],
         "unresolvedDependencyCount": 1,
         "truncatedUnresolvedDependencyCount": 0,
@@ -10716,7 +10739,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "include": "missing.inc",
                 "status": "missing",
                 "kind": "local",
-                "line": 3,
+                "line": 4,
                 "column": 1,
             }
         ],

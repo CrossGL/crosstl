@@ -1506,7 +1506,21 @@ def _format_include_dependency_issue_line(dependency):
 
     kind = dependency.get("kind")
     kind_label = f" {kind}" if isinstance(kind, str) and kind else ""
-    return f"- {location}: {status}{kind_label} include {include}"
+    provenance_label = _format_include_dependency_provenance_label(dependency)
+    return f"- {location}: {status}{kind_label} include {include}{provenance_label}"
+
+
+def _format_include_dependency_provenance_label(dependency):
+    parts = []
+    resolved_from = dependency.get("resolvedFrom")
+    if isinstance(resolved_from, str) and resolved_from:
+        parts.append(resolved_from)
+    resolved_from_define = dependency.get("resolvedFromDefine")
+    if isinstance(resolved_from_define, str) and resolved_from_define:
+        parts.append(f"define {resolved_from_define}")
+    if not parts:
+        return ""
+    return f" ({', '.join(parts)})"
 
 
 def _format_resolved_include_dependency_line(dependency):
@@ -1531,13 +1545,11 @@ def _format_resolved_include_dependency_line(dependency):
 
     kind = dependency.get("kind")
     kind_label = f" {kind}" if isinstance(kind, str) and kind else ""
-    resolved_from = dependency.get("resolvedFrom")
-    source_label = (
-        f" ({resolved_from})"
-        if isinstance(resolved_from, str) and resolved_from
-        else ""
+    source_label = _format_include_dependency_provenance_label(dependency)
+    return (
+        f"- {location}: resolved{kind_label} include {include} -> "
+        f"{resolved_path}{source_label}"
     )
-    return f"- {location}: resolved{kind_label} include {include} -> {resolved_path}{source_label}"
 
 
 def _format_resolved_include_dependency_lines(include_dependencies):

@@ -4926,7 +4926,7 @@ def _inspection_include_dependency_sample(
         value = dependency.get(field_name)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             sample[field_name] = value
-    for field_name in ("resolvedPath", "resolvedFrom"):
+    for field_name in ("resolvedPath", "resolvedFrom", "resolvedFromDefine"):
         value = dependency.get(field_name)
         if _is_non_empty_string(value):
             sample[field_name] = value
