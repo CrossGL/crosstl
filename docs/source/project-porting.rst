@@ -236,7 +236,8 @@ dependency keeps ``resolvedFromDefine`` so the report remains actionable.
 Unresolved system includes are recorded without warning because they often
 refer to SDK or toolchain headers. Missing local includes, dynamic include
 expressions, and include paths that resolve outside the repository emit
-structured ``include.resolution`` diagnostics.
+structured ``include.resolution`` diagnostics. When the failed include came
+from a project define, diagnostics identify that define.
 Report inspection samples both resolved include dependencies and unresolved
 include issues, including the source location, include kind, resolved path, and
 resolution source where available. Define-backed include samples also retain

@@ -1600,14 +1600,20 @@ def _include_resolution_diagnostic(
     status: str,
     include_path: str,
     location: SourceLocation,
+    define_name: str | None = None,
 ) -> ProjectDiagnostic | None:
+    define_suffix = (
+        f" (from project define {define_name})"
+        if _is_non_empty_string(define_name)
+        else ""
+    )
     if status == "missing":
         return ProjectDiagnostic(
             severity="warning",
             code="project.scan.missing-include",
             message=(
                 f"Include directive in {relative_path}:{line_number} "
-                f"could not be resolved: {include_path}"
+                f"could not be resolved{define_suffix}: {include_path}"
             ),
             location=location,
             missing_capabilities=["include.resolution"],
@@ -1619,7 +1625,7 @@ def _include_resolution_diagnostic(
             message=(
                 f"Include directive in {relative_path}:{line_number} "
                 "resolves outside the repository or uses an absolute "
-                f"path: {include_path}"
+                f"path{define_suffix}: {include_path}"
             ),
             location=location,
             missing_capabilities=["include.resolution"],
@@ -1691,6 +1697,7 @@ def _scan_include_dependencies(
                     status=status,
                     include_path=include_path,
                     location=location,
+                    define_name=define_name,
                 )
                 if diagnostic is not None:
                     diagnostics.append(diagnostic)

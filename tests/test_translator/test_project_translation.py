@@ -796,6 +796,77 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
     assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 3}
 
 
+def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.frag").write_text("#include PROJECT_HEADER\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.defines]
+            PROJECT_HEADER = "\\"missing.inc\\""
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "missing.inc",
+            "kind": "local",
+            "status": "missing",
+            "line": 1,
+            "column": 1,
+            "resolvedFromDefine": "PROJECT_HEADER",
+        }
+    ]
+    assert payload["diagnostics"][0]["code"] == "project.scan.missing-include"
+    assert payload["diagnostics"][0]["message"] == (
+        "Include directive in main.frag:1 could not be resolved "
+        "(from project define PROJECT_HEADER): missing.inc"
+    )
+
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    inspection = inspect_project_report(report_path)
+    assert inspection["includeDependencies"]["unresolvedDependencies"] == [
+        {
+            "source": "main.frag",
+            "include": "missing.inc",
+            "status": "missing",
+            "kind": "local",
+            "line": 1,
+            "column": 1,
+            "resolvedFromDefine": "PROJECT_HEADER",
+        }
+    ]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert (
+        "- main.frag:1:1: missing local include missing.inc " "(define PROJECT_HEADER)"
+    ) in result.stdout
+
+
 def test_validate_project_report_rejects_malformed_include_dependency_records(
     tmp_path,
 ):
