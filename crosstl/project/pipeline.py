@@ -2568,6 +2568,46 @@ def _validation_toolchain_run_status_counts(runs: Sequence[Any]) -> dict[str, in
     return _status_counts(runs, "status", VALIDATION_TOOLCHAIN_RUN_STATUSES)
 
 
+def _validation_run_status_rollup(
+    records: Sequence[Any], field_name: str
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        value = record.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        name = value.strip()
+        row = counts.setdefault(
+            name,
+            {
+                "runCount": 0,
+                "okCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["runCount"] += 1
+        status = record.get("status")
+        if status == "ok":
+            row["okCount"] += 1
+        elif status == "failed":
+            row["failedCount"] += 1
+    return {name: counts[name] for name in sorted(counts)}
+
+
+def _validation_toolchain_run_status_by_target(
+    runs: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    return _validation_run_status_rollup(runs, "target")
+
+
+def _validation_toolchain_run_status_by_variant(
+    runs: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    return _validation_run_status_rollup(runs, "variant")
+
+
 def _validation_artifact_status_by_target(
     artifact_checks: Sequence[Any],
 ) -> dict[str, dict[str, int]]:
@@ -3066,6 +3106,10 @@ def inspect_project_report(
     artifact_status_by_variant = validation_report.get("artifactStatusByVariant")
     toolchain_status_counts = validation_report.get("toolchainStatusCounts")
     toolchain_run_status_counts = validation_report.get("toolchainRunStatusCounts")
+    toolchain_run_status_by_target = validation_report.get("toolchainRunStatusByTarget")
+    toolchain_run_status_by_variant = validation_report.get(
+        "toolchainRunStatusByVariant"
+    )
     payload: dict[str, Any] = {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": REPORT_INSPECTION_KIND,
@@ -3115,6 +3159,20 @@ def inspect_project_report(
                 dict(toolchain_run_status_counts)
                 if isinstance(toolchain_run_status_counts, Mapping)
                 else _validation_toolchain_run_status_counts(
+                    _record_sequence(validation_toolchain_runs)
+                )
+            ),
+            "toolchainRunStatusByTarget": (
+                dict(toolchain_run_status_by_target)
+                if isinstance(toolchain_run_status_by_target, Mapping)
+                else _validation_toolchain_run_status_by_target(
+                    _record_sequence(validation_toolchain_runs)
+                )
+            ),
+            "toolchainRunStatusByVariant": (
+                dict(toolchain_run_status_by_variant)
+                if isinstance(toolchain_run_status_by_variant, Mapping)
+                else _validation_toolchain_run_status_by_variant(
                     _record_sequence(validation_toolchain_runs)
                 )
             ),
@@ -3659,6 +3717,12 @@ def _validation_report_payload(
             validation_toolchains
         ),
         "toolchainRunStatusCounts": _validation_toolchain_run_status_counts(
+            validation_toolchain_runs
+        ),
+        "toolchainRunStatusByTarget": _validation_toolchain_run_status_by_target(
+            validation_toolchain_runs
+        ),
+        "toolchainRunStatusByVariant": _validation_toolchain_run_status_by_variant(
             validation_toolchain_runs
         ),
         "sourceHashStatusCounts": (

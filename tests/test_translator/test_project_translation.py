@@ -2683,6 +2683,8 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
         "unavailable": 0,
     }
     assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 0}
+    assert payload["toolchainRunStatusByTarget"] == {}
+    assert payload["toolchainRunStatusByVariant"] == {}
 
 
 def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
@@ -6835,30 +6837,37 @@ def test_validate_project_report_rejects_diagnostics_with_undeclared_targets(tmp
     )
 
 
-def _write_opengl_toolchain_report(repo):
+def _write_opengl_toolchain_report(repo, *, variant=None):
     repo.mkdir()
-    artifact = repo / "out" / "opengl" / "simple.glsl"
+    artifact_segments = ["out", "opengl"]
+    if variant is not None:
+        artifact_segments.append(variant)
+    artifact = repo.joinpath(*artifact_segments, "simple.glsl")
     artifact.parent.mkdir(parents=True)
     artifact.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    project = {
+        "root": str(repo),
+        "targets": ["opengl"],
+        "outputDir": "out",
+    }
+    if variant is not None:
+        project["variants"] = {variant: {}}
+    artifact_record = {
+        "source": "simple.cgl",
+        "target": "opengl",
+        "path": artifact.relative_to(repo).as_posix(),
+        "status": "translated",
+    }
+    if variant is not None:
+        artifact_record["variant"] = variant
     report_path = repo / "portability-report.json"
     report_path.write_text(
         json.dumps(
             {
                 "schemaVersion": 1,
                 "kind": "crosstl-project-portability-report",
-                "project": {
-                    "root": str(repo),
-                    "targets": ["opengl"],
-                    "outputDir": "out",
-                },
-                "artifacts": [
-                    {
-                        "source": "simple.cgl",
-                        "target": "opengl",
-                        "path": "out/opengl/simple.glsl",
-                        "status": "translated",
-                    }
-                ],
+                "project": project,
+                "artifacts": [artifact_record],
             }
         ),
         encoding="utf-8",
@@ -6866,7 +6875,9 @@ def _write_opengl_toolchain_report(repo):
     return report_path
 
 
-def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatch):
+def test_validate_project_report_records_toolchain_failures(
+    tmp_path, monkeypatch, capsys
+):
     report_path = _write_opengl_toolchain_report(tmp_path / "repo")
     monkeypatch.setattr(
         project_pipeline.shutil,
@@ -6903,6 +6914,59 @@ def test_validate_project_report_records_toolchain_failures(tmp_path, monkeypatc
         "unavailable": 0,
     }
     assert payload["toolchainRunStatusCounts"] == {"failed": 1, "ok": 0}
+    assert payload["toolchainRunStatusByTarget"] == {
+        "opengl": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["toolchainRunStatusByVariant"] == {}
+
+    exit_code = crosstl_cli.main(
+        [
+            "validate-project",
+            str(report_path),
+            "--run-toolchains",
+            "--format",
+            "text",
+        ]
+    )
+    assert exit_code == 1
+    stdout = capsys.readouterr().out
+    assert (
+        "Validation toolchain runs by target: opengl=1 run (0 ok, 1 failed)" in stdout
+    )
+
+
+def test_validate_project_report_records_toolchain_run_variant_rollups(
+    tmp_path, monkeypatch
+):
+    report_path = _write_opengl_toolchain_report(tmp_path / "repo", variant="debug")
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+    monkeypatch.setattr(
+        project_pipeline.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="validation ok",
+            stderr="",
+        ),
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is True
+    assert payload["validation"]["toolchainRuns"][0]["variant"] == "debug"
+    assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 1}
+    assert payload["toolchainRunStatusByTarget"] == {
+        "opengl": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert payload["toolchainRunStatusByVariant"] == {
+        "debug": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
 
 
 def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatch):
@@ -6942,6 +7006,10 @@ def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatc
         f"{project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS} seconds."
     )
     assert payload["toolchainRunStatusCounts"] == {"failed": 1, "ok": 0}
+    assert payload["toolchainRunStatusByTarget"] == {
+        "opengl": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["toolchainRunStatusByVariant"] == {}
 
 
 def test_inspect_project_report_summarizes_toolchain_run_failures(
@@ -6971,6 +7039,10 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
         "failed": 1,
         "ok": 0,
     }
+    assert inspection["validation"]["toolchainRunStatusByTarget"] == {
+        "opengl": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert inspection["validation"]["toolchainRunStatusByVariant"] == {}
 
     exit_code = crosstl_cli.main(
         [
@@ -6984,6 +7056,9 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
     assert exit_code == 1
     stdout = capsys.readouterr().out
     assert "Validation toolchain runs: failed=1" in stdout
+    assert (
+        "Validation toolchain runs by target: opengl=1 run (0 ok, 1 failed)" in stdout
+    )
 
 
 def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
@@ -8032,6 +8107,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "failed": 0,
         "ok": 0,
     }
+    assert payload["validation"]["toolchainRunStatusByTarget"] == {}
+    assert payload["validation"]["toolchainRunStatusByVariant"] == {}
     assert payload["validation"]["artifactStatusByTarget"] == {
         "cgl": {
             "artifactCount": 1,

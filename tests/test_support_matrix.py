@@ -768,6 +768,8 @@ def test_project_validation_hooks_document_migration_contract_checks():
         )
         assert "direct validation report artifact target" in backend_support["notes"]
         assert "toolchain run status" in backend_support["notes"]
+        assert "toolchain run target" in backend_support["notes"]
+        assert "toolchain run variant" in backend_support["notes"]
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
         )
@@ -825,6 +827,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_validation_summary_missing_"
             "toolchain_targets"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_records_toolchain_run_variant_rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

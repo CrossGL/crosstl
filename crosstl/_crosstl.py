@@ -408,6 +408,39 @@ def _format_validation_artifact_rollup(label, counts):
     )
 
 
+def _format_validation_run_rollup(label, counts):
+    if not isinstance(counts, Mapping):
+        return None
+
+    entries = []
+    for name, row in counts.items():
+        if not isinstance(name, str) or not name.strip():
+            continue
+        if not isinstance(row, Mapping):
+            continue
+        run_count = row.get("runCount")
+        ok_count = row.get("okCount")
+        failed_count = row.get("failedCount")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (run_count, ok_count, failed_count)
+        ):
+            continue
+        entries.append((name, run_count, ok_count, failed_count))
+    if not entries:
+        return None
+
+    entries.sort(key=lambda item: (-item[1], item[0]))
+    return f"{label}: " + ", ".join(
+        (
+            f"{name}={run_count} "
+            f"{'run' if run_count == 1 else 'runs'} "
+            f"({ok_count} ok, {failed_count} failed)"
+        )
+        for name, run_count, ok_count, failed_count in entries
+    )
+
+
 def _format_project_validation_report(payload):
     counts = payload.get("diagnosticCounts", {})
     counts = counts if isinstance(counts, Mapping) else {}
@@ -458,6 +491,14 @@ def _format_project_validation_report(payload):
             "Validation toolchain runs",
             payload.get("toolchainRunStatusCounts"),
             include_zero=False,
+        ),
+        _format_validation_run_rollup(
+            "Validation toolchain runs by target",
+            payload.get("toolchainRunStatusByTarget"),
+        ),
+        _format_validation_run_rollup(
+            "Validation toolchain runs by variant",
+            payload.get("toolchainRunStatusByVariant"),
         ),
     ):
         if line:
@@ -866,6 +907,12 @@ def _format_project_report_inspection(payload):
     validation_toolchain_run_counts = payload.get("validation", {}).get(
         "toolchainRunStatusCounts"
     )
+    validation_toolchain_run_status_by_target = payload.get("validation", {}).get(
+        "toolchainRunStatusByTarget"
+    )
+    validation_toolchain_run_status_by_variant = payload.get("validation", {}).get(
+        "toolchainRunStatusByVariant"
+    )
     validation_artifact_status_by_target = payload.get("validation", {}).get(
         "artifactStatusByTarget"
     )
@@ -1129,6 +1176,18 @@ def _format_project_report_inspection(payload):
     )
     if validation_toolchain_runs:
         lines.append(validation_toolchain_runs)
+    validation_toolchain_runs_by_target = _format_validation_run_rollup(
+        "Validation toolchain runs by target",
+        validation_toolchain_run_status_by_target,
+    )
+    if validation_toolchain_runs_by_target:
+        lines.append(validation_toolchain_runs_by_target)
+    validation_toolchain_runs_by_variant = _format_validation_run_rollup(
+        "Validation toolchain runs by variant",
+        validation_toolchain_run_status_by_variant,
+    )
+    if validation_toolchain_runs_by_variant:
+        lines.append(validation_toolchain_runs_by_variant)
     if isinstance(validation_summary, Mapping):
         lines.append(
             "Validation artifacts: "
