@@ -958,6 +958,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Render a full shader/program AST as a CUDA translation unit."""
         self.emit("#include <cuda_runtime.h>")
         self.emit("#include <device_launch_parameters.h>")
+        self.emit("#include <cuda_fp16.h>")
         self.emit("")
         self.emit_generated_code(self.generate_cuda_matrix_type_helpers())
         self.emit("")
@@ -2935,8 +2936,35 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
             return f"{vector_info['constructor']}({', '.join(args)})"
 
+        half_constructor = self.cuda_half_constructor_expression(
+            constructor_type, raw_args, args
+        )
+        if half_constructor is not None:
+            return half_constructor
+
         mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
         return f"{mapped_type}({', '.join(args)})"
+
+    def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
+        """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
+        if constructor_type in {"f16", "half", "float16"}:
+            if not args:
+                return "half{}"
+            return f"__float2half({args[0]})"
+
+        if constructor_type not in {"vec2<f16>", "half2", "f16vec2"}:
+            return None
+
+        if not args:
+            return "__float2half2_rn(0.0f)"
+
+        if len(args) == 1:
+            arg_type = self.type_name_string(self.expression_result_type(raw_args[0]))
+            if arg_type in {"vec2<f16>", "half2", "f16vec2"}:
+                return args[0]
+            return f"__float2half2_rn({args[0]})"
+
+        return f"__floats2half2_rn({args[0]}, {args[1]})"
 
     def cuda_vector_constructor_arguments(
         self,
@@ -3035,6 +3063,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             raw_args = node.args
 
         args = [self.visit(arg) for arg in raw_args]
+
+        half_constructor = self.cuda_half_constructor_expression(
+            func_name, raw_args, args
+        )
+        if half_constructor is not None:
+            return half_constructor
 
         if func_name == "lambda":
             return self.generate_lambda_expression(raw_args)
@@ -5957,12 +5991,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "u32": "unsigned int",
             "i64": "long long",
             "u64": "unsigned long long",
+            "f16": "half",
             "f32": "float",
             "f64": "double",
             "int": "int",
             "float": "float",
+            "float16": "half",
+            "half": "half",
             "double": "double",
             # Vector types (with generics)
+            "vec2<f16>": "half2",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",
@@ -5988,6 +6026,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "uvec2": "uint2",
             "uvec3": "uint3",
             "uvec4": "uint4",
+            "f16vec2": "half2",
+            "half2": "half2",
             "bvec2": "uchar2",
             "bvec3": "uchar3",
             "bvec4": "uchar4",
@@ -12013,6 +12053,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 size = type_node.size
                 if element_type == "float":
                     return f"vec{size}"
+                elif element_type == "f16":
+                    return f"vec{size}<f16>"
                 elif element_type == "int":
                     return f"ivec{size}"
                 elif element_type == "uint":

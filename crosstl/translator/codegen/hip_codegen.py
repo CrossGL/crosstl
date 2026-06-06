@@ -271,14 +271,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "u32": "unsigned int",
             "i64": "long long",
             "u64": "unsigned long long",
+            "f16": "half",
             "f32": "float",
             "f64": "double",
             "uint": "unsigned int",
+            "float16": "half",
+            "half": "half",
             "str": "int",
             # Vector types
             "vec2": "float2",
             "vec3": "float3",
             "vec4": "float4",
+            "vec2<f16>": "half2",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",
@@ -300,6 +304,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec2<f64>": "double2",
             "vec3<f64>": "double3",
             "vec4<f64>": "double4",
+            "f16vec2": "half2",
+            "half2": "half2",
             "bvec2": "uchar2",
             "bvec3": "uchar3",
             "bvec4": "uchar4",
@@ -1234,6 +1240,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 "#include <hip/hip_runtime_api.h>",
                 "#include <hip/math_functions.h>",
                 "#include <hip/device_functions.h>",
+                "#include <hip/hip_fp16.h>",
                 "",
             ]
         )
@@ -3687,10 +3694,37 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 if field_name not in consumed:
                     rendered_args.append(self.visit(value))
 
+        half_constructor = self.hip_half_constructor_expression(
+            constructor_type, positional_args, rendered_args
+        )
+        if half_constructor is not None:
+            return half_constructor
+
         mapped_type = self.map_type(constructor_type) if constructor_type else ""
         if not mapped_type:
             return "{" + ", ".join(rendered_args) + "}"
         return f"{mapped_type}{{{', '.join(rendered_args)}}}"
+
+    def hip_half_constructor_expression(self, constructor_type, raw_args, args):
+        """Lower CrossGL FP16 constructors to HIP's documented half intrinsics."""
+        if constructor_type in {"f16", "half", "float16"}:
+            if not args:
+                return "half{}"
+            return f"__float2half({args[0]})"
+
+        if constructor_type not in {"vec2<f16>", "half2", "f16vec2"}:
+            return None
+
+        if not args:
+            return "__float2half2_rn(0.0f)"
+
+        if len(args) == 1:
+            arg_type = self.type_name_string(self.expression_result_type(raw_args[0]))
+            if arg_type in {"vec2<f16>", "half2", "f16vec2"}:
+                return args[0]
+            return f"__float2half2_rn({args[0]})"
+
+        return f"__floats2half2_rn({args[0]}, {args[1]})"
 
     def hip_vector_constructor_arguments(
         self,
@@ -3745,6 +3779,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return enum_constructor
 
         args = [self.visit(arg) for arg in raw_args]
+
+        half_constructor = self.hip_half_constructor_expression(
+            func_name, raw_args, args
+        )
+        if half_constructor is not None:
+            return half_constructor
 
         if func_name == "lambda":
             return self.generate_lambda_expression(raw_args)
@@ -8305,6 +8345,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 size = type_node.size
                 if element_type == "float":
                     return f"float{size}"
+                elif element_type == "f16":
+                    return f"vec{size}<f16>"
                 elif element_type == "int":
                     return f"int{size}"
                 else:

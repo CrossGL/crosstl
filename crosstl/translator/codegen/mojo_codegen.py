@@ -9590,26 +9590,29 @@ class MojoCodeGen:
         if len(args) != 1:
             return None
 
+        supported_float_dtypes = MOJO_FLOAT_DTYPES | {"DType.float16"}
         arg_type = self.expression_result_type(args[0])
         vector_info = self.vector_type_info(arg_type)
         if vector_info is not None:
             dtype, source_width, storage_width, _ = vector_info
-            if dtype not in {"DType.float32", "DType.float64"}:
+            if dtype not in supported_float_dtypes:
                 return None
             arg_expr = self.generate_expression(args[0])
-            self.required_saturate_helpers.add((dtype, source_width, storage_width))
+            self.required_saturate_helpers.add(
+                ("vector", dtype, source_width, storage_width)
+            )
             helper_name = self.saturate_vector_helper_name(
                 dtype, source_width, storage_width
             )
             return f"{helper_name}({arg_expr})"
 
         arg_dtype = self.expression_mojo_dtype(args[0])
-        if arg_dtype not in {"DType.float32", "DType.float64"}:
+        if arg_dtype not in supported_float_dtypes:
             return None
 
         arg_expr = self.generate_expression(args[0])
-        self.required_math_helpers.add("clamp")
-        return f"clamp({arg_expr}, 0.0, 1.0)"
+        self.required_saturate_helpers.add(("scalar", arg_dtype, 1, 1))
+        return f"{self.saturate_scalar_helper_name(arg_dtype)}({arg_expr})"
 
     def generate_angle_conversion_call(self, func_name, args):
         if len(args) != 1:
@@ -12855,10 +12858,23 @@ class MojoCodeGen:
         return f"_crossgl_mod_{dtype_suffix}_{source_width}_{storage_width}_{kind}"
 
     def generate_saturate_helper(self, key):
-        dtype, source_width, storage_width = key
-        _, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+        kind, dtype, source_width, storage_width = key
+        scalar_type, _, pad_literal = MOJO_DTYPE_INFO[dtype]
+
+        if kind == "scalar":
+            mojo_scalar_type = self.map_type(scalar_type)
+            helper_name = self.saturate_scalar_helper_name(dtype)
+            value = self.saturate_value_expression("x")
+            return (
+                f"fn {helper_name}(x: {mojo_scalar_type}) -> {mojo_scalar_type}:\n"
+                f"    return {value}\n\n"
+            )
+
         vector_type = f"SIMD[{dtype}, {storage_width}]"
-        components = [f"clamp(v[{index}], 0.0, 1.0)" for index in range(source_width)]
+        components = [
+            self.saturate_value_expression(f"v[{index}]")
+            for index in range(source_width)
+        ]
         if storage_width > source_width:
             components.append(pad_literal)
 
@@ -12868,6 +12884,12 @@ class MojoCodeGen:
         code = f"fn {helper_name}(v: {vector_type}) -> {vector_type}:\n"
         code += f"    return {vector_type}({', '.join(components)})\n\n"
         return code
+
+    def saturate_value_expression(self, value):
+        return f"0.0 if {value} < 0.0 else (1.0 if {value} > 1.0 else {value})"
+
+    def saturate_scalar_helper_name(self, dtype):
+        return f"_crossgl_saturate_{MOJO_DTYPE_SUFFIX[dtype]}"
 
     def saturate_vector_helper_name(self, dtype, source_width, storage_width):
         dtype_suffix = MOJO_DTYPE_SUFFIX[dtype]

@@ -3510,6 +3510,10 @@ class RustCodeGen:
 
     def map_type_to_rust(self, type_str):
         """Enhanced type mapping for Rust."""
+        matrix_alias = self.normalize_hlsl_matrix_type_name(type_str)
+        if matrix_alias != str(type_str):
+            return self.map_type(matrix_alias)
+
         if type_str.startswith("float") and len(type_str) > 5:
             size = type_str[5:]
             if size.isdigit():
@@ -8582,7 +8586,8 @@ class RustCodeGen:
                     func_name, vector_info, args
                 )
 
-            if func_name in [
+            matrix_func_name = self.normalize_hlsl_matrix_type_name(func_name)
+            if matrix_func_name in [
                 "mat2",
                 "mat3",
                 "mat4",
@@ -8608,7 +8613,7 @@ class RustCodeGen:
                 "dmat4x3",
                 "dmat4x4",
             ]:
-                return self.generate_matrix_constructor_call(func_name, args)
+                return self.generate_matrix_constructor_call(matrix_func_name, args)
 
             args_str = ", ".join(self.generate_expression(arg) for arg in args)
             callable_name = self.rust_imported_math_callable_name(func_name or callee)
@@ -13213,6 +13218,7 @@ class RustCodeGen:
             type_name = self.convert_type_node_to_string(type_name)
         else:
             type_name = str(type_name)
+        type_name = self.normalize_hlsl_matrix_type_name(type_name)
 
         matrix_details = {
             "mat2": (2, 2),
@@ -13246,6 +13252,23 @@ class RustCodeGen:
         columns, rows = details
         component_type = "double" if type_name.startswith("dmat") else "float"
         return {"columns": columns, "rows": rows, "component_type": component_type}
+
+    def normalize_hlsl_matrix_type_name(self, type_name):
+        if type_name is None:
+            return None
+
+        compact = re.sub(r"\s+", "", str(type_name))
+        match = re.fullmatch(r"(float|double)([234])x([234])", compact)
+        if match is None:
+            return str(type_name)
+
+        component_type, rows, columns = match.groups()
+        prefix = "dmat" if component_type == "double" else "mat"
+        rows = int(rows)
+        columns = int(columns)
+        if rows == columns:
+            return f"{prefix}{columns}"
+        return f"{prefix}{columns}x{rows}"
 
     def scalar_type_for_type_constructor(self, scalar_type):
         scalar_type = self.normalize_scalar_type(scalar_type)
@@ -13339,6 +13362,10 @@ class RustCodeGen:
         patch_type = self.rust_tessellation_patch_mapped_type(vtype_str)
         if patch_type is not None:
             return patch_type
+
+        matrix_alias = self.normalize_hlsl_matrix_type_name(vtype_str)
+        if matrix_alias != vtype_str:
+            return self.map_type(matrix_alias)
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, sizes = self.c_array_type_parts(vtype_str)

@@ -25847,6 +25847,24 @@ def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_hlsl_matrix_alias_constructors_compile(tmp_path):
+    code = """
+    shader RustHlslMatrixAliases {
+        float3 firstColumn() {
+            float3x2 basis = float3x2(1.0);
+            return basis.c0;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let basis: Mat2x3<f32>" in generated_code
+    assert "Mat2x3::<f32>::new" in generated_code
+    assert "float3x2" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_stage_local_function_captures_entry_params(tmp_path):
     code = """
     shader RustStageLocalCapture {

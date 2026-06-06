@@ -10746,6 +10746,47 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V backend cannot lower unknown function 'float'" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
 
+    def test_hlsl_matrix_alias_constructors_lower_to_spirv_matrix_types(self, tmp_path):
+        source_code = """
+        shader HlslMatrixAliasConstructor {
+            compute {
+                void main() {
+                    float3x2 basis = float3x2(
+                        1.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vector_types = {
+            vector_id: (component_id, int(width))
+            for vector_id, component_id, width in re.findall(
+                r"(%\d+) = OpTypeVector (%\d+) ([234])\b", spv_code
+            )
+        }
+        matrix_types = {
+            matrix_id: (column_id, int(column_count))
+            for matrix_id, column_id, column_count in re.findall(
+                r"(%\d+) = OpTypeMatrix (%\d+) (\d+)\b", spv_code
+            )
+        }
+
+        assert any(
+            vector_types.get(column_id, (None, None))[1] == 3 and column_count == 2
+            for column_id, column_count in matrix_types.values()
+        )
+        assert "Unknown type float3x2" not in spv_code
+        assert "unknown function 'float3x2'" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_matrix_constructs_have_exact_column_operands(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.0")
+
     def test_struct_resource_members_do_not_emit_opaque_struct_types_for_vulkan10(
         self, tmp_path
     ):

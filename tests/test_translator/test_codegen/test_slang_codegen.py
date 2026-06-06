@@ -172,6 +172,39 @@ def test_basic_shader():
         pytest.fail("Slang basic shader codegen not implemented.")
 
 
+def test_float16_aliases_emit_slang_half_types():
+    code = """
+    shader main {
+        f16 tone(f16 input) {
+            f16 bias = f16(0.5);
+            return bias;
+        }
+
+        vec2<f16> pair(vec2<f16> input) {
+            vec2<f16> scale = vec2<f16>(1.0, 2.0);
+            return scale;
+        }
+
+        vec3<f16> tint(vec3<f16> input) {
+            vec3<f16> offset = vec3<f16>(1.0, 2.0, 3.0);
+            return offset;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "half tone(half input)" in generated_code
+    assert "half bias = half(0.5);" in generated_code
+    assert "half2 pair(half2 input)" in generated_code
+    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "half3 tint(half3 input)" in generated_code
+    assert "half3 offset = half3(1.0, 2.0, 3.0);" in generated_code
+    assert "vec2<f16>" not in generated_code
+    assert "f162" not in generated_code
+    assert "f16(" not in generated_code
+
+
 def test_stage_only_shader_emits_slang_entry_point():
     code = """
     shader main {

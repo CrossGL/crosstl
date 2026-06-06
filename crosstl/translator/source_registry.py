@@ -155,6 +155,10 @@ class SourceRegistry:
                 _, ext = os.path.splitext(path_or_ext)
         ext_key = _normalize_extension(ext or "")
         name = self._by_extension.get(ext_key)
+        if not name and ext_key.startswith("."):
+            _, trailing_ext = os.path.splitext(ext_key)
+            if trailing_ext and trailing_ext != ext_key:
+                name = self._by_extension.get(_normalize_extension(trailing_ext))
         if not name:
             return None
         return self._by_name.get(name)

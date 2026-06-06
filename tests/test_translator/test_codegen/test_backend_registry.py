@@ -147,6 +147,13 @@ def test_source_registry_recognizes_glsl_stage_extensions(extension):
     )
 
 
+@pytest.mark.parametrize("extension", (".rgen.glsl", ".mesh.glsl", ".frag.glsl"))
+def test_source_registry_recognizes_compound_glsl_extension_strings(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "opengl"
+
+
 def test_each_backend_has_codegen_tests():
     backend_files = [name.lower() for name in _backend_test_files()]
     missing = []

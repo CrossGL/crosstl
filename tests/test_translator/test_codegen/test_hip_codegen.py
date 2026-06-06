@@ -1376,6 +1376,37 @@ class TestHipCodeGen:
         assert " = ivec3(" not in hip_code
         assert " = uvec4(" not in hip_code
 
+    def test_fp16_aliases_emit_hip_half_types_and_intrinsics(self):
+        source_code = """
+        shader TestShader {
+            compute {
+                f16 tone(f16 input) {
+                    f16 bias = f16(0.5);
+                    return bias;
+                }
+
+                vec2<f16> pair(vec2<f16> input) {
+                    vec2<f16> scale = vec2<f16>(1.0, 2.0);
+                    vec2<f16> same = vec2<f16>(input);
+                    return same;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "#include <hip/hip_fp16.h>" in hip_code
+        assert "__device__ half tone(half input)" in hip_code
+        assert "half bias = __float2half(0.5);" in hip_code
+        assert "__device__ half2 pair(half2 input)" in hip_code
+        assert "half2 scale = __floats2half2_rn(1.0, 2.0);" in hip_code
+        assert "half2 same = input;" in hip_code
+        assert "vec2<f16>" not in hip_code
+        assert "f162" not in hip_code
+        assert "f16(" not in hip_code
+
     def test_composite_vector_constructors_flatten_hip_lanes(self):
         source_code = """
         shader TestShader {

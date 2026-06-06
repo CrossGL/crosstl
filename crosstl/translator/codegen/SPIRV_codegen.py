@@ -8672,9 +8672,11 @@ class VulkanSPIRVCodeGen:
             constructor_args = self.struct_constructor_args(function_name, args)
             return self.composite_construct(struct_type, constructor_args)
 
+        matrix_function_name = self.normalize_hlsl_matrix_type(function_name)
+
         # Matrix constructors
-        elif re.fullmatch(r"(d)?mat([234])(?:x([234]))?", function_name):
-            match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", function_name)
+        if re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_function_name):
+            match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_function_name)
             is_double, cols, rows = match.groups()
             cols = int(cols)
             rows = int(rows or cols)
@@ -9795,6 +9797,20 @@ class VulkanSPIRVCodeGen:
         }
         return f"{prefixes.get(element_type, 'vec')}{size}"
 
+    def normalize_hlsl_matrix_type(self, type_str: str) -> str:
+        compact = re.sub(r"\s+", "", str(type_str))
+        match = re.fullmatch(r"(float|double)([234])x([234])", compact)
+        if not match:
+            return str(type_str)
+
+        component_type, rows, cols = match.groups()
+        prefix = "dmat" if component_type == "double" else "mat"
+        rows = int(rows)
+        cols = int(cols)
+        if rows == cols:
+            return f"{prefix}{cols}"
+        return f"{prefix}{cols}x{rows}"
+
     def vector_component_type_and_count(
         self, type_str: str
     ) -> Optional[Tuple[str, int]]:
@@ -10906,6 +10922,7 @@ class VulkanSPIRVCodeGen:
             type_str = str(type_name)
 
         type_str = self.normalize_generic_vector_type(type_str)
+        type_str = self.normalize_hlsl_matrix_type(type_str)
         explicit_format = self.explicit_image_format(node) if node is not None else None
 
         array_type = self.split_outer_array_type(type_str)
@@ -10921,7 +10938,7 @@ class VulkanSPIRVCodeGen:
         if self.is_resource_type_name(type_str):
             return self.register_resource_type(type_str, explicit_format)
 
-        return self.map_crossgl_type(type_name)
+        return self.map_crossgl_type(type_str)
 
     def spirv_struct_member_storage_type_name(
         self, type_name, allow_runtime_array: bool = False
@@ -12904,6 +12921,9 @@ class VulkanSPIRVCodeGen:
                 return self.register_vector_type(
                     self.register_primitive_type(component_type), component_count
                 )
+            matrix_type_name = self.normalize_hlsl_matrix_type(callee_name)
+            if re.fullmatch(r"(d)?mat([234])(?:x([234]))?", matrix_type_name):
+                return self.map_crossgl_type(matrix_type_name)
             primitive_name = self.normalize_primitive_name(callee_name)
             if primitive_name in {"bool", "int", "uint", "float", "double"}:
                 return self.register_primitive_type(primitive_name)
@@ -14159,6 +14179,7 @@ class VulkanSPIRVCodeGen:
             return [4]
 
         type_name = self.normalize_generic_vector_type(type_name)
+        type_name = self.normalize_hlsl_matrix_type(type_name)
         array_type = self.split_outer_array_type(type_name)
         if array_type is not None:
             element_type_name, size = array_type

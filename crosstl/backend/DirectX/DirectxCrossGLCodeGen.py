@@ -257,6 +257,9 @@ class HLSLToCrossGLConverter:
         }
         self.legacy_texture_function_sampler_types = {
             "tex2D": {"sampler2D"},
+            "tex2Dlod": {"sampler2D"},
+            "tex2Dbias": {"sampler2D"},
+            "tex2Dgrad": {"sampler2D"},
         }
         self.buffer_method_map = {
             "Load": "buffer_load",
@@ -1075,18 +1078,76 @@ class HLSLToCrossGLConverter:
             f"dropped {parameters} */"
         )
 
-    def legacy_texture_function_call(self, func_name, raw_args, rendered_args):
+    def legacy_texture_function_call(
+        self, func_name, raw_args, rendered_args, is_main=False
+    ):
         expected_sampler_types = self.legacy_texture_function_sampler_types.get(
             func_name
         )
-        if expected_sampler_types is None or len(raw_args) != 2:
+        if expected_sampler_types is None or not raw_args:
             return None
 
         sampler_type = self.raw_type_base(self.expression_raw_type(raw_args[0]))
         if sampler_type not in expected_sampler_types:
             return None
 
-        return f"texture({', '.join(rendered_args)})"
+        if func_name == "tex2D" and len(raw_args) == 2:
+            return f"texture({', '.join(rendered_args)})"
+
+        if func_name in {"tex2Dlod", "tex2Dbias"} and len(raw_args) == 2:
+            coord, explicit_lod = self.legacy_texture_packed_2d_coord_and_w(
+                raw_args[1], rendered_args[1], is_main
+            )
+            helper = "textureLod" if func_name == "tex2Dlod" else "texture"
+            return f"{helper}({rendered_args[0]}, {coord}, {explicit_lod})"
+
+        if func_name == "tex2Dgrad" and len(raw_args) == 4:
+            return f"textureGrad({', '.join(rendered_args)})"
+
+        return None
+
+    def legacy_texture_packed_2d_coord_and_w(
+        self, coord_arg, rendered_coord, is_main=False
+    ):
+        if isinstance(coord_arg, VectorConstructorNode):
+            ctor_args = getattr(coord_arg, "args", []) or []
+            if (
+                len(ctor_args) >= 3
+                and self.numeric_vector_component_count(
+                    self.expression_value_raw_type(ctor_args[0])
+                )
+                == 2
+            ):
+                coord = self.generate_expression(ctor_args[0], is_main)
+                explicit_lod = self.generate_expression(ctor_args[2], is_main)
+                return coord, explicit_lod
+            if len(ctor_args) >= 4:
+                x = self.generate_expression(ctor_args[0], is_main)
+                y = self.generate_expression(ctor_args[1], is_main)
+                explicit_lod = self.generate_expression(ctor_args[3], is_main)
+                return f"vec2({x}, {y})", explicit_lod
+
+        return (
+            self.swizzle_rendered_expression(rendered_coord, "xy"),
+            self.swizzle_rendered_expression(rendered_coord, "w"),
+        )
+
+    def numeric_vector_component_count(self, type_name):
+        base = self.canonical_composite_type(str(type_name or "").strip())
+        match = re.fullmatch(
+            r"(min16float|min10float|min16uint|min16int|min12int|float16_t|"
+            r"uint16_t|int16_t|double|float|half|uint|int|bool)([1-4])",
+            base,
+        )
+        return int(match.group(2)) if match else None
+
+    def swizzle_rendered_expression(self, rendered, swizzle):
+        if re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*",
+            rendered,
+        ):
+            return f"{rendered}.{swizzle}"
+        return f"({rendered}).{swizzle}"
 
     def get_indent(self):
         return "    " * self.indentation
@@ -3245,7 +3306,7 @@ class HLSLToCrossGLConverter:
                     self.generate_expression(arg, is_main) for arg in expr.args
                 ]
             legacy_texture_call = self.legacy_texture_function_call(
-                func_name, expr.args, rendered_args
+                func_name, expr.args, rendered_args, is_main
             )
             if legacy_texture_call is not None:
                 return legacy_texture_call

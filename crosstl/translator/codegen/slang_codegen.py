@@ -4450,6 +4450,8 @@ class SlangCodeGen:
                 return f"{element_type}[{size}]"
             if element_type == "float":
                 return f"vec{type_node.size}"
+            if element_type == "f16":
+                return f"vec{type_node.size}<f16>"
             if element_type == "int":
                 return f"ivec{type_node.size}"
             if element_type == "uint":
@@ -7924,6 +7926,7 @@ class SlangCodeGen:
         if not type_name:
             return False
         return self.convert_type(type_name) in {
+            "half",
             "float",
             "double",
             "int",
@@ -7936,6 +7939,9 @@ class SlangCodeGen:
         if not type_name:
             return False
         return self.convert_type(type_name) in {
+            "half2",
+            "half3",
+            "half4",
             "float2",
             "float3",
             "float4",
@@ -8012,6 +8018,8 @@ class SlangCodeGen:
         mapped_type = self.convert_type(type_name)
         if mapped_type.startswith("double"):
             return "double"
+        if mapped_type.startswith("half"):
+            return "half"
         if mapped_type.startswith("float"):
             return "float"
         if mapped_type.startswith("uint"):
@@ -8026,7 +8034,7 @@ class SlangCodeGen:
         if type_name is None:
             return None
         mapped_type = self.convert_type(type_name)
-        for component_type in ("double", "float", "uint", "int", "bool"):
+        for component_type in ("double", "half", "float", "uint", "int", "bool"):
             if not mapped_type.startswith(component_type):
                 continue
             suffix = mapped_type[len(component_type) :]
@@ -10058,6 +10066,18 @@ class SlangCodeGen:
             return type_name
 
         type_map = {
+            "f16": "half",
+            "float16": "half",
+            "half": "half",
+            "half2": "half2",
+            "half3": "half3",
+            "half4": "half4",
+            "f16vec2": "half2",
+            "f16vec3": "half3",
+            "f16vec4": "half4",
+            "vec2<f16>": "half2",
+            "vec3<f16>": "half3",
+            "vec4<f16>": "half4",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",

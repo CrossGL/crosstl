@@ -547,6 +547,58 @@ def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
 
 
+def test_codegen_shaderlab_legacy_tex2d_lod_bias_grad_imports_canonical_calls():
+    shaderlab = textwrap.dedent("""
+        Shader "Custom/LegacyTex2DVariants"
+        {
+            SubShader
+            {
+                Pass
+                {
+                    CGPROGRAM
+                    sampler2D _MainTex;
+
+                    struct v2f {
+                        float4 position : SV_POSITION;
+                        float2 uv : TEXCOORD0;
+                    };
+
+                    float4 frag(v2f i) : SV_Target
+                    {
+                        float4 lodColor = tex2Dlod(_MainTex, float4(i.uv, 0.0, 2.0));
+                        float4 biasColor = tex2Dbias(_MainTex, float4(i.uv.x, i.uv.y, 0.0, 0.5));
+                        float4 gradColor = tex2Dgrad(_MainTex, i.uv, float2(1.0, 0.0), float2(0.0, 1.0));
+                        return lodColor + biasColor + gradColor;
+                    }
+                    ENDCG
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert "vec4 lodColor = textureLod(_MainTex, i.uv, 2.0);" in crossgl
+    assert "vec4 biasColor = texture(_MainTex, vec2(i.uv.x, i.uv.y), 0.5);" in crossgl
+    assert (
+        "vec4 gradColor = textureGrad(_MainTex, i.uv, vec2(1.0, 0.0), "
+        "vec2(0.0, 1.0));" in crossgl
+    )
+    assert "tex2Dlod(" not in crossgl
+    assert "tex2Dbias(" not in crossgl
+    assert "tex2Dgrad(" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+
+    assert "_MainTex.SampleLevel(_MainTexSampler, i.uv, 2.0)" in hlsl
+    assert "_MainTex.SampleBias(_MainTexSampler, float2(i.uv.x, i.uv.y), 0.5)" in hlsl
+    assert (
+        "_MainTex.SampleGrad(_MainTexSampler, i.uv, float2(1.0, 0.0), "
+        "float2(0.0, 1.0))" in hlsl
+    )
+
+
 def test_codegen_pragma_once_from_directx_fallback_samples():
     hlsl = textwrap.dedent("""
         #pragma once

@@ -5709,7 +5709,7 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
 
     assert "pub struct Particles" in generated_code
     assert (
-        "static VIEW_PROJ: std::sync::LazyLock<float4x4> = "
+        "static VIEW_PROJ: std::sync::LazyLock<Mat4<f32>> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_code
     )
     assert (
@@ -5755,7 +5755,7 @@ def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
     assert "pc.model" not in generated_cgl
     assert "pub struct PushConstants" in generated_rust
     assert (
-        "static MODEL: std::sync::LazyLock<float4x4> = "
+        "static MODEL: std::sync::LazyLock<Mat4<f32>> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_rust
     )
     assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_rust

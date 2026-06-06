@@ -18495,10 +18495,10 @@ def test_builtin_function_call_names_are_mapped():
     assert "lerp(0.0, 1.0, 0.25)" in generated_code
     assert "dot_product(" in generated_code
     assert "power(2.0, 3.0)" in generated_code
-    assert "var sat: Float32 = clamp(1.25, 0.0, 1.0)" in generated_code
+    assert "var sat: Float32 = _crossgl_saturate_f32(1.25)" in generated_code
     assert (
         "var satNested: Float32 = "
-        "clamp(_crossgl_fract_f32(1.75), 0.0, 1.0)" in generated_code
+        "_crossgl_saturate_f32(_crossgl_fract_f32(1.75))" in generated_code
     )
     assert (
         "var satVec: SIMD[DType.float32, 2] = "
@@ -19129,14 +19129,45 @@ def test_saturate_vec3_builtin_lowers_componentwise_and_preserves_padding():
     ) in generated_code
     assert (
         "return SIMD[DType.float32, 4]("
-        "clamp(v[0], 0.0, 1.0), clamp(v[1], 0.0, 1.0), "
-        "clamp(v[2], 0.0, 1.0), 0.0)"
+        "0.0 if v[0] < 0.0 else (1.0 if v[0] > 1.0 else v[0]), "
+        "0.0 if v[1] < 0.0 else (1.0 if v[1] > 1.0 else v[1]), "
+        "0.0 if v[2] < 0.0 else (1.0 if v[2] > 1.0 else v[2]), 0.0)"
     ) in generated_code
     assert (
         "var v: SIMD[DType.float32, 4] = "
         "_crossgl_saturate_f32_3_4("
         "SIMD[DType.float32, 4]((-1.0), 0.5, 2.0, 0.0))"
     ) in generated_code
+    assert "saturate(" not in generated_code
+
+
+def test_saturate_half3_builtin_lowers_componentwise_and_preserves_padding():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                half3 h = half3(-1.0, 0.5, 2.0);
+                half3 s = saturate(h);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn _crossgl_saturate_f16_3_4(v: SIMD[DType.float16, 4]) "
+        "-> SIMD[DType.float16, 4]:"
+    ) in generated_code
+    assert (
+        "return SIMD[DType.float16, 4]("
+        "0.0 if v[0] < 0.0 else (1.0 if v[0] > 1.0 else v[0]), "
+        "0.0 if v[1] < 0.0 else (1.0 if v[1] > 1.0 else v[1]), "
+        "0.0 if v[2] < 0.0 else (1.0 if v[2] > 1.0 else v[2]), 0.0)"
+    ) in generated_code
+    assert (
+        "var s: SIMD[DType.float16, 4] = _crossgl_saturate_f16_3_4(h)" in generated_code
+    )
     assert "saturate(" not in generated_code
 
 
