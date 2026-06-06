@@ -8717,6 +8717,62 @@ def test_project_cli_report_records_include_dir_and_define_overrides(tmp_path):
     assert payload["summary"]["unitCount"] == 1
 
 
+def test_project_cli_report_records_variant_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    output = tmp_path / "portability-report.json"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+
+            [project.defines]
+            MODE = "base"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            ENABLE_FAST_PATH = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            str(repo),
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result.stdout == f"Wrote {output}\n"
+    assert payload["project"]["defines"] == {"MODE": "base"}
+    assert payload["project"]["defineCount"] == 1
+    assert payload["project"]["variants"] == {
+        "debug": {"MODE": "debug"},
+        "release": {"ENABLE_FAST_PATH": "1", "MODE": "release"},
+    }
+    assert payload["project"]["variantCount"] == 2
+    assert payload["project"]["variantDefineCounts"] == {
+        "debug": 1,
+        "release": 2,
+    }
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 0
+
+
 def test_project_cli_report_applies_source_backend_overrides(tmp_path):
     repo = tmp_path / "repo"
     output = tmp_path / "portability-report.json"

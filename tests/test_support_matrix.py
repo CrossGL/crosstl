@@ -458,6 +458,7 @@ def test_project_macro_variants_document_artifact_define_maps():
             "inspection summaries and text output expose variant names "
             "and per-variant define counts" in backend_support["notes"]
         )
+        assert "report CLI variant metadata" in backend_support["notes"]
         assert (
             "define-processing status, source-backend, and variant rollups"
             in backend_support["notes"]
@@ -507,6 +508,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_report_records_include_dir_and_define_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_report_records_variant_metadata"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_lexer.py::def "
