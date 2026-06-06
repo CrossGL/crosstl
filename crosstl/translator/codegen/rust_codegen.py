@@ -5039,6 +5039,8 @@ class RustCodeGen:
             stmt.__class__
         ):
             if hasattr(stmt, "expression"):
+                if self.is_discard_statement(stmt):
+                    return f"{indent_str}gpu::discard();\n"
                 expression = self.generate_expression(stmt.expression)
                 if getattr(stmt, "is_tail_expression", False):
                     return f"{indent_str}{expression}\n"
@@ -5060,6 +5062,10 @@ class RustCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def is_discard_statement(self, stmt):
+        expression = getattr(stmt, "expression", None)
+        return isinstance(expression, IdentifierNode) and expression.name == "discard"
 
     def generate_sync_statement(self, stmt, indent):
         """Render a SyncNode as a Rust synchronization call."""

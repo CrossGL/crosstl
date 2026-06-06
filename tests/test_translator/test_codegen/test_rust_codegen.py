@@ -2202,6 +2202,8 @@ mod gpu {
     #[derive(Debug, Clone, Copy, Default)]
     pub struct RayQuery;
 
+    pub fn discard() {}
+
     #[derive(Debug, Clone, Copy)]
     pub struct Texture1D<T>(PhantomData<T>);
 
@@ -24221,7 +24223,7 @@ def test_rust_fragment_stage_with_texture_sampling():
     assert "DIFFUSE_TEXTURE" in generated_code or "diffuseTexture" in generated_code
 
 
-def test_rust_fragment_stage_with_discard():
+def test_rust_fragment_stage_with_discard(tmp_path):
     code = """
     shader AlphaTest {
         struct FSInput {
@@ -24242,8 +24244,10 @@ def test_rust_fragment_stage_with_discard():
     generated_code = generate_code(ast)
 
     assert_rust_stage_attr(generated_code, "fragment")
-    assert "discard" in generated_code
+    assert "gpu::discard();" in generated_code
+    assert "discard;" not in generated_code
     assert "input.color.w" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_fragment_stage_multiple_render_targets():

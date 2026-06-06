@@ -557,7 +557,7 @@ class GLSLParser:
 
                 if (
                     self.current_token[0] == "IDENTIFIER"
-                    and self.peek(1)[0] == "LPAREN"
+                    and self.peek_non_newline()[0] == "LPAREN"
                 ):
                     function = self.parse_function(
                         self.type_name_with_array_suffixes(type_name, type_array_sizes),
@@ -1419,6 +1419,7 @@ class GLSLParser:
         if name == "main" and not self.should_infer_shader_type:
             qualifier = self.shader_type
         self.eat("IDENTIFIER")
+        self.skip_newlines()
         params = self.parse_parameters()
         self.skip_newlines()
 

@@ -1420,6 +1420,57 @@ def test_codegen_template_style_64_bit_integer_vectors_preserve_width():
     assert "uint64_t4 offsets = uint64_t4(1, 2, 3, 4);" in hlsl_roundtrip
 
 
+def test_codegen_fixed_width_vector_alias_constructors_from_hlsl_docs_reparse():
+    # Sources:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    hlsl = textwrap.dedent("""
+        float16_t4 MakeHalf(float16_t value : TEXCOORD0) : SV_Target0 {
+            float16_t4 halfColor = float16_t4(value, value, value, value);
+            int32_t4 signedLanes = int32_t4(1, 2, 3, 4);
+            uint32_t2 unsignedPair = uint32_t2(1u, 2u);
+            return halfColor + float16_t4(
+                signedLanes.x, signedLanes.y, unsignedPair.x, unsignedPair.y
+            );
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "f16vec4 MakeHalf(float16 value @ TexCoord0) @ gl_FragData[0]" in output
+    assert "f16vec4 halfColor = f16vec4(value, value, value, value);" in output
+    assert "ivec4 signedLanes = ivec4(1, 2, 3, 4);" in output
+    assert "uvec2 unsignedPair = uvec2(1, 2);" in output
+    assert (
+        "return halfColor + f16vec4("
+        "signedLanes.x, signedLanes.y, unsignedPair.x, unsignedPair.y);" in output
+    )
+    assert "float16_t4(" not in output
+    assert "int32_t4(" not in output
+    assert "uint32_t2(" not in output
+    parse_crossgl(output)
+
+
+def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    hlsl = textwrap.dedent("""
+        float32_t Promote(uint32_t seed : TEXCOORD0) : SV_Target0 {
+            int32_t local = int32_t(seed);
+            return float32_t(local);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "float Promote(uint seed @ TexCoord0) @ gl_FragData[0]" in output
+    assert "int local = int(seed);" in output
+    assert "return float(local);" in output
+    assert "float32_t" not in output
+    assert "int32_t" not in output
+    assert "uint32_t" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_signedness_prefixed_int1_aliases_from_microsoft_docs_reparse():
     # Sources: Microsoft Learn HLSL vector and scalar type docs.
     # URLs:

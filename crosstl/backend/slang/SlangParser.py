@@ -1216,7 +1216,7 @@ class SlangParser:
 
     def parse_include(self):
         self.eat("INCLUDE")
-        include_path = self.parse_module_path()
+        include_path = self.parse_module_path(normalize_identifier_file_path=True)
         self.eat("SEMICOLON")
         return include_path
 
@@ -1236,7 +1236,9 @@ class SlangParser:
         self.eat("SEMICOLON")
         return module_path
 
-    def parse_module_path(self, allow_string=True):
+    def parse_module_path(
+        self, allow_string=True, normalize_identifier_file_path=False
+    ):
         if allow_string and self.current_token[0] == "STRING":
             module_path = self.current_token[1][1:-1]
             self.eat("STRING")
@@ -1248,7 +1250,13 @@ class SlangParser:
             self.eat("DOT")
             parts.append(self.current_token[1])
             self.eat("IDENTIFIER")
-        return ".".join(parts)
+        module_path = ".".join(parts)
+        if normalize_identifier_file_path:
+            return self.normalize_identifier_file_path(module_path)
+        return module_path
+
+    def normalize_identifier_file_path(self, module_path):
+        return module_path.replace(".", "/").replace("_", "-")
 
     def parse_export(self, attributes=None):
         self.eat("EXPORT")

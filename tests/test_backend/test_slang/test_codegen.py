@@ -81,6 +81,26 @@ def test_imports_emit_as_parseable_crossgl_unit_preamble():
     cgl_translator.parse(generated_code)
 
 
+def test_identifier_include_path_codegen_uses_slang_file_lookup_semantics():
+    # Slang modules docs: __include dir.file_name resolves like "dir/file-name".
+    code = """
+    module utils;
+    __include utils.tonemap_filter;
+
+    [shader("compute")]
+    void main() {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert generated_code.startswith('import "utils/tonemap-filter";\n\nshader main {')
+    assert "utils.tonemap_filter" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_numthreads_without_shader_attribute_codegen_emits_compute_layout():
     code = """
     Texture2D<uint> gStatsRayCount;

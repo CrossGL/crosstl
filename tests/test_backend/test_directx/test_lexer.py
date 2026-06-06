@@ -307,6 +307,39 @@ def test_exact_16_bit_scalar_types_tokenization_from_hlsl_docs():
     assert ("IDENTIFIER", "uint16_t") not in tokens
 
 
+def test_exact_32_bit_scalar_types_tokenization_from_hlsl_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    tokens = tokenize_code("float32_t f; int32_t i; uint32_t u;")
+
+    assert ("FLOAT32_T", "float32_t") in tokens
+    assert ("INT32_T", "int32_t") in tokens
+    assert ("UINT32_T", "uint32_t") in tokens
+    assert ("IDENTIFIER", "float32_t") not in tokens
+    assert ("IDENTIFIER", "int32_t") not in tokens
+    assert ("IDENTIFIER", "uint32_t") not in tokens
+
+
+def test_fixed_width_vector_aliases_tokenize_as_native_vector_types():
+    # Sources:
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
+    # https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
+    tokens = tokenize_code("""
+    float16_t4 halfColor;
+    int32_t4 signedLanes;
+    uint32_t2 unsignedPair;
+    uint64_t4 wideMask;
+    float16_t2x3 halfMatrix;
+    """)
+
+    assert ("FVECTOR", "float16_t4") in tokens
+    assert ("IVECTOR", "int32_t4") in tokens
+    assert ("UVECTOR", "uint32_t2") in tokens
+    assert ("UVECTOR", "uint64_t4") in tokens
+    assert ("MATRIX", "float16_t2x3") in tokens
+    assert ("IDENTIFIER", "float16_t4") not in tokens
+    assert ("IDENTIFIER", "int32_t4") not in tokens
+
+
 def test_interpolation_modifiers_tokenization():
     code = """
     struct PSInput {
