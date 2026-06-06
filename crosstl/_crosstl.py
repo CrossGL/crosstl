@@ -796,9 +796,12 @@ def _format_source_map_counts(summary):
         for value in (source_map_count, fine_grained_count)
     ):
         return None
+    if fine_grained_count > source_map_count:
+        return None
+    file_level_count = source_map_count - fine_grained_count
     return (
         "Source maps: "
-        f"{source_map_count} file-level, "
+        f"{file_level_count} file-level, "
         f"{fine_grained_count} fine-grained"
     )
 

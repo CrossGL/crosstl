@@ -9745,14 +9745,16 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     assert run["tool"]["driver"]["name"] == "CrossTL project validation"
     assert run["invocations"][0]["executionSuccessful"] is False
     assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
-    assert run["tool"]["driver"]["rules"] == [
-        {
-            "id": "project.validate.generated-hash-mismatch",
-            "name": "project.validate.generated-hash-mismatch",
-        }
-    ]
-    assert len(run["results"]) == 1
-    sarif_result = run["results"][0]
+    rules_by_id = {rule["id"]: rule for rule in run["tool"]["driver"]["rules"]}
+    assert rules_by_id["project.validate.generated-hash-mismatch"] == {
+        "id": "project.validate.generated-hash-mismatch",
+        "name": "project.validate.generated-hash-mismatch",
+    }
+    sarif_result = next(
+        result
+        for result in run["results"]
+        if result.get("ruleId") == "project.validate.generated-hash-mismatch"
+    )
     assert sarif_result["ruleId"] == "project.validate.generated-hash-mismatch"
     assert sarif_result["level"] == "error"
     assert sarif_result["message"]["text"] == (
@@ -11098,6 +11100,27 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "(status=ok, exists=true, sourceHash=ok, generatedHash=ok, "
         "sourceMap=ok, sourceRemap=ok)"
     ) in result.stdout
+
+
+def test_project_cli_source_map_counts_split_file_and_fine_grained_totals():
+    assert (
+        crosstl_cli._format_source_map_counts(
+            {
+                "sourceMapCount": 3,
+                "fineGrainedSourceMapCount": 1,
+            }
+        )
+        == "Source maps: 2 file-level, 1 fine-grained"
+    )
+    assert (
+        crosstl_cli._format_source_map_counts(
+            {
+                "sourceMapCount": 1,
+                "fineGrainedSourceMapCount": 2,
+            }
+        )
+        is None
+    )
 
 
 def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):

@@ -755,6 +755,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert (
+            "text inspection derives file-level source-map counts from total "
+            "and fine-grained source-map totals"
+        ) in backend_support["notes"]
+        assert (
             "artifact provenance summary rollups by pipeline, intermediate "
             "marker, and source backend with intermediate marker"
         ) in backend_support["notes"]
@@ -791,6 +795,14 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_override_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_map_counts"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_source_map_counts_split_file_and_fine_grained_totals"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
