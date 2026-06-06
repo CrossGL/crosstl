@@ -690,6 +690,50 @@ def _source_remap_counts_by_source_backend(
     return dict(sorted(counts.items()))
 
 
+def _artifact_provenance_counts_by_pipeline(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        provenance = artifact.get("provenance")
+        pipeline = (
+            provenance.get("pipeline") if isinstance(provenance, Mapping) else None
+        )
+        key = pipeline if _is_non_empty_string(pipeline) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _artifact_provenance_counts_by_intermediate(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        provenance = artifact.get("provenance")
+        if not isinstance(provenance, Mapping):
+            key = "unknown"
+        elif provenance.get("intermediate") is None:
+            key = "none"
+        else:
+            intermediate = provenance.get("intermediate")
+            key = intermediate if _is_non_empty_string(intermediate) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _artifact_provenance_rollups(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "artifactProvenanceByPipeline": _artifact_provenance_counts_by_pipeline(
+            artifacts
+        ),
+        "artifactProvenanceByIntermediate": _artifact_provenance_counts_by_intermediate(
+            artifacts
+        ),
+    }
+
+
 def _define_processing_status_counts(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -1917,6 +1961,7 @@ class ProjectPortabilityReport:
                 ),
                 "artifactsByVariant": _artifact_counts_by_variant(self.artifacts),
                 "artifactsByTarget": _artifact_counts_by_target(self.artifacts),
+                **_artifact_provenance_rollups(self.artifacts),
                 **source_map_rollups,
                 **define_processing_rollups,
                 **include_path_processing_rollups,
@@ -3307,6 +3352,7 @@ def inspect_project_report(
         "success": bool(validation_report.get("success")),
         "report": {"available": False, "valid": False},
         "sourceMaps": {"available": False},
+        "artifactProvenance": {"available": False},
         "defineProcessing": {"available": False},
         "includeDependencies": {"available": False},
         "includePathProcessing": {"available": False},
@@ -3399,6 +3445,7 @@ def inspect_project_report(
         "summary": dict(summary) if isinstance(summary, Mapping) else {},
     }
     payload["sourceMaps"] = _inspection_source_map_summary(summary)
+    payload["artifactProvenance"] = _inspection_artifact_provenance_summary(summary)
     payload["defineProcessing"] = _inspection_define_processing_summary(
         summary,
         report.get("artifacts"),
@@ -3993,6 +4040,22 @@ def _inspection_source_map_summary(summary: Any) -> dict[str, Any]:
         if isinstance(value, Mapping):
             payload[field_name] = dict(value)
     return payload
+
+
+def _inspection_artifact_provenance_summary(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, Mapping):
+        return {"available": False}
+
+    by_pipeline = summary.get("artifactProvenanceByPipeline")
+    by_intermediate = summary.get("artifactProvenanceByIntermediate")
+    if not isinstance(by_pipeline, Mapping) or not isinstance(by_intermediate, Mapping):
+        return {"available": False}
+
+    return {
+        "available": True,
+        "byPipeline": dict(by_pipeline),
+        "byIntermediate": dict(by_intermediate),
+    }
 
 
 def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
@@ -6897,6 +6960,23 @@ def _summary_contract_reasons(
                 summary.get("artifactsByTarget"),
                 _artifact_counts_by_target(artifact_records),
                 "artifacts",
+            )
+        )
+        artifact_provenance_rollups = _artifact_provenance_rollups(artifact_records)
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactProvenanceByPipeline",
+                summary.get("artifactProvenanceByPipeline"),
+                artifact_provenance_rollups["artifactProvenanceByPipeline"],
+                "artifact provenance",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactProvenanceByIntermediate",
+                summary.get("artifactProvenanceByIntermediate"),
+                artifact_provenance_rollups["artifactProvenanceByIntermediate"],
+                "artifact provenance",
             )
         )
         define_processing_rollups = _define_processing_rollups(artifact_records)

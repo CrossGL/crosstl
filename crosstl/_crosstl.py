@@ -1316,6 +1316,16 @@ def _format_project_report_inspection(payload):
             summary.get("sourceRemapsBySourceBackend"),
             include_zero=False,
         ),
+        _format_count_rollup(
+            "Artifact provenance by pipeline",
+            summary.get("artifactProvenanceByPipeline"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Artifact provenance by intermediate",
+            summary.get("artifactProvenanceByIntermediate"),
+            include_zero=False,
+        ),
     ):
         if line:
             lines.append(line)

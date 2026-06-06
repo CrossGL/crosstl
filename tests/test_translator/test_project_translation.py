@@ -2551,6 +2551,10 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
             "failedCount": 0,
         }
     }
+    assert payload["summary"]["artifactProvenanceByPipeline"] == {
+        "single-file-translate": 1
+    }
+    assert payload["summary"]["artifactProvenanceByIntermediate"] == {"none": 1}
     assert payload["project"]["sourceRootCount"] == 1
     assert payload["project"]["includePatternCount"] == 0
     assert payload["project"]["excludePatternCount"] == len(
@@ -2582,6 +2586,58 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         "application build-system rewrites",
         "backend framework integration",
     ]
+
+
+def test_translate_project_records_bridge_artifact_provenance_rollups(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "shader.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.sources]
+            "*.rs" = "rust"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["artifacts"][0]["provenance"] == {
+        "pipeline": "single-file-translate",
+        "intermediate": "crossgl",
+    }
+    assert payload["summary"]["artifactProvenanceByPipeline"] == {
+        "single-file-translate": 1
+    }
+    assert payload["summary"]["artifactProvenanceByIntermediate"] == {"crossgl": 1}
 
 
 def test_translate_project_records_file_granularity_source_maps(tmp_path):
@@ -6530,6 +6586,8 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "sourceRemapCount": 1,
                     "sourceRemapsByTarget": {"cgl": 1},
                     "sourceRemapsBySourceBackend": {"cgl": 1},
+                    "artifactProvenanceByPipeline": {"manual-copy": 1},
+                    "artifactProvenanceByIntermediate": {"crossgl": 1},
                 },
                 "units": [
                     {
@@ -6607,6 +6665,13 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     )
     assert "summary.artifactsByVariant must match artifacts" in diagnostic["message"]
     assert "summary.artifactsByTarget must match artifacts" in diagnostic["message"]
+    assert "summary.artifactProvenanceByPipeline must match artifact provenance" in (
+        diagnostic["message"]
+    )
+    assert (
+        "summary.artifactProvenanceByIntermediate must match artifact provenance"
+        in diagnostic["message"]
+    )
     assert "summary.sourceMapCount must match artifact source maps" in (
         diagnostic["message"]
     )
@@ -8336,6 +8401,11 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "sourceRemapsByTarget": {"cgl": 1},
         "sourceRemapsBySourceBackend": {"cgl": 1},
     }
+    assert payload["artifactProvenance"] == {
+        "available": True,
+        "byPipeline": {"single-file-translate": 1},
+        "byIntermediate": {"none": 1},
+    }
     assert payload["defineProcessing"] == {
         "available": True,
         "byStatus": {"not-requested": 1},
@@ -8568,6 +8638,11 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "sourceMapsBySourceBackend": {"cgl": 1},
         "sourceRemapsByTarget": {"cgl": 1},
         "sourceRemapsBySourceBackend": {"cgl": 1},
+    }
+    assert payload["artifactProvenance"] == {
+        "available": True,
+        "byPipeline": {"single-file-translate": 1},
+        "byIntermediate": {"none": 1},
     }
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
@@ -9064,6 +9139,8 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source maps by source backend: cgl=1" in result.stdout
     assert "Source remaps by target: cgl=1" in result.stdout
     assert "Source remaps by source backend: cgl=1" in result.stdout
+    assert "Artifact provenance by pipeline: single-file-translate=1" in result.stdout
+    assert "Artifact provenance by intermediate: none=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
