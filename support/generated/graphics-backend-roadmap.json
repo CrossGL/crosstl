@@ -1732,7 +1732,7 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_applies_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
@@ -1759,7 +1759,7 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_applies_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
@@ -1786,7 +1786,7 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_applies_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
             "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
@@ -1817,6 +1817,7 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
@@ -1842,6 +1843,7 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
@@ -1867,6 +1869,7 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
@@ -1909,6 +1912,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_processing_mismatches",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_define_processing_summary_mismatches",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
             "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_project_mapping_keys",
@@ -1940,6 +1944,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_processing_mismatches",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_define_processing_summary_mismatches",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
             "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_project_mapping_keys",
@@ -1971,6 +1976,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_processing_mismatches",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_define_processing_summary_mismatches",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
             "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_project_mapping_keys",
@@ -2834,7 +2840,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names, non-forwarded define/include-path frontend options, and non-repository-relative scan patterns including drive-qualified Windows paths are reported before validation, and validation rejects malformed preserved diagnostics, non-repository-relative diagnostic locations, inconsistent diagnostic location spans, or diagnostics whose targets are not declared by the report before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability, including duplicate external corpus manifest entry warnings.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics; unsupported target names and non-repository-relative scan patterns including drive-qualified Windows paths are reported before validation, while non-forwarded define/include-path frontend options are translation-time warnings surfaced in report summaries; validation rejects malformed preserved diagnostics, non-repository-relative diagnostic locations, inconsistent diagnostic location spans, or diagnostics whose targets are not declared by the report before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability, including duplicate external corpus manifest entry warnings.",
           "status": "supported"
         },
         "metal": {
@@ -2863,7 +2869,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names, non-forwarded define/include-path frontend options, and non-repository-relative scan patterns including drive-qualified Windows paths are reported before validation, and validation rejects malformed preserved diagnostics, non-repository-relative diagnostic locations, inconsistent diagnostic location spans, or diagnostics whose targets are not declared by the report before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability, including duplicate external corpus manifest entry warnings.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics; unsupported target names and non-repository-relative scan patterns including drive-qualified Windows paths are reported before validation, while non-forwarded define/include-path frontend options are translation-time warnings surfaced in report summaries; validation rejects malformed preserved diagnostics, non-repository-relative diagnostic locations, inconsistent diagnostic location spans, or diagnostics whose targets are not declared by the report before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability, including duplicate external corpus manifest entry warnings.",
           "status": "supported"
         },
         "opengl": {
@@ -2892,7 +2898,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support"
           ],
-          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics, unsupported target names, non-forwarded define/include-path frontend options, and non-repository-relative scan patterns including drive-qualified Windows paths are reported before validation, and validation rejects malformed preserved diagnostics, non-repository-relative diagnostic locations, inconsistent diagnostic location spans, or diagnostics whose targets are not declared by the report before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability, including duplicate external corpus manifest entry warnings.",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, and missing-capability fields while keeping per-artifact failures in the report. Scan/report CLI commands return nonzero when project reports contain error diagnostics; unsupported target names and non-repository-relative scan patterns including drive-qualified Windows paths are reported before validation, while non-forwarded define/include-path frontend options are translation-time warnings surfaced in report summaries; validation rejects malformed preserved diagnostics, non-repository-relative diagnostic locations, inconsistent diagnostic location spans, or diagnostics whose targets are not declared by the report before copying them into validation output. Report summaries include contract-checked rollups by diagnostic code and missing capability, including duplicate external corpus manifest entry warnings.",
           "status": "supported"
         }
       }

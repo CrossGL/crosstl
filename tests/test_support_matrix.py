@@ -513,7 +513,7 @@ def test_project_diagnostics_document_location_path_checks():
     feature = features["project.diagnostics"]
 
     for backend_support in feature["support"].values():
-        assert "non-forwarded define/include-path frontend options" in (
+        assert "translation-time warnings surfaced in report summaries" in (
             backend_support["notes"]
         )
         assert "non-repository-relative diagnostic locations" in (
