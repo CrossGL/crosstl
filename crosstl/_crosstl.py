@@ -918,6 +918,63 @@ def _format_source_remap_artifact_lines(source_maps):
     return lines
 
 
+def _format_artifact_provenance_line(artifact):
+    if not isinstance(artifact, Mapping):
+        return None
+
+    source = artifact.get("source")
+    path = artifact.get("path")
+    if not isinstance(source, str) or not source:
+        return None
+    if not isinstance(path, str) or not path:
+        return None
+
+    details = []
+    source_backend = artifact.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    target = artifact.get("target")
+    if isinstance(target, str) and target:
+        details.append(f"target={target}")
+    variant = artifact.get("variant")
+    if isinstance(variant, str) and variant:
+        details.append(f"variant={variant}")
+    pipeline = artifact.get("pipeline")
+    if isinstance(pipeline, str) and pipeline:
+        details.append(f"pipeline={pipeline}")
+    intermediate = artifact.get("intermediate")
+    if isinstance(intermediate, str) and intermediate:
+        details.append(f"intermediate={intermediate}")
+
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"- {source} -> {path}{suffix}"
+
+
+def _format_artifact_provenance_lines(artifact_provenance):
+    if not isinstance(artifact_provenance, Mapping):
+        return []
+    artifacts = artifact_provenance.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        return []
+
+    lines = ["Artifact provenance samples:"]
+    for artifact in artifacts:
+        line = _format_artifact_provenance_line(artifact)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = artifact_provenance.get("truncatedArtifactCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_artifact_matrix_summary(artifact_matrix):
     if not isinstance(artifact_matrix, Mapping):
         return None
@@ -1753,6 +1810,7 @@ def _format_project_report_inspection(payload):
     source_map_payload = payload.get("sourceMaps")
     lines.extend(_format_source_map_artifact_lines(source_map_payload))
     lines.extend(_format_source_remap_artifact_lines(source_map_payload))
+    lines.extend(_format_artifact_provenance_lines(payload.get("artifactProvenance")))
     units_by_source_backend = _format_count_rollup(
         "Units by source backend",
         summary.get("unitsBySourceBackend"),

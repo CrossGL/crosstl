@@ -8969,6 +8969,18 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byPipeline": {"single-file-translate": 1},
         "byIntermediate": {"none": 1},
         "intermediateBySourceBackend": {"cgl": {"none": 1}},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "pipeline": "single-file-translate",
+                "intermediate": "none",
+            }
+        ],
     }
     assert payload["defineProcessing"] == {
         "available": True,
@@ -9277,6 +9289,18 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "byPipeline": {"single-file-translate": 1},
         "byIntermediate": {"none": 1},
         "intermediateBySourceBackend": {"cgl": {"none": 1}},
+        "artifactCount": 1,
+        "truncatedArtifactCount": 0,
+        "artifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "pipeline": "single-file-translate",
+                "intermediate": "none",
+            }
+        ],
     }
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
@@ -9842,6 +9866,12 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "Artifact provenance by source backend and intermediate: cgl=(none=1)"
         in result.stdout
     )
+    assert "Artifact provenance samples:" in result.stdout
+    assert (
+        "- simple.cgl -> out/cgl/simple.cgl "
+        "(sourceBackend=cgl, target=cgl, "
+        "pipeline=single-file-translate, intermediate=none)"
+    ) in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):

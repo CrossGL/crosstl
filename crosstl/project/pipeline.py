@@ -42,6 +42,7 @@ REPORT_PACKAGE_NAME = "crosstl"
 UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
 ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT = 20
+ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT = 20
 DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
@@ -3740,7 +3741,10 @@ def inspect_project_report(
         summary,
         report.get("artifacts"),
     )
-    payload["artifactProvenance"] = _inspection_artifact_provenance_summary(summary)
+    payload["artifactProvenance"] = _inspection_artifact_provenance_summary(
+        summary,
+        report.get("artifacts"),
+    )
     payload["defineProcessing"] = _inspection_define_processing_summary(
         summary,
         report.get("artifacts"),
@@ -4555,7 +4559,35 @@ def _inspection_source_map_summary(
     return payload
 
 
-def _inspection_artifact_provenance_summary(summary: Any) -> dict[str, Any]:
+def _inspection_artifact_provenance_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    provenance = artifact.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return None
+
+    intermediate = provenance.get("intermediate")
+    sample = {
+        "source": artifact.get("source"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "target": artifact.get("target"),
+        "path": artifact.get("path"),
+        "pipeline": provenance.get("pipeline"),
+        "intermediate": (
+            intermediate
+            if _is_non_empty_string(intermediate)
+            else "none" if intermediate is None else "unknown"
+        ),
+    }
+    if "variant" in artifact:
+        sample["variant"] = artifact.get("variant")
+    return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_artifact_provenance_summary(
+    summary: Any,
+    artifacts: Any = None,
+) -> dict[str, Any]:
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -4566,6 +4598,14 @@ def _inspection_artifact_provenance_summary(summary: Any) -> dict[str, Any]:
     )
     if not isinstance(by_pipeline, Mapping) or not isinstance(by_intermediate, Mapping):
         return {"available": False}
+
+    provenance_artifacts = []
+    for artifact in _record_sequence(artifacts):
+        if not isinstance(artifact, Mapping):
+            continue
+        sample = _inspection_artifact_provenance_artifact(artifact)
+        if sample:
+            provenance_artifacts.append(sample)
 
     return {
         "available": True,
@@ -4580,6 +4620,12 @@ def _inspection_artifact_provenance_summary(summary: Any) -> dict[str, Any]:
             if isinstance(intermediate_by_source_backend, Mapping)
             else {}
         ),
+        "artifactCount": len(provenance_artifacts),
+        "truncatedArtifactCount": max(
+            0,
+            len(provenance_artifacts) - ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT,
+        ),
+        "artifacts": provenance_artifacts[:ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT],
     }
 
 

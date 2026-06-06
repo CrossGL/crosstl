@@ -665,6 +665,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "artifact provenance summary rollups by pipeline, intermediate "
             "marker, and source backend with intermediate marker"
         ) in backend_support["notes"]
+        assert "bounded artifact provenance inspection samples" in (
+            backend_support["notes"]
+        )
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]
         )
