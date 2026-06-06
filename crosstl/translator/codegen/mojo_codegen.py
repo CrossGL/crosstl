@@ -9425,6 +9425,11 @@ class MojoCodeGen:
         raise ValueError(f"Unsupported Mojo mesh intrinsic {operation}")
 
     def generate_vector_constructor(self, func_name, args):
+        if len(args) == 1:
+            self.validate_image_result_target_shape(
+                args[0], func_name, f"vector constructor {func_name} argument 1"
+            )
+
         helper_call = self.generate_constructor_helper_call(func_name, args)
         if helper_call is not None:
             return helper_call
@@ -9434,12 +9439,10 @@ class MojoCodeGen:
         ]
         mojo_type = f"SIMD[{dtype}, {storage_width}]"
         emitted_args = []
+        uses_scalar_splat_constructor = False
 
         if len(args) == 1:
             arg = args[0]
-            self.validate_image_result_target_shape(
-                arg, func_name, f"vector constructor {func_name} argument 1"
-            )
             arg_components = self.vector_components_for_expression(arg, dtype)
             if arg_components is not None:
                 emitted_args.extend(arg_components[:source_width])
@@ -9458,6 +9461,7 @@ class MojoCodeGen:
                         arg, dtype, f"vector constructor {func_name} argument 1"
                     )
                 )
+                uses_scalar_splat_constructor = True
         else:
             for index, arg in enumerate(args, start=1):
                 arg_components = self.vector_components_for_expression(arg, dtype)
@@ -9474,6 +9478,11 @@ class MojoCodeGen:
 
         if len(emitted_args) > source_width:
             emitted_args = emitted_args[:source_width]
+        elif len(emitted_args) < source_width and not uses_scalar_splat_constructor:
+            emitted_args.extend(
+                MOJO_DTYPE_INFO[dtype][2]
+                for _ in range(source_width - len(emitted_args))
+            )
 
         if source_width == 3 and len(emitted_args) == 3:
             emitted_args.append(pad_literal)
@@ -13142,7 +13151,7 @@ class MojoCodeGen:
                 return None
             pieces.append(piece)
 
-        pieces = self.select_constructor_pieces(pieces, source_width)
+        pieces = self.select_constructor_pieces(pieces, source_width, dtype)
         if pieces is None:
             return None
 
@@ -13172,7 +13181,7 @@ class MojoCodeGen:
         ]
         return f"{helper_name}({', '.join(call_args)})"
 
-    def select_constructor_pieces(self, pieces, source_width):
+    def select_constructor_pieces(self, pieces, source_width, target_dtype=None):
         selected = []
         remaining = source_width
 
@@ -13189,7 +13198,17 @@ class MojoCodeGen:
                 remaining -= 1
 
         if remaining != 0:
-            return None
+            if target_dtype is None:
+                return None
+            zero_literal = MOJO_DTYPE_INFO[target_dtype][2]
+            selected.extend(
+                {
+                    "kind": "scalar",
+                    "expr": zero_literal,
+                    "dtype": target_dtype,
+                }
+                for _ in range(remaining)
+            )
         return selected
 
     def constructor_piece_for_expression(self, expr, target_dtype):

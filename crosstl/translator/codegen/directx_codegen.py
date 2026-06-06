@@ -520,6 +520,9 @@ class HLSLCodeGen:
         "atan2",
         # GLSL bitCount lowers to HLSL countbits.
         "countbits",
+        # GLSL findLSB/findMSB lower to HLSL first-bit intrinsics.
+        "firstbithigh",
+        "firstbitlow",
     }
     HLSL_BITCAST_FUNCTION_TARGETS = {
         "floatBitsToInt": "int",
@@ -803,6 +806,8 @@ class HLSLCodeGen:
             "fract": "frac",
             "floatBitsToInt": "asint",
             "floatBitsToUint": "asuint",
+            "findLSB": "firstbitlow",
+            "findMSB": "firstbithigh",
             "inverseSqrt": "rsqrt",
             "inversesqrt": "rsqrt",
             "intBitsToFloat": "asfloat",
@@ -4224,6 +4229,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             countbits_result_type = self.hlsl_countbits_result_type(func_name, args)
             if countbits_result_type is not None:
                 return countbits_result_type
+            firstbit_result_type = self.hlsl_firstbit_result_type(func_name, args)
+            if firstbit_result_type is not None:
+                return firstbit_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if func_name == "dot" and args:
@@ -5316,6 +5324,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if suffix in {"2", "3", "4"}:
                     return f"uint{suffix}"
         return "uint"
+
+    def hlsl_firstbit_result_type(self, func_name, args):
+        if func_name not in {"findLSB", "findMSB", "firstbitlow", "firstbithigh"}:
+            return None
+        if func_name in getattr(self, "function_return_types", {}):
+            return None
+
+        source_type = self.map_type(
+            (self.expression_result_type(args[0]) if args else None) or "int"
+        )
+        for component in ("int", "uint"):
+            if source_type == component:
+                return component
+            if source_type.startswith(component):
+                suffix = source_type[len(component) :]
+                if suffix in {"2", "3", "4"}:
+                    return f"{component}{suffix}"
+        return "int"
 
     def hlsl_function_name_is_shadowed(self, func_name):
         return func_name in self.local_variable_types or func_name in getattr(

@@ -1565,7 +1565,7 @@ class CudaParser:
         if self.current_token[0] not in {"CLASS", "STRUCT", "UNION"}:
             return False
 
-        index = self.current_index + 1
+        index = self.skip_alignment_attributes_at_index(self.current_index + 1)
         if index >= len(self.tokens) or self.tokens[index][0] != "IDENTIFIER":
             return False
 

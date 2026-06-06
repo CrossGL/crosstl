@@ -341,6 +341,24 @@ class TestHipParser:
         assert member.name == "data"
         assert member.vtype == "float4"
 
+    def test_public_rocm_stb_image_trailing_aligned_attribute_declarator_parse(self):
+        code = """
+        void load_image_tile() {
+            unsigned char temp[16] __attribute__((aligned(16)));
+            temp[0] = 1;
+        }
+        """
+        ast = self.parse_code(code)
+
+        temp = ast.statements[0].body[0]
+        assignment = ast.statements[0].body[1]
+
+        assert isinstance(temp, VariableNode)
+        assert temp.name == "temp"
+        assert temp.vtype == "unsigned char[16]"
+        assert temp.value is None
+        assert isinstance(assignment, AssignmentNode)
+
     def test_extern_shared_memory_declaration_with_post_type_qualifier_parses(self):
         code = """
         __global__ void dynamic_shared() {

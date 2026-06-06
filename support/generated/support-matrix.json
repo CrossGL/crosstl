@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 980
+        "test_count": 982
       },
       "translator_codegen": {
         "exists": true,
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 880
+        "test_count": 882
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 668
+        "test_count": 669
       },
       "translator_codegen": {
         "exists": true,
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 719
+        "test_count": 721
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 771
+        "test_count": 773
       },
       "translator_codegen": {
         "exists": true,

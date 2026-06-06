@@ -993,6 +993,31 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_STORAGE_IMAGE_ARRAY_FORMAT_ASSEMBLY = """
+; Reduced from Vulkan descriptor arrays of formatted storage images.
+; The Image Format lives on the OpTypeImage element, not the OpTypeArray.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %storage_images "storageImages"
+OpDecorate %storage_images DescriptorSet 0
+OpDecorate %storage_images Binding 0
+OpDecorate %storage_images NonWritable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%count = OpConstant %uint 4
+%image = OpTypeImage %uint 2D 0 0 0 2 R32ui
+%image_array = OpTypeArray %image %count
+%ptr_storage_images = OpTypePointer UniformConstant %image_array
+%storage_images = OpVariable %ptr_storage_images UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_SAMPLED_IMAGE_FETCH_ASSEMBLY = """
 ; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
 ; Test/baseResults/web.separate.frag.out OpSampledImage and
@@ -2125,6 +2150,26 @@ def test_spirv_assembly_storage_image_format_parse():
     ]
     assert storage_image.declaration_qualifiers == ["readonly"]
     assert storage_image.spirv_storage_class == "UniformConstant"
+
+
+def test_spirv_assembly_storage_image_array_format_parse():
+    tokens = tokenize_code(SPIRV_STORAGE_IMAGE_ARRAY_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    storage_images = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_types["%image"]["format"] == "R32ui"
+    assert ast.spirv_types["%image_array"]["kind"] == "array"
+    assert storage_images.layout_type == "UNIFORM"
+    assert storage_images.data_type == "uimage2D"
+    assert storage_images.variable_name == "storageImages[4]"
+    assert storage_images.qualifiers == [
+        ("set", "0"),
+        ("binding", "0"),
+        ("r32ui", None),
+    ]
+    assert storage_images.declaration_qualifiers == ["readonly"]
+    assert storage_images.spirv_storage_class == "UniformConstant"
 
 
 def test_glslang_image_write_sample_operand_parse():

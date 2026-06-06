@@ -4312,6 +4312,7 @@ class VulkanParser:
         self, variable, pointer_type, names, decorations, types, constants
     ):
         resource_type = types.get(pointer_type.get("type_id"), {})
+        resource_element_type = self.spirv_resource_element_type(resource_type, types)
         data_type, array_suffix = self.spirv_type_name_and_suffix(
             pointer_type.get("type_id"), types, constants
         )
@@ -4320,7 +4321,9 @@ class VulkanParser:
 
         variable_decorations = decorations.get(variable["id"], [])
         qualifiers = self.spirv_descriptor_qualifiers(variable_decorations)
-        image_format = self.spirv_image_format_qualifier(resource_type.get("format"))
+        image_format = self.spirv_image_format_qualifier(
+            resource_element_type.get("format")
+        )
         if image_format is not None:
             qualifiers.append((image_format, None))
         qualifier_names = {name for name, _value in qualifiers}
@@ -4329,7 +4332,7 @@ class VulkanParser:
 
         declaration_qualifiers = self.spirv_declaration_qualifiers(variable_decorations)
         access_qualifier = self.spirv_image_access_qualifier(
-            resource_type.get("access_qualifier")
+            resource_element_type.get("access_qualifier")
         )
         if access_qualifier and access_qualifier not in declaration_qualifiers:
             declaration_qualifiers.append(access_qualifier)
@@ -4348,6 +4351,11 @@ class VulkanParser:
             spirv_decorations=variable_decorations,
             spirv_storage_class="UniformConstant",
         )
+
+    def spirv_resource_element_type(self, resource_type, types):
+        while resource_type.get("kind") in {"array", "runtime_array"}:
+            resource_type = types.get(resource_type.get("element_type"), {})
+        return resource_type
 
     def spirv_assembly_specialization_constants(
         self, spec_constant_ids, names, decorations, types, constants, constant_types

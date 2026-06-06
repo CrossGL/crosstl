@@ -1827,6 +1827,7 @@ class HipParser:
         self.skip_newlines()
         name = self.consume_variable_declarator_name()
         var_type += self.parse_array_suffix()
+        self.skip_declarator_attribute_suffixes()
         self.skip_newlines()
 
         value = None
@@ -1942,6 +1943,7 @@ class HipParser:
 
         name = self.consume_variable_declarator_name()
         var_type += self.parse_array_suffix()
+        self.skip_declarator_attribute_suffixes()
         self.skip_newlines()
         value = self.parse_variable_initializer(var_type)
 
@@ -2016,6 +2018,7 @@ class HipParser:
 
     def parse_variable_initializer(self, var_type):
         self.skip_newlines()
+        self.skip_declarator_attribute_suffixes()
         if self.match("ASSIGN"):
             self.advance()
             self.skip_newlines()
@@ -2028,6 +2031,13 @@ class HipParser:
         if self.match("LBRACE"):
             return self.parse_initializer_list()
         return None
+
+    def skip_declarator_attribute_suffixes(self):
+        previous_pos = -1
+        while self.current_token and self.pos != previous_pos:
+            previous_pos = self.pos
+            self.skip_newlines()
+            self.parse_type_attribute_prefixes()
 
     def constructor_initializer_name(self, var_type):
         return " ".join(
@@ -4264,8 +4274,11 @@ class HipParser:
             declarator_name_end = self.skip_variable_declarator_name_at_pos(index)
             if declarator_name_end is not None:
                 index = declarator_name_end
-                while index < len(self.tokens) and self.tokens[index].type == "NEWLINE":
-                    index += 1
+                index = self.skip_newlines_at_pos(index)
+                index = self.skip_array_suffix_at_pos(index)
+                index = self.skip_newlines_at_pos(index)
+                index = self.skip_type_attribute_prefixes_at_pos(index)
+                index = self.skip_newlines_at_pos(index)
                 if index < len(self.tokens) and self.tokens[index].type in {
                     "SEMICOLON",
                     "ASSIGN",

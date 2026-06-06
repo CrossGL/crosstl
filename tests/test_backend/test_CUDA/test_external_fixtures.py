@@ -675,6 +675,36 @@ def test_cutlass_cute_template_array_bound_in_shared_memory_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cutlass_named_alignas_struct_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 2599f2975b06a67d5ee25e4a7292afeda1475c9b
+    # path: include/cutlass/half.h
+    source = """
+    struct alignas(2) half_t {
+        unsigned short storage;
+    };
+
+    __global__ void write_half_storage(half_t *out) {
+        out[threadIdx.x].storage = 0;
+    }
+    """
+
+    ast = parse_cuda(source)
+    half_t = ast.structs[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(half_t, StructNode)
+    assert half_t.name == "half_t"
+    assert half_t.attributes == ["alignas(2)"]
+    assert ast.global_variables == []
+    assert "struct half_t {" in crossgl
+    assert "u16 storage;" in crossgl
+    assert "out[gl_LocalInvocationID.x].storage = 0;" in crossgl
+    assert "alignas" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_transpose_parenthesized_index_and_shared_tile_codegen_reparse():
     source = """
     namespace cg = cooperative_groups;
