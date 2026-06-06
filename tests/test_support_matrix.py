@@ -329,6 +329,9 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "include-path processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
+        assert "warning diagnostics and missing-capability rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "include-path processing rollups by status, source backend, and variant"
             in backend_support["notes"]
@@ -368,6 +371,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_records_include_dependency_resolution"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_filters_invalid_include_dirs_before_frontend"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -416,6 +423,9 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "records each artifact applied define map" in backend_support["notes"]
         assert "define-processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
+        assert "warning diagnostics and missing-capability rollups" in (
+            backend_support["notes"]
+        )
         assert (
             "inspection summaries and text output expose variant names "
             "and per-variant define counts" in backend_support["notes"]
@@ -476,6 +486,11 @@ def test_project_macro_variants_document_artifact_define_maps():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_records_define_processing_without_frontend_"
+            "support"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_limits_named_variants_to_selected"
         ) in backend_support["evidence"]
         assert (
@@ -498,9 +513,21 @@ def test_project_diagnostics_document_location_path_checks():
     feature = features["project.diagnostics"]
 
     for backend_support in feature["support"].values():
+        assert "non-forwarded define/include-path frontend options" in (
+            backend_support["notes"]
+        )
         assert "non-repository-relative diagnostic locations" in (
             backend_support["notes"]
         )
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_filters_invalid_include_dirs_before_frontend"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_records_define_processing_without_frontend_"
+            "support"
+        ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_diagnostic_locations_outside_project"

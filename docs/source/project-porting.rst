@@ -197,6 +197,9 @@ include and define overrides are merged with this configuration before scan or
 translation. Translation artifacts record ``defineProcessing`` metadata so
 reports distinguish define maps that were forwarded to the source lexer from
 define maps that were not requested or could not be consumed by that frontend.
+When configured defines cannot be forwarded, translation reports emit a
+non-blocking warning diagnostic with a missing-capability rollup so the
+limitation appears in validation and inspection summaries.
 Summary, inspection payloads, and text reports also include define-processing
 rollups by source backend and by named variant when variants are configured, so
 frontend-specific and variant-specific preprocessing gaps are visible without
@@ -207,6 +210,9 @@ without exposing configuration values.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
 not be consumed by the selected source frontend. Include-path processing
+warnings are also emitted when active include paths cannot be forwarded, so
+the report diagnostics identify affected source frontends without failing the
+batch translation.
 summaries and text reports also roll up by source backend and by named variant
 when variants are configured. Report inspection includes sampled artifacts
 whose active include paths could not be forwarded, so the affected source,
@@ -360,7 +366,8 @@ Project reports are JSON documents with:
   summary counts when those fields are present.
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
-  diagnostic contract.
+  diagnostic contract. Project-level include and define forwarding limitations
+  are warnings, not translation failures.
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata, target normalization, and config

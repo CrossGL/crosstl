@@ -348,6 +348,40 @@ def _artifact_include_path_processing(
     }
 
 
+def _frontend_define_forwarding_diagnostic(
+    unit: ProjectTranslationUnit, define_count: int
+) -> ProjectDiagnostic:
+    define_label = "define" if define_count == 1 else "defines"
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.translate.defines-not-forwarded",
+        message=(
+            f"{define_count} configured {define_label} were not forwarded to "
+            f"the {unit.source_backend} lexer frontend; translation used source "
+            "text without project define preprocessing for this source backend."
+        ),
+        location=SourceLocation(file=unit.relative_path),
+        missing_capabilities=["macro.defines"],
+    )
+
+
+def _frontend_include_path_forwarding_diagnostic(
+    unit: ProjectTranslationUnit, include_path_count: int
+) -> ProjectDiagnostic:
+    include_label = "include path" if include_path_count == 1 else "include paths"
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.translate.include-paths-not-forwarded",
+        message=(
+            f"{include_path_count} configured {include_label} were not forwarded "
+            f"to the {unit.source_backend} lexer frontend; translation used source "
+            "text without project include path preprocessing for this source backend."
+        ),
+        location=SourceLocation(file=unit.relative_path),
+        missing_capabilities=["include.forwarding"],
+    )
+
+
 def _resolve_report_path(config: ProjectConfig, path_value: Any) -> Path:
     path = Path(str(path_value))
     if not path.is_absolute():
@@ -2879,6 +2913,11 @@ def translate_project(
     )
 
     variant_jobs = _variant_jobs(config)
+    max_define_count = max(
+        (len(defines) for _variant, defines in variant_jobs), default=0
+    )
+    define_forwarding_diagnostics: set[str] = set()
+    include_path_forwarding_diagnostics: set[str] = set()
 
     for unit in scan.units:
         source_supports_defines = _source_frontend_supports_lexer_keyword(
@@ -2887,6 +2926,27 @@ def translate_project(
         source_supports_include_paths = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "include_paths"
         )
+        if (
+            max_define_count > 0
+            and not source_supports_defines
+            and unit.source_backend not in define_forwarding_diagnostics
+        ):
+            diagnostics.append(
+                _frontend_define_forwarding_diagnostic(unit, max_define_count)
+            )
+            define_forwarding_diagnostics.add(unit.source_backend)
+        if (
+            include_paths
+            and not source_supports_include_paths
+            and unit.source_backend not in include_path_forwarding_diagnostics
+        ):
+            diagnostics.append(
+                _frontend_include_path_forwarding_diagnostic(
+                    unit,
+                    len(include_paths),
+                )
+            )
+            include_path_forwarding_diagnostics.add(unit.source_backend)
         for target in selected_targets:
             for variant, defines in variant_jobs:
                 output_path = _artifact_path(config, unit, target, variant)

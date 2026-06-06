@@ -1410,6 +1410,7 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
 
     assert captured_include_paths == [[str(include_dir.resolve())]]
     assert validation["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 4, "error": 0}
     assert payload["artifacts"][0]["includePathProcessing"] == {
         "status": "not-supported",
         "frontend": "lexer",
@@ -1514,6 +1515,31 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "project.config.include-dir-outside-project": 1,
         "project.config.include-dir-not-directory": 1,
         "project.config.missing-include-dir": 1,
+        "project.translate.include-paths-not-forwarded": 1,
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "include.forwarding": 1,
+        "include.resolution": 3,
+    }
+    include_forwarding_diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.include-paths-not-forwarded"
+    )
+    assert include_forwarding_diagnostic["missingCapabilities"] == [
+        "include.forwarding"
+    ]
+    assert include_forwarding_diagnostic["location"]["file"] == "shaders/simple.cgl"
+    assert "not forwarded to the cgl lexer frontend" in (
+        include_forwarding_diagnostic["message"]
+    )
+    assert (
+        validation["diagnosticsByCode"]["project.translate.include-paths-not-forwarded"]
+        == 1
+    )
+    assert validation["missingCapabilityCounts"] == {
+        "include.forwarding": 1,
+        "include.resolution": 3,
     }
 
 
@@ -1954,6 +1980,23 @@ def test_translate_project_records_define_processing_without_frontend_support(
     )
 
     assert validation["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.defines-not-forwarded": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.defines": 1}
+    assert (
+        payload["diagnostics"][0]["code"] == "project.translate.defines-not-forwarded"
+    )
+    assert payload["diagnostics"][0]["missingCapabilities"] == ["macro.defines"]
+    assert payload["diagnostics"][0]["location"]["file"] == "shader.rs"
+    assert "not forwarded to the rust lexer frontend" in (
+        payload["diagnostics"][0]["message"]
+    )
+    assert validation["diagnosticsByCode"] == {
+        "project.translate.defines-not-forwarded": 1
+    }
+    assert validation["missingCapabilityCounts"] == {"macro.defines": 1}
     assert payload["artifacts"][0]["sourceBackend"] == "rust"
     assert payload["artifacts"][0]["defines"] == {"ENABLE_PATH": "1"}
     assert payload["artifacts"][0]["defineProcessing"] == {
