@@ -130,6 +130,39 @@ def test_cgl_translate_api_accepts_registered_backend_aliases(tmp_path, backend)
         _assert_generated_output_is_usable(generated)
 
 
+@pytest.mark.parametrize(
+    ("backend_argument", "expected_snippet"),
+    (
+        (".hlsl", "float helper(float value)"),
+        ("out.HLSL", "float helper(float value)"),
+        (".glsl", "float helper(float value)"),
+        ("kernel.CU", "__device__ float helper(float value)"),
+        (".rs", "fn helper(value: f32) -> f32"),
+    ),
+)
+def test_cgl_translate_api_accepts_target_extension_backend_spellings(
+    tmp_path, backend_argument, expected_snippet
+):
+    source_path = _write_source(
+        tmp_path,
+        "extension-target.cgl",
+        """
+        shader ExtensionTarget {
+            float helper(float value) {
+                return value + 1.0;
+            }
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend=backend_argument, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert expected_snippet in generated
+
+
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 def test_native_sources_translate_to_parseable_crossgl(tmp_path, source_name):
     filename, source = NATIVE_SOURCE_SNIPPETS[source_name]

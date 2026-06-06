@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
@@ -29,6 +30,7 @@ class BackendRegistry:
     def __init__(self) -> None:
         self._by_name: dict[str, BackendSpec] = {}
         self._by_alias: dict[str, str] = {}
+        self._by_extension: dict[str, str] = {}
 
     def register(self, spec: BackendSpec, *, overwrite: bool = False) -> BackendSpec:
         """Register a backend spec and all of its aliases."""
@@ -49,6 +51,16 @@ class BackendRegistry:
                 raise ValueError(f"Backend alias '{alias_key}' already registered")
             self._by_alias[alias_key] = name
 
+        for extension in spec.file_extensions:
+            extension_key = _normalize_backend_name(extension)
+            if extension_key in self._by_extension and not overwrite:
+                if self._by_extension[extension_key] == name:
+                    continue
+                raise ValueError(
+                    f"Backend extension '{extension_key}' already registered"
+                )
+            self._by_extension[extension_key] = name
+
         return spec
 
     def resolve_name(self, name: str) -> str | None:
@@ -58,7 +70,17 @@ class BackendRegistry:
         key = _normalize_backend_name(name)
         if key in self._by_name:
             return key
-        return self._by_alias.get(key)
+        if key in self._by_alias:
+            return self._by_alias[key]
+        if key in self._by_extension:
+            return self._by_extension[key]
+
+        suffixes = [suffix.lower() for suffix in Path(key).suffixes]
+        for index in range(len(suffixes)):
+            extension_key = "".join(suffixes[index:])
+            if extension_key in self._by_extension:
+                return self._by_extension[extension_key]
+        return None
 
     def get(self, name: str) -> BackendSpec | None:
         """Return the backend spec registered for a name or alias."""
@@ -78,6 +100,10 @@ class BackendRegistry:
     def aliases(self) -> dict[str, str]:
         """Return a copy of the alias-to-backend mapping."""
         return dict(self._by_alias)
+
+    def extensions(self) -> dict[str, str]:
+        """Return a copy of the file-extension-to-backend mapping."""
+        return dict(self._by_extension)
 
 
 BACKEND_REGISTRY = BackendRegistry()

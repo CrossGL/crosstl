@@ -275,6 +275,30 @@ def test_target_registry_real_world_extensions_match_source_and_formatter(
         assert formatter.detect_language(f"shader{extension}") == formatter_language
 
 
+@pytest.mark.parametrize(
+    ("backend", "extensions"),
+    (
+        ("cuda", (".cu", ".cuh", ".cuda")),
+        ("directx", (".hlsl",)),
+        ("opengl", (".glsl",)),
+        ("hip", (".hip",)),
+        ("metal", (".metal",)),
+        ("mojo", (".mojo",)),
+        ("rust", (".rs", ".rust")),
+        ("vulkan", (".spvasm",)),
+    ),
+)
+def test_target_registry_resolves_file_extension_backend_spellings(backend, extensions):
+    for extension in extensions:
+        assert codegen.normalize_backend_name(extension) == backend
+        assert codegen.normalize_backend_name(f"target{extension.upper()}") == backend
+        assert codegen.get_backend(extension).name == backend
+        assert (
+            codegen.get_codegen(f"target{extension}").__class__
+            is codegen.get_codegen(backend).__class__
+        )
+
+
 def test_each_backend_has_codegen_tests():
     backend_files = [name.lower() for name in _backend_test_files()]
     missing = []

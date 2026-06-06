@@ -2598,6 +2598,25 @@ def test_rust_gpu_derivative_trait_calls_convert_to_crossgl_intrinsics():
     crosstl.translator.parse(result)
 
 
+def test_absolute_rust_gpu_derivative_paths_codegen_reparseable():
+    code = """
+    fn absolute_derivative_ops(value: Vec3<f32>) -> Vec3<f32> {
+        let dx = ::spirv_std::arch::Derivative::dfdx(value);
+        let wide = ::spirv_std::arch::fwidth(value);
+        ::spirv_std::arch::workgroup_memory_barrier_with_group_sync();
+        return dx + wide;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "dx = dFdx(value);" in result
+    assert "wide = fwidth(value);" in result
+    assert "GroupMemoryBarrierWithGroupSync();" in result
+    assert "::spirv_std" not in result
+    crosstl.translator.parse(result)
+
+
 def test_ldexp_intrinsic_calls_convert_to_crossgl_intrinsic():
     code = """
     fn exponent_ops(value: Vec3<f32>, exponents: Vec3<i32>, scale: f32, scalar_exponent: i32) -> Vec3<f32> {

@@ -582,11 +582,14 @@ class MetalToCrossGLConverter:
     def unwrap_texture_option_argument(self, expr, option_name):
         if (
             isinstance(expr, FunctionCallNode)
-            and expr.name == option_name
+            and self.unscoped_function_name(expr.name) == option_name
             and len(expr.args) == 1
         ):
             return expr.args[0]
         return expr
+
+    def unscoped_function_name(self, name):
+        return str(name).split("::")[-1]
 
     def texture_sample_options_call(self, options, sample_args, is_main=False):
         if not options:
@@ -599,7 +602,7 @@ class MetalToCrossGLConverter:
 
         if (
             isinstance(option, FunctionCallNode)
-            and option.name == "bias"
+            and self.unscoped_function_name(option.name) == "bias"
             and len(option.args) == 1
         ):
             bias = self.generate_expression(option.args[0], is_main)
@@ -682,7 +685,8 @@ class MetalToCrossGLConverter:
     def texture_gradient_option_arguments(self, option):
         if (
             isinstance(option, FunctionCallNode)
-            and option.name in {"gradient2d", "gradient3d", "gradientcube"}
+            and self.unscoped_function_name(option.name)
+            in {"gradient2d", "gradient3d", "gradientcube"}
             and len(option.args) == 2
         ):
             return option.args

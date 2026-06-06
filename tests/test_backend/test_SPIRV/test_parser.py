@@ -744,6 +744,32 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_WORKGROUP_SHARED_ASSEMBLY = """
+; Reduced from glslangValidator -V -H output for GLSL compute:
+; shared uint sharedData[4]; sharedData[0] = 7u.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %shared_data "sharedData"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%uint_4 = OpConstant %uint 4
+%uint_7 = OpConstant %uint 7
+%arr_uint = OpTypeArray %uint %uint_4
+%ptr_workgroup_uint = OpTypePointer Workgroup %uint
+%ptr_workgroup_arr_uint = OpTypePointer Workgroup %arr_uint
+%shared_data = OpVariable %ptr_workgroup_arr_uint Workgroup
+%main = OpFunction %void None %fn
+%label = OpLabel
+%element = OpAccessChain %ptr_workgroup_uint %shared_data %uint_0
+OpStore %element %uint_7
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source version: SPIR-V 1.6 Revision 7, unified spec.
@@ -1832,6 +1858,19 @@ def test_spirv_assembly_runtime_array_buffer_block_parse():
     assert layout.struct_fields == [("uint", "header"), ("uint", "payload[]")]
     assert layout.qualifiers == [("set", "0"), ("binding", "4")]
     assert layout.spirv_storage_class == "Uniform"
+
+
+def test_glslang_workgroup_shared_variable_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_WORKGROUP_SHARED_ASSEMBLY)
+    ast = parse_code(tokens)
+    declaration = ast.global_variables[0]
+
+    assert ast.spirv_assembly is True
+    assert isinstance(declaration, VariableNode)
+    assert declaration.vtype == "groupshared uint"
+    assert declaration.name == "sharedData[4]"
+    assert declaration.spirv_id == "%shared_data"
+    assert declaration.spirv_storage_class == "Workgroup"
 
 
 def test_spirv_tools_array_length_parse():
