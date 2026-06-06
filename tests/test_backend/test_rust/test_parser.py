@@ -903,6 +903,35 @@ def test_generic_impl_where_clause_parsing():
         pytest.fail(f"Generic impl where-clause parsing failed: {e}")
 
 
+def test_negative_trait_impl_parsing_from_rust_reference():
+    # Source: https://doc.rust-lang.org/reference/items/implementations.html
+    code = """
+    struct ShaderHandle;
+
+    impl !Send for ShaderHandle {}
+
+    impl<T> !Sync for DeviceBuffer<T>
+    where
+        T: Copy,
+    {}
+    """
+
+    ast = parse_code(code)
+
+    send_impl, sync_impl = ast.impl_blocks
+    assert send_impl.trait_name == "Send"
+    assert send_impl.struct_name == "ShaderHandle"
+    assert send_impl.is_negative is True
+    assert send_impl.functions == []
+
+    assert sync_impl.generics == ["T"]
+    assert sync_impl.trait_name == "Sync"
+    assert sync_impl.struct_name == "DeviceBuffer<T>"
+    assert sync_impl.where_clauses == [("T", ["Copy"])]
+    assert sync_impl.is_negative is True
+    assert sync_impl.functions == []
+
+
 def test_shader_type_token_declaration_names_parsing():
     code = """
     struct Vec2<T> {

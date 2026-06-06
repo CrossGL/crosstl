@@ -1136,6 +1136,11 @@ class RustParser:
             generics = self.parse_generics()
 
         trait_name = None
+        is_negative = False
+        if self.current_token[0] == "EXCLAMATION":
+            is_negative = True
+            self.eat("EXCLAMATION")
+
         struct_name = self.parse_type()
 
         if self.current_token[0] == "FOR":
@@ -1194,6 +1199,7 @@ class RustParser:
             generics,
             where_clauses,
             type_aliases,
+            is_negative,
         )
 
     def parse_trait(self, visibility=None):

@@ -2736,6 +2736,32 @@ class TestHipParser:
         assert body[3].value.index == "0"
         assert [var.value for var in body[4:]] == ["data", "data", "data", "data"]
 
+    def test_public_rocm_graph_api_newline_after_parenthesized_deref_parse(self):
+        # Upstream: ROCm/rocm-examples,
+        # HIP-Doc/Tutorials/graph_api/src/main_graph_creation.hip.
+        code = """
+        void host() {
+            auto backwardLeafNode = *(
+                std::find_if(std::begin(backwardFFTNodes),
+                             std::end(backwardFFTNodes),
+                             is_leaf));
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+        dereference = declaration.value
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.name == "backwardLeafNode"
+        assert isinstance(dereference, UnaryOpNode)
+        assert dereference.op == "*"
+        assert isinstance(dereference.operand, FunctionCallNode)
+        assert dereference.operand.name == "std::find_if"
+        assert dereference.operand.args[0].name == "std::begin"
+        assert dereference.operand.args[1].name == "std::end"
+        assert dereference.operand.args[2] == "is_leaf"
+
     def test_multi_declarator_host_setup_parsing(self):
         code = """
         void host(int n) {

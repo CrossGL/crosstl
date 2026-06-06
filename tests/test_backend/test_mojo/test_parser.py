@@ -187,6 +187,29 @@ def test_function_type_parameter_parsing_from_modular_gpu_reduction():
     ]
 
 
+def test_thin_function_type_parameter_parsing_from_official_parameter_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/parameters/
+    # "Parameters at a glance" documents noncapturing comparator function types
+    # with an explicit `thin` effect.
+    code = """
+    def invoke_compare(
+        lhs: Scalar[dtype],
+        rhs: Scalar[dtype],
+        compare: def(Scalar[dtype], Scalar[dtype]) thin -> Int,
+    ) -> Int:
+        return compare(lhs, rhs)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "invoke_compare")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("lhs", "Scalar[dtype]"),
+        ("rhs", "Scalar[dtype]"),
+        ("compare", "def(Scalar[dtype], Scalar[dtype]) thin -> Int"),
+    ]
+    assert function.return_type == "Int"
+
+
 def test_variadic_and_deinit_parameters_parse_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

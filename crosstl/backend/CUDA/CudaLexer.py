@@ -32,7 +32,7 @@ TOKENS = tuple(
         ("CLUSTER_DIMS", r"\b__cluster_dims__\b"),
         ("BLOCK_SIZE", r"\b__block_size__\b"),
         ("GRID_CONSTANT", r"\b__grid_constant__\b"),
-        ("ALIGNAS", r"\b(?:alignas|__align__)\b"),
+        ("ALIGNAS", r"\b(?:alignas|__align__|__builtin_align__)\b"),
         ("ASM", r"\b(?:asm|__asm__)\b"),
         # CUDA built-in variables
         ("THREADIDX", r"\bthreadIdx\b"),
@@ -230,6 +230,7 @@ KEYWORDS = {
     "__grid_constant__": "GRID_CONSTANT",
     "alignas": "ALIGNAS",
     "__align__": "ALIGNAS",
+    "__builtin_align__": "ALIGNAS",
     "asm": "ASM",
     "__asm__": "ASM",
     "__volatile__": "VOLATILE",

@@ -842,6 +842,12 @@ class RustToCrossGLConverter:
                 code += self.generate_function(func, indent=1)
 
         for impl_block in ast.impl_blocks:
+            if getattr(impl_block, "is_negative", False):
+                code += (
+                    f"    // Negative implementation for {impl_block.trait_name} "
+                    f"on {impl_block.struct_name}\n"
+                )
+                continue
             code += f"    // Implementation for {impl_block.struct_name}\n"
             for func in impl_block.functions:
                 code += self.generate_function(
@@ -10193,6 +10199,8 @@ class RustToCrossGLConverter:
         return f"({node.op}{operand})"
 
     def visit_ImplNode(self, node):
+        if getattr(node, "is_negative", False):
+            return f"// Negative implementation for {node.trait_name} on {node.struct_name}\n"
         code = f"// Implementation for {node.struct_name}\n"
         for func in node.functions:
             code += self.generate_function(func, 0, node.struct_name)

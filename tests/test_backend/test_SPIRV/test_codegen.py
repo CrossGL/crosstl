@@ -853,6 +853,49 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_GROUPED_SWITCH_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source grammar: https://registry.khronos.org/SPIR-V/specs/unified1/MachineReadableGrammar.html
+; Source tool: glslangValidator -V then spirv-dis, reduced from a fragment
+; shader containing case 0: case 1: in the same switch body.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %mode %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %mode "mode"
+OpName %out_color "outColor"
+OpDecorate %mode Flat
+OpDecorate %mode Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v4float = OpTypeVector %float 4
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero_f = OpConstant %float 0.0
+%one_f = OpConstant %float 1.0
+%red = OpConstantComposite %v4float %one_f %zero_f %zero_f %one_f
+%blue = OpConstantComposite %v4float %zero_f %zero_f %one_f %one_f
+%mode = OpVariable %ptr_input_int Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_mode = OpLoad %int %mode
+OpSelectionMerge %merge None
+OpSwitch %loaded_mode %default 0 %case_grouped 1 %case_grouped
+%default = OpLabel
+OpStore %out_color %blue
+OpBranch %merge
+%case_grouped = OpLabel
+OpStore %out_color %red
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -4195,6 +4238,27 @@ def test_spirv_glslang_switch_codegen_reparse():
     assert "default:" in generated_code
     assert "outColor = float4(0.0, 0.0, 1.0, 1.0);" in generated_code
     assert generated_code.count("break;") == 3
+    assert "OpSwitch" not in generated_code
+    assert "OpSelectionMerge" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_grouped_switch_targets_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_GROUPED_SWITCH_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int mode @input @location(0) @flat;" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "switch (mode) {" in generated_code
+    assert generated_code.index("case 0:") < generated_code.index("case 1:")
+    assert generated_code.index("case 1:") < generated_code.index(
+        "outColor = float4(1.0, 0.0, 0.0, 1.0);"
+    )
+    assert generated_code.count("outColor = float4(1.0, 0.0, 0.0, 1.0);") == 1
+    assert generated_code.count("outColor = float4(0.0, 0.0, 1.0, 1.0);") == 1
+    assert generated_code.count("break;") == 2
     assert "OpSwitch" not in generated_code
     assert "OpSelectionMerge" not in generated_code
     assert "Unhandled statement type" not in generated_code
