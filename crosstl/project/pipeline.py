@@ -1533,6 +1533,20 @@ def _include_literal(value: str) -> tuple[str, str] | None:
     return kind, include_path
 
 
+def _include_literal_from_define(
+    config: ProjectConfig, expression: str
+) -> tuple[str, str, str] | None:
+    define_name = expression.strip()
+    if not define_name or define_name not in config.defines:
+        return None
+
+    literal = _include_literal(config.defines[define_name].strip())
+    if literal is None:
+        return None
+    kind, include_path = literal
+    return define_name, kind, include_path
+
+
 def _include_search_roots(
     config: ProjectConfig, source_path: Path, kind: str
 ) -> list[tuple[str, Path]]:
@@ -1579,6 +1593,40 @@ def _resolve_include_dependency(
     return "missing", None, None
 
 
+def _include_resolution_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    status: str,
+    include_path: str,
+    location: SourceLocation,
+) -> ProjectDiagnostic | None:
+    if status == "missing":
+        return ProjectDiagnostic(
+            severity="warning",
+            code="project.scan.missing-include",
+            message=(
+                f"Include directive in {relative_path}:{line_number} "
+                f"could not be resolved: {include_path}"
+            ),
+            location=location,
+            missing_capabilities=["include.resolution"],
+        )
+    if status == "outside-project":
+        return ProjectDiagnostic(
+            severity="warning",
+            code="project.scan.include-outside-project",
+            message=(
+                f"Include directive in {relative_path}:{line_number} "
+                "resolves outside the repository or uses an absolute "
+                f"path: {include_path}"
+            ),
+            location=location,
+            missing_capabilities=["include.resolution"],
+        )
+    return None
+
+
 def _scan_include_dependencies(
     config: ProjectConfig, unit_path: Path, relative_path: str
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
@@ -1615,6 +1663,39 @@ def _scan_include_dependencies(
         literal = _include_literal(raw_body)
         if literal is None:
             body = _strip_include_line_comment(raw_body) or raw_body
+            define_literal = _include_literal_from_define(config, body)
+            if define_literal is not None:
+                define_name, kind, include_path = define_literal
+                status, resolved_path, resolved_from = _resolve_include_dependency(
+                    config, unit_path, kind, include_path
+                )
+                dependency = {
+                    "include": include_path,
+                    "kind": kind,
+                    "status": status,
+                    "line": line_number,
+                    "column": column,
+                    "resolvedFromDefine": define_name,
+                }
+                if resolved_path:
+                    dependency["resolvedPath"] = resolved_path
+                    dependency["resolvedHash"] = _source_hash(
+                        config.root / resolved_path
+                    )
+                if resolved_from:
+                    dependency["resolvedFrom"] = resolved_from
+                dependencies.append(dependency)
+                diagnostic = _include_resolution_diagnostic(
+                    relative_path=relative_path,
+                    line_number=line_number,
+                    status=status,
+                    include_path=include_path,
+                    location=location,
+                )
+                if diagnostic is not None:
+                    diagnostics.append(diagnostic)
+                continue
+
             dependency = {
                 "include": body,
                 "kind": "dynamic",
@@ -1654,33 +1735,15 @@ def _scan_include_dependencies(
         if resolved_from:
             dependency["resolvedFrom"] = resolved_from
         dependencies.append(dependency)
-        if status == "missing":
-            diagnostics.append(
-                ProjectDiagnostic(
-                    severity="warning",
-                    code="project.scan.missing-include",
-                    message=(
-                        f"Include directive in {relative_path}:{line_number} "
-                        f"could not be resolved: {include_path}"
-                    ),
-                    location=location,
-                    missing_capabilities=["include.resolution"],
-                )
-            )
-        elif status == "outside-project":
-            diagnostics.append(
-                ProjectDiagnostic(
-                    severity="warning",
-                    code="project.scan.include-outside-project",
-                    message=(
-                        f"Include directive in {relative_path}:{line_number} "
-                        "resolves outside the repository or uses an absolute "
-                        f"path: {include_path}"
-                    ),
-                    location=location,
-                    missing_capabilities=["include.resolution"],
-                )
-            )
+        diagnostic = _include_resolution_diagnostic(
+            relative_path=relative_path,
+            line_number=line_number,
+            status=status,
+            include_path=include_path,
+            location=location,
+        )
+        if diagnostic is not None:
+            diagnostics.append(diagnostic)
 
     return dependencies, diagnostics
 
@@ -6373,6 +6436,15 @@ def _include_dependency_contract_reasons(
             f"{prefix}.resolvedFrom must be omitted unless status is resolved"
         )
 
+    resolved_from_define = dependency.get("resolvedFromDefine")
+    if "resolvedFromDefine" in dependency:
+        if not _is_non_empty_string(resolved_from_define):
+            reasons.append(f"{prefix}.resolvedFromDefine must be a string")
+        if kind == "dynamic":
+            reasons.append(
+                f"{prefix}.resolvedFromDefine must be omitted for dynamic includes"
+            )
+
     return reasons
 
 
@@ -6387,12 +6459,16 @@ def _project_config_for_include_validation(
         not isinstance(include_dir, str) for include_dir in include_dirs
     ):
         return None
+    defines = project.get("defines", {})
+    if not _valid_string_mapping(defines):
+        defines = {}
     output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
     if not isinstance(output_dir, str):
         output_dir = DEFAULT_OUTPUT_DIR
     return ProjectConfig(
         root=root_path,
         include_dirs=tuple(include_dirs),
+        defines=dict(defines),
         output_dir=output_dir,
     )
 
@@ -6436,6 +6512,26 @@ def _current_include_dependency_contract_reasons(
     reasons = []
     if status != expected_status:
         reasons.append(f"{prefix}.status must match current include resolution")
+
+    resolved_from_define = dependency.get("resolvedFromDefine")
+    if _is_non_empty_string(resolved_from_define):
+        define_literal = _include_literal_from_define(
+            include_config, resolved_from_define
+        )
+        if define_literal is None:
+            reasons.append(
+                f"{prefix}.resolvedFromDefine must match a project define include"
+            )
+        else:
+            _, expected_kind, expected_include = define_literal
+            if kind != expected_kind:
+                reasons.append(
+                    f"{prefix}.kind must match current project define include"
+                )
+            if include_value != expected_include:
+                reasons.append(
+                    f"{prefix}.include must match current project define include"
+                )
     if expected_status != "resolved":
         return reasons
 

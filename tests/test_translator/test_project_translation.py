@@ -676,6 +676,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             #include <cuda_runtime.h>
             #include "missing.inc"
             #include PROJECT_HEADER
+            #include UNKNOWN_HEADER
             #include "../../outside.inc"
             void main() {}
             """).strip(),
@@ -686,6 +687,9 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             [project]
             source_roots = ["shaders"]
             include_dirs = ["includes"]
+
+            [project.defines]
+            PROJECT_HEADER = "<shared.inc>"
             """).strip(),
         encoding="utf-8",
     )
@@ -732,44 +736,55 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             "column": 1,
         },
         {
-            "include": "PROJECT_HEADER",
+            "include": "shared.inc",
+            "kind": "system",
+            "status": "resolved",
+            "line": 6,
+            "column": 1,
+            "resolvedFromDefine": "PROJECT_HEADER",
+            "resolvedPath": "includes/shared.inc",
+            "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedFrom": "include-dir",
+        },
+        {
+            "include": "UNKNOWN_HEADER",
             "kind": "dynamic",
             "status": "dynamic",
-            "line": 6,
+            "line": 7,
             "column": 1,
         },
         {
             "include": "../../outside.inc",
             "kind": "local",
             "status": "outside-project",
-            "line": 7,
+            "line": 8,
             "column": 1,
         },
     ]
-    assert payload["summary"]["includeDependencyCount"] == 6
+    assert payload["summary"]["includeDependencyCount"] == 7
     assert payload["summary"]["includeDependenciesByKind"] == {
         "dynamic": 1,
         "local": 3,
-        "system": 2,
+        "system": 3,
     }
     assert payload["summary"]["includeDependenciesByStatus"] == {
         "dynamic": 1,
         "missing": 1,
         "outside-project": 1,
-        "resolved": 2,
+        "resolved": 3,
         "system": 1,
     }
     assert payload["summary"]["includeDependenciesByResolvedFrom"] == {
-        "include-dir": 1,
+        "include-dir": 2,
         "source": 1,
     }
-    assert payload["summary"]["includeDependenciesBySourceBackend"] == {"opengl": 6}
+    assert payload["summary"]["includeDependenciesBySourceBackend"] == {"opengl": 7}
     assert payload["summary"]["includeDependenciesBySourceBackendStatus"] == {
         "opengl": {
             "dynamic": 1,
             "missing": 1,
             "outside-project": 1,
-            "resolved": 2,
+            "resolved": 3,
             "system": 1,
         }
     }
@@ -800,6 +815,7 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     dependency["resolvedPath"] = "../outside.inc"
     dependency["resolvedHash"] = {"algorithm": "md5", "value": "not-a-sha"}
     dependency["resolvedFrom"] = "workspace"
+    dependency["resolvedFromDefine"] = ""
     payload["summary"]["includeDependencyCount"] = 2
     payload["summary"]["includeDependenciesByKind"] = {"module": 1}
     payload["summary"]["includeDependenciesByResolvedFrom"] = {"workspace": 1}
@@ -836,6 +852,9 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     assert (
         "units[0].includeDependencies[0].resolvedFrom must be source or include-dir"
         in (diagnostic["message"])
+    )
+    assert "units[0].includeDependencies[0].resolvedFromDefine must be a string" in (
+        diagnostic["message"]
     )
     assert "summary.includeDependencyCount must match unit include dependencies" in (
         diagnostic["message"]
@@ -957,6 +976,50 @@ def test_validate_project_report_rejects_include_dependency_resolution_mismatche
     assert (
         "units[0].includeDependencies[0].resolvedFrom must match current "
         "include resolution"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_stale_define_include_dependencies(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (include_dir / "shared.inc").write_text("vec4 shared_color();\n", encoding="utf-8")
+    (include_dir / "other.inc").write_text("vec4 other_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        "#version 450\n#include PROJECT_HEADER\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+
+            [project.defines]
+            PROJECT_HEADER = "<shared.inc>"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    report_path = repo / "include-dependencies-report.json"
+    payload = report.to_json()
+    payload["project"]["defines"]["PROJECT_HEADER"] = "<other.inc>"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].include must match current project "
+        "define include"
     ) in diagnostic["message"]
 
 
