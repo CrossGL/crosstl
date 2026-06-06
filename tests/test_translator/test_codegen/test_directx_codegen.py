@@ -20275,6 +20275,14 @@ def test_directx_texture_sampling_capability_descriptors():
         "compare_offset": True,
         "gather_compare_offset": True,
     }
+    assert codegen.texture_sampling_capabilities("Texture1DArray") == {
+        "texture_type": "Texture1DArray",
+        "gather": False,
+        "gather_offset": False,
+        "sample_offset": True,
+        "compare_offset": True,
+        "gather_compare_offset": False,
+    }
     assert codegen.texture_sampling_capabilities("Texture3D") == {
         "texture_type": "Texture3D",
         "gather": False,
@@ -20326,6 +20334,9 @@ def test_directx_texture_dimension_descriptors():
         offset_dimension=1,
         sample_offset_dimension=1,
         texel_fetch_offset_dimension=1,
+        compare_offset_dimension=1,
+        compare_lod_offset_dimension=1,
+        compare_grad_offset_dimension=1,
         gradient_dimension=1,
         query_lod_coordinate_dimension=2,
     )
@@ -21219,19 +21230,19 @@ def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers()
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 2D or 2D-array textures */ 0.0"
+            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         )
         == 2
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 2D or 2D-array textures */ 0.0"
+            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         )
         == 2
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 2D or 2D-array textures */ 0.0"
+            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         )
         == 2
     )
@@ -22768,7 +22779,7 @@ def test_directx_projected_cube_shadow_compare_lowers_supported_forms():
     }:
         assert (
             generated_code.count(
-                f"/* unsupported DirectX texture compare: {func_name} offsets require 2D or 2D-array textures */ 0.0"
+                f"/* unsupported DirectX texture compare: {func_name} offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
             )
             == 1
         )
@@ -22897,7 +22908,7 @@ def test_directx_projected_cube_shadow_compare_implicit_samplers_lowers_supporte
         in generated_code
     )
     assert (
-        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 2D or 2D-array textures */ 0.0"
+        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         in generated_code
     )
     coordinate_diagnostic_counts = {
@@ -23030,7 +23041,7 @@ def test_directx_projected_cube_shadow_compare_resource_arrays_thread_supported_
         in generated_code
     )
     assert (
-        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 2D or 2D-array textures */ 0.0"
+        "/* unsupported DirectX texture compare: textureCompareProjGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         in generated_code
     )
     coordinate_diagnostic_counts = {
@@ -23763,6 +23774,115 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
     assert "textureGatherCompare(" not in generated_code
     assert "textureGatherCompareOffset(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
+
+
+def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs():
+    # Microsoft documents SampleCmp offsets for Texture1D and Texture1DArray as
+    # scalar int offsets.
+    shader = """
+    shader ShadowCompare1DOffsets {
+        sampler1D shadowLine;
+        sampler1DArray shadowLines;
+        sampler compareSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uLayer @ TEXCOORD1;
+            float depth;
+            float lod;
+            float ddx;
+            float ddy;
+            int offset @ TEXCOORD2;
+        };
+
+        float compareLine(
+            sampler1D tex,
+            sampler s,
+            float u,
+            float depth,
+            float lod,
+            float ddx,
+            float ddy,
+            int offset
+        ) {
+            float basic = textureCompareOffset(tex, s, u, depth, offset);
+            float level = textureCompareLodOffset(tex, s, u, depth, lod, offset);
+            float grad = textureCompareGradOffset(tex, s, u, depth, ddx, ddy, offset);
+            return basic + level + grad;
+        }
+
+        float compareLineArray(
+            sampler1DArray tex,
+            sampler s,
+            vec2 uLayer,
+            float depth,
+            float lod,
+            float ddx,
+            float ddy,
+            int offset
+        ) {
+            float basic = textureCompareOffset(tex, s, uLayer, depth, offset);
+            float level = textureCompareLodOffset(tex, s, uLayer, depth, lod, offset);
+            float grad = textureCompareGradOffset(tex, s, uLayer, depth, ddx, ddy, offset);
+            return basic + level + grad;
+        }
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                return compareLine(
+                    shadowLine,
+                    compareSampler,
+                    input.u,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                ) + compareLineArray(
+                    shadowLines,
+                    compareSampler,
+                    input.uLayer,
+                    input.depth,
+                    input.lod,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture1D shadowLine : register(t0);" in generated_code
+    assert "Texture1DArray shadowLines : register(t1);" in generated_code
+    assert "SamplerComparisonState compareSampler : register(s0);" in generated_code
+    assert (
+        "float compareLine(Texture1D tex, SamplerComparisonState s, float u, float depth, float lod, float ddx, float ddy, int offset)"
+        in generated_code
+    )
+    assert "float basic = tex.SampleCmp(s, u, depth, offset);" in generated_code
+    assert (
+        "float level = tex.SampleCmpLevel(s, u, depth, lod, offset);" in generated_code
+    )
+    assert (
+        "float grad = tex.SampleCmpGrad(s, u, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "float compareLineArray(Texture1DArray tex, SamplerComparisonState s, float2 uLayer, float depth, float lod, float ddx, float ddy, int offset)"
+        in generated_code
+    )
+    assert "tex.SampleCmp(s, uLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmpLevel(s, uLayer, depth, lod, offset)" in generated_code
+    assert "tex.SampleCmpGrad(s, uLayer, depth, ddx, ddy, offset)" in generated_code
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureCompareLodOffset(" not in generated_code
+    assert "textureCompareGradOffset(" not in generated_code
+    assert "unsupported DirectX texture compare" not in generated_code
 
 
 def test_directx_cube_shadow_gather_compare_supports_cube_and_cube_array():
@@ -24593,19 +24713,19 @@ def test_directx_cube_shadow_compare_offsets_report_unsupported():
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 2D or 2D-array textures */ 0.0"
+            "/* unsupported DirectX texture compare: textureCompareOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         )
         == 2
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 2D or 2D-array textures */ 0.0"
+            "/* unsupported DirectX texture compare: textureCompareLodOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         )
         == 2
     )
     assert (
         generated_code.count(
-            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 2D or 2D-array textures */ 0.0"
+            "/* unsupported DirectX texture compare: textureCompareGradOffset offsets require 1D, 1D-array, 2D, or 2D-array textures */ 0.0"
         )
         == 2
     )
@@ -25821,7 +25941,7 @@ def test_directx_typed_comparison_texture_operations_use_resource_shape():
     ) in generated_code
     assert (
         "/* unsupported DirectX texture compare: textureCompareOffset offsets require "
-        "2D or 2D-array textures */ 0.0"
+        "1D, 1D-array, 2D, or 2D-array textures */ 0.0"
     ) in generated_code
     assert (
         "inspectImplicit(shadow2D, shadow2DSampler, shadow2DQuerySampler, input.uv, "

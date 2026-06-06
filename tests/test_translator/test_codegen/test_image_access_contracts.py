@@ -652,7 +652,7 @@ def test_texture_compare_offset_capability_error_matches_backend_terms():
     )
     assert (
         texture_compare_offset_capability_error("DirectX")
-        == "offsets require 2D or 2D-array textures"
+        == "offsets require 1D, 1D-array, 2D, or 2D-array textures"
     )
     assert (
         texture_compare_offset_capability_error("Metal")

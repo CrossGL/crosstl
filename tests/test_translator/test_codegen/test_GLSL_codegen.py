@@ -5564,6 +5564,31 @@ def test_glsl_hlsl_mul_alias_emits_binary_matrix_multiply():
     assert "mul(" not in generated_code
 
 
+def test_glsl_user_defined_mul_function_is_preserved():
+    # Khronos GLSL 4.60 permits user-defined function calls; the CrossGL-to-GLSL
+    # mul alias should only lower when no user helper shadows the alias name.
+    shader = """
+    shader UserMul {
+        vec3 mul(vec3 value, vec3 scale) {
+            return (value * scale) + vec3(0.5);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec3 color = mul(vec3(0.25), vec3(2.0));
+                return vec4(color, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "vec3 mul(vec3 value, vec3 scale)" in generated_code
+    assert "vec3 color = mul(vec3(0.25), vec3(2.0));" in generated_code
+    assert "vec3 color = (vec3(0.25) * vec3(2.0));" not in generated_code
+
+
 def test_glsl_hlsl_mad_alias_emits_multiply_add_expression():
     # Khronos GLSL 4.60 documents fma(x, y, z) as returning x * y + z;
     # shader ports commonly spell the non-fused source form as mad(x, y, z).

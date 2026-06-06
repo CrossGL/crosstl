@@ -1892,7 +1892,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             function_name = node.name
         if is_kernel_entry and function_name == "main":
             function_name = "compute_main"
-        signature = f"{qualifier_str} {return_type} {function_name}({params})"
+        launch_bounds = self.hip_compute_launch_bounds_attribute(
+            node, stage_name, is_kernel_entry
+        )
+        if launch_bounds is not None:
+            signature = (
+                f"{qualifier_str} {return_type} {launch_bounds} "
+                f"{function_name}({params})"
+            )
+        else:
+            signature = f"{qualifier_str} {return_type} {function_name}({params})"
         body = getattr(node, "body", None)
 
         if stage_name in self.hip_ray_stage_names():
@@ -2284,6 +2293,49 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if operator == "-":
                 return -value
             return value
+
+        return None
+
+    def hip_compute_launch_bounds_attribute(self, func, stage_name, is_kernel_entry):
+        """Return a HIP launch-bounds attribute for compute @numthreads metadata."""
+        if not is_kernel_entry or stage_name != "compute":
+            return None
+
+        for attribute_name in ("numthreads", "local_size", "workgroup_size"):
+            arguments = self.hip_stage_attribute_arguments(func, attribute_name)
+            if not arguments:
+                continue
+            if len(arguments) != 3:
+                raise ValueError(
+                    f"HIP compute stage {attribute_name} requires exactly "
+                    "three arguments"
+                )
+
+            values = []
+            literal_product = 1
+            all_literal = True
+            for axis, argument in zip("xyz", arguments):
+                literal_value = self.literal_int_value(argument)
+                if literal_value is not None:
+                    if literal_value <= 0:
+                        raise ValueError(
+                            f"HIP compute stage {attribute_name} {axis} "
+                            f"dimension ({literal_value}) must be positive"
+                        )
+                    literal_product *= literal_value
+                else:
+                    all_literal = False
+                value_text = self.attribute_value_to_string(argument)
+                values.append(str(value_text))
+
+            max_threads = (
+                str(literal_product)
+                if all_literal
+                else " * ".join(f"({value})" for value in values)
+            )
+            if attribute_name == "workgroup_size" and max_threads == "1":
+                continue
+            return f"__launch_bounds__({max_threads})"
 
         return None
 

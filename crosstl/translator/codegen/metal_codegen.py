@@ -372,6 +372,7 @@ class MetalCodeGen:
         "dot",
         "exp",
         "exp2",
+        "faceforward",
         "floor",
         "fract",
         "length",

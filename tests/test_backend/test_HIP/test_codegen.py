@@ -16506,6 +16506,7 @@ class TestHipCodeGen:
         result = translate(str(source_path), backend="hip", format_output=False)
 
         assert "__global__ void scale_mask(" in result
+        assert "__launch_bounds__" not in result
         assert "float* out" in result
         assert "float* in_" in result
         assert "unsigned int* flags" in result
