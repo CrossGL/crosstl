@@ -1687,6 +1687,119 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     )["defines"] == {"MODE": "base", "USE_FAST_PATH": "1"}
 
 
+def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.defines]
+            MODE = "base"
+            USE_FAST_PATH = "1"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_defines(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths
+        text = json.dumps({"defines": dict(defines or {})}, sort_keys=True)
+        Path(save_shader).write_text(text, encoding="utf-8")
+        return text
+
+    monkeypatch.setattr(project_pipeline, "translate", write_defines)
+
+    report = translate_project(load_project_config(repo), variants=["debug"])
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["project"]["variants"] == {"debug": {"MODE": "debug"}}
+    assert payload["project"]["variantCount"] == 1
+    assert payload["project"]["variantDefineCounts"] == {"debug": 1}
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["artifactsByVariant"] == {
+        "debug": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    }
+    assert payload["summary"]["defineProcessingByVariant"] == {
+        "debug": {"forwarded": 1}
+    }
+    assert payload["summary"]["includePathProcessingByVariant"] == {
+        "debug": {"not-requested": 1}
+    }
+    assert payload["artifactMatrix"]["variantCount"] == 1
+    assert payload["artifactMatrix"]["statusByVariant"] == {
+        "debug": {
+            "expectedArtifactCount": 1,
+            "emittedArtifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "missingArtifactCount": 0,
+            "extraArtifactCount": 0,
+            "complete": True,
+        }
+    }
+    assert [artifact["variant"] for artifact in payload["artifacts"]] == ["debug"]
+    assert [artifact["path"] for artifact in payload["artifacts"]] == [
+        "translated/opengl/debug/simple.glsl"
+    ]
+    assert payload["artifacts"][0]["defines"] == {
+        "MODE": "debug",
+        "USE_FAST_PATH": "1",
+    }
+    assert (repo / "translated" / "opengl" / "debug" / "simple.glsl").exists()
+    assert not (repo / "translated" / "opengl" / "release" / "simple.glsl").exists()
+    assert "release" not in json.dumps(payload)
+
+
+def test_translate_project_rejects_unknown_selected_variant(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "selected project variant is not declared in project config: "
+            "profile \\(available: debug\\)"
+        ),
+    ):
+        translate_project(load_project_config(repo), variants=["profile"])
+
+
 def test_translate_project_named_variants_apply_crossgl_defines(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -8240,6 +8353,97 @@ def test_project_cli_translate_project_applies_source_backend_overrides(tmp_path
     assert payload["summary"]["unitsBySourceOverride"] == {"cgl": 1}
     assert payload["units"][0]["sourceOverride"] == "cgl"
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
+
+
+def test_project_cli_translate_project_limits_named_variants_to_selected(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.defines]
+            MODE = "base"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--variant",
+            "debug",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["project"]["variants"] == {"debug": {"MODE": "debug"}}
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["artifactsByVariant"] == {
+        "debug": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    }
+    assert payload["artifacts"][0]["variant"] == "debug"
+    assert payload["artifacts"][0]["path"] == "translated/opengl/debug/simple.glsl"
+    assert (repo / "translated" / "opengl" / "debug" / "simple.glsl").exists()
+    assert not (repo / "translated" / "opengl" / "release" / "simple.glsl").exists()
+
+
+def test_project_cli_translate_project_rejects_unknown_selected_variant(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--variant",
+            "profile",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Error: selected project variant is not declared in project config: "
+        "profile (available: debug)"
+    ) in result.stdout
 
 
 def test_project_cli_scan_rejects_empty_define_override(tmp_path):

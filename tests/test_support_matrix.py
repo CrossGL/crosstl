@@ -418,6 +418,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "sampled define-processing artifact metadata" in (
             backend_support["notes"]
         )
+        assert "scoped runs for selected declared variants" in backend_support["notes"]
         assert (
             "malformed define/variant metadata including empty mapping keys and "
             "forged variant define counts"
@@ -463,6 +464,14 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_crossgl_defines"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_limits_named_variants_to_selected"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_translate_project_limits_named_variants_to_selected"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

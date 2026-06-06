@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping, Optional, Sequence, Tuple
@@ -2447,6 +2447,46 @@ def _variant_jobs(
     ]
 
 
+def _selected_variant_names(variants: Sequence[str] | str | None) -> list[str] | None:
+    if variants is None:
+        return None
+    names = [variants] if isinstance(variants, str) else list(variants)
+    if not names:
+        raise ValueError(
+            "selected project variants must include at least one variant name"
+        )
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("selected project variants must be non-empty strings")
+        if name not in seen:
+            selected.append(name)
+            seen.add(name)
+    return selected
+
+
+def _config_with_selected_variants(
+    config: ProjectConfig, variants: Sequence[str] | str | None
+) -> ProjectConfig:
+    selected = _selected_variant_names(variants)
+    if selected is None:
+        return config
+
+    unknown = [name for name in selected if name not in config.variants]
+    if unknown:
+        available = ", ".join(sorted(config.variants)) or "(none)"
+        raise ValueError(
+            "selected project variant is not declared in project config: "
+            f"{', '.join(unknown)} (available: {available})"
+        )
+    return replace(
+        config,
+        variants={name: config.variants[name] for name in selected},
+    )
+
+
 def _artifact_matrix_report(
     config: ProjectConfig,
     units: Sequence[ProjectTranslationUnit],
@@ -2793,6 +2833,7 @@ def translate_project(
     *,
     targets: Sequence[str] | None = None,
     output_dir: str | os.PathLike[str] | None = None,
+    variants: Sequence[str] | str | None = None,
     format_output: bool = False,
     validate: bool = False,
 ) -> ProjectPortabilityReport:
@@ -2817,6 +2858,7 @@ def translate_project(
             variants=config.variants,
             external_corpus_manifest=config.external_corpus_manifest,
         )
+    config = _config_with_selected_variants(config, variants)
 
     selected_targets = _normalized_targets(
         targets if targets is not None else config.targets

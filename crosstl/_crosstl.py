@@ -312,6 +312,7 @@ def _run_translate_project(args):
         config,
         targets=args.target,
         output_dir=args.output_dir,
+        variants=args.variant,
         format_output=not args.no_format,
         validate=args.validate,
     )
@@ -2132,6 +2133,11 @@ def _build_parser():
         "--output-dir",
         default=None,
         help="Directory for translated artifacts",
+    )
+    translate_project_parser.add_argument(
+        "--variant",
+        action="append",
+        help="Named project variant to translate; repeatable",
     )
     translate_project_parser.add_argument(
         "--report", help="Write project portability JSON report to this path"
