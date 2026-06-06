@@ -794,6 +794,43 @@ def test_attributed_impl_block_parsing_from_spirv_std_image():
     assert impl_block.functions[0].name == "sample"
 
 
+def test_impl_item_attributes_are_preserved_from_rust_gpu_style_helpers():
+    code = """
+    struct Kernel;
+
+    impl Kernel {
+        #[cfg_attr(target_arch = "spirv", inline)]
+        #[doc(alias = "OpImageSampleExplicitLod")]
+        pub fn sample(&self) -> u32 {
+            return 1;
+        }
+
+        #[allow(non_camel_case_types)]
+        pub type sample_result = u32;
+    }
+    """
+
+    ast = parse_code(code)
+    impl_block = ast.impl_blocks[0]
+    method = impl_block.functions[0]
+    alias = impl_block.type_aliases[0]
+
+    assert [attr.name for attr in method.attributes] == ["cfg_attr", "doc"]
+    assert method.attributes[0].args == [
+        "target_arch",
+        "=",
+        '"spirv"',
+        "inline",
+    ]
+    assert method.attributes[1].args == ["alias", "=", '"OpImageSampleExplicitLod"']
+    assert method.visibility == "pub"
+
+    assert alias.name == "sample_result"
+    assert alias.attributes[0].name == "allow"
+    assert alias.attributes[0].args == ["non_camel_case_types"]
+    assert alias.visibility == "pub"
+
+
 def test_rust_gpu_block_local_impl_item_is_not_parsed_as_for_loop():
     # Reduced from https://github.com/Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

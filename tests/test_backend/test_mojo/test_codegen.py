@@ -187,6 +187,21 @@ def test_variadic_and_reference_parameter_codegen_from_current_docs():
     assert "ref[self]" not in generated_code
 
 
+def test_variadic_keyword_parameter_codegen_from_current_docs():
+    code = """
+    def print_nicely(**kwargs: Int):
+        for item in kwargs.items():
+            print(item.key, "=", item.value)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "void print_nicely(int kwargs)" in generated_code
+    assert "for item in kwargs.items()" in generated_code
+    assert "**kwargs" not in generated_code
+    assert "Unhandled" not in generated_code
+
+
 def test_function_parameter_separator_markers_codegen_drops_markers():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:

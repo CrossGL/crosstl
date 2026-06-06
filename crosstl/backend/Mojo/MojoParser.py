@@ -829,7 +829,7 @@ class MojoParser:
             attributes = self.parse_attributes()
             self.skip_layout_tokens()
             convention = self.parse_parameter_convention()
-            is_variadic = self.parse_variadic_parameter_marker()
+            variadic_kind = self.parse_variadic_parameter_marker()
 
             if self.is_untyped_self_parameter(convention):
                 name = self.current_token[1]
@@ -877,7 +877,8 @@ class MojoParser:
                 parameter_convention=convention,
             )
             param.default_value = default_value
-            param.is_variadic = is_variadic
+            param.is_variadic = variadic_kind is not None
+            param.is_variadic_keyword = variadic_kind == "keyword"
             params.append(param)
             self.skip_layout_tokens()
 
@@ -965,13 +966,19 @@ class MojoParser:
         return False
 
     def parse_variadic_parameter_marker(self):
+        if self.current_token[0] == "POWER":
+            if self.peek_token()[0] not in self.TYPE_START_TOKENS:
+                return None
+            self.eat("POWER")
+            self.skip_layout_tokens()
+            return "keyword"
         if self.current_token[0] != "MULTIPLY":
-            return False
+            return None
         if self.peek_token()[0] not in self.TYPE_START_TOKENS:
-            return False
+            return None
         self.eat("MULTIPLY")
         self.skip_layout_tokens()
-        return True
+        return "positional"
 
     def is_untyped_self_parameter(self, convention):
         if convention is None:

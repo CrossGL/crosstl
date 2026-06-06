@@ -2960,6 +2960,35 @@ def test_c_style_scalar_cast_codegen_from_official_select_expr_sample():
     )
 
 
+def test_c_style_user_type_identifier_cast_codegen_reparse_from_enum_sample():
+    code = """
+    enum class Mode : uint
+    {
+        Off,
+        On,
+    };
+
+    Mode decode(uint raw)
+    {
+        Mode mode = (Mode)raw;
+        return mode;
+    }
+
+    uint encode(Mode mode)
+    {
+        return (uint)mode;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Mode mode = Mode(raw);" in generated_code
+    assert "return uint(mode);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_rwtexture_load_codegen_from_official_texture_capability_sample():
     code = """
     RWStructuredBuffer<int> outputBuffer;
