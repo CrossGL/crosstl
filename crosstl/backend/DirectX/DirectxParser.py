@@ -137,6 +137,14 @@ QUALIFIER_TOKENS = {
     "GROUPSHARED",
 }
 
+INTERPOLATION_QUALIFIER_TOKENS = {
+    "NOINTERPOLATION",
+    "NOPERSPECTIVE",
+    "LINEAR",
+    "CENTROID",
+    "SAMPLE",
+}
+
 CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"center", "shared", "snorm", "unorm"}
 CONTEXTUAL_IDENTIFIER_TOKENS = {
     "CLIP",
@@ -878,6 +886,49 @@ class HLSLParser:
         if semantics:
             semantic = ": ".join(semantics)
         return semantic, register, packoffset
+
+    def parse_parameter_semantic_and_interpolation(self):
+        semantic = None
+        register = None
+        packoffset = None
+        interpolation_qualifiers = []
+
+        semantics = []
+        while self.current_token[0] == "COLON":
+            self.eat("COLON")
+            if self.current_token[0] == "REGISTER":
+                register = self.parse_register_binding("REGISTER")
+                continue
+            if self.current_token[0] == "PACKOFFSET":
+                packoffset = self.parse_register_binding("PACKOFFSET")
+                continue
+            if self.current_token[0] in INTERPOLATION_QUALIFIER_TOKENS:
+                interpolation_qualifiers.extend(self.parse_interpolation_qualifiers())
+                continue
+
+            if self.current_token[0] != "IDENTIFIER":
+                raise SyntaxError(
+                    f"Expected semantic identifier, got {self.current_token[0]}"
+                )
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "LPAREN":
+                args = self.parse_semantic_argument_list()
+                name = f"{name}({args})"
+            semantics.append(name)
+
+        interpolation_qualifiers.extend(self.parse_interpolation_qualifiers())
+
+        if semantics:
+            semantic = ": ".join(semantics)
+        return semantic, register, packoffset, interpolation_qualifiers
+
+    def parse_interpolation_qualifiers(self):
+        qualifiers = []
+        while self.current_token[0] in INTERPOLATION_QUALIFIER_TOKENS:
+            qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+        return qualifiers
 
     def parse_semantic_argument_list(self):
         self.eat("LPAREN")
@@ -1762,7 +1813,13 @@ class HLSLParser:
                     name = ""
 
                 array_sizes = self.parse_array_suffixes()
-                semantic, _, _ = self.parse_semantic_or_register()
+                (
+                    semantic,
+                    _,
+                    _,
+                    interpolation_qualifiers,
+                ) = self.parse_parameter_semantic_and_interpolation()
+                qualifiers.extend(interpolation_qualifiers)
                 value = None
                 if self.current_token[0] == "EQUALS":
                     self.eat("EQUALS")

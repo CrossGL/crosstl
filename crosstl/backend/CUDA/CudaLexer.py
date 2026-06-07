@@ -20,6 +20,7 @@ TOKENS = tuple(
         # CUDA keywords and qualifiers
         ("GLOBAL", r"\b__global__\b"),
         ("TILE_GLOBAL", r"\b__tile_global__\b"),
+        ("TILE", r"\b__tile__\b"),
         ("DEVICE", r"\b__device__\b"),
         ("HOST", r"\b__host__\b"),
         ("SHARED", r"\b__shared__\b"),
@@ -215,6 +216,7 @@ TOKENS = tuple(
 KEYWORDS = {
     "__global__": "GLOBAL",
     "__tile_global__": "TILE_GLOBAL",
+    "__tile__": "TILE",
     "__device__": "DEVICE",
     "__host__": "HOST",
     "__shared__": "SHARED",
@@ -311,6 +313,7 @@ class TokenType(Enum):
     KERNEL_LAUNCH_END = auto()
     GLOBAL = auto()
     TILE_GLOBAL = auto()
+    TILE = auto()
     DEVICE = auto()
     HOST = auto()
     SHARED = auto()

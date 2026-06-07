@@ -5,6 +5,7 @@ import pytest
 
 from crosstl.backend.GLSL.OpenglAst import (
     AssignmentNode,
+    DiscardNode,
     DoWhileNode,
     ForNode,
     FunctionCallNode,
@@ -536,6 +537,29 @@ EXTERNAL_FIXTURES = [
                     lighting += diffuse + specular;
                 }
                 FragColor = vec4(lighting, 1.0);
+            }
+        """).strip(),
+    ),
+    ExternalFixture(
+        name="learnopengl-blending-discard-fragment",
+        repo="https://github.com/JoeyDeVries/LearnOpenGL",
+        commit="a545a703f95893258d16dbe32f5ccbb6400fd213",
+        path="src/4.advanced_opengl/3.1.blending_discard/3.1.blending.fs",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 330 core
+            out vec4 FragColor;
+
+            in vec2 TexCoords;
+
+            uniform sampler2D texture1;
+
+            void main()
+            {
+                vec4 texColor = texture(texture1, TexCoords);
+                if(texColor.a < 0.1)
+                    discard;
+                FragColor = texColor;
             }
         """).strip(),
     ),
@@ -1330,6 +1354,28 @@ def test_codegen_glslang_contextual_keyword_identifier_fixture():
     ):
         assert declaration in crossgl
     assert "uvec2 = 2.0;" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_learnopengl_blending_discard_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "learnopengl-blending-discard-fragment"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    main = next(function for function in ast.functions if function.name == "main")
+    discard_branch = next(
+        statement for statement in main.body if isinstance(statement, IfNode)
+    )
+
+    assert isinstance(discard_branch.if_body[0], DiscardNode)
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "if ((texColor.a < 0.1)) {\n            discard;\n        }" in crossgl
+    assert "FragColor = texColor;" in crossgl
     parse_crossgl(crossgl)
 
 

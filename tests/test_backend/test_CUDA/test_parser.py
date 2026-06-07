@@ -2273,6 +2273,29 @@ class TestCudaParser:
         assert kernel.body[0].value.name == "ct::tensor_span"
         assert kernel.body[1].name == "[pid_m, pid_n, dummy]"
 
+    def test_cuda_programming_guide_tile_function_parsing(self):
+        # Source pattern:
+        # https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-tile-kernels.html
+        code = """
+        #include "cuda_tile.h"
+        __tile__ float helper(float x, float y) {
+            return x + y;
+        }
+        __tile_global__ void my_kernel(float* a, float* b, float* c) {
+            c[0] = helper(a[0], b[0]);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.functions) == 1
+        assert ast.functions[0].name == "helper"
+        assert ast.functions[0].qualifiers == ["__tile__"]
+        assert ast.kernels[0].name == "my_kernel"
+        assert ast.kernels[0].qualifiers == ["__tile_global__"]
+
     def test_unique_ptr_host_allocation_parsing(self):
         code = """
         void host(int n) {

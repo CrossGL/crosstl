@@ -3933,6 +3933,7 @@ class RustToCrossGLConverter:
             constructor = self.format_path_constructor_call_parts(
                 expression.name,
                 args,
+                expression.args,
             )
             if constructor is not None:
                 return args_code, constructor
@@ -4623,17 +4624,24 @@ class RustToCrossGLConverter:
             for right_name in self.type_lookup_names(right)
         )
 
-    def format_path_constructor_call_parts(self, function_name, args):
+    def format_path_constructor_call_parts(self, function_name, args, arg_nodes=None):
         if "::" not in function_name:
             return None
 
         type_name, constructor_name = function_name.rsplit("::", 1)
-        if constructor_name not in {"new", "splat"}:
+        if constructor_name not in {"new", "splat", "from"}:
             return None
 
         mapped_type = self.map_type(type_name)
         if mapped_type == type_name:
             return None
+
+        if constructor_name == "from":
+            return self.format_vector_from_constructor_call(
+                mapped_type,
+                args,
+                arg_nodes,
+            )
 
         if constructor_name == "splat":
             if len(args) != 1 or mapped_type not in self.VECTOR_SPLAT_CONSTRUCTORS:
@@ -4641,6 +4649,74 @@ class RustToCrossGLConverter:
             return f"{mapped_type}({args[0]})"
 
         return f"{mapped_type}({', '.join(args)})"
+
+    def format_vector_from_constructor_call(self, mapped_type, args, arg_nodes=None):
+        if (
+            len(args) != 1
+            or mapped_type not in self.VECTOR_COMPONENT_COUNTS
+            or not arg_nodes
+            or len(arg_nodes) != 1
+        ):
+            return None
+
+        arg_node = arg_nodes[0]
+        if isinstance(arg_node, TupleNode):
+            values = self.split_wrapped_comma_values(args[0], "(", ")")
+        elif isinstance(arg_node, ArrayNode) and arg_node.size is None:
+            values = self.split_wrapped_comma_values(args[0], "{", "}")
+        else:
+            return None
+
+        if values is None or len(values) <= 1:
+            return None
+        return f"{mapped_type}({', '.join(values)})"
+
+    def split_wrapped_comma_values(self, value, opening, closing):
+        if not isinstance(value, str):
+            return None
+
+        value = value.strip()
+        if not (value.startswith(opening) and value.endswith(closing)):
+            return None
+
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+
+        parts = []
+        current = []
+        depth = 0
+        quote = None
+        escaped = False
+
+        for char in inner:
+            current.append(char)
+
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                continue
+
+            if char in {'"', "'"}:
+                quote = char
+            elif char in "([{":
+                depth += 1
+            elif char in ")]}":
+                depth = max(0, depth - 1)
+            elif char == "," and depth == 0:
+                part = "".join(current[:-1]).strip()
+                if part:
+                    parts.append(part)
+                current = []
+
+        final_part = "".join(current).strip()
+        if final_part:
+            parts.append(final_part)
+        return parts
 
     def format_vector_associated_constant(self, value):
         if not isinstance(value, str) or "::" not in value:
@@ -8275,6 +8351,7 @@ class RustToCrossGLConverter:
             constructor = self.format_path_constructor_call_parts(
                 expression.name,
                 args,
+                expression.args,
             )
             if constructor is not None:
                 return args_code, constructor
@@ -9358,7 +9435,11 @@ class RustToCrossGLConverter:
 
     def format_path_constructor_call(self, function_name, args):
         arg_values = [self.generate_expression(arg) for arg in args]
-        return self.format_path_constructor_call_parts(function_name, arg_values)
+        return self.format_path_constructor_call_parts(
+            function_name,
+            arg_values,
+            args,
+        )
 
     def map_type(self, rust_type):
         """Map a Rust type name to the closest CrossGL type name."""
