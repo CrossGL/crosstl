@@ -1423,6 +1423,41 @@ def test_rust_gpu_reduce_subgroup_builtins_parse_from_upstream_example():
     ]
 
 
+def test_rust_gpu_subgroup_composite_primitive_name_binding_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/arch/subgroup/subgroup_composite_all_equals.rs.
+    code = """
+    fn disassembly(my_struct: MyStruct) -> bool {
+        subgroup_all_equal(my_struct)
+    }
+
+    #[spirv(compute(threads(32)))]
+    pub fn main(inv_id: u32, inv_id_3d: UVec3, output: &mut u32) {
+        unsafe {
+            let my_struct = MyStruct {
+                a: inv_id as f32,
+                b: inv_id_3d,
+                c: Nested(5i32 - inv_id as i32),
+                d: Zst,
+            };
+            let bool = disassembly(my_struct);
+            *output = u32::from(bool);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[1].body[0]
+    bool_binding = unsafe_block.block.statements[1]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert isinstance(bool_binding, LetNode)
+    assert bool_binding.name == "bool"
+    assert isinstance(bool_binding.value, FunctionCallNode)
+    assert bool_binding.value.name == "disassembly"
+
+
 def test_rust_gpu_vector_associated_constants_parse_from_upstream_compiletests():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

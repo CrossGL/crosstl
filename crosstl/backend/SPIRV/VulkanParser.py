@@ -243,6 +243,7 @@ class VulkanParser:
         "BitReverse": "bitfieldReverse",
         "OuterProduct": "outerProduct",
         "QuantizeToF16": "spirvQuantizeToF16",
+        "SatConvertSToU": "spirvSatConvertSToU",
         "SDot": "spirvSDot",
         "SDotKHR": "spirvSDot",
         "SUDot": "spirvSUDot",

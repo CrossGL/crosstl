@@ -3239,6 +3239,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_SAT_CONVERT_STOU_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 1c74ae51a0478e15e3460fcc536b46c792684d2e
+; Source path: test/val/val_conversion_test.cpp
+; Reduced from ValidateConversion::SatConvertSToUSuccess
+; OpSatConvertSToU %u32 %u64_2.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %signed_in %unsigned_out
+OpExecutionMode %main OriginUpperLeft
+OpName %signed_in "signedIn"
+OpName %unsigned_out "unsignedOut"
+OpDecorate %signed_in Location 0
+OpDecorate %unsigned_out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%uint = OpTypeInt 32 0
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_uint = OpTypePointer Output %uint
+%signed_in = OpVariable %ptr_input_int Input
+%unsigned_out = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %int %signed_in
+%saturated = OpSatConvertSToU %uint %loaded
+OpStore %unsigned_out %saturated
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_BIT_INSTRUCTIONS_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Reduced from core bit instruction definitions for OpBitCount, OpBitReverse,
@@ -5935,6 +5966,20 @@ def test_spirv_tools_bitcast_success_codegen_reparse():
     assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
     assert "float_value" not in generated_code
     assert "vec_value" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_sat_convert_stou_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_SAT_CONVERT_STOU_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int signedIn @input @location(0);" in generated_code
+    assert "uint unsignedOut @output @location(0);" in generated_code
+    assert "unsignedOut = spirvSatConvertSToU(signedIn);" in generated_code
+    assert "unsignedOut = saturated;" not in generated_code
+    assert "OpSatConvertSToU" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

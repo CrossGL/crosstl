@@ -3805,6 +3805,8 @@ class HLSLToCrossGLConverter:
             return f"{func_name}({args})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_expression(expr.object, is_main)
+            if isinstance(expr.object, (int, float)):
+                obj = f"({obj})"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
             multisample_fetch = self.generate_multisample_texture_operator_fetch(

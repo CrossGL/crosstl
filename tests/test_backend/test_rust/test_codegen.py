@@ -1514,6 +1514,67 @@ def test_rust_gpu_reduce_subgroup_builtins_codegen_from_upstream_example():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_subgroup_composite_primitive_name_binding_codegen_reparse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/arch/subgroup/subgroup_composite_all_equals.rs.
+    code = """
+    use glam::*;
+    use spirv_std::ScalarComposite;
+    use spirv_std::arch::*;
+    use spirv_std::spirv;
+
+    #[derive(Copy, Clone, ScalarComposite)]
+    pub struct MyStruct {
+        a: f32,
+        b: UVec3,
+        c: Nested,
+        d: Zst,
+    }
+
+    #[derive(Copy, Clone, ScalarComposite)]
+    pub struct Nested(i32);
+
+    #[derive(Copy, Clone, ScalarComposite)]
+    pub struct Zst;
+
+    fn disassembly(my_struct: MyStruct) -> bool {
+        subgroup_all_equal(my_struct)
+    }
+
+    #[spirv(compute(threads(32)))]
+    pub fn main(
+        #[spirv(local_invocation_index)] inv_id: u32,
+        #[spirv(local_invocation_id)] inv_id_3d: UVec3,
+        #[spirv(descriptor_set = 0, binding = 0, storage_buffer)] output: &mut u32,
+    ) {
+        unsafe {
+            let my_struct = MyStruct {
+                a: inv_id as f32,
+                b: inv_id_3d,
+                c: Nested(5i32 - inv_id as i32),
+                d: Zst,
+            };
+
+            let bool = disassembly(my_struct);
+            *output = u32::from(bool);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "compute {" in result
+    assert "uint inv_id @ gl_LocalInvocationIndex" in result
+    assert "uvec3 inv_id_3d @ gl_LocalInvocationID" in result
+    assert "uint output @ set(0) @ binding(0)" in result
+    assert "let bool_ = disassembly(my_struct);" in result
+    assert "output = u32::from(bool_);" in result
+    assert "AssignmentNode" not in result
+    assert "let bool = " not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

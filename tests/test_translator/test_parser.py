@@ -60,6 +60,43 @@ def parse_code(tokens: List):
     return parser.parse()
 
 
+def test_void_parameter_list_parses_as_empty_parameters():
+    code = """
+    shader VoidParameterListShader {
+        compute {
+            float helper(void) {
+                return 1.0;
+            }
+
+            void main(void) {
+                float value = helper();
+                return;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+
+    assert compute_stage.entry_point.parameters == []
+
+
+def test_void_parameter_list_rejects_mixed_parameters():
+    code = """
+    shader BadMixedVoidParameterShader {
+        compute {
+            void main(void, int x) {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(SyntaxError):
+        parse_code(tokenize_code(code))
+
+
 def test_struct_tokenization():
     code = """
     struct VSInput {

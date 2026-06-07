@@ -616,6 +616,66 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["tex.GatherRed"],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/type/texture-sampler/combined-texture-sampler-array.slang
+        "id": "slang_combined_sampler_array_dual_registers",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/type/texture-sampler/combined-texture-sampler-array.slang",
+        "source": (
+            """
+            Sampler2D tex2D[16] : register(t0, space2) : register(s0, space2);
+            SamplerCube texCube[8] : register(t5, space1) : register(s10, space1);
+            Sampler3D tex3D[4] : register(t20) : register(s25);
+            Sampler1D tex1D[2] : register(t30, space3) : register(s30, space3);
+            Sampler2D singleTex[1] : register(t100, space5) : register(s100, space5);
+            Sampler2D largeTex[64] : register(t200, space10) : register(s200, space10);
+            Sampler2D singleSampler : register(t300) : register(s300);
+            Sampler2D partialTex[2] : register(t400);
+
+            float4 fragMain() : SV_Target
+            {
+                float4 result = tex2D[0].Sample(float2(0.5, 0.5));
+                result += texCube[1].Sample(float3(0.2, 0.3, 0.4));
+                result += tex3D[2].Sample(float3(0.1, 0.9, 0.6));
+                result += tex1D[1].Sample(0.7);
+                result += singleTex[0].Sample(float2(0.7, 0.4));
+                result += largeTex[5].Sample(float2(0.8, 0.6));
+                result += singleSampler.Sample(float2(0.3, 0.7));
+                result += partialTex[1].Sample(float2(0.4, 0.8));
+
+                return result;
+            }
+        """
+        ),
+        "crossgl": True,
+        "registers": {
+            "tex2D": ["t0,space2", "s0,space2"],
+            "texCube": ["t5,space1", "s10,space1"],
+            "tex3D": ["t20", "s25"],
+            "tex1D": ["t30,space3", "s30,space3"],
+            "singleSampler": ["t300", "s300"],
+            "partialTex": ["t400"],
+        },
+        "contains": [
+            "sampler2D tex2D[16] @register(t0, space2);",
+            "samplerCube texCube[8] @register(t5, space1);",
+            "sampler3D tex3D[4] @register(t20);",
+            "sampler1D tex1D[2] @register(t30, space3);",
+            "sampler2D singleSampler @register(t300);",
+            "vec4 result = texture(tex2D[0], vec2(0.5, 0.5));",
+            "result += texture(texCube[1], vec3(0.2, 0.3, 0.4));",
+            "result += texture(tex1D[1], 0.7);",
+            "return result;",
+        ],
+        "not_contains": [
+            "Expected semantic name",
+            ".Sample(",
+            "@register(s0, space2)",
+            "@register(s300)",
+        ],
+    },
+    {
         "id": "slang_hlsl_intrinsic_sample_cmp_bias",
         "repo": "shader-slang/slang",
         "path": "tests/hlsl-intrinsic/texture/sample-cmp.slang",
@@ -1254,6 +1314,16 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
             for enum in getattr(ast, "enums", [])
         }
         assert enum_types == enum_underlying_types
+
+    expected_registers = fixture.get("registers", {})
+    if expected_registers:
+        actual_registers = {}
+        for node in getattr(ast, "global_vars", []):
+            declaration = getattr(node, "left", node)
+            name = getattr(declaration, "name", None)
+            if name in expected_registers:
+                actual_registers[name] = getattr(declaration, "registers", [])
+        assert actual_registers == expected_registers
 
     for expected in fixture.get("contains", []):
         assert expected in generated

@@ -410,6 +410,7 @@ class MetalToCrossGLConverter:
         self.global_sampler_names = set()
         self.suppress_structured_buffer_index_lowering = False
         self.struct_member_types = {}
+        self.struct_name_map = {}
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.texture_method_functions = {
@@ -1054,6 +1055,7 @@ class MetalToCrossGLConverter:
 
         # Get structs - support both 'struct' and 'structs' attributes
         structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
+        self.struct_name_map = self.build_struct_name_map(structs)
         self.struct_member_types = self.collect_struct_member_types(structs)
         enums = getattr(ast, "enums", []) or []
         emitted_typedefs = [
@@ -1097,14 +1099,14 @@ class MetalToCrossGLConverter:
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
                 if getattr(struct_node, "aggregate_kind", None) == "union":
-                    union_name = struct_node.name or "anonymous"
+                    union_name = self.map_struct_name(struct_node.name or "anonymous")
                     code += (
                         f"    // Metal union {union_name} represented as "
                         "struct-like layout; overlapping storage is not modeled\n"
                     )
                 if struct_node.name in self.constant_struct_name:
                     code += "    // cbuffers\n"
-                    code += f"    cbuffer {struct_node.name} {{\n"
+                    code += f"    cbuffer {self.map_struct_name(struct_node.name)} {{\n"
                 else:
                     code += "    // Structs\n"
                     struct_alignas = ""
@@ -1118,7 +1120,10 @@ class MetalToCrossGLConverter:
                                     f"alignas({self.generate_expression(item, False)})"
                                 )
                         struct_alignas = " ".join(parts) + " "
-                    code += f"    {struct_alignas}struct {struct_node.name} {{\n"
+                    code += (
+                        f"    {struct_alignas}struct "
+                        f"{self.map_struct_name(struct_node.name)} {{\n"
+                    )
                 for member in struct_node.members:
                     if isinstance(member, StaticAssertNode):
                         cond = self.generate_expression(member.condition, False)
@@ -1246,6 +1251,30 @@ class MetalToCrossGLConverter:
             member_types[struct_name] = members
         return member_types
 
+    def build_struct_name_map(self, structs):
+        mapped_names = {}
+        used_names = set()
+        for struct_node in structs or []:
+            if not isinstance(struct_node, StructNode):
+                continue
+            raw_name = getattr(struct_node, "name", None)
+            if not raw_name:
+                continue
+            base_name = self.sanitize_identifier(raw_name)
+            candidate = base_name
+            suffix = 2
+            while candidate in used_names:
+                candidate = f"{base_name}_{suffix}"
+                suffix += 1
+            used_names.add(candidate)
+            mapped_names[raw_name] = candidate
+        return mapped_names
+
+    def map_struct_name(self, name):
+        if not name:
+            return name
+        return self.struct_name_map.get(name, self.sanitize_identifier(name))
+
     def iter_ast_children(self, node):
         if node is None or isinstance(node, (str, int, float, bool)):
             return
@@ -1288,6 +1317,7 @@ class MetalToCrossGLConverter:
             self.collect_storage_texture_declaration_ids(ast)
         )
         self.struct_member_types = {}
+        self.struct_name_map = {}
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
@@ -2189,6 +2219,7 @@ class MetalToCrossGLConverter:
             return f"{sampled_resource_type}{suffix}"
 
         mapped = self.type_map.get(base, base)
+        mapped = self.struct_name_map.get(mapped, mapped)
         return f"{mapped}{suffix}"
 
     def map_type_alias(self, alias):
