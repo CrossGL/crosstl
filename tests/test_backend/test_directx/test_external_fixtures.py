@@ -35,6 +35,7 @@ DIRECTX_SHADER_COMPILER_FLOAT64_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be
 DIRECTX_SHADER_COMPILER_BUFFER_ACCESS_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
 )
+DIRECTX_SHADER_COMPILER_REWRITER_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -723,6 +724,30 @@ EXTERNAL_FIXTURES = [
             "ivec2 int2 = int2buf[address];",
             "uvec3 uint3 = uint3buf[address];",
             "float b = float4buf[address][2];",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_rewriter_anonymous_struct_global",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_REWRITER_COMMIT,
+        path="tools/clang/test/HLSL/rewriter/anonymous_struct.hlsl",
+        code=textwrap.dedent("""
+            SamplerState ss;
+
+            static const struct {
+              float a;
+              SamplerState s;
+            } A = {1.2, ss};
+
+            float4 main() : SV_Target {
+                return A.a;
+            }
+        """).strip(),
+        contains=(
+            "struct AnonymousStruct_A {",
+            "sampler ss;",
+            "static const AnonymousStruct_A A = {1.2, ss};",
+            "return A.a;",
         ),
     ),
     ExternalFixture(

@@ -1528,6 +1528,23 @@ def test_rust_gpu_mouse_shader_perp_dot_method_codegen_from_upstream_example():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_mouse_shader_max_element_method_codegen_from_upstream_example():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Rectangle::distance.
+    code = """
+    fn rectangle_distance(diff: Vec2, size: Vec2) -> f32 {
+        (diff - size / 2.0).max_element()
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "return max((diff - (size / 2.0)).x, " "(diff - (size / 2.0)).y);" in result
+    assert ".max_element(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_glam_reflect_refract_methods_codegen_reparse():
     # Common glam method-form lighting/refraction idiom used by Rust GPU shaders.
     code = """

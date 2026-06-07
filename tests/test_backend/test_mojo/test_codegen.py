@@ -741,6 +741,56 @@ def test_modular_image_pipeline_blur_chained_bounds_codegen():
     assert "pix_val_accum += int(img_in[cur_row, cur_col]);" in generated_code
 
 
+def test_for_else_codegen_from_official_compound_statement_reference():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-compound-statements/
+    # "Loops and else clauses" documents that a for-else block skips the
+    # else body when break exits the loop.
+    code = """
+    def search(items: List[Int], target: Int):
+        var found = False
+        for item in items:
+            if item == target:
+                found = True
+                break
+        else:
+            print("not found")
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "bool __mojo_loop_completed_0 = true;" in generated_code
+    assert "for item in items {" in generated_code
+    assert "__mojo_loop_completed_0 = false;\n                break;" in generated_code
+    assert "if (__mojo_loop_completed_0)" in generated_code
+    assert 'print("not found");' in generated_code
+    assert "Unhandled" not in generated_code
+
+
+def test_while_else_codegen_from_official_control_flow_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/control-flow/
+    # "The while statement" documents while-else and the break skip behavior.
+    code = """
+    def main():
+        var n = 0
+        while n < 5:
+            n += 1
+            if n == 3:
+                break
+            print(n)
+        else:
+            print("Executing else clause")
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "bool __mojo_loop_completed_0 = true;" in generated_code
+    assert "while ((n < 5))" in generated_code
+    assert "__mojo_loop_completed_0 = false;\n                break;" in generated_code
+    assert "if (__mojo_loop_completed_0)" in generated_code
+    assert 'print("Executing else clause");' in generated_code
+    assert "Unhandled" not in generated_code
+
+
 def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
     code = """
     def main():

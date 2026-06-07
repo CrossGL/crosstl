@@ -1433,6 +1433,8 @@ class RustToCrossGLConverter:
     def infer_builtin_method_return_type(self, method_name, receiver_type, args):
         if method_name == "extend" and len(args) == 1:
             return self.extended_vector_constructor(receiver_type)
+        if method_name in {"max_element", "min_element"} and not args:
+            return self.vector_element_scalar_type(receiver_type)
         if method_name == "to_bits" and not args:
             bitcast_info = self.primitive_float_bitcast_info(receiver_type)
             if bitcast_info is not None:
@@ -4115,6 +4117,14 @@ class RustToCrossGLConverter:
         ):
             return f"(({obj}.x * {args[0]}.y) - ({obj}.y * {args[0]}.x))"
 
+        element_reduction = self.format_vector_element_reduction_call(
+            method_name,
+            obj,
+            receiver_type,
+        )
+        if element_reduction is not None:
+            return element_reduction
+
         if (
             method_name in {"map", "filter", "for_each", "any", "all"}
             and len(args) == 1
@@ -4202,6 +4212,34 @@ class RustToCrossGLConverter:
 
         mapped_type = self.map_type(receiver_type)
         return self.VECTOR_EXTEND_CONSTRUCTOR_MAP.get(mapped_type)
+
+    def format_vector_element_reduction_call(self, method_name, obj, receiver_type):
+        intrinsic = {"max_element": "max", "min_element": "min"}.get(method_name)
+        if intrinsic is None:
+            return None
+
+        mapped_type = self.map_type(receiver_type)
+        component_count = self.VECTOR_COMPONENT_COUNTS.get(mapped_type)
+        if component_count is None:
+            return None
+
+        components = [f"{obj}.{component}" for component in "xyzw"[:component_count]]
+        reduction = components[0]
+        for component in components[1:]:
+            reduction = f"{intrinsic}({reduction}, {component})"
+        return reduction
+
+    def vector_element_scalar_type(self, receiver_type):
+        mapped_type = self.map_type(receiver_type)
+        if mapped_type.startswith("bvec"):
+            return "bool"
+        if mapped_type.startswith("ivec"):
+            return "int"
+        if mapped_type.startswith("uvec"):
+            return "uint"
+        if mapped_type.startswith("vec"):
+            return "float"
+        return None
 
     def format_resource_method_call(self, method_name, obj, args, receiver_type=None):
         if not self.is_resource_method_name(method_name):
@@ -7690,7 +7728,13 @@ class RustToCrossGLConverter:
             return False
 
         method_name = expression.name.member
-        if method_name in {"len", "length", "normalize"}:
+        if method_name in {
+            "len",
+            "length",
+            "normalize",
+            "max_element",
+            "min_element",
+        }:
             return not expression.args
         if method_name in {"dot", "cross"}:
             return len(expression.args) == 1

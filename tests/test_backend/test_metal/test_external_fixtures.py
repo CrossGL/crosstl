@@ -40,6 +40,7 @@ MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13e
 MLX_STEEL_GEMM_LOADER_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_GRID_SAMPLER_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
+PYTORCH_POOLING_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 PYTORCH_ACTIVATION_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 PYTORCH_C10_METAL_CONSTEXPR_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
@@ -1067,6 +1068,43 @@ EXTERNAL_FIXTURES = [
                      tid += tptg.x * tgpg.x) {
                     data_out[tid] = output_t(data_in[tid]);
                 }
+            }
+        """
+        ),
+    },
+    {
+        "name": "pytorch_pooling_templated_braced_constructor_return",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_POOLING_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/Pooling.metal",
+        "roundtrip": True,
+        "contains": [
+            "IterBounds<int32_t> get_input_iter_bounds",
+            "return IterBounds<int32_t>(start, end);",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            struct IterBounds {
+                T start;
+                T end;
+            };
+
+            template <int32_t dim>
+            IterBounds<int32_t> get_input_iter_bounds(
+                constant int32_t* input_sizes,
+                thread int32_t (&pooling_dim_indices)[3],
+                constant int32_t* kernel_size,
+                constant int32_t* stride,
+                constant int32_t* padding,
+                constant int32_t* dilation) {
+                auto d = dilation[dim];
+                auto start = stride[dim] * pooling_dim_indices[dim] - padding[dim];
+                auto end = min(start + kernel_size[dim] * d, input_sizes[dim]);
+                return IterBounds<int32_t>{start, end};
             }
         """
         ),

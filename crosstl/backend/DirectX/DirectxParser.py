@@ -333,6 +333,17 @@ class HLSLParser:
                 self.parse_class_declaration()
                 continue
 
+            if self.is_qualified_struct_definition_start():
+                qualifiers = self.parse_qualifiers()
+                synthetic_start = len(self.synthetic_structs)
+                struct = self.parse_struct(
+                    declaration_qualifiers=qualifiers,
+                    declaration_attributes=attributes,
+                )
+                structs.extend(self.synthetic_structs[synthetic_start:])
+                structs.append(struct)
+                continue
+
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 synthetic_start = len(self.synthetic_structs)
                 cbuffers.append(self.parse_cbuffer(attributes=attributes))
@@ -597,6 +608,32 @@ class HLSLParser:
         return self.current_token_is_keyword(
             "CLASS", "class"
         ) or self.current_token_is_keyword("INTERFACE", "interface")
+
+    def is_qualified_struct_definition_start(self):
+        idx = self.current_index
+        saw_qualifier = False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            saw_qualifier = True
+            idx += 1
+
+        if (
+            not saw_qualifier
+            or idx >= len(self.tokens)
+            or self.tokens[idx][0] != "STRUCT"
+        ):
+            return False
+
+        idx += 1
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE":
+            return True
+        if idx < len(self.tokens) and self.is_identifier_token_at(idx):
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_angle_list_at(idx)
+                if idx is None:
+                    return False
+            return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+        return False
 
     def parse_class_declaration(self):
         if self.current_token_is_keyword("CLASS", "class"):
@@ -1068,7 +1105,9 @@ class HLSLParser:
         struct_node.is_forward_declaration = True
         return struct_node
 
-    def parse_struct(self):
+    def parse_struct(self, declaration_qualifiers=None, declaration_attributes=None):
+        declaration_qualifiers = list(declaration_qualifiers or [])
+        declaration_attributes = list(declaration_attributes or [])
         self.eat("STRUCT")
         struct_attributes = self.parse_attribute_list()
         name = None
@@ -1150,8 +1189,8 @@ class HLSLParser:
             variable_declarations = self.parse_variable_declaration_list_rest(
                 struct_type,
                 first_name,
-                qualifiers=[],
-                attributes=[],
+                qualifiers=declaration_qualifiers,
+                attributes=declaration_attributes,
                 allow_semantic=True,
                 consume_semicolon=True,
             )
