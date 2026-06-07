@@ -32,6 +32,16 @@ except ImportError:
 SPIRV_BINARY_MAGIC_PREFIXES = (b"\x03\x02\x23\x07", b"\x07\x23\x02\x03")
 
 
+def _non_negative_int(value):
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def _read_shader_source(file_path: str, source_name: str) -> str:
     with open(file_path, "rb") as file:
         shader_bytes = file.read()
@@ -2518,13 +2528,13 @@ def _build_parser():
     inspect_parser.add_argument("--output", "-o", help="Write inspection output")
     inspect_parser.add_argument(
         "--max-diagnostics",
-        type=int,
+        type=_non_negative_int,
         default=20,
         help="Maximum diagnostics to include in the inspection summary",
     )
     inspect_parser.add_argument(
         "--max-failed-artifacts",
-        type=int,
+        type=_non_negative_int,
         default=20,
         help="Maximum failed artifacts to include in the inspection summary",
     )

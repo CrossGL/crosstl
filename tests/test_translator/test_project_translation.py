@@ -14347,6 +14347,42 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
     assert "Diagnostics truncated: showing 4 of " in result.stdout
 
 
+@pytest.mark.parametrize("limit_flag", ("--max-diagnostics", "--max-failed-artifacts"))
+def test_project_cli_inspect_report_rejects_negative_sample_limits(
+    tmp_path,
+    limit_flag,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+            limit_flag,
+            "-1",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "must be a non-negative integer" in result.stderr
+    assert limit_flag in result.stderr
+    assert result.stdout == ""
+
+
 @pytest.mark.parametrize("command_prefix", ([], ["translate"]))
 def test_single_file_cli_forwards_frontend_options(
     tmp_path, monkeypatch, capsys, command_prefix

@@ -307,8 +307,13 @@ def test_project_report_inspection_documents_rollups():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_truncated_sections"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_rejects_negative_sample_limits"
+        ) in backend_support["evidence"]
         assert "source-override" in backend_support["notes"]
         assert "skipped source-override" in backend_support["notes"]
+        assert "negative sample-limit rejection" in backend_support["notes"]
         assert (
             "migration scope, non-goals, action count and kind, severity, and "
             "target rollups, bounded migration action samples with target lists "
