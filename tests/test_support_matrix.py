@@ -855,6 +855,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "source-remap summary rollups including variant rollups" in (
             backend_support["notes"]
         )
+        assert (
+            "sanitized variant output segments in source-map and source-remap paths"
+            in (backend_support["notes"])
+        )
         assert "missing source-map and source-remap variant rollups" in (
             backend_support["notes"]
         )
@@ -919,6 +923,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_source_map_counts_split_file_and_fine_grained_totals"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_sanitizes_variant_source_map_and_remap_paths"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

@@ -4859,6 +4859,68 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
     assert "Source remaps by variant: debug=1, release=1" in result.stdout
 
 
+def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants."qa/profile"]
+            MODE = "qa"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+
+    variant_segment = project_pipeline._variant_output_segment("qa/profile")
+    expected_artifact_path = f"out/cgl/{variant_segment}/simple.cgl"
+    expected_remap_path = f"out/cgl/{variant_segment}/simple.source-remap.json"
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    source_remap = artifact["sourceRemap"]
+    source_remap_payload = json.loads(
+        (repo / expected_remap_path).read_text(encoding="utf-8")
+    )
+
+    assert validation["success"] is True
+    assert variant_segment != "qa/profile"
+    assert "/" not in variant_segment
+    assert artifact["variant"] == "qa/profile"
+    assert artifact["path"] == expected_artifact_path
+    assert source_map["generated"]["file"] == expected_artifact_path
+    assert source_map["mappings"][0]["generated"]["file"] == expected_artifact_path
+    assert source_remap["path"] == expected_remap_path
+    assert source_remap["generatedFile"] == expected_artifact_path
+    assert source_remap_payload["generatedFile"] == expected_artifact_path
+    assert (
+        source_remap_payload["mappings"][0]["generated"]["file"]
+        == expected_artifact_path
+    )
+    assert payload["summary"]["sourceMapsByVariant"] == {"qa/profile": 1}
+    assert payload["summary"]["sourceRemapsByVariant"] == {"qa/profile": 1}
+    assert validation["artifactStatusByVariant"] == {
+        "qa/profile": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert inspection["sourceMaps"]["sourceMapsByVariant"] == {"qa/profile": 1}
+    assert inspection["sourceMaps"]["sourceRemapsByVariant"] == {"qa/profile": 1}
+    assert (repo / expected_artifact_path).exists()
+    assert (repo / expected_remap_path).exists()
+    assert not (repo / "out" / "cgl" / "qa" / "profile" / "simple.cgl").exists()
+    assert not (
+        repo / "out" / "cgl" / "qa" / "profile" / "simple.source-remap.json"
+    ).exists()
+
+
 def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
