@@ -8699,6 +8699,14 @@ def _toolchain_run_contract_reasons(
         or any(not _is_non_empty_string(part) for part in command)
     ):
         reasons.append(f"{prefix}.command must be a non-empty list of strings")
+    elif _is_non_empty_string(run.get("target")):
+        normalized_target = _normalized_targets([str(run["target"])])[0]
+        configured_tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
+        if configured_tools and command[0] not in configured_tools:
+            reasons.append(
+                f"{prefix}.command[0] must match a configured validation tool "
+                f"for target {normalized_target}"
+            )
 
     returncode = run.get("returncode")
     if not isinstance(returncode, int) or isinstance(returncode, bool):

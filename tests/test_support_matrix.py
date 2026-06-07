@@ -1294,6 +1294,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "toolchain run target" in backend_support["notes"]
         assert "toolchain run source backend" in backend_support["notes"]
         assert "toolchain run variant" in backend_support["notes"]
+        assert "target-tool command consistency" in backend_support["notes"]
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
         )
@@ -1364,6 +1365,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_records_toolchain_run_variant_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_toolchain_run_command_target_"
+            "mismatch"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
