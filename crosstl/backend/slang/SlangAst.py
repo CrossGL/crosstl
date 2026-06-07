@@ -137,6 +137,16 @@ class ParenthesizedCommaNode(ASTNode):
         return f"ParenthesizedCommaNode(expressions={self.expressions})"
 
 
+class DeferNode(ASTNode):
+    """Node representing a Slang defer statement."""
+
+    def __init__(self, body):
+        self.body = body
+
+    def __repr__(self):
+        return f"DeferNode(body={self.body})"
+
+
 class AssociatedTypeNode(ASTNode):
     """Node representing a Slang interface associated type requirement."""
 

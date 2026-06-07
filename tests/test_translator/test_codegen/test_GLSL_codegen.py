@@ -82,6 +82,39 @@ def test_glsl_specialization_constant_metadata_emits_layout():
     assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in generated
 
 
+def test_glsl_tile_image_ext_importer_attribute_roundtrips():
+    # Reduced from the backend GLSL importer output for glslang's
+    # Test/spv.ext.ShaderTileImage.overlap.frag fixture.
+    shader = """
+    #version 460
+    #extension GL_EXT_shader_tile_image : require
+    precision mediump int;
+    precision highp float;
+
+    shader TileImage {
+        attachmentEXT in_color @location(0) @tileImageEXT @highp[2];
+
+        fragment {
+            vec4 main() @location(1) @highp @out_color {
+                vec4 out_color;
+                out_color = colorAttachmentReadEXT(in_color[0]);
+                return out_color;
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "#extension GL_EXT_shader_tile_image : require" in generated
+    assert (
+        "layout(location = 0) tileImageEXT highp attachmentEXT in_color[2];"
+        in generated
+    )
+    assert "layout(location = 0) highp attachmentEXT in_color[2];" not in generated
+    assert "out_color = colorAttachmentReadEXT(in_color[0]);" in generated
+
+
 def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
     shader = """
     shader SynchronizationBuiltins {

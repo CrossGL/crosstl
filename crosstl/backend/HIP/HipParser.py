@@ -893,6 +893,8 @@ class HipParser:
         self.consume("TYPEDEF")
         if self.match("STRUCT"):
             return self.parse_typedef_struct_alias()
+        if self.match("ENUM"):
+            return self.parse_typedef_enum_alias()
 
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
@@ -951,6 +953,60 @@ class HipParser:
             self.advance()
         self.type_aliases.add(alias_name)
         return StructNode(alias_name, members)
+
+    def parse_typedef_enum_alias(self):
+        self.consume("ENUM")
+        is_scoped = False
+        self.skip_newlines()
+
+        if self.match("CLASS", "STRUCT"):
+            is_scoped = True
+            self.advance()
+            self.skip_newlines()
+
+        tag_name = None
+        if self.match("IDENTIFIER"):
+            tag_name = self.current_token.value
+            self.type_aliases.add(tag_name)
+            self.advance()
+
+        underlying_type = None
+        self.skip_newlines()
+        if self.match("COLON"):
+            self.advance()
+            self.skip_newlines()
+            underlying_type = self.parse_type()
+
+        self.skip_newlines()
+        if not self.match("LBRACE"):
+            alias = self.parse_type_alias_declarator(
+                f"enum {tag_name}", allow_prefix=True
+            )
+            if self.match("SEMICOLON"):
+                self.advance()
+            return alias
+
+        self.consume("LBRACE")
+        members = self.parse_enum_members()
+        self.consume("RBRACE")
+
+        alias_name = tag_name
+        self.skip_newlines()
+        if self.match("IDENTIFIER"):
+            alias_name = self.current_token.value
+            self.advance()
+        if not alias_name:
+            self.error("Expected typedef enum alias name")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+
+        self.type_aliases.add(alias_name)
+        enum_node = EnumNode(alias_name, members)
+        enum_node.underlying_type = underlying_type
+        enum_node.is_scoped = is_scoped
+        enum_node.enum_tag = tag_name
+        return enum_node
 
     def parse_using_alias(self):
         self.advance()

@@ -26,6 +26,7 @@ from crosstl.backend.Mojo.MojoAst import (
     PassNode,
     RangeForNode,
     ReturnNode,
+    SetComprehensionNode,
     SliceNode,
     StructNode,
     SwitchNode,
@@ -2155,6 +2156,23 @@ def test_dict_display_and_comprehension_parse_from_current_mojo_docs():
     assert [(clause["kind"]) for clause in dict_squares.clauses] == ["for"]
     assert dict_squares.clauses[0]["pattern"] == "x"
     assert isinstance(dict_squares.clauses[0]["iterable"], FunctionCallNode)
+
+
+def test_set_comprehension_parse_from_current_mojo_docs():
+    # Reduced from https://github.com/modular/modular/blob/04cff5a4cc491ec2bf6850ce99e0253075fc908c/mojo/docs/reference/expressions.mdx,
+    # "Set comprehensions" in the Mojo expression reference.
+    code = """
+    def main():
+        var fibs = {fib(x) for x in range(6)}
+    """
+    ast = parse_code(tokenize_code(code))
+    fibs = find_function(ast, "main").body[0].initial_value
+
+    assert isinstance(fibs, SetComprehensionNode)
+    assert isinstance(fibs.expression, FunctionCallNode)
+    assert [(clause["kind"]) for clause in fibs.clauses] == ["for"]
+    assert fibs.clauses[0]["pattern"] == "x"
+    assert isinstance(fibs.clauses[0]["iterable"], FunctionCallNode)
 
 
 def test_dotted_type_annotation_parse_from_modular_tiled_matmul_example():

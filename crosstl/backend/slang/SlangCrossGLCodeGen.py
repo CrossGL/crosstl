@@ -929,9 +929,16 @@ class SlangToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
-    def generate_function_body(self, body, indent=0, is_main=False):
+    def generate_function_body(
+        self, body, indent=0, is_main=False, deferred_scopes=None
+    ):
         code = ""
+        deferred_scopes = deferred_scopes or []
+        deferred_statements = []
         for stmt in body:
+            if isinstance(stmt, DeferNode):
+                deferred_statements.append(stmt.body)
+                continue
             expanded_statement = self.generate_resource_get_dimensions_statement(
                 stmt, indent, is_main
             )
@@ -941,6 +948,19 @@ class SlangToCrossGLConverter:
             sincos_statement = self.generate_sincos_statement(stmt, indent, is_main)
             if sincos_statement is not None:
                 code += sincos_statement
+                continue
+            if isinstance(stmt, ReturnNode):
+                code += self.generate_deferred_scope_exits(
+                    [*deferred_scopes, deferred_statements], indent, is_main
+                )
+                code += "    " * indent
+                if not is_main:
+                    if stmt.value is None:
+                        code += "return;\n"
+                    else:
+                        code += (
+                            f"return {self.generate_expression(stmt.value, is_main)};\n"
+                        )
                 continue
             code += "    " * indent
             if isinstance(stmt, VariableNode):
@@ -965,30 +985,45 @@ class SlangToCrossGLConverter:
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, UnaryOpNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
-            elif isinstance(stmt, ReturnNode):
-                if not is_main:
-                    if stmt.value is None:
-                        code += "return;\n"
-                    else:
-                        code += (
-                            f"return {self.generate_expression(stmt.value, is_main)};\n"
-                        )
             elif isinstance(stmt, ForNode):
-                code += self.generate_for_loop(stmt, indent, is_main)
+                code += self.generate_for_loop(
+                    stmt, indent, is_main, [*deferred_scopes, deferred_statements]
+                )
             elif isinstance(stmt, WhileNode):
-                code += self.generate_while_loop(stmt, indent, is_main)
+                code += self.generate_while_loop(
+                    stmt, indent, is_main, [*deferred_scopes, deferred_statements]
+                )
             elif isinstance(stmt, DoWhileNode):
-                code += self.generate_do_while_loop(stmt, indent, is_main)
+                code += self.generate_do_while_loop(
+                    stmt, indent, is_main, [*deferred_scopes, deferred_statements]
+                )
             elif isinstance(stmt, SwitchNode):
-                code += self.generate_switch_statement(stmt, indent, is_main)
+                code += self.generate_switch_statement(
+                    stmt, indent, is_main, [*deferred_scopes, deferred_statements]
+                )
             elif isinstance(stmt, IfNode):
-                code += self.generate_if_statement(stmt, indent, is_main)
+                code += self.generate_if_statement(
+                    stmt, indent, is_main, [*deferred_scopes, deferred_statements]
+                )
             elif isinstance(stmt, BreakNode):
                 code += "break;\n"
             elif isinstance(stmt, ContinueNode):
                 code += "continue;\n"
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
+        code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
+        return code
+
+    def generate_deferred_scope_exits(self, deferred_scopes, indent=0, is_main=False):
+        code = ""
+        for deferred_statements in reversed(deferred_scopes or []):
+            code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
+        return code
+
+    def generate_deferred_bodies(self, deferred_statements, indent=0, is_main=False):
+        code = ""
+        for deferred_body in reversed(deferred_statements or []):
+            code += self.generate_function_body(deferred_body, indent, is_main)
         return code
 
     def generate_sincos_statement(self, stmt, indent=0, is_main=False):
@@ -1008,13 +1043,15 @@ class SlangToCrossGLConverter:
             f"{indent_text}{cosine_target} = cos({value});\n"
         )
 
-    def generate_for_loop(self, node, indent, is_main):
+    def generate_for_loop(self, node, indent, is_main, deferred_scopes=None):
         init = self.generate_for_clause(node.init, is_main)
         condition = self.generate_for_clause(node.condition, is_main)
         update = self.generate_for_clause(node.update, is_main)
 
         code = f"for ({init}; {condition}; {update}) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += self.generate_function_body(
+            node.body, indent + 1, is_main, deferred_scopes
+        )
         code += "    " * indent + "}\n"
         return code
 
@@ -1025,30 +1062,34 @@ class SlangToCrossGLConverter:
             return ", ".join(self.generate_expression(item, is_main) for item in clause)
         return self.generate_expression(clause, is_main)
 
-    def generate_while_loop(self, node, indent, is_main):
+    def generate_while_loop(self, node, indent, is_main, deferred_scopes=None):
         condition = self.generate_expression(node.condition, is_main)
 
         code = f"while ({condition}) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += self.generate_function_body(
+            node.body, indent + 1, is_main, deferred_scopes
+        )
         code += "    " * indent + "}\n"
         return code
 
-    def generate_do_while_loop(self, node, indent, is_main):
+    def generate_do_while_loop(self, node, indent, is_main, deferred_scopes=None):
         condition = self.generate_expression(node.condition, is_main)
 
         code = "do {\n"
-        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += self.generate_function_body(
+            node.body, indent + 1, is_main, deferred_scopes
+        )
         code += "    " * indent + f"}} while ({condition});\n"
         return code
 
-    def generate_switch_statement(self, node, indent, is_main):
+    def generate_switch_statement(self, node, indent, is_main, deferred_scopes=None):
         expression = self.generate_expression(node.expression, is_main)
 
         code = f"switch ({expression}) {{\n"
         unlabeled_statements = getattr(node, "unlabeled_statements", []) or []
         if unlabeled_statements:
             code += self.generate_function_body(
-                unlabeled_statements, indent + 1, is_main
+                unlabeled_statements, indent + 1, is_main, deferred_scopes
             )
         ordered_cases = getattr(node, "ordered_cases", None)
         if ordered_cases is not None:
@@ -1058,36 +1099,48 @@ class SlangToCrossGLConverter:
                 else:
                     value = self.generate_expression(case.value, is_main)
                     code += "    " * (indent + 1) + f"case {value}:\n"
-                code += self.generate_function_body(case.body, indent + 2, is_main)
+                code += self.generate_function_body(
+                    case.body, indent + 2, is_main, deferred_scopes
+                )
             code += "    " * indent + "}\n"
             return code
 
         for case in node.cases:
             value = self.generate_expression(case.value, is_main)
             code += "    " * (indent + 1) + f"case {value}:\n"
-            code += self.generate_function_body(case.body, indent + 2, is_main)
+            code += self.generate_function_body(
+                case.body, indent + 2, is_main, deferred_scopes
+            )
 
         if node.default_case is not None:
             code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(node.default_case, indent + 2, is_main)
+            code += self.generate_function_body(
+                node.default_case, indent + 2, is_main, deferred_scopes
+            )
 
         code += "    " * indent + "}\n"
         return code
 
-    def generate_if_statement(self, node, indent, is_main):
+    def generate_if_statement(self, node, indent, is_main, deferred_scopes=None):
         condition = self.generate_expression(node.condition, is_main)
 
         code = f"if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1, is_main)
+        code += self.generate_function_body(
+            node.if_body, indent + 1, is_main, deferred_scopes
+        )
         code += "    " * indent + "}"
 
         if node.else_body:
             if isinstance(node.else_body, IfNode):
                 code += " else "
-                code += self.generate_if_statement(node.else_body, indent, is_main)
+                code += self.generate_if_statement(
+                    node.else_body, indent, is_main, deferred_scopes
+                )
             else:
                 code += " else {\n"
-                code += self.generate_function_body(node.else_body, indent + 1, is_main)
+                code += self.generate_function_body(
+                    node.else_body, indent + 1, is_main, deferred_scopes
+                )
                 code += "    " * indent + "}"
 
         code += "\n"

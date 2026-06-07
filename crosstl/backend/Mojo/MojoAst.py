@@ -144,6 +144,20 @@ class DictComprehensionNode(ASTNode):
         )
 
 
+class SetComprehensionNode(ASTNode):
+    """Node representing a Mojo set comprehension expression."""
+
+    def __init__(self, expression, clauses):
+        self.expression = expression
+        self.clauses = clauses
+
+    def __repr__(self):
+        return (
+            "SetComprehensionNode("
+            f"expression={self.expression}, clauses={self.clauses})"
+        )
+
+
 class SliceNode(ASTNode):
     """Node representing a Mojo slice index."""
 

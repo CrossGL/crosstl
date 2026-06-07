@@ -40,6 +40,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "b4ee9992e851a078c99d93de59d6142a51f5e3a1",
         "paths": ["HIP-Basic/inline_assembly/main.hip"],
     },
+    "rocm_examples_rocdecode": {
+        "url": "https://github.com/ROCm/rocm-examples",
+        "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
+        "paths": ["Common/rocdecode_utils.hpp"],
+    },
     "hip_examples": {
         "url": "https://github.com/ROCm/HIP-Examples",
         "commit": "cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3",
@@ -530,6 +535,36 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     assert "atomicAdd_system(" not in crossgl
     assert "atomicOr_system(" not in crossgl
     assert "atomicCAS_system(" not in crossgl
+
+
+def test_external_rocm_rocdecode_typedef_enum_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
+    # Common/rocdecode_utils.hpp.
+    source = """
+    typedef enum reconfigure_flush_mode_enum {
+        RECONFIG_FLUSH_MODE_NONE = 0x0,
+        RECONFIG_FLUSH_MODE_DUMP_TO_FILE = 0x1,
+        RECONFIG_FLUSH_MODE_CALCULATE_MD5 = (0x1 << 1),
+    } reconfigure_flush_mode;
+
+    bool should_calculate_md5(reconfigure_flush_mode flush_mode) {
+        return flush_mode
+            == reconfigure_flush_mode::RECONFIG_FLUSH_MODE_CALCULATE_MD5;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    enum = ast.statements[0]
+    function = ast.statements[1]
+
+    assert enum.name == "reconfigure_flush_mode"
+    assert enum.members[0] == ("RECONFIG_FLUSH_MODE_NONE", "0x0")
+    assert enum.members[1] == ("RECONFIG_FLUSH_MODE_DUMP_TO_FILE", "0x1")
+    assert isinstance(enum.members[2][1], BinaryOpNode)
+    assert function.params[0]["type"] == "reconfigure_flush_mode"
+    assert "enum reconfigure_flush_mode {" in crossgl
+    assert "RECONFIG_FLUSH_MODE_CALCULATE_MD5 = (0x1 << 1)," in crossgl
+    assert "bool should_calculate_md5(reconfigure_flush_mode flush_mode)" in crossgl
 
 
 def test_external_hip_examples_histogram_dynamic_shared_crossgl_reparse():
