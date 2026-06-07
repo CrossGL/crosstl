@@ -342,6 +342,42 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
     }
 
 
+def test_scan_project_reports_extensionless_unsupported_sources(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "kernel").write_text("not shader code", encoding="utf-8")
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report(targets=["cgl"]).to_json()
+
+    assert scan.units == []
+    assert scan.skipped == [{"path": "kernel", "reason": "unsupported-extension"}]
+    assert payload["summary"]["skippedByReason"] == {"unsupported-extension": 1}
+    assert payload["summary"]["skippedByExtension"] == {"extensionless": 1}
+    diagnostics_by_code = {
+        diagnostic["code"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    assert set(diagnostics_by_code) == {
+        "project.scan.empty",
+        "project.scan.unsupported-source",
+    }
+    assert diagnostics_by_code["project.scan.unsupported-source"][
+        "missingCapabilities"
+    ] == ["source.discovery"]
+    assert (
+        "No registered source backend for kernel"
+        in diagnostics_by_code["project.scan.unsupported-source"]["message"]
+    )
+
+
 def test_scan_project_skips_known_unsupported_source_artifacts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -13204,6 +13240,7 @@ def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_pat
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "kernel").write_text("not shader code", encoding="utf-8")
     (repo / "notes.txt").write_text("not shader code", encoding="utf-8")
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
@@ -13235,8 +13272,8 @@ def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_pat
     )
 
     assert result.returncode == 0
-    assert "Skipped by reason: unsupported-extension=1" in result.stdout
-    assert "Skipped by extension: .txt=1" in result.stdout
+    assert "Skipped by reason: unsupported-extension=2" in result.stdout
+    assert "Skipped by extension: .txt=1, extensionless=1" in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_source_override_rollups(tmp_path):

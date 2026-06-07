@@ -225,12 +225,19 @@ def test_project_repo_scan_documents_source_root_status():
         assert "validation rejects missing scan summary rollups" in (
             backend_support["notes"]
         )
+        assert "extensionless unsupported explicit includes" in (
+            backend_support["notes"]
+        )
         assert "text inspection identifies inactive source roots by path" in (
             backend_support["notes"]
         )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_source_roots_that_are_not_directories"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_extensionless_unsupported_sources"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -278,6 +285,7 @@ def test_project_report_inspection_documents_rollups():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_skipped_reason_rollups"
         ) in backend_support["evidence"]
+        assert "extensionless skipped-extension rollups" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_override_rollups"
