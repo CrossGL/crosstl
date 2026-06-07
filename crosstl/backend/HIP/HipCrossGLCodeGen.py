@@ -5157,6 +5157,9 @@ class HipToCrossGLConverter:
         return name.rsplit("::", 1)[-1].split("<", 1)[0]
 
     def format_hip_fp16_intrinsic_call(self, function_name, args):
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
         if function_name == "__half2float" and len(args) == 1:
             return f"f32({args[0]})"
         if function_name == "__float2half" and len(args) == 1:
@@ -5165,10 +5168,49 @@ class HipToCrossGLConverter:
             return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
         if function_name == "__floats2half2_rn" and len(args) == 2:
             return self.format_vector_constructor("vec2", args, "f16")
+        if function_name == "__halves2half2" and len(args) == 2:
+            return self.format_vector_constructor("vec2", args, "f16")
         if function_name == "__low2float" and len(args) == 1:
             return f"f32({self.format_vector_component_access(args[0], 'x')})"
         if function_name == "__high2float" and len(args) == 1:
             return f"f32({self.format_vector_component_access(args[0], 'y')})"
+        if function_name == "__low2half" and len(args) == 1:
+            return self.format_vector_component_access(args[0], "x")
+        if function_name == "__high2half" and len(args) == 1:
+            return self.format_vector_component_access(args[0], "y")
+        if function_name == "__low2half2" and len(args) == 1:
+            low = self.format_vector_component_access(args[0], "x")
+            return self.format_vector_constructor("vec2", [low, low], "f16")
+        if function_name == "__high2half2" and len(args) == 1:
+            high = self.format_vector_component_access(args[0], "y")
+            return self.format_vector_constructor("vec2", [high, high], "f16")
+        if function_name in {"__lows2half2", "__low2half2"} and len(args) == 2:
+            return self.format_vector_constructor(
+                "vec2",
+                [
+                    self.format_vector_component_access(args[0], "x"),
+                    self.format_vector_component_access(args[1], "x"),
+                ],
+                "f16",
+            )
+        if function_name == "__highs2half2" and len(args) == 2:
+            return self.format_vector_constructor(
+                "vec2",
+                [
+                    self.format_vector_component_access(args[0], "y"),
+                    self.format_vector_component_access(args[1], "y"),
+                ],
+                "f16",
+            )
+        if function_name == "__lowhigh2highlow" and len(args) == 1:
+            return self.format_vector_constructor(
+                "vec2",
+                [
+                    self.format_vector_component_access(args[0], "y"),
+                    self.format_vector_component_access(args[0], "x"),
+                ],
+                "f16",
+            )
         if function_name == "__hadd2" and len(args) == 2:
             return f"({args[0]} + {args[1]})"
         if function_name == "__hmul2" and len(args) == 2:

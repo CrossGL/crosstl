@@ -3448,6 +3448,9 @@ class VulkanParser:
         args = [image, coordinate]
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
             args.append(parsed_operands["Lod"][0])
+        sample = self.spirv_assembly_image_sample_operand(parsed_operands)
+        if sample is not None:
+            args.append(sample)
         offset = self.spirv_assembly_image_offset_operand(parsed_operands)
         if offset is not None:
             args.append(offset)

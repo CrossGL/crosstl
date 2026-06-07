@@ -2300,6 +2300,38 @@ def test_codegen_sampled_texture_reads_roundtrip_to_texel_fetch():
     assert "textureLoad(" not in metal
 
 
+def test_codegen_sampled_cube_texture_read_from_msl_spec_is_diagnostic():
+    # Apple Metal Shading Language Specification, section 5.10.6:
+    # texturecube read overloads carry coord, face, and lod separately. CrossGL
+    # has no face-aware cube texel-fetch form, so do not lower face as LOD.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    float4 readCube(texturecube<float> tex, uint2 coord, uint face, uint lod) {
+        return tex.read(coord, face, lod);
+    }
+
+    float4 readCubeArray(texturecube_array<float> tex,
+                         uint2 coord,
+                         uint face,
+                         uint layer,
+                         uint lod) {
+        return tex.read(coord, face, layer, lod);
+    }
+    """
+    crossgl = convert(code)
+
+    diagnostic = (
+        "vec4(0.0) /* unsupported Metal sampled cube texture read: "
+        "read on tex requires face-aware texel fetch */"
+    )
+    assert crossgl.count(diagnostic) == 2
+    assert "texelFetch(tex, coord, face)" not in crossgl
+    assert "texelFetch(tex, vec4(coord, face), layer)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_access_qualified_1d_storage_textures():
     code = """
     #include <metal_stdlib>

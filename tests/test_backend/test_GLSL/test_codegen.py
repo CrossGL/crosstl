@@ -765,6 +765,94 @@ def test_codegen_native_shadow_texture_imports_compare_helpers():
     assert "textureCompareLodOffset(" not in glsl
 
 
+def test_codegen_native_projected_shadow_texture_imports_compare_helpers():
+    # Vulkan GLSL built-ins expose projected shadow comparisons through
+    # textureProj* overloads on sampler2DShadow with the reference packed in P.z.
+    code = textwrap.dedent("""
+        #version 450 core
+        layout(location = 0) in vec4 uvRefQ;
+        layout(location = 1) in vec2 ddx;
+        layout(location = 2) in vec2 ddy;
+        layout(location = 0) out vec4 fragColor;
+        uniform sampler2DShadow shadowMap;
+
+        void main() {
+            const ivec2 offset = ivec2(1, -1);
+            float projected = textureProj(shadowMap, uvRefQ);
+            float projectedOffset = textureProjOffset(shadowMap, uvRefQ, offset);
+            float projectedLod = textureProjLod(shadowMap, uvRefQ, 0.0);
+            float projectedLodOffset = textureProjLodOffset(
+                shadowMap,
+                uvRefQ,
+                0.0,
+                offset
+            );
+            float projectedGrad = textureProjGrad(shadowMap, uvRefQ, ddx, ddy);
+            float projectedGradOffset = textureProjGradOffset(
+                shadowMap,
+                uvRefQ,
+                ddx,
+                ddy,
+                offset
+            );
+            fragColor = vec4(
+                projected
+                + projectedOffset
+                + projectedLod
+                + projectedLodOffset
+                + projectedGrad
+                + projectedGradOffset
+            );
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "textureCompareProj(shadowMap, input.uvRefQ.xyw, input.uvRefQ.z)" in crossgl
+    assert (
+        "textureCompareProjOffset(shadowMap, input.uvRefQ.xyw, input.uvRefQ.z, offset)"
+        in crossgl
+    )
+    assert (
+        "textureCompareProjLod(shadowMap, input.uvRefQ.xyw, input.uvRefQ.z, 0.0)"
+        in crossgl
+    )
+    assert (
+        "textureCompareProjLodOffset(shadowMap, input.uvRefQ.xyw, input.uvRefQ.z, 0.0, offset)"
+        in crossgl
+    )
+    assert (
+        "textureCompareProjGrad(shadowMap, input.uvRefQ.xyw, input.uvRefQ.z, input.ddx, input.ddy)"
+        in crossgl
+    )
+    assert (
+        "textureCompareProjGradOffset(shadowMap, input.uvRefQ.xyw, input.uvRefQ.z, input.ddx, input.ddy, offset)"
+        in crossgl
+    )
+    assert "float projected = textureProj(" not in crossgl
+    assert "float projectedLod = textureProjLod(" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+
+    hlsl = HLSLCodeGen().generate(shader_ast)
+    assert "shadowMap.SampleCmp(" in hlsl
+    assert "shadowMap.SampleCmpLevel(" in hlsl
+    assert "shadowMap.SampleCmpGrad(" in hlsl
+    assert "shadowMap.Sample(" not in hlsl
+
+    metal = MetalCodeGen().generate(shader_ast)
+    assert "shadowMap.sample_compare" in metal
+    assert "shadowMap.sample(" not in metal
+
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "texture(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z))" in glsl
+    assert (
+        "textureLodOffset(shadowMap, vec3(uvRefQ.xyw.xy / uvRefQ.xyw.z, uvRefQ.z), 0.0, offset)"
+        in glsl
+    )
+    assert "textureCompareProj" not in glsl
+
+
 def test_codegen_legacy_shadow2d_imports_compare_helpers_from_openmw_pcf():
     # Reduced from s-ilent/shadows_fragment.glsl, which samples a
     # sampler2DShadow through shadow2D(...).r for PCF taps. GLSL 1.40 also
