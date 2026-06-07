@@ -1915,7 +1915,8 @@ def test_validate_project_report_rejects_missing_current_include_dependencies(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "units[0].includeDependencies must include current include dependency "
-        "unit source:2:1 resolved local include local.inc"
+        "unit source:2:1 resolved local include local.inc -> "
+        "shaders/local.inc (source)"
     ) in diagnostic["message"]
 
 
@@ -1953,7 +1954,8 @@ def test_validate_project_report_rejects_extra_current_include_dependencies(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "units[0].includeDependencies contains include dependency not found "
-        "in current source: unit source:99:1 resolved local include local.inc"
+        "in current source: unit source:99:1 resolved local include local.inc -> "
+        "shaders/local.inc (source)"
     ) in diagnostic["message"]
 
 
@@ -1990,12 +1992,12 @@ def test_validate_project_report_labels_forged_define_include_provenance(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "units[0].includeDependencies must include current include dependency "
-        "unit source:1:1 resolved local include local.inc"
+        "unit source:1:1 resolved local include local.inc -> local.inc (source)"
     ) in diagnostic["message"]
     assert (
         "units[0].includeDependencies contains include dependency not found "
-        "in current source: unit source:1:1 resolved local include local.inc "
-        "define PROJECT_HEADER"
+        "in current source: unit source:1:1 resolved local include local.inc -> "
+        "local.inc (source, define PROJECT_HEADER)"
     ) in diagnostic["message"]
 
 

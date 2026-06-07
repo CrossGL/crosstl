@@ -7740,12 +7740,21 @@ def _include_dependency_scan_label(
     kind = str(values.get("kind", "include"))
     include_value = str(values.get("include", "<unknown>"))
     label = f"{source}:{line}:{column} {status} {kind} include {include_value}"
+    resolved_path = values.get("resolvedPath")
+    if isinstance(resolved_path, str) and resolved_path:
+        label = f"{label} -> {resolved_path}"
+    details = []
     variant = values.get("variant")
     if isinstance(variant, str) and variant:
-        label = f"{label} variant {variant}"
+        details.append(f"variant {variant}")
+    resolved_from = values.get("resolvedFrom")
+    if isinstance(resolved_from, str) and resolved_from:
+        details.append(resolved_from)
     resolved_from_define = values.get("resolvedFromDefine")
     if isinstance(resolved_from_define, str) and resolved_from_define:
-        label = f"{label} define {resolved_from_define}"
+        details.append(f"define {resolved_from_define}")
+    if details:
+        label = f"{label} ({', '.join(details)})"
     return label
 
 
