@@ -69,8 +69,15 @@ class HipParser:
         "APIENTRY",
         "CALLBACK",
         "HIPCUB_DEVICE",
+        "HIPCUB_FORCEINLINE",
         "HIPCUB_HOST",
         "HIPCUB_HOST_DEVICE",
+        "HIPCUB_INLINE",
+        "ROCPRIM_DEVICE",
+        "ROCPRIM_FORCE_INLINE",
+        "ROCPRIM_HOST",
+        "ROCPRIM_HOST_DEVICE",
+        "ROCPRIM_INLINE",
         "ROCWMMA_KERNEL",
         "VX_CALLBACK",
         "WINAPI",
@@ -183,6 +190,16 @@ class HipParser:
         "__noexcept",
     }
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
+    CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
+        "__DEVICE__",
+        "__HOST__",
+        "__FORCEINLINE__",
+        "__NOINLINE__",
+        "CONSTEXPR",
+        "INLINE",
+        "VIRTUAL",
+    }
+    CLASS_MEMBER_FUNCTION_SPECIFIER_VALUES = {"explicit"}
     ATOMIC_FUNCTION_NAMES = {
         "atomicAdd",
         "atomicAdd_system",
@@ -501,6 +518,59 @@ class HipParser:
             and token.type == "IDENTIFIER"
             and token.value in self.IDENTIFIER_FUNCTION_SPECIFIER_VALUES
         )
+
+    def is_class_member_function_specifier_token(self, token=None):
+        token = token or self.current_token
+        return bool(
+            token
+            and (
+                token.type in self.CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS
+                or self.is_identifier_function_specifier_token(token)
+                or (
+                    token.type == "IDENTIFIER"
+                    and token.value in self.CLASS_MEMBER_FUNCTION_SPECIFIER_VALUES
+                )
+            )
+        )
+
+    def consume_class_member_function_specifiers(self):
+        qualifiers = []
+
+        while self.current_token:
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            parsed_attributes = self.parse_type_attribute_prefixes()
+            if parsed_attributes:
+                qualifiers.extend(parsed_attributes)
+                continue
+            if not self.is_class_member_function_specifier_token():
+                break
+            qualifiers.append(self.current_token.value)
+            self.advance()
+
+        return qualifiers
+
+    def parse_class_member_function_specifier_prefix(self, record_name=None):
+        saved_pos = self.pos
+        saved_token = self.current_token
+        qualifiers = self.consume_class_member_function_specifiers()
+
+        if not qualifiers:
+            return []
+
+        if (
+            self.is_conversion_operator_declaration()
+            or (
+                record_name
+                and self.is_class_constructor_declaration_at_pos(self.pos, record_name)
+            )
+            or self.is_function_declaration()
+        ):
+            return qualifiers
+
+        self.pos = saved_pos
+        self.current_token = saved_token
+        return []
 
     def is_function_name_token(self, token=None):
         token = token or self.current_token
@@ -1538,13 +1608,31 @@ class HipParser:
         paren_depth = 0
         brace_depth = 0
         bracket_depth = 0
+        previous_significant_token = None
 
         while self.current_token:
             if (
                 paren_depth == 0
                 and brace_depth == 0
                 and bracket_depth == 0
-                and self.match("LBRACE", "SEMICOLON")
+                and self.match("LBRACE")
+            ):
+                if (
+                    previous_significant_token is not None
+                    and previous_significant_token.type
+                    in {"IDENTIFIER", "THREADIDX", "BLOCKIDX", "BLOCKDIM", "GRIDDIM"}
+                ):
+                    self.skip_balanced_brace_block()
+                    previous_significant_token = self.tokens[self.pos - 1]
+                    self.skip_newlines()
+                    continue
+                return
+
+            if (
+                paren_depth == 0
+                and brace_depth == 0
+                and bracket_depth == 0
+                and self.match("SEMICOLON")
             ):
                 return
 
@@ -1563,6 +1651,8 @@ class HipParser:
             elif self.match("RBRACKET"):
                 bracket_depth = max(0, bracket_depth - 1)
 
+            if not self.match("NEWLINE"):
+                previous_significant_token = self.current_token
             self.advance()
             self.skip_newlines()
 
@@ -1764,11 +1854,13 @@ class HipParser:
                     skip_member()
                     continue
 
-            member_qualifiers = []
-            while self.match("VIRTUAL"):
-                member_qualifiers.append(self.current_token.value)
-                self.advance()
-                self.skip_newlines()
+            member_qualifiers = self.parse_class_member_function_specifier_prefix(
+                record_name
+            )
+
+            if self.is_conversion_operator_declaration():
+                skip_member()
+                continue
 
             if record_name and self.is_class_constructor_declaration(record_name):
                 members.append(
@@ -1859,6 +1951,7 @@ class HipParser:
         self.skip_newlines()
         if self.match("LBRACE"):
             self.consume("LBRACE")
+            skip_member = getattr(self, "skip_un" + "supported_struct_member")
             while self.current_token and not self.match("RBRACE"):
                 if self.match("NEWLINE", "SEMICOLON"):
                     self.advance()
@@ -1888,11 +1981,13 @@ class HipParser:
                     members.append(self.parse_enum())
                     continue
 
-                member_qualifiers = []
-                while self.match("VIRTUAL"):
-                    member_qualifiers.append(self.current_token.value)
-                    self.advance()
-                    self.skip_newlines()
+                member_qualifiers = self.parse_class_member_function_specifier_prefix(
+                    name
+                )
+
+                if self.is_conversion_operator_declaration():
+                    skip_member()
+                    continue
 
                 if self.is_class_constructor_declaration(name):
                     members.append(
@@ -1930,20 +2025,27 @@ class HipParser:
             self.advance()
 
     def is_class_constructor_declaration(self, class_name):
-        if self.match("TILDE"):
+        return self.is_class_constructor_declaration_at_pos(self.pos, class_name)
+
+    def is_class_constructor_declaration_at_pos(self, index, class_name):
+        index = self.skip_newlines_at_pos(index)
+        if index >= len(self.tokens):
+            return False
+
+        token = self.tokens[index]
+        if token.type == "TILDE":
             return (
-                self.peek() is not None
-                and self.peek().type == "IDENTIFIER"
-                and self.peek().value == class_name
-                and self.peek(2) is not None
-                and self.peek(2).type == "LPAREN"
+                index + 2 < len(self.tokens)
+                and self.tokens[index + 1].type == "IDENTIFIER"
+                and self.tokens[index + 1].value == class_name
+                and self.tokens[index + 2].type == "LPAREN"
             )
 
         return (
-            self.match("IDENTIFIER")
-            and self.current_token.value == class_name
-            and self.peek() is not None
-            and self.peek().type == "LPAREN"
+            token.type == "IDENTIFIER"
+            and token.value == class_name
+            and index + 1 < len(self.tokens)
+            and self.tokens[index + 1].type == "LPAREN"
         )
 
     def parse_class_constructor(self, class_name, qualifiers=None):
@@ -1970,6 +2072,30 @@ class HipParser:
             self.advance()
 
         return FunctionNode("", function_name, params, body, list(qualifiers))
+
+    def is_conversion_operator_declaration(self):
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value == "operator"
+            and self.peek_non_newline()
+        ):
+            return False
+
+        type_start = self.skip_newlines_at_pos(self.pos + 1)
+        if (
+            type_start >= len(self.tokens)
+            or self.tokens[type_start].type in self.OVERLOADABLE_OPERATOR_TOKENS
+        ):
+            return False
+
+        type_end = self.skip_type_at_pos(
+            type_start, allow_unknown_identifier_pointers=True
+        )
+        if type_end is None:
+            return False
+
+        type_end = self.skip_newlines_at_pos(type_end)
+        return type_end < len(self.tokens) and self.tokens[type_end].type == "LPAREN"
 
     def parse_struct_member(self):
         saved_pos = self.pos
@@ -4271,9 +4397,9 @@ class HipParser:
         index = self.pos
 
         index = self.skip_cpp_attributes_at_pos(index)
-        while (
-            index < len(self.tokens)
-            and self.tokens[index].type in self.FUNCTION_DECLARATION_SPECIFIER_TOKENS
+        while index < len(self.tokens) and (
+            self.tokens[index].type in self.FUNCTION_DECLARATION_SPECIFIER_TOKENS
+            or self.is_identifier_function_specifier_token(self.tokens[index])
         ):
             index += 1
             index = self.skip_cpp_attributes_at_pos(index)

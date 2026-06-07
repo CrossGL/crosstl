@@ -10882,6 +10882,42 @@ def test_glsl_texture_and_atomic_builtins():
     assert "atomicCounterIncrement" in generated
 
 
+def test_glsl_lowers_compiler_workgroup_atomic_resource_types():
+    code = """
+    shader OpenGLAtomicAddShader {
+        const int GROUP_SIZE = 4;
+
+        compute {
+            layout(local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer atomic<int>* counters;
+            layout(set = 0, binding = 1) buffer atomic<uint>* unsignedCounters;
+            var<workgroup> tile: atomic<int>[GROUP_SIZE];
+            var<workgroup> unsignedTile: atomic<uint>[GROUP_SIZE];
+
+            void main() {
+                uint index = gl_LocalInvocationID.x;
+                uint unsignedDelta = index;
+                atomicAdd(counters[index], 1);
+                atomicAdd(unsignedCounters[index], unsignedDelta);
+                atomicAdd(tile[index], 1);
+                atomicAdd(unsignedTile[index], unsignedDelta);
+                return;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated = generate_code(ast)
+
+    assert "buffer countersBuffer { int counters[]; };" in generated
+    assert "buffer unsignedCountersBuffer { uint unsignedCounters[]; };" in generated
+    assert "shared int tile[GROUP_SIZE];" in generated
+    assert "shared uint unsignedTile[GROUP_SIZE];" in generated
+    assert "atomic<int>" not in generated
+    assert "atomic<uint>" not in generated
+
+
 def test_glsl_wave_and_mesh_intrinsics():
     code = """
     shader main {

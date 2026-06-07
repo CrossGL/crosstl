@@ -757,13 +757,9 @@ class CudaParser:
                 if index is None:
                     return None
                 continue
-            if (
-                index + 1 < len(self.tokens)
-                and self.tokens[index][0] == "SCOPE"
-                and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
-            ):
+            if self.is_qualified_type_member_at_index(index):
                 has_qualified_suffix = True
-                index += 2
+                index = self.skip_qualified_type_member_at_index(index)
                 continue
             break
 
@@ -949,6 +945,23 @@ class CudaParser:
             and self.tokens[index][0] == "SCOPE"
             and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
         )
+
+    def is_qualified_type_member_at_index(self, index):
+        if index + 1 >= len(self.tokens) or self.tokens[index][0] != "SCOPE":
+            return False
+        if self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS:
+            return True
+        return (
+            index + 2 < len(self.tokens)
+            and self.tokens[index + 1][0] == "TEMPLATE"
+            and self.tokens[index + 2][0] in self.NAME_COMPONENT_TOKENS
+        )
+
+    def skip_qualified_type_member_at_index(self, index):
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "TEMPLATE":
+            index += 1
+        return index + 1
 
     def skip_composite_scalar_type_suffix_at_index(self, index, type_token):
         if type_token == "LONG":
@@ -2482,6 +2495,8 @@ class CudaParser:
                 continue
             if self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
+                if self.current_token[0] == "TEMPLATE":
+                    self.eat("TEMPLATE")
                 member = self.parse_name_component()
                 type_name += f"::{member}"
                 continue

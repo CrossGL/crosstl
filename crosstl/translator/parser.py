@@ -1706,7 +1706,7 @@ class Parser:
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "array":
             self.eat("IDENTIFIER")
             self.eat("LESS_THAN")
-            element_type = self.parse_type()
+            element_type = self.parse_resource_parameter_type()
             size = None
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -1717,10 +1717,69 @@ class Parser:
 
         return self.parse_type()
 
+    def current_token_starts_var_address_space_declaration(self):
+        """Return whether the current token starts ``var<address-space>`` syntax."""
+        return self.current_token[0] == "VAR" and self.peek()[0] == "LESS_THAN"
+
+    def parse_var_address_space_qualifiers(self):
+        """Parse the address-space qualifier list in ``var<...>`` declarations."""
+        qualifiers = []
+        self.eat("VAR")
+        self.eat("LESS_THAN")
+
+        while (
+            not self.current_token_is_type_greater_than()
+            and self.current_token[0] != "EOF"
+        ):
+            token_type, token_value = self.current_token
+            if (
+                token_type != "COMMA"
+                and isinstance(token_value, str)
+                and token_value.isidentifier()
+            ):
+                qualifiers.append(token_value.lower())
+            self.eat(token_type)
+
+        self.eat_type_greater_than()
+        return qualifiers
+
+    def parse_var_address_space_declaration(self, attributes):
+        """Parse ``var<workgroup> name: Type`` resource/shared declarations."""
+        qualifiers = self.parse_var_address_space_qualifiers()
+        name = self.parse_binding_identifier()
+        self.eat("COLON")
+        var_type = self.parse_resource_parameter_type()
+        var_type = self.parse_array_suffixes(var_type)
+
+        attributes.extend(self.parse_post_declaration_attributes())
+        var_type = self.parse_array_suffixes(var_type)
+
+        initial_value = None
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            initial_value = self.parse_expression()
+
+        self.eat("SEMICOLON")
+
+        node = VariableNode(
+            name=name,
+            var_type=var_type,
+            initial_value=initial_value,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            is_mutable="const" not in qualifiers,
+        )
+        node.is_var_address_space = True
+        node.address_space_qualifiers = list(qualifiers)
+        return node
+
     def parse_variable_declaration(self, leading_attributes=None):
         """Parse a variable declaration, including qualifiers and attributes."""
         attributes = list(leading_attributes or [])
         attributes.extend(self.parse_attribute_annotations())
+
+        if self.current_token_starts_var_address_space_declaration():
+            return self.parse_var_address_space_declaration(attributes)
 
         is_colon_style_var = (
             self.current_token[0] == "VAR"
@@ -1857,6 +1916,9 @@ class Parser:
                 and self.peek()[0] != "LESS_THAN"
                 and self.peek(2)[0] == "COLON"
             ):
+                return True
+
+            if self.current_token_starts_var_address_space_declaration():
                 return True
 
             self.parse_variable_qualifiers()

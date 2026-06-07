@@ -6070,6 +6070,7 @@ class CudaToCrossGLConverter:
         return mapped_type
 
     def convert_cuda_type_to_crossgl(self, cuda_type):
+        cuda_type = self.strip_dependent_template_disambiguators(cuda_type)
         cuda_type = self.strip_type_qualifiers(cuda_type)
 
         type_mapping = {
@@ -6132,6 +6133,9 @@ class CudaToCrossGLConverter:
             return "auto"
 
         return type_mapping.get(cuda_type, cuda_type)
+
+    def strip_dependent_template_disambiguators(self, type_name):
+        return str(type_name).replace("::template ", "::")
 
     def is_decltype_type_name(self, type_name):
         return isinstance(type_name, str) and type_name.strip().startswith("decltype(")
