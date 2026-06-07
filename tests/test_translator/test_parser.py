@@ -4,6 +4,7 @@ from typing import List
 import pytest
 
 from crosstl.translator.ast import (
+    ArrayAccessNode,
     ArrayType,
     AssignmentNode,
     ConstructorNode,
@@ -13,6 +14,8 @@ from crosstl.translator.ast import (
     ForInNode,
     ForNode,
     FunctionCallNode,
+    FunctionType,
+    GenericParameterNode,
     IdentifierNode,
     IdentifierPatternNode,
     IfNode,
@@ -58,6 +61,194 @@ def parse_code(tokens: List):
     """
     parser = Parser(tokens)
     return parser.parse()
+
+
+def test_square_bracket_generic_type_arguments_parse_as_named_type_args():
+    code = """
+    shader SquareGenericTypeShader {
+        SIMD[dtype, width] gather(
+            SIMD[DType.bool, width] mask = SIMD[DType.bool, width](fill = true)
+        ) {
+            return SIMD[dtype, width](0);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+
+    assert isinstance(function.return_type, NamedType)
+    assert function.return_type.name == "SIMD"
+    assert [arg.name for arg in function.return_type.generic_args] == [
+        "dtype",
+        "width",
+    ]
+
+    parameter = function.parameters[0]
+    assert isinstance(parameter.param_type, NamedType)
+    assert parameter.param_type.name == "SIMD"
+    assert isinstance(parameter.param_type.generic_args[0], MemberAccessNode)
+    assert parameter.param_type.generic_args[1].name == "width"
+    assert isinstance(parameter.default_value, FunctionCallNode)
+    assert parameter.default_value.function.name == "SIMD[DType.bool, width]"
+
+
+def test_square_bracket_generic_type_arguments_do_not_replace_arrays():
+    code = """
+    shader ArraySuffixShader {
+        int read_value(int values[4], int index) {
+            return values[index];
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+
+    assert isinstance(function.parameters[0].param_type, ArrayType)
+    assert isinstance(function.body.statements[0].value, ArrayAccessNode)
+
+
+def test_mojo_style_callable_type_parameter_reparses_to_function_type():
+    code = """
+    shader CallableTypeShader {
+        void reduce_adapter(
+            def[dtype:DType, width:Int, rank:Int](IndexList[rank])
+                capturing[_] -> SIMD[dtype, width] input_fn
+        ) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(function_type, FunctionType)
+    assert isinstance(function_type.return_type, NamedType)
+    assert function_type.return_type.name == "SIMD"
+    assert function_type.annotations["effects"] == ["capturing"]
+    generic_params = function_type.annotations["generic_params"]
+    assert [param.name for param in generic_params] == ["dtype", "width", "rank"]
+    assert all(isinstance(param, GenericParameterNode) for param in generic_params)
+
+
+def test_square_bracket_generic_type_arguments_accept_named_values_and_ellipsis():
+    code = """
+    shader NamedSquareGenericShader {
+        void execute(
+            OutputTensor output,
+            InputTensor[dtype=output.dtype, rank=output.rank, ...] input
+        ) {
+            return;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    input_type = ast.functions[0].parameters[1].param_type
+
+    assert isinstance(input_type, NamedType)
+    assert input_type.name == "InputTensor"
+    assert [argument.left.name for argument in input_type.generic_args[:2]] == [
+        "dtype",
+        "rank",
+    ]
+    assert input_type.generic_args[2].name == "..."
+
+
+def test_square_bracket_generic_type_arguments_accept_expression_values():
+    code = """
+    shader ExpressionSquareGenericShader {
+        void vector_addition(
+            TileTensor[active_dtype, type_of(layout_), MutAnyOrigin] left
+        ) {
+            row_major[VECTOR_WIDTH]();
+            llvm_intrinsic["llvm.trunc", type_of(left), has_side_effect=false](left);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    tensor_type = ast.functions[0].parameters[0].param_type
+    statements = ast.functions[0].body.statements
+
+    assert isinstance(tensor_type, NamedType)
+    assert tensor_type.name == "TileTensor"
+    assert len(tensor_type.generic_args) == 3
+    assert isinstance(tensor_type.generic_args[1], FunctionCallNode)
+    assert isinstance(statements[0].expression, FunctionCallNode)
+    assert isinstance(statements[1].expression, FunctionCallNode)
+
+
+def test_square_bracket_generic_type_arguments_accept_ellipsis_only_lists():
+    code = """
+    shader EllipsisSquareGenericShader {
+        void execute(InputTensor[...] input, OutputTensor[rank=2, ...] output) {
+            return;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    input_type = ast.functions[0].parameters[0].param_type
+    output_type = ast.functions[0].parameters[1].param_type
+
+    assert isinstance(input_type, NamedType)
+    assert input_type.generic_args[0].name == "..."
+    assert output_type.generic_args[1].name == "..."
+
+
+def test_dotted_type_names_parse_as_single_named_type():
+    code = """
+    shader DottedTypeShader {
+        void __init__(Self.tensor_type tensor, Self.SharedMemTileType tile) {
+            return;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    parameters = ast.functions[0].parameters
+
+    assert parameters[0].param_type.name == "Self.tensor_type"
+    assert parameters[1].param_type.name == "Self.SharedMemTileType"
+
+
+def test_square_bracket_generic_parameters_parse_on_variable_declarations():
+    code = """
+    shader DeclarationSquareGenericShader {
+        CoordLike _TransposeStrideTypesTabulator[
+            permutations:IntTuple,
+            input_stride_types:TypeList[Trait=CoordLike, ...],
+            idx:Int
+        ] = input_stride_types[idx];
+
+        let _TransposeStrideTypes[
+            permutations:IntTuple,
+            rank:Int,
+            input_stride_types:TypeList[Trait=CoordLike, ...]
+        ] = TypeList.tabulate[rank, _TransposeStrideTypesTabulator[
+            permutations,
+            input_stride_types,
+            _
+        ]]();
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    typed_variable = ast.global_variables[0]
+    let_variable = ast.global_variables[1]
+
+    assert [param.name for param in typed_variable.generic_params] == [
+        "permutations",
+        "input_stride_types",
+        "idx",
+    ]
+    assert [param.name for param in let_variable.generic_params] == [
+        "permutations",
+        "rank",
+        "input_stride_types",
+    ]
 
 
 def test_void_parameter_list_parses_as_empty_parameters():

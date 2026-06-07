@@ -85,6 +85,7 @@ def test_struct_generic_member_codegen():
     assert "mat4 transform @ Position;" in generated_code
     assert "vec4 tint @ Color;" in generated_code
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_struct_method_codegen_preserves_method_body():
@@ -179,6 +180,7 @@ def test_function_type_parameter_codegen_from_modular_gpu_reduction():
         in generated_code
     )
     assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_thin_function_type_parameter_codegen_from_official_parameter_docs():
@@ -310,6 +312,7 @@ def test_default_keyword_parameter_name_codegen_from_modular_stdlib():
     ) in generated_code
     assert "return default_;" in generated_code
     assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_constant_keyword_parameter_name_codegen_reparses_crossgl():
@@ -1535,6 +1538,7 @@ def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     assert "mat4 transform @ Position;" in generated_code
     assert "vec4 tint @ Color;" in generated_code
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_struct_conditional_trait_conformance_codegen_from_modular_docs():

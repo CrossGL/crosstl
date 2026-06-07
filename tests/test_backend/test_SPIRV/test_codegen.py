@@ -4668,6 +4668,48 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_LOOP_PHI_COMPLEX_INCOMING_ASSEMBLY = """
+; Reduced from GraphicsFuzz loop-carried OpPhi patterns where recursively
+; expanding incoming SSA expressions caused exponential CrossGL output growth.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %out_color "outColor"
+OpDecorate %input_value Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%bool = OpTypeBool
+%v4float = OpTypeVector %float 4
+%ptr_input_float = OpTypePointer Input %float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%one = OpConstant %float 1.0
+%input_value = OpVariable %ptr_input_float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%loaded = OpLoad %float %input_value
+%seed = OpFAdd %float %loaded %loaded
+OpBranch %loop
+%loop = OpLabel
+%carry = OpPhi %float %seed %entry %next %body
+%twice = OpFAdd %float %carry %carry
+%cond = OpFOrdLessThan %bool %carry %one
+OpLoopMerge %merge %body None
+OpBranchConditional %cond %body %merge
+%body = OpLabel
+%next = OpFAdd %float %twice %one
+OpBranch %loop
+%merge = OpLabel
+%outv = OpCompositeConstruct %v4float %carry %carry %carry %one
+OpStore %out_color %outv
+OpReturn
+OpFunctionEnd
+"""
+
 
 def test_vulkan_to_crossgl_emits_fragment_main():
     tokens = tokenize_code(FRAGMENT_SHADER)
@@ -6893,6 +6935,20 @@ def test_spirv_tools_direct_selection_phi_codegen_reparse():
     assert "outColor = phi;" not in generated_code
     assert "spirvPhi" not in generated_code
     assert "OpPhi" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_loop_phi_complex_incoming_codegen_reparse():
+    tokens = tokenize_code(SPIRV_LOOP_PHI_COMPLEX_INCOMING_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert len(generated_code) < 2000
+    assert 'spirvPhi(seed, "entry", next, "body")' in generated_code
+    assert 'spirvPhi((inputValue + inputValue), "entry", next, "body")' not in (
+        generated_code
+    )
     assert "Unhandled statement type" not in generated_code
 
 

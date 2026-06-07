@@ -3020,13 +3020,17 @@ class HLSLToCrossGLConverter:
         storage_prefix = self.format_global_storage_qualifier_prefix(node)
         precise_prefix = self.format_precise_qualifier_prefix(node)
         array_suffix = self.format_array_suffixes(node)
+        variable_type = self.map_variable_type(node)
+        variable_name = self.render_identifier(node.name)
+        if storage_prefix == "const " and array_suffix:
+            variable_type = f"{variable_type}{array_suffix}"
+            array_suffix = ""
         initializer = ""
         if getattr(node, "value", None) is not None:
             initializer = f" = {self.generate_expression(node.value)}"
         return (
-            code
-            + f"    {storage_prefix}{precise_prefix}{self.map_variable_type(node)} "
-            f"{self.render_identifier(node.name)}{array_suffix}{initializer};\n"
+            code + f"    {storage_prefix}{precise_prefix}{variable_type} "
+            f"{variable_name}{array_suffix}{initializer};\n"
         )
 
     def generate_cbuffers(self, ast):

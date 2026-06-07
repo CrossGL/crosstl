@@ -300,7 +300,7 @@ def test_cufftdx_scoped_storage_types_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert "array<FFT_value_type>" in crossgl
-    assert "array<FFT::value_type, FFT::storage_size>" in crossgl
+    assert "array<FFT::value_type, FFT_storage_size>" in crossgl
     assert "data: array<FFT::value_type>" not in crossgl
     assert_crossgl_reparse(crossgl)
 
@@ -839,7 +839,7 @@ def test_cutlass_cute_template_array_bound_in_shared_memory_codegen_reparse():
 
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "TA[cosize_v<ASmemLayout>]"
-    assert "array<TA, cosize_v<ASmemLayout>>" in crossgl
+    assert "array<TA, cosize_v_ASmemLayout>" in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -943,7 +943,9 @@ def test_cuda_samples_transpose_parenthesized_index_and_shared_tile_codegen_repa
     crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert shared.vtype == "float[32][(32 + 1)]"
-    assert "var<workgroup> tile: array<array<f32, (32 + 1)>, 32>;" in crossgl
+    assert (
+        "var<workgroup> tile: " "array<array<f32, cuda_array_extent_32_plus_1>, 32>;"
+    ) in crossgl
     assert "var index_in: i32 = (xIndex + (yIndex * width));" in crossgl
     assert "var index_out: i32 = (xIndex + (yIndex * height));" in crossgl
     assert "yIndex((*width))" not in crossgl
@@ -1470,7 +1472,7 @@ def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
         in crossgl
     )
     assert (
-        "var<workgroup> shmem: " "array<array<f16, ((CHUNK_K * K) + SKEW_HALF)>>;"
+        "var<workgroup> shmem: " "array<array<f16, CHUNK_K_mul_K_plus_SKEW_HALF>>;"
     ) in crossgl
     assert_crossgl_reparse(crossgl)
 
@@ -1508,7 +1510,7 @@ def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
     assert body[3].vtype == "__nv_bfloat16"
     assert "array<f16>" in crossgl
     assert (
-        "var<workgroup> shmem: " "array<array<f16, ((CHUNK_K * K) + SKEW_BF16)>>;"
+        "var<workgroup> shmem: " "array<array<f16, CHUNK_K_mul_K_plus_SKEW_BF16>>;"
     ) in crossgl
     assert "var local: ptr<f16> = D;" in crossgl
     assert (

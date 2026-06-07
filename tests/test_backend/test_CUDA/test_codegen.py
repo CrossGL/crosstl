@@ -277,8 +277,12 @@ class TestCudaCodeGen:
 
     def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
         code = """
+        #define KERNEL_RADIUS 8
+        #define KERNEL_LENGTH (2 * KERNEL_RADIUS + 1)
+
         __device__ __constant__ float stencil[4];
         __constant__ int offsets[4];
+        __constant__ float c_Kernel[KERNEL_LENGTH];
 
         __global__ void apply_constants(float* out, const float* input) {
             int idx = threadIdx.x;
@@ -296,13 +300,18 @@ class TestCudaCodeGen:
         assert "@group(0) @binding(0) var<uniform> stencil: array<f32, 4>;" in result
         assert "@group(0) @binding(1) var<uniform> offsets: array<i32, 4>;" in result
         assert (
-            "@group(0) @binding(2) var<storage, read_write> out: array<f32>" in result
+            "@group(0) @binding(2) var<uniform> c_Kernel: "
+            "array<f32, cuda_array_extent_2_mul_8_plus_1>;"
+        ) in result
+        assert (
+            "@group(0) @binding(3) var<storage, read_write> out: array<f32>" in result
         )
         assert (
-            "@group(0) @binding(3) var<storage, read_write> input: array<f32>" in result
+            "@group(0) @binding(4) var<storage, read_write> input: array<f32>" in result
         )
         assert result.count("@group(0) @binding(0)") == 1
         assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_fixed_width_pointer_declaration_list_conversion(self):
         code = """
@@ -488,7 +497,9 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "u32 scan1Inclusive(u32 idata, ptr<u32> s_Data, u32 size)" in result
-        assert "var<workgroup> s_Data: array<u32, (2 * 256)>;" in result
+        assert (
+            "var<workgroup> s_Data: array<u32, cuda_array_extent_2_mul_256>;" in result
+        )
         expected_pos = (
             "var pos: u32 = "
             "((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);"

@@ -2993,16 +2993,36 @@ class VulkanParser:
         args = []
         for value, label in incoming:
             args.append(
-                self.spirv_assembly_operand_expression(
-                    value,
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                self.spirv_assembly_phi_operand_expression(
+                    value, expressions, names, decorations, constants
                 )
             )
             args.append(self.spirv_string_literal(str(label).lstrip("%")))
         return FunctionCallNode("spirvPhi", args)
+
+    def spirv_assembly_phi_operand_expression(
+        self, operand, expressions, names, decorations, constants
+    ):
+        if (
+            isinstance(operand, str)
+            and operand.startswith("%")
+            and operand in expressions
+        ):
+            expression = VariableNode(
+                "",
+                self.spirv_assembly_value_name(operand, names, decorations),
+            )
+            return self.spirv_maybe_non_uniform_expression(
+                operand, expression, decorations
+            )
+
+        return self.spirv_assembly_operand_expression(
+            operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
 
     def spirv_assembly_selection_phi_expression(
         self,

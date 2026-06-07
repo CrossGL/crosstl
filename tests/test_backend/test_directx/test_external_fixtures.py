@@ -753,6 +753,26 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_global_const_array_initializer",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/vector/imm0.hlsl",
+        code=textwrap.dedent("""
+            float4 m = float4(4, 5, 6, 7);
+            const float2 m3[2] = {12, 13, 14, 15};
+
+            float4 main(float4 a : A) : SV_TARGET
+            {
+                return a + m + m3[0].xyxy + m3[1].xyxy;
+            }
+        """).strip(),
+        contains=(
+            "vec4 m = vec4(4, 5, 6, 7);",
+            "const vec2[2] m3 = {12, 13, 14, 15};",
+            "return ((a + m) + m3[0].xyxy) + m3[1].xyxy;",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_buffer_access_type_like_local_names",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_BUFFER_ACCESS_COMMIT,

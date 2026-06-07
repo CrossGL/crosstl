@@ -1,5 +1,7 @@
 """CUDA to CrossGL Code Generator"""
 
+import re
+
 from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -327,6 +329,32 @@ class CudaToCrossGLConverter:
         if name in self.CROSSGL_RESERVED_IDENTIFIERS:
             return f"{name}_"
         return name
+
+    def format_crossgl_array_extent(self, size):
+        size = str(size).strip()
+        if not size:
+            return size
+        simple_extent_pattern = r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xX][0-9A-Fa-f]+|\d+)[uU]?"
+        if re.fullmatch(simple_extent_pattern, size):
+            return size
+
+        replacements = {
+            "*": "_mul_",
+            "/": "_div_",
+            "%": "_mod_",
+            "+": "_plus_",
+            "-": "_minus_",
+        }
+        extent = size
+        for operator, word in replacements.items():
+            extent = extent.replace(operator, word)
+        extent = re.sub(r"[^A-Za-z0-9_]+", "_", extent).strip("_")
+        extent = re.sub(r"_+", "_", extent)
+        if not extent:
+            extent = "expr"
+        if extent[0].isdigit():
+            extent = f"cuda_array_extent_{extent}"
+        return self.sanitize_identifier_name(extent)
 
     def is_simple_identifier(self, name):
         return isinstance(name, str) and name.isidentifier()
@@ -4391,7 +4419,7 @@ class CudaToCrossGLConverter:
                 "shared memory size"
             )
         if node.size:
-            size = self.visit(node.size)
+            size = self.format_crossgl_array_extent(self.visit(node.size))
             self.emit(f"var<workgroup> {node.name}: array<{var_type}, {size}>;")
         else:
             self.emit(f"var<workgroup> {node.name}: {var_type};")
@@ -6217,7 +6245,9 @@ class CudaToCrossGLConverter:
 
         for size in reversed(dimensions):
             if size:
-                mapped_type = f"array<{mapped_type}, {size}>"
+                mapped_type = (
+                    f"array<{mapped_type}, {self.format_crossgl_array_extent(size)}>"
+                )
             else:
                 mapped_type = f"array<{mapped_type}>"
 
@@ -6375,7 +6405,8 @@ class CudaToCrossGLConverter:
         if len(template_args) >= 2 and not self.is_dynamic_span_extent(
             template_args[1]
         ):
-            return f"array<{element_type}, {template_args[1]}>"
+            extent = self.format_crossgl_array_extent(template_args[1])
+            return f"array<{element_type}, {extent}>"
         return f"array<{element_type}>"
 
     def convert_enable_if_type(self, cuda_type):
@@ -6556,7 +6587,9 @@ class CudaToCrossGLConverter:
             mapped_type = self.convert_cuda_type_to_crossgl(base_type)
         for size in reversed(dimensions):
             if size:
-                mapped_type = f"array<{mapped_type}, {size}>"
+                mapped_type = (
+                    f"array<{mapped_type}, {self.format_crossgl_array_extent(size)}>"
+                )
             else:
                 mapped_type = f"array<{mapped_type}>"
 

@@ -990,6 +990,31 @@ EXTERNAL_FIXTURES = [
         "source": "typedef half float16_t;",
     },
     {
+        "name": "mlx_bf16_scalar_typedef_reparse",
+        "repo_url": MLX_REPO,
+        "commit": MLX_CURRENT_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/bf16.h",
+        "roundtrip": True,
+        "contains": ["typedef f16 bfloat16_t;"],
+        "not_contains": ["typedef bfloat bfloat16_t;"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef bfloat bfloat16_t;
+
+            inline uint16_t bfloat16_to_uint16(const bfloat16_t x) {
+                return as_type<uint16_t>(x);
+            }
+
+            inline bfloat16_t uint16_to_bfloat16(const uint16_t x) {
+                return as_type<bfloat16_t>(x);
+            }
+        """
+        ),
+    },
+    {
         "name": "mlx_scan_template_specialized_struct_reparse",
         "repo_url": MLX_REPO,
         "commit": MLX_SCAN_COMMIT,

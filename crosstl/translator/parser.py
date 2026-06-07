@@ -26,6 +26,7 @@ from .ast import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    FunctionType,
     GenericParameterNode,
     IdentifierNode,
     IdentifierPatternNode,
@@ -421,6 +422,8 @@ class Parser:
                 cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
+            elif self.current_token[0] == "LET":
+                global_variables.append(self.parse_let_declaration())
             elif self.current_token[0] == "LAYOUT":
                 attributes = self.parse_layout_attributes()
                 if self.is_layout_buffer_block_declaration():
@@ -537,6 +540,8 @@ class Parser:
                 cbuffers.append(self.parse_cbuffer_as_struct())
             elif self.current_token[0] == "CONST":
                 constants.append(self.parse_constant())
+            elif self.current_token[0] == "LET":
+                global_variables.append(self.parse_let_declaration())
             elif self.current_token[0] == "LAYOUT":
                 attributes = self.parse_layout_attributes()
                 if self.is_layout_buffer_block_declaration():
@@ -1844,6 +1849,7 @@ class Parser:
         """Parse one declarator after a shared C-style variable type."""
         var_type = self.parse_array_suffixes(deepcopy(base_type))
         name = self.parse_binding_identifier()
+        generic_params = self.parse_declaration_square_generic_parameters()
         var_type = self.parse_array_suffixes(var_type)
 
         attributes = list(declaration_attributes)
@@ -1855,7 +1861,7 @@ class Parser:
             self.eat("EQUALS")
             initial_value = self.parse_expression()
 
-        return VariableNode(
+        variable = VariableNode(
             name=name,
             var_type=var_type,
             initial_value=initial_value,
@@ -1863,13 +1869,29 @@ class Parser:
             attributes=attributes,
             is_mutable="const" not in qualifiers,
         )
+        variable.generic_params = generic_params
+        return variable
+
+    def parse_declaration_square_generic_parameters(self):
+        """Parse declaration-level square generic parameters after a binding name."""
+        if (
+            self.current_token[0] == "LBRACKET"
+            and not self.current_token_starts_square_attribute(
+                allow_single_square=False
+            )
+            and self.square_brackets_form_type_arguments()
+        ):
+            return self.parse_square_generic_arguments()
+        return []
 
     def parse_array_suffixes(self, type_node):
         """Parse one or more non-attribute array suffixes after a type/name."""
-        while self.current_token[
-            0
-        ] == "LBRACKET" and not self.current_token_starts_square_attribute(
-            allow_single_square=False
+        while (
+            self.current_token[0] == "LBRACKET"
+            and not self.current_token_starts_square_attribute(
+                allow_single_square=False
+            )
+            and not self.square_brackets_form_type_arguments()
         ):
             self.eat("LBRACKET")
             size = None
@@ -2281,13 +2303,26 @@ class Parser:
             self.eat(token_type)
             base_type = NamedType(sampler_types[token_type])
 
+        elif self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "def":
+            base_type = self.parse_callable_type()
+
         elif self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
+            while self.current_token[0] in {"DOT", "DOUBLE_COLON"}:
+                separator = self.current_token[1]
+                self.eat(self.current_token[0])
+                segment = self.parse_binding_identifier()
+                name = f"{name}{separator}{segment}"
 
             generic_args = []
             if self.current_token[0] == "LESS_THAN":
                 generic_args = self.parse_generic_arguments()
+            elif (
+                self.current_token[0] == "LBRACKET"
+                and self.square_brackets_form_type_arguments()
+            ):
+                generic_args = self.parse_square_generic_arguments()
 
             base_type = NamedType(name, generic_args)
 
@@ -2306,6 +2341,12 @@ class Parser:
             base_type = PrimitiveType("float")
 
         while self.current_token[0] == "LBRACKET":
+            if (
+                isinstance(base_type, NamedType)
+                and self.square_brackets_form_type_arguments()
+            ):
+                base_type.generic_args.extend(self.parse_square_generic_arguments())
+                continue
             self.eat("LBRACKET")
             size = None
             if self.current_token[0] != "RBRACKET":
@@ -2333,6 +2374,172 @@ class Parser:
                 base_type = NamedType(f"buffer_{base_type}", [])
 
         return base_type
+
+    def parse_callable_type(self):
+        """Parse Mojo-style function type syntax emitted by reverse codegen."""
+        self.eat("IDENTIFIER")
+
+        generic_params = []
+        if self.current_token[0] == "LBRACKET":
+            generic_params = self.parse_square_generic_arguments()
+
+        self.eat("LPAREN")
+        param_types = []
+        while self.current_token[0] != "RPAREN":
+            param_types.append(self.parse_type())
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+        self.eat("RPAREN")
+
+        effects = []
+        while self.current_token[0] in {"IDENTIFIER", "RAISES"}:
+            effect = str(self.current_token[1])
+            if effect not in {"capturing", "raises", "thin", "async"}:
+                break
+            effects.append(effect)
+            self.eat(self.current_token[0])
+            if self.current_token[0] == "LBRACKET":
+                self.skip_balanced_brackets()
+
+        return_type = PrimitiveType("void")
+        if self.is_arrow_token():
+            self.eat_arrow()
+            return_type = self.parse_type()
+
+        callable_type = FunctionType(return_type, param_types)
+        callable_type.annotations["generic_params"] = generic_params
+        callable_type.annotations["effects"] = effects
+        return callable_type
+
+    def square_brackets_form_type_arguments(self):
+        """Return whether ``[...]`` is a generic argument list, not an array size."""
+        if self.current_token[0] != "LBRACKET":
+            return False
+
+        index = self.pos + 1
+        depth = 1
+        saw_generic_separator = False
+        saw_nested_brackets = False
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+                saw_nested_brackets = True
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    next_type = (
+                        self.tokens[index + 1][0]
+                        if index + 1 < len(self.tokens)
+                        else "EOF"
+                    )
+                    return (
+                        saw_generic_separator
+                        or saw_nested_brackets
+                        or next_type == "LPAREN"
+                    )
+            elif depth == 1 and token_type in {"COMMA", "COLON", "EQUALS"}:
+                saw_generic_separator = True
+            elif (
+                depth == 1
+                and token_type == "RANGE"
+                and index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] == "DOT"
+            ):
+                saw_generic_separator = True
+
+            index += 1
+
+        return False
+
+    def parse_square_generic_arguments(self):
+        """Parse Mojo-style square-bracket type arguments."""
+        self.eat("LBRACKET")
+        args = []
+
+        while self.current_token[0] != "RBRACKET":
+            args.append(self.parse_square_generic_argument())
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+
+        self.eat("RBRACKET")
+        return args
+
+    def parse_square_generic_argument(self):
+        """Parse one square-bracket generic argument or parameter declaration."""
+        if self.current_token[0] == "RANGE" and self.peek()[0] == "DOT":
+            self.eat("RANGE")
+            self.eat("DOT")
+            return IdentifierNode("...")
+
+        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.eat("COLON")
+
+            constraints = [self.parse_type()]
+            while self.current_token[0] in {"PLUS", "BITWISE_AND"}:
+                self.eat(self.current_token[0])
+                constraints.append(self.parse_type())
+
+            default_type = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_type = self.parse_expression()
+
+            return GenericParameterNode(
+                name=name,
+                constraints=constraints,
+                default_type=default_type,
+            )
+
+        if self.current_token_is_binding_identifier() and self.peek()[0] == "EQUALS":
+            name = self.parse_binding_identifier()
+            self.eat("EQUALS")
+            return AssignmentNode(IdentifierNode(name), self.parse_expression())
+
+        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] in {
+            "DOT",
+            "DOUBLE_COLON",
+            "LPAREN",
+        }:
+            return self.parse_expression()
+
+        if self.current_token_starts_type():
+            return self.parse_type()
+
+        if self.current_token[0] in {
+            "BOOLEAN_LITERAL",
+            "NUMBER",
+            "FLOAT_NUMBER",
+            "HEX_NUMBER",
+            "BIN_NUMBER",
+            "OCT_NUMBER",
+            "STRING_LITERAL",
+            "CHAR_LITERAL",
+        }:
+            return self.parse_literal()
+
+        return self.parse_expression()
+
+    def skip_balanced_brackets(self):
+        """Consume a square-bracket payload used by type effects."""
+        self.eat("LBRACKET")
+        depth = 1
+        while depth and self.current_token[0] != "EOF":
+            if self.current_token[0] == "LBRACKET":
+                depth += 1
+            elif self.current_token[0] == "RBRACKET":
+                depth -= 1
+
+            token_type = self.current_token[0]
+            self.eat(token_type)
 
     def parse_generic_parameters(self):
         """Parse generic parameter declarations after ``<``."""
@@ -2547,10 +2754,24 @@ class Parser:
         if hasattr(type_node, "value"):
             value = type_node.value
             return str(value).lower() if isinstance(value, bool) else str(value)
+        if isinstance(type_node, AssignmentNode):
+            left = self.format_type_argument(type_node.left)
+            right = self.format_type_argument(type_node.right)
+            return f"{left} = {right}"
+        if isinstance(type_node, ArrayAccessNode):
+            array = self.format_type_argument(type_node.array)
+            index = self.format_type_argument(type_node.index)
+            return f"{array}[{index}]"
         if isinstance(type_node, BinaryOpNode):
             left = self.format_type_argument(type_node.left)
             right = self.format_type_argument(type_node.right)
             return f"{left} {type_node.operator} {right}"
+        if isinstance(type_node, FunctionCallNode):
+            function = self.format_type_argument(type_node.function)
+            args = ", ".join(
+                self.format_type_argument(argument) for argument in type_node.arguments
+            )
+            return f"{function}({args})"
         if isinstance(type_node, TernaryOpNode):
             condition = self.format_type_argument(type_node.condition)
             true_expr = self.format_type_argument(type_node.true_expr)
@@ -2563,6 +2784,28 @@ class Parser:
                 if type_node.is_postfix
                 else f"{type_node.operator}{operand}"
             )
+        if isinstance(type_node, MemberAccessNode):
+            return f"{self.format_expression_path(type_node.object_expr)}.{type_node.member}"
+        if isinstance(type_node, FunctionType):
+            params = ", ".join(
+                self.format_type_argument(param_type)
+                for param_type in type_node.param_types
+            )
+            return_type = self.format_type_argument(type_node.return_type)
+            return f"def({params}) -> {return_type}"
+        if isinstance(type_node, GenericParameterNode):
+            constraints = " & ".join(
+                self.format_type_argument(constraint)
+                for constraint in type_node.constraints
+            )
+            result = (
+                f"{type_node.name}:{constraints}" if constraints else type_node.name
+            )
+            if type_node.default_type is not None:
+                result = (
+                    f"{result} = {self.format_type_argument(type_node.default_type)}"
+                )
+            return result
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
@@ -2701,6 +2944,7 @@ class Parser:
             self.eat("MUT")
 
         name = self.parse_binding_identifier()
+        generic_params = self.parse_declaration_square_generic_parameters()
 
         var_type = None
         if self.current_token[0] == "COLON":
@@ -2714,6 +2958,7 @@ class Parser:
         var_node = VariableNode(
             name=name, var_type=var_type, initial_value=initial_value
         )
+        var_node.generic_params = generic_params
 
         if is_mutable:
             var_node.qualifiers = getattr(var_node, "qualifiers", []) + ["mut"]
@@ -3267,6 +3512,14 @@ class Parser:
                     left = IdentifierNode(
                         f"{self.format_expression_path(left)}::{member}"
                     )
+            elif (
+                self.current_token[0] == "LBRACKET"
+                and isinstance(left, (IdentifierNode, MemberAccessNode))
+                and self.square_brackets_form_expression_type_arguments()
+            ):
+                generic_args = self.parse_square_expression_generic_arguments()
+                args = ", ".join(self.format_type_argument(arg) for arg in generic_args)
+                left = IdentifierNode(f"{self.format_expression_path(left)}[{args}]")
             elif self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
                 index = self.parse_expression()
@@ -3325,6 +3578,80 @@ class Parser:
                 break
 
         return left
+
+    def parse_square_expression_generic_arguments(self):
+        """Parse square-bracket specialization arguments in expression position."""
+        self.eat("LBRACKET")
+        args = []
+
+        while self.current_token[0] != "RBRACKET":
+            if self.current_token[0] == "RANGE" and self.peek()[0] == "DOT":
+                self.eat("RANGE")
+                self.eat("DOT")
+                args.append(IdentifierNode("..."))
+            elif (
+                self.current_token_is_binding_identifier()
+                and self.peek()[0] == "EQUALS"
+            ):
+                name = self.parse_binding_identifier()
+                self.eat("EQUALS")
+                args.append(
+                    AssignmentNode(IdentifierNode(name), self.parse_expression())
+                )
+            else:
+                args.append(self.parse_expression())
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            break
+
+        self.eat("RBRACKET")
+        return args
+
+    def square_brackets_form_expression_type_arguments(self):
+        """Return whether expression ``[...]`` is a specialization suffix."""
+        if self.current_token[0] != "LBRACKET":
+            return False
+
+        index = self.pos + 1
+        bracket_depth = 1
+        paren_depth = 0
+        brace_depth = 0
+        saw_generic_separator = False
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET":
+                bracket_depth -= 1
+                if bracket_depth == 0:
+                    next_type = (
+                        self.tokens[index + 1][0]
+                        if index + 1 < len(self.tokens)
+                        else "EOF"
+                    )
+                    return saw_generic_separator or next_type == "LPAREN"
+            elif token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth:
+                paren_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth:
+                brace_depth -= 1
+            elif (
+                bracket_depth == 1
+                and paren_depth == 0
+                and brace_depth == 0
+                and token_type in {"COMMA", "EQUALS"}
+            ):
+                saw_generic_separator = True
+
+            index += 1
+
+        return False
 
     def generic_suffix_is_expression_name_suffix(self):
         """Return whether ``<...>`` belongs to an identifier expression name."""
@@ -4072,6 +4399,13 @@ class Parser:
         if self.is_type_token():
             self.eat(self.current_token[0])
 
+            while self.current_token[0] in {"DOT", "DOUBLE_COLON"}:
+                self.eat(self.current_token[0])
+                if self.current_token_is_binding_identifier():
+                    self.eat(self.current_token[0])
+                else:
+                    break
+
             if self.current_token[0] == "LESS_THAN":
                 depth = 1
                 self.eat("LESS_THAN")
@@ -4217,6 +4551,9 @@ class Parser:
 
         if self.current_token[0] == "CONST":
             return self.parse_constant()
+
+        if self.current_token[0] == "LET":
+            return self.parse_let_declaration()
 
         if self.is_cbuffer_declaration():
             return self.parse_cbuffer_as_struct()

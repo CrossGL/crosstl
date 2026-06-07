@@ -207,6 +207,7 @@ class MetalToCrossGLConverter:
             "uint64_t": "uint64",
             "float": "float",
             "half": "float16",
+            "bfloat": "f16",
             "double": "double",
             "size_t": "uint64",
             "ptrdiff_t": "int64",
