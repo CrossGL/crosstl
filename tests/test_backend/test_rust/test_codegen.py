@@ -770,6 +770,33 @@ def test_rust_gpu_image_query_and_fetch_methods_codegen_from_upstream_compiletes
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_image_query_lod_method_codegen_from_upstream_compiletest():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/query/query_lod.rs.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] sampler: &Sampler,
+        output: &mut glam::Vec2,
+    ) {
+        *output = image.query_lod(*sampler, glam::Vec2::new(0.0, 1.0));
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D image @ set(0) @ binding(0)" in result
+    assert "sampler sampler_ @ set(0) @ binding(1)" in result
+    assert "output = textureQueryLod(image, sampler_, vec2(0.0, 1.0));" in result
+    assert ".query_lod(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_image_gather_method_codegen_from_spirv_std_api():
     # Reduced from spirv_std::image::Image gather API:
     # https://embarkstudios.github.io/rust-gpu/api/spirv_std/image/type.Image2dArray.html

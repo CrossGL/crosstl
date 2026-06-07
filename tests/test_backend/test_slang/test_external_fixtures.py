@@ -181,6 +181,43 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/language-feature/multi-level-break.slang
+        "id": "slang_labeled_break_from_multi_level_break_sample",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/language-feature/multi-level-break.slang",
+        "source": (
+            """
+            int test(int r)
+            {
+                int result = 0;
+            outer:
+                for (int i = 0; i < 2; i++)
+                {
+                    for (int j = 0; j < 3; j++)
+                    {
+                        result++;
+                        if (r == 0)
+                        {
+                            break outer;
+                        }
+                        break;
+                    }
+                }
+                return result;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "outer:",
+            "break outer;",
+            "break;",
+            "return result;",
+        ],
+    },
+    {
         "id": "slang_generated_defer_scope_exit",
         "repo": "shader-slang/slang-current-2026-06-07",
         "path": (

@@ -95,8 +95,11 @@ STAGE_TOKENS = {
 }
 
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
-MACRO_QUALIFIERS = {"METAL_FUNC", "STEEL_CONST"}
-MACRO_QUALIFIER_ALIASES = {"STEEL_CONST": "constant"}
+MACRO_QUALIFIERS = {"METAL_FUNC", "STEEL_CONST", "C10_METAL_CONSTEXPR"}
+MACRO_QUALIFIER_ALIASES = {
+    "STEEL_CONST": ("constant",),
+    "C10_METAL_CONSTEXPR": ("constant", "constexpr"),
+}
 IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
 RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
@@ -1423,7 +1426,7 @@ class MetalParser:
             or self.is_gnu_attribute_start()
         ):
             if self.is_type_qualifier_start():
-                qualifiers.append(self.parse_type_qualifier())
+                qualifiers.extend(self.parse_type_qualifier())
                 continue
             parsed_attributes = self.parse_attributes()
             if attributes is not None:
@@ -1501,7 +1504,7 @@ class MetalParser:
             "BITWISE_AND",
         ]:
             if self.is_type_qualifier_start():
-                qualifiers.append(self.parse_type_qualifier())
+                qualifiers.extend(self.parse_type_qualifier())
                 continue
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
             self.eat(self.current_token[0])
@@ -1547,12 +1550,12 @@ class MetalParser:
         ):
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
-            return MACRO_QUALIFIER_ALIASES.get(qualifier, qualifier)
+            return MACRO_QUALIFIER_ALIASES.get(qualifier, (qualifier,))
 
         qualifier_name = self.current_token[1]
         self.eat("IDENTIFIER")
         args = self.parse_balanced_token_text("LPAREN", "RPAREN")
-        return f"{qualifier_name}({args})"
+        return (f"{qualifier_name}({args})",)
 
     def parse_balanced_token_text(
         self, open_token, close_token, error_message="Unterminated type qualifier"

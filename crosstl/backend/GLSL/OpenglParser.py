@@ -455,6 +455,8 @@ class GLSLParser:
 
         while self.current_token[0] != "EOF":
             self.skip_newlines()
+            self.skip_statement_attributes()
+            self.skip_newlines()
             if self.current_token[0] == "EOF":
                 break
 
@@ -1425,6 +1427,8 @@ class GLSLParser:
         self.eat("IDENTIFIER")
         self.skip_newlines()
         params = self.parse_parameters()
+        self.skip_newlines()
+        self.skip_statement_attributes()
         self.skip_newlines()
 
         if self.current_token[0] == "SEMICOLON":

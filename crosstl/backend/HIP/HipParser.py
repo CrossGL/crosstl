@@ -386,6 +386,7 @@ class HipParser:
 
         index = self.skip_newlines_at_pos(index)
         index = self.skip_cpp_attributes_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
         function_qualifiers = {
             *self.FUNCTION_DECLARATION_SPECIFIER_TOKENS,
             "__LAUNCH_BOUNDS__",
@@ -399,8 +400,10 @@ class HipParser:
             else:
                 index += 1
             index = self.skip_newlines_at_pos(index)
+            index = self.skip_type_attribute_prefixes_at_pos(index)
 
         index = self.skip_newlines_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
         index = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
         if index is None:
             return None
@@ -422,6 +425,33 @@ class HipParser:
             return index
 
         return None
+
+    def is_leading_type_attribute_qualified_function(self):
+        attribute_end = self.skip_type_attribute_prefixes_at_pos(self.pos)
+        if attribute_end == self.pos:
+            return False
+
+        attribute_end = self.skip_newlines_at_pos(attribute_end)
+        return (
+            self.is_function_qualifier_token_at_pos(attribute_end)
+            and self.function_name_index_at(self.pos) is not None
+        )
+
+    def is_function_qualifier_token_at_pos(self, index):
+        if index >= len(self.tokens):
+            return False
+
+        token = self.tokens[index]
+        return token.type in {
+            *self.FUNCTION_SPECIFIER_TOKENS,
+            "__DEVICE__",
+            "__HOST__",
+            "__GLOBAL__",
+            "__FORCEINLINE__",
+            "__NOINLINE__",
+            "__LAUNCH_BOUNDS__",
+            "CONSTEXPR",
+        } or self.is_identifier_function_specifier_token(token)
 
     def error(self, message: str):
         token_info = (
@@ -677,6 +707,9 @@ class HipParser:
             self.skip_cpp_attributes()
             return self.parse_statement()
 
+        if self.is_leading_type_attribute_qualified_function():
+            return self.parse_function_with_qualifier()
+
         if self.is_linkage_specifier_start():
             return self.parse_linkage_specification()
 
@@ -802,6 +835,9 @@ class HipParser:
         self.parse_template_suffix()
         self.skip_newlines()
         self.skip_cpp_attributes()
+
+        if self.is_leading_type_attribute_qualified_function():
+            return self.parse_function_with_qualifier()
 
         if (
             self.match(
@@ -1268,6 +1304,10 @@ class HipParser:
         while True:
             self.skip_newlines()
             self.skip_cpp_attributes()
+            parsed_attributes = self.parse_type_attribute_prefixes()
+            if parsed_attributes:
+                attributes.extend(parsed_attributes)
+                continue
             if (
                 not self.match(
                     *self.FUNCTION_SPECIFIER_TOKENS,

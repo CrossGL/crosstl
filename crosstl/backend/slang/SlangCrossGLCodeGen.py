@@ -950,6 +950,7 @@ class SlangToCrossGLConverter:
                 code += sincos_statement
                 continue
             if isinstance(stmt, ReturnNode):
+                code += self.generate_statement_label(stmt, indent)
                 code += self.generate_deferred_scope_exits(
                     [*deferred_scopes, deferred_statements], indent, is_main
                 )
@@ -962,6 +963,7 @@ class SlangToCrossGLConverter:
                             f"return {self.generate_expression(stmt.value, is_main)};\n"
                         )
                 continue
+            code += self.generate_statement_label(stmt, indent)
             code += "    " * indent
             if isinstance(stmt, VariableNode):
                 self.register_variable_type(stmt)
@@ -1006,13 +1008,28 @@ class SlangToCrossGLConverter:
                     stmt, indent, is_main, [*deferred_scopes, deferred_statements]
                 )
             elif isinstance(stmt, BreakNode):
-                code += "break;\n"
+                code += self.generate_jump_statement("break", stmt) + "\n"
             elif isinstance(stmt, ContinueNode):
-                code += "continue;\n"
+                code += self.generate_jump_statement("continue", stmt) + "\n"
             elif isinstance(stmt, DiscardNode):
                 code += "discard;\n"
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
+
+    def generate_statement_label(self, stmt, indent=0):
+        label = getattr(stmt, "label", None)
+        if not label:
+            return ""
+        return "    " * indent + f"{self.format_label_identifier(label)}:\n"
+
+    def generate_jump_statement(self, keyword, node):
+        target_label = getattr(node, "target_label", None)
+        if not target_label:
+            return f"{keyword};"
+        return f"{keyword} {self.format_label_identifier(target_label)};"
+
+    def format_label_identifier(self, label):
+        return self.sanitize_crossgl_identifier(str(label), set())
 
     def generate_deferred_scope_exits(self, deferred_scopes, indent=0, is_main=False):
         code = ""
