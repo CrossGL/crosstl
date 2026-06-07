@@ -2394,6 +2394,9 @@ def _run_inspect_report(args):
         run_toolchains=args.run_toolchains,
         max_diagnostics=args.max_diagnostics,
         max_failed_artifacts=args.max_failed_artifacts,
+        max_validation_artifacts=args.max_validation_artifacts,
+        max_toolchain_runs=args.max_toolchain_runs,
+        max_migration_actions=args.max_migration_actions,
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -2537,6 +2540,24 @@ def _build_parser():
         type=_non_negative_int,
         default=20,
         help="Maximum failed artifacts to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-validation-artifacts",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum validation artifact samples to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-toolchain-runs",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum validation toolchain-run samples to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-migration-actions",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum migration action samples to include in the inspection summary",
     )
     inspect_parser.add_argument(
         "--run-toolchains",

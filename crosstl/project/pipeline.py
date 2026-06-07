@@ -4549,12 +4549,18 @@ def inspect_project_report(
     run_toolchains: bool = False,
     max_diagnostics: int = 20,
     max_failed_artifacts: int = 20,
+    max_validation_artifacts: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
+    max_toolchain_runs: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
+    max_migration_actions: int = MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     """Build a concise inspection summary for a project portability report."""
     path = Path(report_path)
     validation_report = validate_project_report(path, run_toolchains=run_toolchains)
     diagnostic_limit = max(0, max_diagnostics)
     failed_artifact_limit = max(0, max_failed_artifacts)
+    validation_artifact_limit = max(0, max_validation_artifacts)
+    toolchain_run_limit = max(0, max_toolchain_runs)
+    migration_action_limit = max(0, max_migration_actions)
     diagnostics = list(validation_report.get("diagnostics", []))
     validation_result = validation_report.get("validation", {})
     validation_toolchains = (
@@ -4695,20 +4701,15 @@ def inspect_project_report(
             "artifactCount": len(validation_artifact_samples),
             "truncatedArtifactCount": max(
                 0,
-                len(validation_artifact_samples) - VALIDATION_INSPECTION_SAMPLE_LIMIT,
+                len(validation_artifact_samples) - validation_artifact_limit,
             ),
-            "artifacts": validation_artifact_samples[
-                :VALIDATION_INSPECTION_SAMPLE_LIMIT
-            ],
+            "artifacts": validation_artifact_samples[:validation_artifact_limit],
             "toolchainRunCount": len(validation_toolchain_run_samples),
             "truncatedToolchainRunCount": max(
                 0,
-                len(validation_toolchain_run_samples)
-                - VALIDATION_INSPECTION_SAMPLE_LIMIT,
+                len(validation_toolchain_run_samples) - toolchain_run_limit,
             ),
-            "toolchainRuns": validation_toolchain_run_samples[
-                :VALIDATION_INSPECTION_SAMPLE_LIMIT
-            ],
+            "toolchainRuns": validation_toolchain_run_samples[:toolchain_run_limit],
             "result": (
                 dict(validation_result)
                 if isinstance(validation_result, Mapping)
@@ -4861,9 +4862,9 @@ def inspect_project_report(
             ),
             "truncatedActionCount": max(
                 0,
-                len(action_samples) - MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
+                len(action_samples) - migration_action_limit,
             ),
-            "actions": action_samples[:MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT],
+            "actions": action_samples[:migration_action_limit],
         }
 
     external_corpus = report.get("externalCorpus")

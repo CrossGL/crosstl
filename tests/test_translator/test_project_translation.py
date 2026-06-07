@@ -12972,6 +12972,65 @@ def test_inspect_project_report_records_truncation_metadata(tmp_path):
     assert len(payload["failedArtifacts"]) == 1
 
 
+def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for index in range(4):
+        (repo / f"shader-{index}.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    actions = [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": f"Review host integration task {index}.",
+            "targets": ["cgl"],
+        }
+        for index in range(5)
+    ]
+    payload["migration"].update(project_pipeline._migration_action_rollups(actions))
+    payload["migration"]["actions"] = actions
+    report_path = repo / "out" / "sample-limit-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    toolchain_runs = [
+        {
+            "source": artifact["source"],
+            "sourceBackend": artifact["sourceBackend"],
+            "target": artifact["target"],
+            "path": artifact["path"],
+            "command": ["crosstl-test-validator", str(index)],
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+        }
+        for index, artifact in enumerate(payload["artifacts"])
+    ]
+    monkeypatch.setattr(
+        project_pipeline,
+        "_run_toolchain_smoke",
+        lambda *args, **kwargs: toolchain_runs,
+    )
+
+    payload = inspect_project_report(
+        report_path,
+        run_toolchains=True,
+        max_validation_artifacts=2,
+        max_toolchain_runs=3,
+        max_migration_actions=4,
+    )
+
+    assert payload["validation"]["artifactCount"] == 4
+    assert payload["validation"]["truncatedArtifactCount"] == 2
+    assert len(payload["validation"]["artifacts"]) == 2
+    assert payload["validation"]["toolchainRunCount"] == 4
+    assert payload["validation"]["truncatedToolchainRunCount"] == 1
+    assert len(payload["validation"]["toolchainRuns"]) == 3
+    assert payload["migration"]["actionCount"] == 5
+    assert payload["migration"]["truncatedActionCount"] == 1
+    assert len(payload["migration"]["actions"]) == 4
+
+
 def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -14347,7 +14406,16 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
     assert "Diagnostics truncated: showing 4 of " in result.stdout
 
 
-@pytest.mark.parametrize("limit_flag", ("--max-diagnostics", "--max-failed-artifacts"))
+@pytest.mark.parametrize(
+    "limit_flag",
+    (
+        "--max-diagnostics",
+        "--max-failed-artifacts",
+        "--max-validation-artifacts",
+        "--max-toolchain-runs",
+        "--max-migration-actions",
+    ),
+)
 def test_project_cli_inspect_report_rejects_negative_sample_limits(
     tmp_path,
     limit_flag,
