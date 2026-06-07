@@ -76,6 +76,12 @@ REPORT_PROJECT_FIELDS = frozenset(
         "externalCorpusManifest",
     )
 )
+REPORT_SOURCE_ROOT_STATUS_FIELDS = frozenset(
+    ("path", "resolvedPath", "status", "scanVisible")
+)
+REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
+    ("path", "resolvedPath", "status", "frontendVisible")
+)
 REPORT_SUMMARY_FIELDS = frozenset(
     (
         "unitCount",
@@ -7264,6 +7270,7 @@ def _include_dir_status_contract_reasons(
     include_dirs: Any,
     *,
     require_counts: bool,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     records = project.get("includeDirStatus")
     if not isinstance(records, list):
@@ -7284,6 +7291,12 @@ def _include_dir_status_contract_reasons(
             reasons.append(f"{prefix} must be an object")
             continue
 
+        if require_closed_fields:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    prefix, record, REPORT_INCLUDE_DIR_STATUS_FIELDS
+                )
+            )
         valid_records.append(record)
         include_path = record.get("path")
         resolved_path = record.get("resolvedPath")
@@ -7363,6 +7376,7 @@ def _source_root_status_contract_reasons(
     source_roots: Any,
     *,
     require_counts: bool,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     records = project.get("sourceRootStatus")
     if not isinstance(records, list):
@@ -7383,6 +7397,12 @@ def _source_root_status_contract_reasons(
             reasons.append(f"{prefix} must be an object")
             continue
 
+        if require_closed_fields:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    prefix, record, REPORT_SOURCE_ROOT_STATUS_FIELDS
+                )
+            )
         valid_records.append(record)
         source_root = record.get("path")
         resolved_path = record.get("resolvedPath")
@@ -7523,6 +7543,7 @@ def _project_metadata_contract_reasons(
                 project,
                 source_roots,
                 require_counts=require_full_metadata,
+                require_closed_fields=require_full_metadata,
             )
         )
     elif "sourceRootStatusCounts" in project:
@@ -7551,6 +7572,7 @@ def _project_metadata_contract_reasons(
                 project,
                 include_dirs,
                 require_counts=require_full_metadata,
+                require_closed_fields=require_full_metadata,
             )
         )
     elif "includeDirStatusCounts" in project:

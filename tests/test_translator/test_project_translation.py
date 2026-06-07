@@ -4824,6 +4824,46 @@ def test_validate_project_report_rejects_stale_source_root_status(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_unexpected_generated_project_status_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    shader_dir.mkdir()
+    include_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+            output_dir = "out"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["project"]["sourceRootStatus"][0]["unexpected"] = "metadata"
+    payload["project"]["includeDirStatus"][0]["unexpected"] = "metadata"
+    report_path = repo / "out" / "unexpected-generated-project-status-fields.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "project.sourceRootStatus[0].unexpected is not allowed" in diagnostic["message"]
+    )
+    assert (
+        "project.includeDirStatus[0].unexpected is not allowed" in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
