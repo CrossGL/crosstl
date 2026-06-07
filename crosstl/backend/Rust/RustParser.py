@@ -3316,12 +3316,34 @@ class RustParser:
                 ):
                     statements.append(parsed_expression)
                     continue
+                if self.current_token[
+                    0
+                ] != "RBRACE" and self.is_block_like_expression_statement(
+                    parsed_expression
+                ):
+                    statements.append(parsed_expression)
+                    continue
 
                 expression = parsed_expression
                 break
 
         self.eat("RBRACE")
         return BlockNode(statements, expression)
+
+    def is_block_like_expression_statement(self, expression):
+        return isinstance(
+            expression,
+            (
+                AsyncBlockNode,
+                BlockNode,
+                ConstBlockNode,
+                IfNode,
+                LoopNode,
+                MatchNode,
+                TryBlockNode,
+                UnsafeBlockNode,
+            ),
+        )
 
     def is_braced_macro_call(self, expression):
         return (

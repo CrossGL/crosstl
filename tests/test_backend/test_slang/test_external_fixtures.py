@@ -1128,6 +1128,48 @@ EXTERNAL_FIXTURES = [
         ],
         "not_contains": ["[root]", "__AttributeUsage"],
     },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: docs/generated/tests/design/ast-reference/statements/
+        # targetswitch-static-dispatch.slang
+        "id": "slang_target_switch_default_arm",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": (
+            "docs/generated/tests/design/ast-reference/statements/"
+            "targetswitch-static-dispatch.slang"
+        ),
+        "source": (
+            """
+            float helper()
+            {
+                __target_switch
+                {
+                    case hlsl:
+                        return 1.0;
+                    default:
+                        return 9.0;
+                }
+            }
+
+            RWStructuredBuffer<float> output;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                output[0] = helper();
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "float helper()",
+            "return 9.0;",
+            "output[0] = helper();",
+        ],
+        "not_contains": ["__target_switch", "return 1.0;"],
+    },
 ]
 
 

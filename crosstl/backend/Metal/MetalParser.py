@@ -1441,21 +1441,25 @@ class MetalParser:
             and self.current_token[1] == "decltype"
         ):
             base_type = self.parse_decltype_type()
-        elif self.current_token[0] not in TYPE_TOKENS:
-            raise SyntaxError(f"Expected type, got {self.current_token[0]}")
+        elif self.current_token[0] in {"METAL", "SCOPE"} or (
+            self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "SCOPE"
+        ):
+            base_type = self.parse_scoped_identifier()
         elif (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "typename"
-            and self.peek(1)[0] in TYPE_TOKENS
+            and self.peek(1)[0] in TYPE_TOKENS | {"SCOPE"}
         ):
             self.eat("IDENTIFIER")
-            if self.current_token[0] == "METAL" or (
+            if self.current_token[0] in {"METAL", "SCOPE"} or (
                 self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "SCOPE"
             ):
                 base_type = self.parse_scoped_identifier()
             else:
                 base_type = self.current_token[1]
                 self.eat(self.current_token[0])
+        elif self.current_token[0] not in TYPE_TOKENS:
+            raise SyntaxError(f"Expected type, got {self.current_token[0]}")
         elif (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in SIGNED_TYPE_PREFIXES
@@ -1474,10 +1478,6 @@ class MetalParser:
                     "int": "uint",
                     "long": "ulong",
                 }.get(base_type, base_type)
-        elif self.current_token[0] == "METAL" or (
-            self.current_token[0] == "IDENTIFIER" and self.peek(1)[0] == "SCOPE"
-        ):
-            base_type = self.parse_scoped_identifier()
         else:
             base_type = self.current_token[1]
             self.eat(self.current_token[0])

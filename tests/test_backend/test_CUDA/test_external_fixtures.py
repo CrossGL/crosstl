@@ -39,6 +39,7 @@ EXTERNAL_SAMPLES = [
             "cpp/2_Concepts_and_Techniques/scan/scan.cu",
             "cpp/3_CUDA_Features/globalToShmemAsyncCopy/globalToShmemAsyncCopy.cu",
             "cpp/3_CUDA_Features/cudaCompressibleMemory/saxpy.cu",
+            "cpp/3_CUDA_Features/bf16TensorCoreGemm/bf16TensorCoreGemm.cu",
             "cpp/3_CUDA_Features/cdpAdvancedQuicksort/cdpAdvancedQuicksort.cu",
             "cpp/3_CUDA_Features/cdpQuadtree/cdpQuadtree.cu",
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
@@ -1229,6 +1230,51 @@ def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
     assert (
         "var<workgroup> shmem: " "array<array<f16, ((CHUNK_K * K) + SKEW_HALF)>>;"
     ) in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/3_CUDA_Features/bf16TensorCoreGemm/bf16TensorCoreGemm.cu
+    source = """
+    __global__ void compute_bf16gemm(const __nv_bfloat16 *A,
+                                     __nv_bfloat16 *D) {
+        extern __shared__ __nv_bfloat16 shmem[][CHUNK_K * K + SKEW_BF16];
+        __nv_bfloat16 *local = D;
+        const __nv_bfloat16 *tile_ptr =
+            &shmem[threadIdx.y][threadIdx.x];
+        __nv_bfloat16 value = A[threadIdx.x];
+        local[threadIdx.x] = value;
+        D[threadIdx.x] = tile_ptr[0];
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert ast.kernels[0].params[0].vtype == "const __nv_bfloat16 *"
+    assert ast.kernels[0].params[1].vtype == "__nv_bfloat16 *"
+    assert isinstance(body[0], SharedMemoryNode)
+    assert body[0].vtype == "__nv_bfloat16[][((CHUNK_K * K) + SKEW_BF16)]"
+    assert body[1].vtype == "__nv_bfloat16 *"
+    assert body[1].name == "local"
+    assert body[2].vtype == "const __nv_bfloat16 *"
+    assert body[2].name == "tile_ptr"
+    assert body[3].vtype == "__nv_bfloat16"
+    assert "array<f16>" in crossgl
+    assert (
+        "var<workgroup> shmem: " "array<array<f16, ((CHUNK_K * K) + SKEW_BF16)>>;"
+    ) in crossgl
+    assert "var local: ptr<f16> = D;" in crossgl
+    assert (
+        "var tile_ptr: ptr<f16> = "
+        "(&shmem[gl_LocalInvocationID.y][gl_LocalInvocationID.x]);"
+    ) in crossgl
+    assert "var value: f16 = A[gl_LocalInvocationID.x];" in crossgl
+    assert "__nv_bfloat16" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

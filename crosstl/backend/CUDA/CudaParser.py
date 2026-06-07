@@ -306,6 +306,8 @@ class CudaParser:
         "__half",
         "half2",
         "__half2",
+        "__nv_bfloat16",
+        "__nv_bfloat162",
         "int8_t",
         "uint8_t",
         "int16_t",

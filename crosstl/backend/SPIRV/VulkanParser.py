@@ -1378,6 +1378,42 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if result_id and opcode == "OpImageSparseFetch" and len(operands) >= 3:
+                expressions[result_id] = (
+                    self.spirv_assembly_image_sparse_fetch_expression(
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode in {
+                "OpImageSparseGather",
+                "OpImageSparseDrefGather",
+            }:
+                if len(operands) >= 4:
+                    expressions[result_id] = (
+                        self.spirv_assembly_image_sparse_gather_expression(
+                            opcode,
+                            operands[1],
+                            operands[2],
+                            operands[3],
+                            operands[4:],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode in {"OpImageGather", "OpImageDrefGather"}:
                 if len(operands) >= 4:
                     expressions[result_id] = (
@@ -3126,6 +3162,9 @@ class VulkanParser:
                 (
                     "spirvImageSparseSample",
                     "spirvImageSparseRead",
+                    "spirvImageSparseFetch",
+                    "spirvImageSparseGather",
+                    "spirvImageSparseDrefGather",
                 )
             )
         ):
@@ -3492,6 +3531,79 @@ class VulkanParser:
             return f"spirvImageSparseRead{suffix}"
         suffix = self.spirv_fallback_identifier(read_function_name, "read")
         return f"spirvImageSparseRead{suffix}"
+
+    def spirv_assembly_image_sparse_fetch_expression(
+        self,
+        image_operand,
+        coordinate_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        fetch = self.spirv_assembly_image_fetch_expression(
+            image_operand,
+            coordinate_operand,
+            image_operands,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        function_name = self.spirv_sparse_image_fetch_function_name(fetch.name)
+        return FunctionCallNode(function_name, fetch.args)
+
+    def spirv_sparse_image_fetch_function_name(self, fetch_function_name):
+        if fetch_function_name == "texelFetch":
+            return "spirvImageSparseFetch"
+        if fetch_function_name.startswith("texelFetch"):
+            suffix = fetch_function_name[len("texelFetch") :]
+            return f"spirvImageSparseFetch{suffix}"
+        suffix = self.spirv_fallback_identifier(fetch_function_name, "fetch")
+        return f"spirvImageSparseFetch{suffix}"
+
+    def spirv_assembly_image_sparse_gather_expression(
+        self,
+        opcode,
+        image_operand,
+        coordinate_operand,
+        gather_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        gather = self.spirv_assembly_image_gather_expression(
+            {
+                "OpImageSparseGather": "OpImageGather",
+                "OpImageSparseDrefGather": "OpImageDrefGather",
+            }[opcode],
+            image_operand,
+            coordinate_operand,
+            gather_operand,
+            image_operands,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        function_name = self.spirv_sparse_image_gather_function_name(
+            opcode,
+            gather.name,
+        )
+        return FunctionCallNode(function_name, gather.args)
+
+    def spirv_sparse_image_gather_function_name(self, opcode, gather_function_name):
+        if "Dref" in opcode and gather_function_name.startswith("textureGatherCompare"):
+            suffix = gather_function_name[len("textureGatherCompare") :]
+            return f"spirvImageSparseDrefGather{suffix}"
+        if gather_function_name.startswith("textureGather"):
+            suffix = gather_function_name[len("textureGather") :]
+            return f"spirvImageSparseGather{suffix}"
+        suffix = self.spirv_fallback_identifier(gather_function_name, "gather")
+        return f"spirvImageSparseGather{suffix}"
 
     def spirv_assembly_image_gather_expression(
         self,

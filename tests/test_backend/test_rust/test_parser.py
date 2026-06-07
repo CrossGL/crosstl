@@ -5463,6 +5463,43 @@ def test_rust_gpu_struct_literal_field_attributes_parse():
     ]
 
 
+def test_rust_gpu_ash_runner_nested_block_statement_parse():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/runners/ash/src/graphics.rs MyRenderer::render_frame.
+    code = """
+    impl MyRenderer {
+        pub fn render_frame(&mut self, frame: DrawFrame) -> anyhow::Result<()> {
+            unsafe {
+                let device = &self.device;
+                {
+                    device.begin_command_buffer(cmd)?;
+                    device.end_command_buffer(cmd)?;
+                }
+                device.queue_submit2(device.main_queue, &[], frame.draw_finished_fence)?;
+                Ok(())
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.impl_blocks[0].methods[0].body[0]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    block = unsafe_block.block
+    assert isinstance(block.statements[0], LetNode)
+    assert isinstance(block.statements[1], BlockNode)
+    assert [type(stmt) for stmt in block.statements[1].statements] == [
+        TryNode,
+        TryNode,
+    ]
+    assert isinstance(block.statements[2], TryNode)
+    assert block.statements[2].expression.name.member == "queue_submit2"
+    assert isinstance(block.expression, FunctionCallNode)
+    assert block.expression.name == "Ok"
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

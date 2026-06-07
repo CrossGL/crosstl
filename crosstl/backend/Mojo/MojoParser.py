@@ -1527,6 +1527,7 @@ class MojoParser:
             self.pos = saved_pos
             self.current_token = saved_token
 
+        convention = self.parse_parameter_convention()
         if self.is_identifier_name_token():
             var_name = self.parse_identifier_tuple()
             if self.current_token[0] == "IN":
@@ -1534,10 +1535,14 @@ class MojoParser:
                 iterable = self.parse_for_iterable()
                 self.eat("COLON")
                 body = self.parse_block()
-                return RangeForNode("", var_name, iterable, body)
+                node = RangeForNode("", var_name, iterable, body)
+                node.target_convention = convention
+                return node
 
         raise SyntaxError(
-            f"Invalid for loop syntax. Expected C-style 'for init; condition; update:' or Python-style 'for var in iterable:'"
+            "Invalid for loop syntax. Expected C-style "
+            "'for init; condition; update:' or Python-style "
+            "'for [convention] target in iterable:'"
         )
 
     def parse_for_iterable(self):

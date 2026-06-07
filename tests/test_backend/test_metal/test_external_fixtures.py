@@ -39,6 +39,7 @@ MLX_UNARY_OPS_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 MLX_STEEL_GEMM_LOADER_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
+PYTORCH_GRID_SAMPLER_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 PYTORCH_ACTIVATION_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 PYTORCH_C10_METAL_CONSTEXPR_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
@@ -1004,6 +1005,32 @@ EXTERNAL_FIXTURES = [
                 Op op;
                 LoopedElemToLoc<NDIMS, IdxT, (NDIMS > 2)> loop(reduce_ndim);
             }
+        """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: 7168b60c0d3561d93aac7519d03d1bd95ee3e7a3
+    # Path: aten/src/ATen/native/mps/kernels/GridSampler.h
+    {
+        "name": "pytorch_grid_sampler_leading_global_namespace_type",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_GRID_SAMPLER_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/GridSampler.h",
+        "roundtrip": False,
+        "struct_names": ["GridSamplerParams"],
+        "contains": [
+            "c10::metal::array<idx_t,N> output_sizes;",
+            "c10::metal::array<idx_t,N> input_strides;",
+        ],
+        "source": (
+            """
+            template <unsigned N = 5, typename idx_t = int32_t>
+            struct GridSamplerParams {
+                int32_t sampler_dims;
+                ::c10::metal::array<idx_t, N> output_sizes;
+                ::c10::metal::array<idx_t, N> input_strides;
+            };
         """
         ),
     },

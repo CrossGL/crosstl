@@ -3803,21 +3803,33 @@ class HLSLToCrossGLConverter:
         text = str(type_name).strip()
         fixed_width_aliases = {
             "float32_t": "float",
+            "float64_t": "double",
             "int32_t": "int",
             "uint32_t": "uint",
         }
         if text in fixed_width_aliases:
             return fixed_width_aliases[text]
 
-        vector_alias_match = re.fullmatch(r"(float32_t|int32_t|uint32_t)([2-4])", text)
+        vector_alias_match = re.fullmatch(
+            r"(float32_t|float64_t|int32_t|uint32_t)([1-4])", text
+        )
         if vector_alias_match:
             scalar, width = vector_alias_match.groups()
             scalar_prefix = {
                 "float32_t": "float",
+                "float64_t": "double",
                 "int32_t": "int",
                 "uint32_t": "uint",
             }[scalar]
             return f"{scalar_prefix}{width}"
+
+        matrix_alias_match = re.fullmatch(r"(float64_t)([1-4])x([1-4])", text)
+        if matrix_alias_match:
+            scalar, rows, cols = matrix_alias_match.groups()
+            scalar_prefix = {
+                "float64_t": "double",
+            }[scalar]
+            return f"{scalar_prefix}{rows}x{cols}"
 
         match = re.fullmatch(r"(signed|unsigned)\s+(.+)", text)
         if not match:

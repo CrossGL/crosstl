@@ -9856,6 +9856,41 @@ def test_rust_gpu_struct_literal_field_attributes_codegen():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_ash_runner_nested_block_statement_codegen():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/runners/ash/src/graphics.rs MyRenderer::render_frame.
+    code = """
+    impl MyRenderer {
+        pub fn render_frame(&mut self, frame: DrawFrame) -> anyhow::Result<()> {
+            unsafe {
+                let device = &self.device;
+                {
+                    device.begin_command_buffer(cmd)?;
+                    device.end_command_buffer(cmd)?;
+                }
+                device.queue_submit2(device.main_queue, &[], frame.draw_finished_fence)?;
+                Ok(())
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "BlockNode" not in result
+    assert "device.begin_command_buffer(cmd)" in result
+    assert "device.end_command_buffer(cmd)" in result
+    assert (
+        "device.queue_submit2(device.main_queue, {}, frame.draw_finished_fence)"
+        in result
+    )
+    assert result.index("device.end_command_buffer(cmd)") < result.index(
+        "device.queue_submit2("
+    )
+    assert "return Ok(());" in result
+
+
 def test_error_handling():
     edge_cases = [
         "fn empty() {}",

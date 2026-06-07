@@ -2947,6 +2947,68 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMAGE_SPARSE_FETCH_GATHER_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/val/val_image_test.cpp
+; Reduced from sparse image fetch/gather validation coverage plus sparse
+; result extraction rules.
+OpCapability Shader
+OpCapability SparseResidency
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %fetch_out %gather_out %resident_out %image_var %sampled_var
+OpExecutionMode %main OriginUpperLeft
+OpName %fetch_out "fetchOut"
+OpName %gather_out "gatherOut"
+OpName %resident_out "residentOut"
+OpName %image_var "imageVar"
+OpName %sampled_var "sampledVar"
+OpDecorate %fetch_out Location 0
+OpDecorate %gather_out Location 1
+OpDecorate %resident_out Location 2
+OpDecorate %image_var DescriptorSet 0
+OpDecorate %image_var Binding 0
+OpDecorate %sampled_var DescriptorSet 0
+OpDecorate %sampled_var Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%ptr_output_bool = OpTypePointer Output %bool
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v2int = OpTypeVector %uint 2
+%v4float = OpTypeVector %float 4
+%res_type = OpTypeStruct %uint %v4float
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_image = OpTypePointer UniformConstant %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%coord = OpConstantComposite %v2int %zero %one
+%image_var = OpVariable %ptr_image UniformConstant
+%sampled_var = OpVariable %ptr_sampled UniformConstant
+%fetch_out = OpVariable %ptr_output_v4float Output
+%gather_out = OpVariable %ptr_output_v4float Output
+%resident_out = OpVariable %ptr_output_bool Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_image = OpLoad %image %image_var
+%fetch_sparse = OpImageSparseFetch %res_type %loaded_image %coord Lod %zero
+%fetch_texel = OpCompositeExtract %v4float %fetch_sparse 1
+OpStore %fetch_out %fetch_texel
+%fetch_code = OpCompositeExtract %uint %fetch_sparse 0
+%resident = OpImageSparseTexelsResident %bool %fetch_code
+OpStore %resident_out %resident
+%loaded_sampled = OpLoad %sampled %sampled_var
+%gather_sparse = OpImageSparseGather %res_type %loaded_sampled %coord %zero
+%gather_texel = OpCompositeExtract %v4float %gather_sparse 1
+OpStore %gather_out %gather_texel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -5352,6 +5414,38 @@ def test_spirv_tools_sparse_image_read_codegen_reparse():
     assert "outColor = sparse[1];" not in generated_code
     assert "resident = is_resident;" not in generated_code
     assert "OpImageSparseRead" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_sparse_image_fetch_gather_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_IMAGE_SPARSE_FETCH_GATHER_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2D imageVar @set(0) @binding(0);" in generated_code
+    assert "Texture2D sampledVar @set(0) @binding(1);" in generated_code
+    assert "float4 fetchOut @output @location(0);" in generated_code
+    assert "float4 gatherOut @output @location(1);" in generated_code
+    assert "bool residentOut @output @location(2);" in generated_code
+    assert (
+        "fetchOut = spirvSparseTexel("
+        "spirvImageSparseFetch(imageVar, uint2(0, 1), 0));" in generated_code
+    )
+    assert (
+        "residentOut = spirvSparseTexelsResident("
+        "spirvSparseResidencyCode("
+        "spirvImageSparseFetch(imageVar, uint2(0, 1), 0)));" in generated_code
+    )
+    assert (
+        "gatherOut = spirvSparseTexel("
+        "spirvImageSparseGather(sampledVar, uint2(0, 1), 0));" in generated_code
+    )
+    assert "fetchOut = fetch_sparse[1];" not in generated_code
+    assert "gatherOut = gather_sparse[1];" not in generated_code
+    assert "residentOut = resident;" not in generated_code
+    assert "OpImageSparseFetch" not in generated_code
+    assert "OpImageSparseGather" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

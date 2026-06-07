@@ -711,6 +711,36 @@ def test_for_in_iterable_parsing_preserves_loop_iterable():
     assert loop.iterable.name == "values"
 
 
+def test_for_in_target_conventions_parse_from_modular_control_flow_docs():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
+    # mojo/docs/code/manual/control-flow/for_loop.mojo for-loop examples.
+    code = """
+    fn main(values: List[Int], capitals: Dict[String, String]):
+        for ref value in values:
+            value -= 1
+        for var state in capitals:
+            sink(state)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = find_function(ast, "main")
+    ref_loop = function.body[0]
+    var_loop = function.body[1]
+
+    assert isinstance(ref_loop, RangeForNode)
+    assert ref_loop.name == "value"
+    assert ref_loop.iterable.name == "values"
+    assert getattr(ref_loop, "target_convention", None) == "ref"
+    assert isinstance(ref_loop.body[0], AssignmentNode)
+    assert ref_loop.body[0].operator == "-="
+
+    assert isinstance(var_loop, RangeForNode)
+    assert var_loop.name == "state"
+    assert var_loop.iterable.name == "capitals"
+    assert getattr(var_loop, "target_convention", None) == "var"
+
+
 def test_tuple_for_target_parsing_from_modular_pmpp_examples():
     code = """
     from std.itertools import product
