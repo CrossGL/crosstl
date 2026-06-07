@@ -4292,6 +4292,19 @@ class HLSLToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_fragment_coverage_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if not semantic or str(semantic).upper() != "SV_COVERAGE":
+            return False
+        if str(function_qualifier or "").lower() not in {"fragment", "pixel"}:
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
     def is_barycentric_semantic(self, semantic):
         return bool(
             semantic and re.fullmatch(r"SV_BARYCENTRICS\d*", str(semantic).upper())
@@ -4325,6 +4338,10 @@ class HLSLToCrossGLConverter:
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_fragment_coverage_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            return "@ gl_SampleMaskIn"
         if self.is_barycentric_semantic(semantic):
             mapped = (
                 "gl_BaryCoordNoPerspEXT"

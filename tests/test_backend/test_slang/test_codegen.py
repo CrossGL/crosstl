@@ -581,7 +581,7 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     assert "uint instanceId @ gl_InstanceID" in generated_code
     assert "bool frontFace @ gl_FrontFacing" in generated_code
     assert "uint sampleIndex @ gl_SampleID" in generated_code
-    assert "uint coverage @ gl_SampleMask" in generated_code
+    assert "uint coverage @ gl_SampleMaskIn" in generated_code
     assert "uint primitiveId @ gl_PrimitiveID" in generated_code
     assert "uvec3 dispatchId @ gl_GlobalInvocationID" in generated_code
     assert "uvec3 groupThreadId @ gl_LocalInvocationID" in generated_code
@@ -597,6 +597,60 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     assert "@ sv_groupthreadid" not in generated_code
     assert "@ Sv_GroupId" not in generated_code
     assert "@ SV_GROUPINDEX" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_fragment_sv_coverage_parameter_codegen_uses_sample_mask_in():
+    code = """
+    [shader("fragment")]
+    float4 fragmentMain(uint coverage : SV_Coverage) : SV_Target
+    {
+        return float4(float(coverage), 0.0, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint coverage @ gl_SampleMaskIn" in generated_code
+    assert "uint coverage @ gl_SampleMask)" not in generated_code
+    assert "@ SV_Coverage" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_fragment_sv_coverage_outputs_codegen_remain_sample_mask():
+    code = """
+    struct FragmentOutput
+    {
+        float4 color : SV_Target0;
+        uint coverage : SV_Coverage;
+    };
+
+    [shader("fragment")]
+    uint coverageReturn() : SV_Coverage
+    {
+        return 1;
+    }
+
+    [shader("fragment")]
+    FragmentOutput structReturn()
+    {
+        FragmentOutput output;
+        output.color = float4(1.0);
+        output.coverage = 1;
+        return output;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint coverageReturn() @ gl_SampleMask" in generated_code
+    assert "uint coverage @ gl_SampleMask;" in generated_code
+    assert "gl_SampleMaskIn" not in generated_code
+    assert "@ SV_Coverage" not in generated_code
     cgl_translator.parse(generated_code)
 
 

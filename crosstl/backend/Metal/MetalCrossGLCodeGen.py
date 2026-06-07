@@ -1526,7 +1526,14 @@ class MetalToCrossGLConverter:
                 if self.structured_buffer_pointer_type(param):
                     self.current_structured_buffer_names.add(param.name)
             params = ", ".join(
-                self.format_decl(p, include_semantic=True, semantic_context="parameter")
+                self.format_decl(
+                    p,
+                    include_semantic=True,
+                    semantic_context={
+                        "kind": "parameter",
+                        "function_qualifier": getattr(func, "qualifier", None),
+                    },
+                )
                 for p in func.params
             )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
@@ -2854,6 +2861,13 @@ class MetalToCrossGLConverter:
         if not semantic:
             return ""
 
+        if isinstance(context, dict):
+            context_kind = context.get("kind")
+            function_qualifier = str(context.get("function_qualifier") or "").lower()
+        else:
+            context_kind = context
+            function_qualifier = ""
+
         outputs = []
         attr_names = {
             str(getattr(attr, "name", "")).lower()
@@ -2870,7 +2884,13 @@ class MetalToCrossGLConverter:
             name = attr.name
             args = [str(a).strip() for a in attr.args] if attr.args else []
             key = f"{name}({args[0]})" if args else name
-            if name == "barycentric_coord":
+            if (
+                context_kind == "parameter"
+                and function_qualifier == "fragment"
+                and name == "position"
+            ):
+                out = "gl_FragCoord"
+            elif name == "barycentric_coord":
                 out = (
                     "gl_BaryCoordNoPerspEXT"
                     if no_perspective_barycentric
@@ -2878,7 +2898,7 @@ class MetalToCrossGLConverter:
                 )
             elif has_barycentric_coord and "no_perspective" in str(name).lower():
                 continue
-            elif context == "parameter" and name == "sample_mask":
+            elif context_kind == "parameter" and name == "sample_mask":
                 out = "gl_SampleMaskIn"
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))

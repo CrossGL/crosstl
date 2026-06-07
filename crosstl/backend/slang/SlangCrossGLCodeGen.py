@@ -477,7 +477,6 @@ class SlangToCrossGLConverter:
             # Fragment inputs
             "SV_IsFrontFace": "gl_FrontFacing",
             "SV_SampleIndex": "gl_SampleID",
-            "SV_Coverage": "gl_SampleMask",
             "SV_Barycentrics": "gl_BaryCoordEXT",
             # Fragment outputs
             "SV_Target": "Out_Color",
@@ -498,6 +497,9 @@ class SlangToCrossGLConverter:
             "SV_Depth5": "Out_Depth5",
             "SV_Depth6": "Out_Depth6",
             "SV_Depth7": "Out_Depth7",
+            # SV_Coverage is also a fragment input, handled contextually
+            # for parameters in map_semantic.
+            "SV_Coverage": "gl_SampleMask",
             "SV_ViewID": "gl_ViewID",
             "SV_RenderTargetArrayIndex": "gl_Layer",
             "SV_ViewportArrayIndex": "gl_ViewportIndex",
@@ -2733,6 +2735,19 @@ class SlangToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_fragment_coverage_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if semantic is None or str(semantic).lower() != "sv_coverage":
+            return False
+        if str(function_qualifier or "").lower() not in {"fragment", "pixel"}:
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
     def is_no_perspective_barycentric_parameter(self, parameter):
         qualifiers = {
             str(qualifier).strip().lower()
@@ -2755,6 +2770,10 @@ class SlangToCrossGLConverter:
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_fragment_coverage_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            return "@ gl_SampleMaskIn"
         mapped_semantic = self.semantic_map.get(semantic)
         if mapped_semantic is None:
             mapped_semantic = self.hlsl_system_semantic_map.get(str(semantic).lower())

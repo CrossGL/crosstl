@@ -1442,6 +1442,8 @@ def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
     """
     crossgl = convert(code)
 
+    assert "vec4 pixPos @gl_FragCoord" in crossgl
+    assert "@gl_Position" not in crossgl
     assert "for (int i = 0; i < int(PIXEL_SIZE); i++)" in crossgl
     assert "for (int j = 0; j < int(PIXEL_SIZE); j++)" in crossgl
     assert "col += vec4(float(i + j));" in crossgl

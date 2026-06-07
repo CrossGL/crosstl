@@ -2317,6 +2317,28 @@ def test_codegen_fragment_sv_position_parameter_imports_as_frag_coord():
     parse_crossgl(vertex_output)
 
 
+def test_codegen_fragment_sv_coverage_parameter_imports_as_sample_mask_input():
+    fragment_output = generate_crossgl("""
+        float4 PSMain(uint coverage : SV_Coverage) : SV_Target0 {
+            return float4(float(coverage), 0.0, 0.0, 1.0);
+        }
+    """)
+
+    assert "uint coverage @ gl_SampleMaskIn" in fragment_output
+    assert "uint coverage @ gl_SampleMask)" not in fragment_output
+    parse_crossgl(fragment_output)
+
+    output_mask = generate_crossgl("""
+        uint PSMain() : SV_Coverage {
+            return 1u;
+        }
+    """)
+
+    assert "uint PSMain() @ gl_SampleMask" in output_mask
+    assert "@ gl_SampleMaskIn" not in output_mask
+    parse_crossgl(output_mask)
+
+
 def test_codegen_register_bindings_emitted():
     output = generate_crossgl(REGISTER_BINDINGS_HLSL)
     assert "@ register" in output
