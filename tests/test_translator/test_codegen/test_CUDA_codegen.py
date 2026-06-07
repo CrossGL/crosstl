@@ -12063,6 +12063,31 @@ class TestCudaCodeGen:
             "binding=6 binding_source=explicit" in cuda_code
         )
 
+    def test_sampler_descriptor_array_source_bindings_do_not_expand_cuda_ranges(self):
+        source_code = """
+        shader CudaSamplerDescriptorArrayBindings {
+            sampler linearSamplers[2] @set(0) @binding(5);
+            sampler shadowSamplers[2] @set(0) @binding(6);
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=linearSamplers kind=sampler set=0 "
+            "binding=5 binding_source=explicit count=2" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=shadowSamplers kind=sampler set=0 "
+            "binding=6 binding_source=explicit count=2" in cuda_code
+        )
+        assert "cudaTextureObject_t linearSamplers[2];" in cuda_code
+        assert "cudaTextureObject_t shadowSamplers[2];" in cuda_code
+
     def test_texture_and_sampler_binding_namespaces_are_independent_for_cuda_codegen(
         self,
     ):
@@ -12144,6 +12169,22 @@ class TestCudaCodeGen:
         with pytest.raises(ValueError, match="Conflicting CUDA resource binding"):
             CudaCodeGen().generate(
                 Parser(Lexer(overlapping_buffer_range).tokens).parse()
+            )
+
+        overlapping_native_sampler_range = """
+        shader DuplicateCudaNativeSamplerRange {
+            @sampler(5) sampler linearSamplers[2];
+            @sampler(6) sampler shadowSamplers[2];
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting CUDA resource binding"):
+            CudaCodeGen().generate(
+                Parser(Lexer(overlapping_native_sampler_range).tokens).parse()
             )
 
     def test_typed_hlsl_dynamic_resource_arrays_emit_cuda_shapes_and_metadata(self):

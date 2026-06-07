@@ -12998,6 +12998,26 @@ class RustCodeGen:
                 return ",".join(values)
         return None
 
+    def rust_explicit_resource_binding_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return attr_name
+        return None
+
     def rust_resource_base_type_and_count(self, type_name):
         type_name = self.type_name_string(type_name)
         if self.is_array_type_name(type_name):
@@ -13050,6 +13070,15 @@ class RustCodeGen:
             return "buffer"
         return kind
 
+    def rust_resource_binding_validation_count(self, node, resource_kind, count):
+        if (
+            resource_kind == "sampler"
+            and count != 1
+            and self.rust_explicit_resource_binding_attribute(node) == "binding"
+        ):
+            return 1
+        return count
+
     def rust_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.rust_used_resource_bindings.get(
@@ -13093,21 +13122,24 @@ class RustCodeGen:
             return ""
 
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        validation_count = self.rust_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.rust_resource_binding_namespace(resource_kind)
         set_index = self.explicit_rust_resource_set_index(node)
         binding = self.explicit_rust_resource_binding_index(node)
         if binding is None:
             binding = self.next_available_rust_resource_binding(
-                namespace, set_index, count
+                namespace, set_index, validation_count
             )
             binding_source = "automatic"
             self.reserve_rust_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
         else:
             binding_source = "explicit"
             self.reserve_rust_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
 
         parts = [
@@ -13151,9 +13183,14 @@ class RustCodeGen:
         if not name or resource_kind is None or binding is None:
             return
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        validation_count = self.rust_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.rust_resource_binding_namespace(resource_kind)
         set_index = self.explicit_rust_resource_set_index(node)
-        self.reserve_rust_resource_binding(namespace, set_index, binding, count, name)
+        self.reserve_rust_resource_binding(
+            namespace, set_index, binding, validation_count, name
+        )
 
     def reserve_explicit_rust_resource_bindings(self, ast):
         def reserve_variable(node):

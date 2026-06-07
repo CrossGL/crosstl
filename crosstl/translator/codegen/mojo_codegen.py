@@ -1205,6 +1205,7 @@ class MojoCodeGen:
         self.struct_resource_access_qualifiers = {}
         self.literal_int_constants = {}
         self.mojo_resource_binding_cursors = {}
+        self.mojo_source_resource_bindings = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
@@ -1459,6 +1460,7 @@ class MojoCodeGen:
             getattr(ast, "constants", [])
         )
         self.mojo_resource_binding_cursors = {}
+        self.mojo_source_resource_bindings = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
@@ -2525,18 +2527,14 @@ class MojoCodeGen:
     ):
         if self.is_mojo_shared_variable(node):
             if isinstance(node, ArrayNode):
-                variable_type = self.array_type_name(
-                    node.element_type, get_array_size_from_node(node)
-                )
+                variable_type = self.array_declared_type(node)
             else:
                 variable_type = self.variable_declared_type(node) or "float"
             self.register_variable_type(getattr(node, "name", None), variable_type)
             return ""
 
         if isinstance(node, ArrayNode):
-            variable_type = self.array_type_name(
-                node.element_type, get_array_size_from_node(node)
-            )
+            variable_type = self.array_declared_type(node)
             self.register_variable_type(node.name, variable_type)
             key = (node.name, variable_type)
             if key in emitted_stage_local_variables:
@@ -3995,8 +3993,16 @@ class MojoCodeGen:
         if image_format is None:
             return type_name
 
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            element_type, size = self.parse_array_type_name(type_name)
+            formatted_element_type = self.explicit_image_format_resource_type(
+                element_type, node
+            )
+            return self.array_type_name(formatted_element_type, size)
+
         mapped_type = self.resource_type_alias(type_name) or self.type_mapping.get(
-            self.type_name(type_name), self.type_name(type_name)
+            type_name, type_name
         )
         if not self.is_image_resource_type(mapped_type):
             return type_name
@@ -4314,6 +4320,51 @@ class MojoCodeGen:
             self.mojo_resource_binding_cursors.get(key, 0), end + 1
         )
 
+    def resource_attribute_names(self, node):
+        return {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+
+    def has_resource_qualifier(self, node, qualifier_name):
+        qualifier_name = str(qualifier_name).lower()
+        return qualifier_name in {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+
+    def uses_source_descriptor_array_binding(self, node, count, resource_kind=None):
+        if count <= 1:
+            return False
+        attr_names = self.resource_attribute_names(node)
+        if "binding" not in attr_names or "register" in attr_names:
+            return False
+        return (
+            self.has_resource_qualifier(node, "uniform") or resource_kind == "sampler"
+        )
+
+    def explicit_binding_is_target_native(self, node, count, resource_kind=None):
+        return not self.uses_source_descriptor_array_binding(node, count, resource_kind)
+
+    def reserve_source_resource_binding(
+        self, namespace, set_index, binding, count, name
+    ):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        for used_start, used_end, used_name in self.mojo_source_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                raise ValueError(
+                    "Conflicting Mojo source resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        self.mojo_source_resource_bindings.setdefault(key, []).append(
+            (binding, end, name)
+        )
+
     def generate_resource_metadata_comment(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
         resource_kind = self.mojo_resource_kind(type_name, kind, node)
@@ -4325,13 +4376,35 @@ class MojoCodeGen:
         namespace = self.mojo_resource_binding_namespace(resource_kind)
         set_index = self.explicit_resource_set_index(node)
         binding = self.explicit_resource_binding_index(node)
+        source_binding = None
         if binding is None:
             binding = self.next_available_resource_binding(namespace, set_index, count)
             binding_source = "automatic"
             self.reserve_resource_binding(namespace, set_index, binding, count, name)
         else:
             binding_source = "explicit"
-            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+            source_binding = binding
+            uses_source_descriptor = self.uses_source_descriptor_array_binding(
+                node, count, resource_kind
+            )
+            if self.explicit_binding_is_target_native(node, count, resource_kind):
+                self.reserve_resource_binding(
+                    namespace, set_index, binding, count, name
+                )
+            else:
+                self.reserve_source_resource_binding(
+                    namespace, set_index, source_binding, 1, name
+                )
+                key = (namespace, set_index)
+                if self.resource_binding_range_conflicts(key, binding, count):
+                    binding = self.next_available_resource_binding(
+                        namespace, set_index, count
+                    )
+                self.reserve_resource_binding(
+                    namespace, set_index, binding, count, name
+                )
+            if not uses_source_descriptor:
+                source_binding = None
 
         parts = [
             "# CrossGL resource metadata:",
@@ -4343,6 +4416,8 @@ class MojoCodeGen:
         ]
         if count != 1:
             parts.append(f"count={count}")
+        if source_binding is not None and source_binding != binding:
+            parts.append(f"source_binding={source_binding}")
         register_metadata = self.resource_register_metadata(node)
         if register_metadata:
             parts.append(f"register={register_metadata}")
@@ -5674,6 +5749,13 @@ class MojoCodeGen:
         if hasattr(member, "vtype"):
             return self.explicit_image_format_resource_type(member.vtype, member)
         return "float"
+
+    def array_declared_type(self, node):
+        element_type = getattr(node, "element_type", getattr(node, "vtype", "float"))
+        element_type = self.explicit_image_format_resource_type(
+            self.type_name(element_type), node
+        )
+        return self.array_type_name(element_type, get_array_size_from_node(node))
 
     def register_struct_type_metadata(self, node):
         struct_name = getattr(node, "name", None)
@@ -7865,13 +7947,12 @@ class MojoCodeGen:
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
-        size = get_array_size_from_node(node)
-        self.register_variable_type(
-            node.name, self.array_type_name(node.element_type, size)
-        )
+        variable_type = self.array_declared_type(node)
+        self.register_variable_type(node.name, variable_type)
+        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
         return (
-            f"{indent_str}var {self.mojo_identifier(node.name)} = "
-            f"{self.array_initial_value(node.element_type, size)}\n"
+            f"{resource_comment}{indent_str}var {self.mojo_identifier(node.name)} = "
+            f"{self.array_initial_value_for_type(variable_type)}\n"
         )
 
     def generate_assignment(self, node):

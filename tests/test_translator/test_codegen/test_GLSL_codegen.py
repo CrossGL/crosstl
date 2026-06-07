@@ -1986,6 +1986,87 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
     assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
 
 
+def test_glsl_descriptor_array_texture_bindings_remap_overlapping_target_slots():
+    code = """
+    shader MixedTextureCompareDescriptorArrayShader {
+        layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+        layout(set = 0, binding = 3) uniform sampler2DShadow shadowMaps[2];
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                float shadow = textureCompare(shadowMaps[1], uv, 0.5);
+                return texture(colorMaps[1], uv) + vec4(shadow);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(binding = 2) uniform sampler2D colorMaps[2];" in generated
+    assert "layout(binding = 4) uniform sampler2DShadow shadowMaps[2];" in generated
+    assert "texture(colorMaps[1], uv)" in generated
+    assert "texture(shadowMaps[1], vec3(uv, 0.5))" in generated
+    assert "layout(binding = 3) uniform sampler2DShadow shadowMaps[2];" not in generated
+
+
+def test_glsl_descriptor_array_storage_image_atomic_bindings_remap_overlapping_target_slots():
+    code = """
+    shader StorageImageAtomicDescriptorArrayShader {
+        layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D signedCounters[2];
+        layout(set = 0, binding = 2, format = r32ui) readwrite uniform uimage2D unsignedCounters[2];
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                int signedValue = imageAtomicAdd(signedCounters[1], pixel, 1);
+                uint unsignedValue = imageAtomicAdd(unsignedCounters[1], pixel, 1u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "layout(r32i, binding = 1) uniform iimage2D signedCounters[2];" in generated
+    assert (
+        "layout(r32ui, binding = 3) uniform uimage2D unsignedCounters[2];" in generated
+    )
+    assert "imageAtomicAdd(signedCounters[1], pixel, 1)" in generated
+    assert "imageAtomicAdd(unsignedCounters[1], pixel, 1u)" in generated
+    assert (
+        "layout(r32ui, binding = 2) uniform uimage2D unsignedCounters[2];"
+        not in generated
+    )
+
+
+def test_glsl_descriptor_array_storage_image_format_bindings_remap_overlapping_target_slots():
+    code = """
+    shader StorageImageExplicitFormatDescriptorArrayShader {
+        layout(set = 0, binding = 0, format = rgba32f) readwrite uniform image2D colorImages[2];
+        layout(set = 0, binding = 1, format = r32ui) readwrite uniform uimage2D labelImages[2];
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(colorImages[1], pixel);
+                uint label = imageLoad(labelImages[1], pixel);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "layout(rgba32f, binding = 0) uniform image2D colorImages[2];" in generated
+    assert "layout(r32ui, binding = 2) uniform uimage2D labelImages[2];" in generated
+    assert "vec4 color = imageLoad(colorImages[1], pixel);" in generated
+    assert "uint label = imageLoad(labelImages[1], pixel).x;" in generated
+    assert (
+        "layout(r32ui, binding = 1) uniform uimage2D labelImages[2];" not in generated
+    )
+
+
 def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
     code = """
     shader DescriptorSetOrderIndependentGLSL {

@@ -245,6 +245,7 @@ class SlangCodeGen:
         self.identifier_aliases = {}
         self.slang_resource_register_cursors = {}
         self.slang_used_resource_registers = {}
+        self.slang_source_sampler_register_assignments = {}
         self.slang_vk_binding_cursors = {}
         self.slang_used_vk_bindings = {}
         self.slang_global_declaration_signatures = {}
@@ -435,6 +436,7 @@ class SlangCodeGen:
             self.identifier_aliases = {}
             self.slang_resource_register_cursors = {}
             self.slang_used_resource_registers = {}
+            self.slang_source_sampler_register_assignments = {}
             self.slang_vk_binding_cursors = {}
             self.slang_used_vk_bindings = {}
             self.slang_global_declaration_signatures = {}
@@ -4875,6 +4877,16 @@ class SlangCodeGen:
             return register_space
         return 0
 
+    def slang_source_bound_sampler_uses_remappable_register(
+        self, register_prefix, explicit_binding, register_binding, resource_count
+    ):
+        return (
+            register_prefix == "s"
+            and explicit_binding is not None
+            and register_binding is None
+            and resource_count is not None
+        )
+
     def reserve_explicit_slang_resource_declarations(self, node):
         for declaration, type_name, forced_prefix in self.slang_resource_declarations(
             node
@@ -4938,6 +4950,40 @@ class SlangCodeGen:
             type_name, node, register_prefix or forced_register_prefix
         )
         space_key = self.slang_resource_register_space_key(explicit_set, register_space)
+        if self.slang_source_bound_sampler_uses_remappable_register(
+            prefix, explicit_binding, register_binding, resource_count
+        ):
+            descriptor_set = (
+                explicit_set if explicit_set is not None else register_space
+            )
+            descriptor_set = descriptor_set or 0
+            self.reserve_slang_vk_binding_range(
+                descriptor_set,
+                explicit_binding,
+                resource_count,
+                self.slang_resource_name(node),
+            )
+            assigned_binding = self.next_available_slang_resource_register(
+                prefix, space_key, resource_count, preferred=explicit_binding
+            )
+            if assigned_binding is None:
+                return
+            self.reserve_slang_resource_register_range(
+                prefix,
+                assigned_binding,
+                resource_count,
+                self.slang_resource_name(node),
+                space_key,
+            )
+            self.advance_slang_resource_register(
+                prefix, space_key, assigned_binding, resource_count
+            )
+            self.slang_source_sampler_register_assignments[id(node)] = (
+                assigned_binding,
+                space_key,
+            )
+            return
+
         if binding is not None and prefix is not None:
             self.reserve_slang_resource_register_range(
                 prefix,
@@ -4961,25 +5007,46 @@ class SlangCodeGen:
     def slang_resource_name(self, node):
         return getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
 
-    def next_available_slang_resource_register(self, register_prefix, space, count):
-        binding = self.slang_resource_register_cursors.get((register_prefix, space), 0)
+    def next_available_slang_resource_register(
+        self, register_prefix, space, count, preferred=None
+    ):
         ranges = self.slang_used_resource_registers.get((register_prefix, space), [])
-        while True:
-            end = None if count is None else binding + max(count, 1) - 1
-            conflict_end = None
-            for used_start, used_end, _used_name in ranges:
-                if not self.slang_resource_register_ranges_overlap(
-                    binding, end, used_start, used_end
-                ):
-                    continue
-                if used_end is None:
-                    return None
-                conflict_end = (
-                    used_end if conflict_end is None else max(conflict_end, used_end)
-                )
-            if conflict_end is None:
-                return binding
-            binding = conflict_end + 1
+        candidates = []
+        if preferred is not None:
+            candidates.append(preferred)
+        candidates.append(
+            self.slang_resource_register_cursors.get((register_prefix, space), 0)
+        )
+
+        for candidate in candidates:
+            binding = candidate
+            while True:
+                end = None if count is None else binding + max(count, 1) - 1
+                conflict_end = None
+                for used_start, used_end, _used_name in ranges:
+                    if not self.slang_resource_register_ranges_overlap(
+                        binding, end, used_start, used_end
+                    ):
+                        continue
+                    if used_end is None:
+                        return None
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+                if conflict_end is None:
+                    return binding
+                binding = conflict_end + 1
+
+    def assigned_slang_source_sampler_register(self, node, space_key):
+        assignment = self.slang_source_sampler_register_assignments.get(id(node))
+        if assignment is None:
+            return None
+        binding, assignment_space = assignment
+        if assignment_space != space_key:
+            return None
+        return binding
 
     def next_available_slang_resource_register_space(
         self, register_prefix, start_space, count
@@ -5162,14 +5229,38 @@ class SlangCodeGen:
             descriptor_set, register_space
         )
         resource_count = self.slang_resource_array_count(node, type_name)
+        source_bound_sampler_register = (
+            self.slang_source_bound_sampler_uses_remappable_register(
+                register_prefix, explicit_binding, register_binding, resource_count
+            )
+        )
 
-        if register_binding is None and explicit_binding is not None:
+        assigned_register = None
+        if source_bound_sampler_register:
+            assigned_register = self.assigned_slang_source_sampler_register(
+                node, space_key
+            )
+            if assigned_register is not None:
+                register_binding = assigned_register
+                register_binding_expr = str(assigned_register)
+
+        if (
+            register_binding is None
+            and explicit_binding is not None
+            and not source_bound_sampler_register
+        ):
             register_binding = explicit_binding
             register_binding_expr = explicit_binding_expr
 
         if register_binding is None and register_binding_expr is None and auto_assign:
+            preferred_register_binding = (
+                explicit_binding if source_bound_sampler_register else None
+            )
             register_binding = self.next_available_slang_resource_register(
-                register_prefix, space_key, resource_count
+                register_prefix,
+                space_key,
+                resource_count,
+                preferred=preferred_register_binding,
             )
             if register_binding is None:
                 if descriptor_set is not None or descriptor_set_expr is not None:

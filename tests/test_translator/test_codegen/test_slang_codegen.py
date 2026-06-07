@@ -10870,6 +10870,47 @@ def test_slang_vulkan_descriptor_arrays_do_not_reserve_adjacent_bindings():
     )
 
 
+def test_slang_sampler_descriptor_arrays_remap_overlapping_target_registers():
+    code = """
+    shader SlangMixedTextureCompareDescriptorArrayBindings {
+        sampler2DShadow shadowMaps[2] @set(0) @binding(3);
+        sampler linearSamplers[2] @set(0) @binding(5);
+        sampler shadowSamplers[2] @set(0) @binding(6);
+
+        float sampleShadow(int descriptor, vec2 uv, float depth) {
+            return textureCompare(
+                shadowMaps[descriptor],
+                shadowSamplers[descriptor],
+                uv,
+                depth
+            );
+        }
+
+        fragment {
+            vec4 main(vec2 uv, float depth) @ gl_FragColor {
+                float sampled = sampleShadow(1, uv, depth);
+                return vec4(sampled, sampled, sampled, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(5, 0)]] SamplerState linearSamplers[2] "
+        ": register(s5, space0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(6, 0)]] SamplerComparisonState shadowSamplers[2] "
+        ": register(s7, space0);" in generated_code
+    )
+    assert (
+        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)"
+        in (generated_code)
+    )
+
+
 def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
     code = """
     shader AutoResourceBindings {
@@ -12165,6 +12206,13 @@ def test_byte_address_interlocked_member_calls_reject_value_contexts():
             sampler2d overlap @binding(1);
             """,
             "t1 overlaps 'textures' t0-t1",
+        ),
+        (
+            """
+            sampler linearSamplers[2] @register(s5);
+            sampler shadowSamplers[2] @register(s6);
+            """,
+            "s6-s7 overlaps 'linearSamplers' s5-s6",
         ),
         (
             """

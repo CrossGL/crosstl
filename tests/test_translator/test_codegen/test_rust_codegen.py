@@ -18653,6 +18653,39 @@ def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_sampler_descriptor_array_source_bindings_do_not_expand_rust_ranges(tmp_path):
+    code = """
+    shader RustSamplerDescriptorArrayBindings {
+        sampler linearSamplers[2] @set(0) @binding(5);
+        sampler shadowSamplers[2] @set(0) @binding(6);
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=linearSamplers kind=sampler set=0 "
+        "binding=5 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=shadowSamplers kind=sampler set=0 "
+        "binding=6 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "resource linearSamplers is emitted as a compile-only placeholder static"
+        in generated_code
+    )
+    assert (
+        "resource shadowSamplers is emitted as a compile-only placeholder static"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen(
     tmp_path,
 ):
@@ -18790,6 +18823,20 @@ def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
 
     with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
         generate_code(parse_code(tokenize_code(overlapping_buffer_range)))
+
+    overlapping_native_sampler_range = """
+    shader DuplicateRustNativeSamplerRange {
+        @sampler(5) sampler linearSamplers[2];
+        @sampler(6) sampler shadowSamplers[2];
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(overlapping_native_sampler_range)))
 
 
 def test_explicit_storage_image_formats_map_to_rust_value_types_and_compile(tmp_path):

@@ -6401,6 +6401,31 @@ class TestHipCodeGen:
             "binding=6 binding_source=explicit" in hip_code
         )
 
+    def test_sampler_descriptor_array_source_bindings_do_not_expand_hip_ranges(self):
+        source_code = """
+        shader HipSamplerDescriptorArrayBindings {
+            sampler linearSamplers[2] @set(0) @binding(5);
+            sampler shadowSamplers[2] @set(0) @binding(6);
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=linearSamplers kind=sampler set=0 "
+            "binding=5 binding_source=explicit count=2" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=shadowSamplers kind=sampler set=0 "
+            "binding=6 binding_source=explicit count=2" in hip_code
+        )
+        assert "hipTextureObject_t linearSamplers[2];" in hip_code
+        assert "hipTextureObject_t shadowSamplers[2];" in hip_code
+
     def test_duplicate_resource_bindings_are_rejected_for_hip_codegen(self):
         duplicate_texture_binding = """
         shader DuplicateHipTextureBindings {
@@ -6435,6 +6460,22 @@ class TestHipCodeGen:
         with pytest.raises(ValueError, match="Conflicting HIP resource binding"):
             HipCodeGen().generate(
                 Parser(Lexer(overlapping_buffer_range).tokens).parse()
+            )
+
+        overlapping_native_sampler_range = """
+        shader DuplicateHipNativeSamplerRange {
+            @sampler(5) sampler linearSamplers[2];
+            @sampler(6) sampler shadowSamplers[2];
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting HIP resource binding"):
+            HipCodeGen().generate(
+                Parser(Lexer(overlapping_native_sampler_range).tokens).parse()
             )
 
     def test_forwarded_dynamic_resource_arrays_emit_hip_metadata_arguments(self):

@@ -2597,16 +2597,12 @@ class GLSLCodeGen:
                         continue
 
                 binding_namespace = "buffer binding"
-                explicit_binding = self.explicit_resource_binding_index(node)
-                resource_binding = (
-                    explicit_binding
-                    if explicit_binding is not None
-                    else self.next_available_resource_binding(
-                        used_resource_bindings,
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_count,
-                    )
+                resource_binding = self.opengl_resource_binding_for_declaration(
+                    node,
+                    used_resource_bindings,
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_count,
                 )
                 declaration = self.glsl_buffer_block_declaration(
                     node, vtype, var_name, resource_binding, array_suffix
@@ -2635,16 +2631,12 @@ class GLSLCodeGen:
                 self.sampler_variables.add(var_name)
                 if self.should_preserve_sampler_resource(var_name):
                     binding_namespace = "sampler binding"
-                    explicit_binding = self.explicit_resource_binding_index(node)
-                    resource_binding = (
-                        explicit_binding
-                        if explicit_binding is not None
-                        else self.next_available_resource_binding(
-                            used_resource_bindings,
-                            resource_binding_cursors,
-                            binding_namespace,
-                            resource_count,
-                        )
+                    resource_binding = self.opengl_resource_binding_for_declaration(
+                        node,
+                        used_resource_bindings,
+                        resource_binding_cursors,
+                        binding_namespace,
+                        resource_count,
                     )
                     self.reserve_resource_binding_range(
                         used_resource_bindings,
@@ -2671,16 +2663,12 @@ class GLSLCodeGen:
             if self.is_structured_buffer_type(vtype):
                 self.record_structured_buffer_access_metadata(var_name, vtype, node)
                 binding_namespace = "buffer binding"
-                explicit_binding = self.explicit_resource_binding_index(node)
-                resource_binding = (
-                    explicit_binding
-                    if explicit_binding is not None
-                    else self.next_available_resource_binding(
-                        used_resource_bindings,
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_count,
-                    )
+                resource_binding = self.opengl_resource_binding_for_declaration(
+                    node,
+                    used_resource_bindings,
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_count,
                 )
                 self.reserve_resource_binding_range(
                     used_resource_bindings,
@@ -2748,16 +2736,12 @@ class GLSLCodeGen:
                     if self.is_storage_image_type(vtype)
                     else "texture binding"
                 )
-                explicit_binding = self.explicit_resource_binding_index(node)
-                resource_binding = (
-                    explicit_binding
-                    if explicit_binding is not None
-                    else self.next_available_resource_binding(
-                        used_resource_bindings,
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_count,
-                    )
+                resource_binding = self.opengl_resource_binding_for_declaration(
+                    node,
+                    used_resource_bindings,
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_count,
                 )
                 self.reserve_resource_binding_range(
                     used_resource_bindings,
@@ -2780,17 +2764,13 @@ class GLSLCodeGen:
                     resource_count,
                 )
             elif self.is_layout_bound_struct_uniform(node, vtype):
-                explicit_binding = self.explicit_resource_binding_index(node)
                 binding_namespace = "uniform buffer binding"
-                resource_binding = (
-                    explicit_binding
-                    if explicit_binding is not None
-                    else self.next_available_resource_binding(
-                        used_resource_bindings,
-                        resource_binding_cursors,
-                        binding_namespace,
-                        resource_count,
-                    )
+                resource_binding = self.opengl_resource_binding_for_declaration(
+                    node,
+                    used_resource_bindings,
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_count,
                 )
                 self.reserve_resource_binding_range(
                     used_resource_bindings,
@@ -14601,11 +14581,24 @@ class GLSLCodeGen:
         return namespace, binding, resource_count, var_name
 
     def reserve_explicit_global_resource_bindings(self, global_vars, used_bindings):
+        used_source_bindings = {}
         for node in global_vars:
             metadata = self.global_resource_binding_metadata(node)
             if metadata is None:
                 continue
             namespace, binding, resource_count, var_name = metadata
+            source_binding = self.source_descriptor_binding_index(node)
+            if source_binding is not None:
+                self.reserve_resource_binding_range(
+                    used_source_bindings,
+                    "source descriptor",
+                    "descriptor binding",
+                    source_binding,
+                    1,
+                    var_name,
+                )
+            if self.should_remap_descriptor_array_target_binding(node, resource_count):
+                continue
             self.reserve_resource_binding_range(
                 used_bindings,
                 "OpenGL",
@@ -14623,6 +14616,14 @@ class GLSLCodeGen:
     ):
         count = max(count or 1, 1)
         binding = self.next_resource_binding(binding_cursors, namespace)
+        return self.next_available_resource_binding_from(
+            used_bindings, namespace, binding, count
+        )
+
+    def next_available_resource_binding_from(
+        self, used_bindings, namespace, binding, count
+    ):
+        count = max(count or 1, 1)
         ranges = used_bindings.get(namespace, [])
         while True:
             end = binding + count - 1
@@ -14637,6 +14638,20 @@ class GLSLCodeGen:
             if conflict_end is None:
                 return binding
             binding = conflict_end + 1
+
+    def opengl_resource_binding_for_declaration(
+        self, node, used_bindings, binding_cursors, namespace, count
+    ):
+        explicit_binding = self.explicit_resource_binding_index(node)
+        if explicit_binding is None:
+            return self.next_available_resource_binding(
+                used_bindings, binding_cursors, namespace, count
+            )
+        if self.should_remap_descriptor_array_target_binding(node, count):
+            return self.next_available_resource_binding_from(
+                used_bindings, namespace, explicit_binding, count
+            )
+        return explicit_binding
 
     def advance_resource_binding(self, binding_cursors, namespace, start, count):
         count = max(count or 1, 1)
@@ -15337,6 +15352,48 @@ class GLSLCodeGen:
             "Incompatible OpenGL resource register metadata for "
             f"'{node_name}': register {source} uses {actual_prefix}-register, "
             f"expected {expected_prefix}-register for {namespace}"
+        )
+
+    def has_descriptor_set_attribute(self, node):
+        if not hasattr(node, "attributes"):
+            return False
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() in {"set", "space"}:
+                return True
+        return False
+
+    def has_explicit_opengl_target_binding_attribute(self, node):
+        if not hasattr(node, "attributes"):
+            return False
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() in {
+                "buffer",
+                "register",
+                "sampler",
+                "texture",
+            }:
+                return True
+        return False
+
+    def source_descriptor_binding_index(self, node):
+        if not self.has_descriptor_set_attribute(node):
+            return None
+        choices = self.explicit_resource_binding_choices(node)
+        binding_choices = [
+            binding for attr_name, _, binding in choices if attr_name == "binding"
+        ]
+        if not binding_choices:
+            return None
+        self.explicit_resource_binding_index(node)
+        return binding_choices[0]
+
+    def should_remap_descriptor_array_target_binding(self, node, resource_count):
+        return (
+            resource_count > 1
+            and self.source_descriptor_binding_index(node) is not None
+            and not self.has_explicit_opengl_target_binding_attribute(node)
         )
 
     def invalid_resource_access_message(self, node, source):

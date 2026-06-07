@@ -17077,20 +17077,27 @@ class MetalCodeGen:
     def reserve_explicit_global_resource_bindings(
         self, global_vars, used_bindings, source_bindings
     ):
+        metadata_items = []
         for node in global_vars:
             metadata = self.global_resource_binding_metadata(node)
             if metadata is None:
                 continue
-            namespace, binding, resource_count, var_name = metadata
-            self.pre_reserve_explicit_resource_binding(
-                used_bindings,
-                source_bindings,
-                namespace,
-                binding,
-                resource_count,
-                var_name,
-                node,
-            )
+            metadata_items.append((node, metadata))
+
+        for descriptor_set in (None, 0):
+            for node, metadata in metadata_items:
+                if self.explicit_resource_set_index(node) != descriptor_set:
+                    continue
+                namespace, binding, resource_count, var_name = metadata
+                self.pre_reserve_explicit_resource_binding(
+                    used_bindings,
+                    source_bindings,
+                    namespace,
+                    binding,
+                    resource_count,
+                    var_name,
+                    node,
+                )
 
     def next_available_resource_binding(
         self, used_bindings, namespace, binding_index, count
@@ -17113,6 +17120,8 @@ class MetalCodeGen:
 
     def pre_reserve_cbuffer_bindings(self, used_bindings, source_bindings):
         for cbuffer in self.cbuffer_variables:
+            if self.explicit_resource_set_index(cbuffer) is not None:
+                continue
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
             )
@@ -17163,6 +17172,31 @@ class MetalCodeGen:
         descriptor_set = self.explicit_resource_set_index(node)
         if descriptor_set not in (None, 0):
             return None
+        if descriptor_set == 0:
+            self.reserve_source_resource_binding_range(
+                source_bindings,
+                namespace,
+                descriptor_set,
+                binding,
+                1,
+                name,
+            )
+            target_binding = self.next_available_resource_binding(
+                used_bindings,
+                namespace,
+                binding,
+                count,
+            )
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                namespace,
+                target_binding,
+                count,
+                name,
+            )
+            self.metal_resource_binding_indices_by_id[id(node)] = target_binding
+            return target_binding
         self.reserve_resource_binding_range(
             used_bindings,
             "Metal",
@@ -17197,6 +17231,7 @@ class MetalCodeGen:
             )
             return cached
 
+        requested_binding = binding
         descriptor_set = self.explicit_resource_set_index(node)
         if binding is None:
             binding = self.next_available_resource_binding(
@@ -17206,19 +17241,21 @@ class MetalCodeGen:
                 count,
             )
 
-        if descriptor_set not in (None, 0):
-            self.reserve_source_resource_binding_range(
-                source_bindings,
-                namespace,
-                descriptor_set,
-                binding,
-                count,
-                name,
-            )
+        if descriptor_set is not None:
+            if requested_binding is not None:
+                self.reserve_source_resource_binding_range(
+                    source_bindings,
+                    namespace,
+                    descriptor_set,
+                    requested_binding,
+                    1,
+                    name,
+                )
+            target_cursor = 0 if descriptor_set != 0 else binding
             target_binding = self.next_available_resource_binding(
                 used_bindings,
                 namespace,
-                0,
+                target_cursor,
                 count,
             )
         else:

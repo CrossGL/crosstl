@@ -3165,6 +3165,120 @@ def test_mojo_resource_array_binding_count_resolves_symbolic_constant():
     )
 
 
+def test_mojo_vulkan_texture_descriptor_arrays_remap_target_bindings():
+    code = """
+    shader MixedTextureCompareDescriptorArrayShader {
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 0) buffer vec4* values;
+        layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+        layout(set = 0, binding = 3) uniform sampler2DShadow shadowMaps[2];
+        layout(set = 0, binding = 5) sampler linearSamplers[2];
+        layout(set = 0, binding = 6) sampler shadowSamplers[2];
+
+        void main() {
+          vec4 color =
+              textureLod(colorMaps[0], linearSamplers[1], vec2(0.25, 0.75), 1.0);
+          float visibility =
+              textureCompare(shadowMaps[1], shadowSamplers[0], vec2(0.5, 0.5), 0.25);
+          values[0] = color + vec4(visibility, 0.0, 0.0, 1.0);
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorMaps kind=texture set=0 "
+        "binding=2 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=shadowMaps kind=texture set=0 "
+        "binding=4 binding_source=explicit count=2 source_binding=3" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=linearSamplers kind=sampler set=0 "
+        "binding=5 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=shadowSamplers kind=sampler set=0 "
+        "binding=7 binding_source=explicit count=2 source_binding=6" in generated_code
+    )
+    assert "sample_lod_sampler(colorMaps[0], linearSamplers[1]" in generated_code
+    assert "_crossgl_texture_compare_sampler_Texture2DShadow" in generated_code
+    assert "shadowMaps[1], shadowSamplers[0]" in generated_code
+
+
+def test_mojo_vulkan_storage_image_atomic_descriptor_arrays_remap_target_bindings():
+    code = """
+    shader StorageImageAtomicDescriptorArrayShader {
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D signedCounters[2];
+        layout(set = 0, binding = 2, format = r32ui) readwrite uniform uimage2D unsignedCounters[2];
+
+        void main() {
+          ivec2 pixel = ivec2(0, 0);
+          int signedOld = imageAtomicAdd(signedCounters[0], pixel, 1);
+          uint unsignedOld = imageAtomicAdd(unsignedCounters[1], pixel, 1u);
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=signedCounters kind=image set=0 "
+        "binding=1 binding_source=explicit count=2 access=readwrite" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=unsignedCounters kind=image set=0 "
+        "binding=3 binding_source=explicit count=2 source_binding=2 "
+        "access=readwrite" in generated_code
+    )
+    assert "_crossgl_image_atomic_add_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+
+
+def test_mojo_vulkan_explicit_format_image_descriptor_arrays_remap_target_bindings():
+    code = """
+    shader StorageImageExplicitFormatDescriptorArrayShader {
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 0, format = rgba8) readwrite uniform image2D colorImages[2];
+        layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D labelImages[2];
+
+        void main() {
+          ivec2 pixel = ivec2(0, 0);
+          vec4 color = imageLoad(colorImages[0], pixel);
+          ivec4 label = imageLoad(labelImages[1], pixel);
+          imageStore(colorImages[0], pixel, color);
+          imageStore(labelImages[1], pixel, label);
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorImages kind=image set=0 "
+        "binding=0 binding_source=explicit count=2 access=readwrite" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=labelImages kind=image set=0 "
+        "binding=2 binding_source=explicit count=2 source_binding=1 "
+        "access=readwrite" in generated_code
+    )
+    assert "image_load(colorImages[0], pixel)" in generated_code
+    assert "image_load(labelImages[1], pixel)" in generated_code
+    assert "image_store(labelImages[1], pixel, label)" in generated_code
+    assert "struct IImage2DInt4:" in generated_code
+    assert (
+        "fn image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.int32, 4]:" in generated_code
+    )
+
+
 def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers():
     code = """
     RWTexture2D<float4> outColor : register(u0, space2);

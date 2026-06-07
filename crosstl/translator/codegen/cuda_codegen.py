@@ -9703,6 +9703,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return ",".join(values)
         return None
 
+    def cuda_explicit_resource_binding_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return attr_name
+        return None
+
     def cuda_resource_base_type_and_count(self, type_name):
         type_name = self.type_name_string(type_name)
         if not type_name:
@@ -9760,6 +9780,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return "buffer"
         return kind
 
+    def cuda_resource_binding_validation_count(self, node, resource_kind, count):
+        if (
+            resource_kind == "sampler"
+            and count != 1
+            and self.cuda_explicit_resource_binding_attribute(node) == "binding"
+        ):
+            return 1
+        return count
+
     def cuda_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.cuda_used_resource_bindings.get(
@@ -9803,21 +9832,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return ""
 
         _base_type, count = self.cuda_resource_base_type_and_count(type_name)
+        validation_count = self.cuda_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.cuda_resource_binding_namespace(resource_kind)
         set_index = self.explicit_cuda_resource_set_index(node)
         binding = self.explicit_cuda_resource_binding_index(node)
         if binding is None:
             binding = self.next_available_cuda_resource_binding(
-                namespace, set_index, count
+                namespace, set_index, validation_count
             )
             binding_source = "automatic"
             self.reserve_cuda_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
         else:
             binding_source = "explicit"
             self.reserve_cuda_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
 
         parts = [
@@ -9853,9 +9885,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if not name or resource_kind is None or binding is None:
             return
         _base_type, count = self.cuda_resource_base_type_and_count(type_name)
+        validation_count = self.cuda_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.cuda_resource_binding_namespace(resource_kind)
         set_index = self.explicit_cuda_resource_set_index(node)
-        self.reserve_cuda_resource_binding(namespace, set_index, binding, count, name)
+        self.reserve_cuda_resource_binding(
+            namespace, set_index, binding, validation_count, name
+        )
 
     def reserve_explicit_cuda_resource_bindings(self, ast):
         for node in getattr(ast, "global_variables", []) or []:

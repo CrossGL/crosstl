@@ -4759,6 +4759,96 @@ def test_metal_descriptor_sets_pack_into_free_flat_resource_slots():
     assert "detailMap.sample(shadowSampler, uv)" in generated_code
 
 
+def test_metal_mixed_texture_compare_descriptor_arrays_remap_flat_slots():
+    code = """
+    shader MixedTextureCompareDescriptorArrayShader {
+        fragment {
+            layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+            layout(set = 0, binding = 3) uniform sampler2DShadow shadowMaps[2];
+            layout(set = 0, binding = 6) sampler linearSamplers[2];
+            layout(set = 0, binding = 7) sampler shadowSamplers[2];
+
+            vec4 main(vec2 uv @TEXCOORD0, int layer @TEXCOORD1) @gl_FragColor {
+                float shadow = textureCompare(
+                    shadowMaps[layer],
+                    shadowSamplers[layer],
+                    uv,
+                    0.5
+                );
+                return texture(colorMaps[layer], linearSamplers[layer], uv) + vec4(shadow);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "array<texture2d<float>, 2> colorMaps [[texture(2)]]" in generated_code
+    assert "array<depth2d<float>, 2> shadowMaps [[texture(4)]]" in generated_code
+    assert "array<sampler, 2> linearSamplers [[sampler(6)]]" in generated_code
+    assert "array<sampler, 2> shadowSamplers [[sampler(8)]]" in generated_code
+
+
+def test_metal_storage_image_atomic_descriptor_arrays_remap_flat_slots():
+    code = """
+    shader StorageImageAtomicDescriptorArrayShader {
+        compute {
+            layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D signedCounters[2];
+            layout(set = 0, binding = 2, format = r32ui) readwrite uniform uimage2D unsignedCounters[2];
+
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                imageAtomicAdd(signedCounters[0], ivec2(tid.xy), 1);
+                imageAtomicAdd(unsignedCounters[1], ivec2(tid.xy), 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert (
+        "array<texture2d<int, access::read_write>, 2> signedCounters [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<uint, access::read_write>, 2> unsignedCounters [[texture(3)]]"
+        in generated_code
+    )
+
+
+def test_metal_storage_image_explicit_format_descriptor_arrays_remap_flat_slots():
+    code = """
+    shader StorageImageExplicitFormatDescriptorArrayShader {
+        compute {
+            layout(set = 0, binding = 0, format = rgba32f) readwrite uniform image2D colorImages[2];
+            layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D labelImages[2];
+
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                imageStore(colorImages[0], ivec2(tid.xy), vec4(1.0));
+                imageStore(labelImages[1], ivec2(tid.xy), 1);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert (
+        "array<texture2d<float, access::read_write>, 2> colorImages [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<int, access::read_write>, 2> labelImages [[texture(2)]]"
+        in generated_code
+    )
+
+
 def test_metal_auto_bindings_skip_later_explicit_global_bindings():
     code = """
     shader LateExplicitBindingsMetal {
