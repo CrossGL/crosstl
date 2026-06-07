@@ -151,14 +151,32 @@ class RustCodeGen:
             "dmat4x4": "Mat4<f64>",
             # Texture Types
             "sampler1D": "Texture1D<f32>",
+            "isampler1D": "Texture1D<i32>",
+            "usampler1D": "Texture1D<u32>",
             "sampler1DArray": "Texture1DArray<f32>",
+            "isampler1DArray": "Texture1DArray<i32>",
+            "usampler1DArray": "Texture1DArray<u32>",
             "sampler2D": "Texture2D<f32>",
+            "isampler2D": "Texture2D<i32>",
+            "usampler2D": "Texture2D<u32>",
             "sampler2DArray": "Texture2DArray<f32>",
+            "isampler2DArray": "Texture2DArray<i32>",
+            "usampler2DArray": "Texture2DArray<u32>",
             "sampler3D": "Texture3D<f32>",
+            "isampler3D": "Texture3D<i32>",
+            "usampler3D": "Texture3D<u32>",
             "samplerCube": "TextureCube<f32>",
+            "isamplerCube": "TextureCube<i32>",
+            "usamplerCube": "TextureCube<u32>",
             "samplerCubeArray": "TextureCubeArray<f32>",
+            "isamplerCubeArray": "TextureCubeArray<i32>",
+            "usamplerCubeArray": "TextureCubeArray<u32>",
             "sampler2DMS": "Texture2DMS<f32>",
+            "isampler2DMS": "Texture2DMS<i32>",
+            "usampler2DMS": "Texture2DMS<u32>",
             "sampler2DMSArray": "Texture2DMSArray<f32>",
+            "isampler2DMSArray": "Texture2DMSArray<i32>",
+            "usampler2DMSArray": "Texture2DMSArray<u32>",
             "sampler2DShadow": "DepthTexture2D<f32>",
             "sampler2DArrayShadow": "DepthTexture2DArray<f32>",
             "samplerCubeShadow": "DepthTextureCube<f32>",
@@ -9256,9 +9274,15 @@ class RustCodeGen:
         if member == "GetDimensions":
             return "void"
         if member in {"Sample", "sample", "texture"}:
-            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+            return (
+                "float"
+                if self.is_shadow_texture_type(texture_type)
+                else self.texture_sample_result_type(texture_type)
+            )
+        if str(member).startswith("Gather"):
+            return self.texture_gather_result_type(texture_type)
         if member in self.rust_hlsl_texture_member_operations():
-            return "vec4"
+            return self.texture_sample_result_type(texture_type)
         return None
 
     def generate_texture_helper_call(self, helper_name, args):
@@ -11940,7 +11964,11 @@ class RustCodeGen:
             return self.constructor_result_type(expr)
         if isinstance(expr, TextureNode):
             texture_type = self.expression_result_type(expr.texture_expr)
-            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+            return (
+                "float"
+                if self.is_shadow_texture_type(texture_type)
+                else self.texture_sample_result_type(texture_type)
+            )
         if isinstance(expr, TextureOpNode):
             operation = getattr(expr, "operation", "")
             if operation in {
@@ -11981,7 +12009,11 @@ class RustCodeGen:
                 self.is_shadow_texture_type(texture_type)
             ):
                 return "float"
-            return "vec4"
+            if str(operation).startswith("textureGather") or str(operation).startswith(
+                "Gather"
+            ):
+                return self.texture_gather_result_type(texture_type)
+            return self.texture_sample_result_type(texture_type)
         if isinstance(expr, WaveOpNode):
             return self.wave_op_result_type(
                 getattr(expr, "operation", ""),
@@ -12209,6 +12241,12 @@ class RustCodeGen:
             "sample_projected_grad_offset_sampler",
             "texel_fetch",
             "texel_fetch_offset",
+        }:
+            if arg_types:
+                return self.texture_sample_result_type(arg_types[0])
+            return "vec4"
+
+        if mapped_name in {
             "texture_gather",
             "texture_gather_sampler",
             "texture_gather_component",
@@ -12222,6 +12260,8 @@ class RustCodeGen:
             "texture_gather_offsets_component",
             "texture_gather_offsets_component_sampler",
         }:
+            if arg_types:
+                return self.texture_gather_result_type(arg_types[0])
             return "vec4"
 
         if mapped_name.startswith("sample_shadow"):
@@ -12482,6 +12522,74 @@ class RustCodeGen:
         }:
             return "ivec3"
         return "ivec2"
+
+    def texture_sample_result_type(self, texture_type):
+        payload_type = self.texture_payload_type(texture_type)
+        if payload_type is None:
+            return "vec4"
+        return self.texture_payload_sample_result_type(payload_type)
+
+    def texture_gather_result_type(self, texture_type):
+        payload_type = self.texture_payload_type(texture_type)
+        if payload_type is None:
+            return "vec4"
+        return self.texture_payload_component_vector_result_type(payload_type)
+
+    def texture_payload_type(self, texture_type):
+        texture_type = str(texture_type or "")
+        mapped_type = self.unqualify_runtime_type_name(self.map_type(texture_type))
+        texture_base, texture_args = self.generic_type_parts(mapped_type)
+        texture_base = texture_base.rsplit("::", 1)[-1]
+        if texture_base not in {
+            "Texture1D",
+            "Texture1DArray",
+            "Texture2D",
+            "Texture2DArray",
+            "Texture3D",
+            "TextureCube",
+            "TextureCubeArray",
+            "Texture2DMS",
+            "Texture2DMSArray",
+            "DepthTexture2D",
+            "DepthTexture2DArray",
+            "DepthTextureCube",
+            "DepthTextureCubeArray",
+        }:
+            return None
+        if not texture_args:
+            return None
+        return texture_args[0]
+
+    def texture_payload_sample_result_type(self, payload_type):
+        payload_type = self.unqualify_runtime_type_name(self.map_type(payload_type))
+        vector_info = self.vector_type_info(payload_type)
+        if vector_info is not None:
+            return (
+                self.vector_type_for_components(
+                    vector_info["component_type"],
+                    vector_info["size"],
+                )
+                or "vec4"
+            )
+
+        scalar_type = self.normalize_scalar_type(payload_type)
+        if scalar_type is None:
+            return "vec4"
+        return self.vector_type_for_components(scalar_type, 4) or "vec4"
+
+    def texture_payload_component_vector_result_type(self, payload_type):
+        payload_type = self.unqualify_runtime_type_name(self.map_type(payload_type))
+        vector_info = self.vector_type_info(payload_type)
+        if vector_info is not None:
+            return (
+                self.vector_type_for_components(vector_info["component_type"], 4)
+                or "vec4"
+            )
+
+        scalar_type = self.normalize_scalar_type(payload_type)
+        if scalar_type is None:
+            return "vec4"
+        return self.vector_type_for_components(scalar_type, 4) or "vec4"
 
     def texture_dimensions_result_type(self, texture_type):
         size_type = self.texture_size_result_type(texture_type)

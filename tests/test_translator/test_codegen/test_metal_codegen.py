@@ -17182,6 +17182,56 @@ def test_metal_default_integer_storage_image_vector_load_store_from_compiler_fix
     assert "imageStore(" not in generated_code
 
 
+def test_metal_explicit_r32_image_formats_allow_vector_fixture_contexts():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/StorageImageExplicitFormatShader.cgl.
+    shader = """
+    shader StorageImageExplicitFormatShader {
+        compute {
+            layout(local_size_x = 2, local_size_y = 2, local_size_z = 1) in;
+            layout(set = 0, binding = 0, format = r32f) readonly uniform image2D readColor;
+            layout(set = 0, binding = 1, format = r32i) readonly uniform iimage2D readLabel;
+            layout(set = 0, binding = 2, format = r32ui) readonly uniform uimage2D readMask;
+            layout(set = 0, binding = 3, format = r32ui) writeonly uniform uimage2D writeMask;
+            layout(set = 0, binding = 4) buffer vec4* colors;
+            layout(set = 0, binding = 5) buffer ivec4* labels;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(readColor, pixel);
+                ivec4 label = imageLoad(readLabel, pixel);
+                uvec4 mask = imageLoad(readMask, pixel);
+                imageStore(writeMask, pixel, mask);
+                colors[0] = color;
+                labels[0] = label;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "texture2d<float, access::read> readColor [[texture(0)]]" in generated_code
+    assert "texture2d<int, access::read> readLabel [[texture(1)]]" in generated_code
+    assert "texture2d<uint, access::read> readMask [[texture(2)]]" in generated_code
+    assert "texture2d<uint, access::write> writeMask [[texture(3)]]" in generated_code
+    assert "float4 color = readColor.read(uint2(pixel));" in generated_code
+    assert "int4 label = readLabel.read(uint2(pixel));" in generated_code
+    assert "uint4 mask = readMask.read(uint2(pixel));" in generated_code
+    assert "writeMask.write(mask, uint2(pixel));" in generated_code
+    assert "colors[0] = color;" in generated_code
+    assert "labels[0] = label;" in generated_code
+    assert "readColor.read(uint2(pixel)).x" not in generated_code
+    assert "readLabel.read(uint2(pixel)).x" not in generated_code
+    assert "readMask.read(uint2(pixel)).x" not in generated_code
+    assert "writeMask.write(uint4(mask)" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_metal_rg_image_scalar_and_vector_load_store():
     shader = """
     shader RGImageScalarVector {
@@ -20819,6 +20869,49 @@ def test_metal_array_texture_types_split_coordinates_and_layers():
     assert "tex.sample_compare(s, direction, depth)" in generated_code
     assert ".sample(s, uvLayer)" not in generated_code
     assert ".sample_compare(s, uvLayer, depth)" not in generated_code
+
+
+def test_metal_integer_texture_lod_resources_register_as_sampled_textures():
+    shader = """
+    shader VulkanIntegerTextureSamplerLodFixtures {
+        isampler2D labelMap;
+        usampler2DArray labelAtlas;
+        sampler nearestSampler;
+        buffer ivec4* signedLabels;
+        buffer uvec4* unsignedLabels;
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5);
+                vec3 uvLayer = vec3(0.5, 0.5, 0.0);
+                signedLabels[0] = textureLod(labelMap, nearestSampler, uv, 0.0);
+                unsignedLabels[0] = textureLod(labelAtlas, nearestSampler, uvLayer, 1.0);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "texture2d<int> labelMap [[texture(0)]]" in generated_code
+    assert "texture2d_array<uint> labelAtlas [[texture(1)]]" in generated_code
+    assert "sampler nearestSampler [[sampler(0)]]" in generated_code
+    assert (
+        "device int4* signedLabels [[buffer(0)]], device uint4* unsignedLabels [[buffer(1)]]"
+        in generated_code
+    )
+    assert (
+        "signedLabels[0] = labelMap.sample(nearestSampler, uv, level(0.0));"
+        in generated_code
+    )
+    assert (
+        "unsignedLabels[0] = labelAtlas.sample(nearestSampler, uvLayer.xy, uint(uvLayer.z), level(1.0));"
+        in generated_code
+    )
+    assert "textureLod(" not in generated_code
 
 
 def test_metal_cube_array_and_multisample_texture_types():

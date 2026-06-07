@@ -1461,6 +1461,119 @@ def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
     assert "imageStore(" not in generated_code
 
 
+def test_hlsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/StorageImageExplicitFormatShader.cgl.
+    shader = """
+    shader StorageImageExplicitFormatShader {
+        compute {
+            layout(local_size_x = 2, local_size_y = 2, local_size_z = 1) in;
+            layout(set = 0, binding = 0, format = r32f) readonly uniform image2D readColor;
+            layout(set = 0, binding = 1, format = r32i) readonly uniform iimage2D readLabel;
+            layout(set = 0, binding = 2, format = r32ui) readonly uniform uimage2D readMask;
+            layout(set = 0, binding = 3, format = r32ui) writeonly uniform uimage2D writeMask;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(readColor, pixel);
+                ivec4 label = imageLoad(readLabel, pixel);
+                uvec4 mask = imageLoad(readMask, pixel);
+                imageStore(writeMask, pixel, mask);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWTexture2D<float> readColor : register(u0);" in generated_code
+    assert "RWTexture2D<int> readLabel : register(u1);" in generated_code
+    assert "RWTexture2D<uint> readMask : register(u2);" in generated_code
+    assert "RWTexture2D<uint> writeMask : register(u3);" in generated_code
+    assert "float4 color = ((float4)(readColor[pixel]));" in generated_code
+    assert "int4 label = ((int4)(readLabel[pixel]));" in generated_code
+    assert "uint4 mask = ((uint4)(readMask[pixel]));" in generated_code
+    assert "writeMask[pixel] = (mask).x" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_hlsl_integer_texture_lod_resources_from_compiler_fixtures():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/VulkanIntegerTextureSamplerLodShader.cgl and
+    # tests/fixtures/VulkanIntegerTextureArraySamplerLodShader.cgl.
+    shader = """
+    shader VulkanIntegerTextureSamplerLodShader {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer ivec4* values;
+            layout(set = 0, binding = 1) buffer uvec4* masks;
+            layout(set = 0, binding = 2) uniform isampler2D labelMap;
+            layout(set = 0, binding = 3) uniform usamplerCube maskMap;
+            layout(set = 0, binding = 4) uniform isampler2DArray labelAtlas;
+            layout(set = 0, binding = 5) uniform usamplerCubeArray maskCubes;
+            layout(set = 0, binding = 6) sampler labelSampler;
+            layout(set = 0, binding = 7) sampler maskSampler;
+
+            void main() {
+                ivec4 label = textureLod(
+                    labelMap,
+                    labelSampler,
+                    vec2(0.5, 0.5),
+                    0.0
+                );
+                uvec4 mask = textureLod(
+                    maskMap,
+                    maskSampler,
+                    vec3(0.0, 1.0, 0.0),
+                    0.0
+                );
+                ivec4 arrayLabel = textureLod(
+                    labelAtlas,
+                    labelSampler,
+                    vec3(0.5, 0.5, 1.0),
+                    0.0
+                );
+                uvec4 arrayMask = textureLod(
+                    maskCubes,
+                    maskSampler,
+                    vec4(0.0, 1.0, 0.0, 2.0),
+                    0.0
+                );
+                values[0] = label + arrayLabel;
+                masks[0] = mask + arrayMask;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "Texture2D<int4> labelMap : register(t2);" in generated_code
+    assert "TextureCube<uint4> maskMap : register(t3);" in generated_code
+    assert "Texture2DArray<int4> labelAtlas : register(t4);" in generated_code
+    assert "TextureCubeArray<uint4> maskCubes : register(t5);" in generated_code
+    assert "SamplerState labelSampler : register(s6);" in generated_code
+    assert "SamplerState maskSampler : register(s7);" in generated_code
+    assert (
+        "int4 label = labelMap.SampleLevel(labelSampler, " "float2(0.5, 0.5), 0.0);"
+    ) in generated_code
+    assert (
+        "uint4 mask = maskMap.SampleLevel(maskSampler, " "float3(0.0, 1.0, 0.0), 0.0);"
+    ) in generated_code
+    assert (
+        "int4 arrayLabel = labelAtlas.SampleLevel(labelSampler, "
+        "float3(0.5, 0.5, 1.0), 0.0);"
+    ) in generated_code
+    assert (
+        "uint4 arrayMask = maskCubes.SampleLevel(maskSampler, "
+        "float4(0.0, 1.0, 0.0, 2.0), 0.0);"
+    ) in generated_code
+    assert "textureLod(" not in generated_code
+
+
 def test_hlsl_cbuffer_mixed_member_types():
     shader = """
     shader MixedCbufferMembers {

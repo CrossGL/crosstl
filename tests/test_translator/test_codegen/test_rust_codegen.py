@@ -2443,20 +2443,110 @@ mod gpu {
     #[derive(Debug, Clone, Copy, Default)]
     pub struct RwByteAddressBuffer;
 
-    pub trait TextureLike {}
-    impl<T> TextureLike for Texture1D<T> {}
-    impl<T> TextureLike for Texture1DArray<T> {}
-    impl<T> TextureLike for Texture2D<T> {}
-    impl<T> TextureLike for Texture2DArray<T> {}
-    impl<T> TextureLike for Texture3D<T> {}
-    impl<T> TextureLike for TextureCube<T> {}
-    impl<T> TextureLike for TextureCubeArray<T> {}
-    impl<T> TextureLike for Texture2DMS<T> {}
-    impl<T> TextureLike for Texture2DMSArray<T> {}
-    impl<T> TextureLike for DepthTexture2D<T> {}
-    impl<T> TextureLike for DepthTexture2DArray<T> {}
-    impl<T> TextureLike for DepthTextureCube<T> {}
-    impl<T> TextureLike for DepthTextureCubeArray<T> {}
+    pub trait SampledTexturePayload {
+        type Sample: Default;
+        type Gather: Default;
+    }
+
+    impl SampledTexturePayload for f32 {
+        type Sample = Vec4<f32>;
+        type Gather = Vec4<f32>;
+    }
+
+    impl SampledTexturePayload for i32 {
+        type Sample = Vec4<i32>;
+        type Gather = Vec4<i32>;
+    }
+
+    impl SampledTexturePayload for u32 {
+        type Sample = Vec4<u32>;
+        type Gather = Vec4<u32>;
+    }
+
+    impl<T: Default> SampledTexturePayload for Vec2<T> {
+        type Sample = Vec2<T>;
+        type Gather = Vec4<T>;
+    }
+
+    impl<T: Default> SampledTexturePayload for Vec3<T> {
+        type Sample = Vec3<T>;
+        type Gather = Vec4<T>;
+    }
+
+    impl<T: Default> SampledTexturePayload for Vec4<T> {
+        type Sample = Vec4<T>;
+        type Gather = Vec4<T>;
+    }
+
+    pub trait TextureLike {
+        type Sample: Default;
+        type Gather: Default;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture1D<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture1DArray<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture2D<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture2DArray<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture3D<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for TextureCube<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for TextureCubeArray<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture2DMS<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for Texture2DMSArray<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for DepthTexture2D<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for DepthTexture2DArray<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for DepthTextureCube<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
+
+    impl<T: SampledTexturePayload> TextureLike for DepthTextureCubeArray<T> {
+        type Sample = <T as SampledTexturePayload>::Sample;
+        type Gather = <T as SampledTexturePayload>::Gather;
+    }
 
     pub trait ShadowTextureLike {}
     impl<T> ShadowTextureLike for DepthTexture2D<T> {}
@@ -2498,36 +2588,36 @@ mod gpu {
     impl SampleCoord for Vec3<f32> {}
     impl SampleCoord for Vec4<f32> {}
 
-    pub fn sample<Texture, Coord>(_texture: Texture, _coord: Coord) -> Vec4<f32>
+    pub fn sample<Texture, Coord>(_texture: Texture, _coord: Coord) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_bias<Texture, Coord, Bias>(
         _texture: Texture,
         _coord: Coord,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_sampler<Texture, SamplerState, Coord>(
         _texture: Texture,
         _sampler: SamplerState,
         _coord: Coord,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_bias_sampler<Texture, SamplerState, Coord, Bias>(
@@ -2535,12 +2625,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_shadow<Texture, Coord>(_texture: Texture, _coord: Coord) -> f32
@@ -2592,12 +2682,12 @@ mod gpu {
         _texture: Texture,
         _coord: Coord,
         _lod: Lod,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_lod_sampler<Texture, SamplerState, Coord, Lod>(
@@ -2605,12 +2695,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _lod: Lod,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_lod_offset<Texture, Coord, Lod, Offset>(
@@ -2618,12 +2708,12 @@ mod gpu {
         _coord: Coord,
         _lod: Lod,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_lod_offset_sampler<Texture, SamplerState, Coord, Lod, Offset>(
@@ -2632,12 +2722,12 @@ mod gpu {
         _coord: Coord,
         _lod: Lod,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_grad<Texture, Coord, Grad>(
@@ -2645,12 +2735,12 @@ mod gpu {
         _coord: Coord,
         _ddx: Grad,
         _ddy: Grad,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_grad_sampler<Texture, SamplerState, Coord, Grad>(
@@ -2659,12 +2749,12 @@ mod gpu {
         _coord: Coord,
         _ddx: Grad,
         _ddy: Grad,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_grad_offset<Texture, Coord, Grad, Offset>(
@@ -2673,12 +2763,12 @@ mod gpu {
         _ddx: Grad,
         _ddy: Grad,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_grad_offset_sampler<Texture, SamplerState, Coord, Grad, Offset>(
@@ -2688,24 +2778,24 @@ mod gpu {
         _ddx: Grad,
         _ddy: Grad,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_offset<Texture, Coord, Offset>(
         _texture: Texture,
         _coord: Coord,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_offset_bias<Texture, Coord, Offset, Bias>(
@@ -2713,12 +2803,12 @@ mod gpu {
         _coord: Coord,
         _offset: Offset,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_offset_sampler<Texture, SamplerState, Coord, Offset>(
@@ -2726,12 +2816,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_offset_bias_sampler<Texture, SamplerState, Coord, Offset, Bias>(
@@ -2740,47 +2830,47 @@ mod gpu {
         _coord: Coord,
         _offset: Offset,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected<Texture, Coord>(
         _texture: Texture,
         _coord: Coord,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_bias<Texture, Coord, Bias>(
         _texture: Texture,
         _coord: Coord,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_sampler<Texture, SamplerState, Coord>(
         _texture: Texture,
         _sampler: SamplerState,
         _coord: Coord,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_bias_sampler<Texture, SamplerState, Coord, Bias>(
@@ -2788,24 +2878,24 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_lod<Texture, Coord, Lod>(
         _texture: Texture,
         _coord: Coord,
         _lod: Lod,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_lod_sampler<Texture, SamplerState, Coord, Lod>(
@@ -2813,12 +2903,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _lod: Lod,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_grad<Texture, Coord, Grad>(
@@ -2826,12 +2916,12 @@ mod gpu {
         _coord: Coord,
         _ddx: Grad,
         _ddy: Grad,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_grad_sampler<Texture, SamplerState, Coord, Grad>(
@@ -2840,24 +2930,24 @@ mod gpu {
         _coord: Coord,
         _ddx: Grad,
         _ddy: Grad,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_offset<Texture, Coord, Offset>(
         _texture: Texture,
         _coord: Coord,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_offset_bias<Texture, Coord, Offset, Bias>(
@@ -2865,12 +2955,12 @@ mod gpu {
         _coord: Coord,
         _offset: Offset,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_offset_sampler<Texture, SamplerState, Coord, Offset>(
@@ -2878,12 +2968,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_offset_bias_sampler<Texture, SamplerState, Coord, Offset, Bias>(
@@ -2892,12 +2982,12 @@ mod gpu {
         _coord: Coord,
         _offset: Offset,
         _bias: Bias,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_lod_offset<Texture, Coord, Lod, Offset>(
@@ -2905,12 +2995,12 @@ mod gpu {
         _coord: Coord,
         _lod: Lod,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_lod_offset_sampler<Texture, SamplerState, Coord, Lod, Offset>(
@@ -2919,12 +3009,12 @@ mod gpu {
         _coord: Coord,
         _lod: Lod,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_grad_offset<Texture, Coord, Grad, Offset>(
@@ -2933,12 +3023,12 @@ mod gpu {
         _ddx: Grad,
         _ddy: Grad,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn sample_projected_grad_offset_sampler<Texture, SamplerState, Coord, Grad, Offset>(
@@ -2948,23 +3038,23 @@ mod gpu {
         _ddx: Grad,
         _ddy: Grad,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texel_fetch<Texture, Coord, Lod>(
         _texture: Texture,
         _coord: Coord,
         _lod: Lod,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texel_fetch_offset<Texture, Coord, Lod, Offset>(
@@ -2972,11 +3062,11 @@ mod gpu {
         _coord: Coord,
         _lod: Lod,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Sample
     where
         Texture: TextureLike,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_size<Texture, Result>(_texture: Texture) -> Result
@@ -3059,36 +3149,36 @@ mod gpu {
     pub fn texture_gather<Texture, Coord>(
         _texture: Texture,
         _coord: Coord,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_sampler<Texture, SamplerState, Coord>(
         _texture: Texture,
         _sampler: SamplerState,
         _coord: Coord,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_component<Texture, Coord, Component>(
         _texture: Texture,
         _coord: Coord,
         _component: Component,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_component_sampler<Texture, SamplerState, Coord, Component>(
@@ -3096,24 +3186,24 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _component: Component,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offset<Texture, Coord, Offset>(
         _texture: Texture,
         _coord: Coord,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offset_sampler<Texture, SamplerState, Coord, Offset>(
@@ -3121,12 +3211,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _offset: Offset,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offset_component<Texture, Coord, Offset, Component>(
@@ -3134,12 +3224,12 @@ mod gpu {
         _coord: Coord,
         _offset: Offset,
         _component: Component,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offset_component_sampler<Texture, SamplerState, Coord, Offset, Component>(
@@ -3148,24 +3238,24 @@ mod gpu {
         _coord: Coord,
         _offset: Offset,
         _component: Component,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offsets<Texture, Coord, Offsets>(
         _texture: Texture,
         _coord: Coord,
         _offsets: Offsets,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offsets_sampler<Texture, SamplerState, Coord, Offsets>(
@@ -3173,12 +3263,12 @@ mod gpu {
         _sampler: SamplerState,
         _coord: Coord,
         _offsets: Offsets,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offsets_component<Texture, Coord, Offsets, Component>(
@@ -3186,12 +3276,12 @@ mod gpu {
         _coord: Coord,
         _offsets: Offsets,
         _component: Component,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_gather_offsets_component_sampler<Texture, SamplerState, Coord, Offsets, Component>(
@@ -3200,12 +3290,12 @@ mod gpu {
         _coord: Coord,
         _offsets: Offsets,
         _component: Component,
-    ) -> Vec4<f32>
+    ) -> <Texture as TextureLike>::Gather
     where
         Texture: TextureLike,
         Coord: SampleCoord,
     {
-        Vec4::default()
+        Default::default()
     }
 
     pub fn texture_compare<Texture, Coord, Compare>(
@@ -17076,6 +17166,89 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
     assert "textureLod" not in generated_code
     assert "textureGrad" not in generated_code
     assert "textureOffset" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_integer_texture_lod_sampler_helpers_preserve_integer_samples_and_compile(
+    tmp_path,
+):
+    # Reduced from VulkanIntegerTextureSamplerLodShader.cgl and
+    # VulkanIntegerTextureArraySamplerLodShader.cgl.
+    code = """
+    shader IntegerTextureSamplerLodProbe {
+        isampler2D signedTex;
+        isampler2DArray signedLayers;
+        usamplerCube unsignedCube;
+        usamplerCubeArray unsignedCubeLayers;
+        sampler textureSampler;
+
+        fragment {
+            vec4 main(vec2 uv, vec3 uvLayer, vec3 direction, vec4 directionLayer, float lod) @ gl_FragColor {
+                let signedSample = textureLod(signedTex, textureSampler, uv, lod);
+                let signedLayerSample = textureLod(
+                    signedLayers,
+                    textureSampler,
+                    uvLayer,
+                    lod
+                );
+                let unsignedSample = textureLod(
+                    unsignedCube,
+                    textureSampler,
+                    direction,
+                    lod
+                );
+                let unsignedLayerSample = textureLod(
+                    unsignedCubeLayers,
+                    textureSampler,
+                    directionLayer,
+                    lod
+                );
+                return vec4(
+                    float(signedSample.x),
+                    float(signedLayerSample.y),
+                    float(unsignedSample.z),
+                    float(unsignedLayerSample.w)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static SIGNED_TEX: std::sync::LazyLock<Texture2D<i32>>" in generated_code
+    assert (
+        "static SIGNED_LAYERS: std::sync::LazyLock<Texture2DArray<i32>>"
+        in generated_code
+    )
+    assert (
+        "static UNSIGNED_CUBE: std::sync::LazyLock<TextureCube<u32>>" in generated_code
+    )
+    assert (
+        "static UNSIGNED_CUBE_LAYERS: std::sync::LazyLock<TextureCubeArray<u32>>"
+        in generated_code
+    )
+    assert (
+        "let signedSample: Vec4<i32> = "
+        "sample_lod_sampler(*SIGNED_TEX, *TEXTURE_SAMPLER, uv, lod);"
+    ) in generated_code
+    assert (
+        "let signedLayerSample: Vec4<i32> = "
+        "sample_lod_sampler(*SIGNED_LAYERS, *TEXTURE_SAMPLER, uvLayer, lod);"
+    ) in generated_code
+    assert (
+        "let unsignedSample: Vec4<u32> = "
+        "sample_lod_sampler(*UNSIGNED_CUBE, *TEXTURE_SAMPLER, direction, lod);"
+    ) in generated_code
+    assert (
+        "let unsignedLayerSample: Vec4<u32> = "
+        "sample_lod_sampler(*UNSIGNED_CUBE_LAYERS, *TEXTURE_SAMPLER, directionLayer, lod);"
+    ) in generated_code
+    assert "textureLod" not in generated_code
+    assert "isampler2D" not in generated_code
+    assert "isampler2DArray" not in generated_code
+    assert "usamplerCube" not in generated_code
+    assert "usamplerCubeArray" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

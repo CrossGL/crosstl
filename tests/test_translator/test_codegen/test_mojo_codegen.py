@@ -2942,6 +2942,55 @@ def test_resource_placeholders_emit_for_sampler_types():
     assert "textureGrad" not in generated_code
 
 
+def test_mojo_integer_texture_lod_uses_integer_vector_result_types():
+    code = """
+    isampler2D signedMap;
+    usampler2DArray counterLayers;
+    sampler linearSampler;
+
+    ivec4 sampleSigned(isampler2D tex, sampler state, vec2 uv) {
+        ivec4 label = textureLod(tex, state, uv, 1.0);
+        return label;
+    }
+
+    uvec4 sampleUnsignedLayer(usampler2DArray tex, sampler state, vec3 uvLayer) {
+        uvec4 counter = textureLod(tex, state, uvLayer, 2.0);
+        return counter;
+    }
+
+    void noop() {}
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DInt:" in generated_code
+    assert "struct Texture2DArrayUInt:" in generated_code
+    assert "var signedMap: Texture2DInt = Texture2DInt()" in generated_code
+    assert (
+        "var counterLayers: Texture2DArrayUInt = Texture2DArrayUInt()" in generated_code
+    )
+    assert (
+        "fn sample_lod_sampler(tex: Texture2DInt, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2], lod: Float32) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn sample_lod_sampler(tex: Texture2DArrayUInt, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 4], lod: Float32) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert (
+        "var label: SIMD[DType.int32, 4] = "
+        "sample_lod_sampler(tex, state, uv, 1.0)" in generated_code
+    )
+    assert (
+        "var counter: SIMD[DType.uint32, 4] = "
+        "sample_lod_sampler(tex, state, uvLayer, 2.0)" in generated_code
+    )
+    assert "textureLod" not in generated_code
+    assert "isampler2D" not in generated_code
+    assert "usampler2DArray" not in generated_code
+
+
 def test_resource_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -25545,6 +25594,61 @@ def test_mojo_image_atomic_uint_constructor_value_infers_unsigned_type():
     assert "imageAtomicAdd" not in generated_code
 
 
+def test_mojo_explicit_scalar_image_format_atomics_remain_scalar():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/StorageImageAtomicShader.cgl.
+    code = """
+    shader StorageImageAtomicShader {
+        compute {
+            layout(set = 0, binding = 0, format = r32i) readwrite uniform iimage2D signedCounters;
+            layout(set = 0, binding = 1, format = r32ui) readwrite uniform uimage2D unsignedCounters;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                int signedOld = imageAtomicAdd(signedCounters, pixel, 1);
+                uint unsignedOld = imageAtomicAdd(
+                    unsignedCounters,
+                    pixel,
+                    uint(1.0)
+                );
+                int signedExchanged = imageAtomicExchange(
+                    signedCounters,
+                    pixel,
+                    signedOld
+                );
+                uint unsignedExchanged = imageAtomicExchange(
+                    unsignedCounters,
+                    pixel,
+                    unsignedOld
+                );
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct IImage2DInt4:" in generated_code
+    assert "struct UImage2DUInt4:" in generated_code
+    assert (
+        "fn _crossgl_image_atomic_add_IImage2DInt4_SIMD_DType_int32_2_Int32"
+        "(arg0: IImage2DInt4, arg1: SIMD[DType.int32, 2], arg2: Int32)"
+        " -> Int32:" in generated_code
+    )
+    assert (
+        "fn _crossgl_image_atomic_add_UImage2DUInt4_SIMD_DType_int32_2_UInt32"
+        "(arg0: UImage2DUInt4, arg1: SIMD[DType.int32, 2], arg2: UInt32)"
+        " -> UInt32:" in generated_code
+    )
+    assert "var signedOld: Int32 = _crossgl_image_atomic_add_IImage2DInt4" in (
+        generated_code
+    )
+    assert "var unsignedOld: UInt32 = _crossgl_image_atomic_add_UImage2DUInt4" in (
+        generated_code
+    )
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
+
+
 def test_mojo_storage_image_load_store_operations():
     code = """
     image2D colorImage;
@@ -26129,6 +26233,57 @@ def test_mojo_storage_image_store_on_various_formats():
         "fn image_store(image: UImage3D, coord: SIMD[DType.int32, 4], value: UInt32):"
         in generated_code
     )
+    assert "imageStore" not in generated_code
+
+
+def test_mojo_explicit_scalar_storage_image_formats_use_vector_contexts():
+    code = """
+    iimage2D labels @r32i;
+    uimage2D counters @r32ui;
+
+    shader StorageImageExplicitFormat {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                ivec4 label = imageLoad(labels, pixel);
+                imageStore(labels, pixel, label);
+                uvec4 counter = imageLoad(counters, pixel);
+                imageStore(counters, pixel, counter);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct IImage2DInt4:" in generated_code
+    assert "struct UImage2DUInt4:" in generated_code
+    assert "var labels: IImage2DInt4 = IImage2DInt4()" in generated_code
+    assert "var counters: UImage2DUInt4 = UImage2DUInt4()" in generated_code
+    assert (
+        "fn image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.int32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: IImage2DInt4, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.int32, 4]):" in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.uint32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "var label: SIMD[DType.int32, 4] = image_load(labels, pixel)" in (
+        generated_code
+    )
+    assert "image_store(labels, pixel, label)" in generated_code
+    assert "var counter: SIMD[DType.uint32, 4] = image_load(counters, pixel)" in (
+        generated_code
+    )
+    assert "image_store(counters, pixel, counter)" in generated_code
+    assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
 
 

@@ -892,6 +892,24 @@ class MetalCodeGen:
             "sampler2DArrayShadow": "depth2d_array<float>",
             "samplerCubeShadow": "depthcube<float>",
             "samplerCubeArrayShadow": "depthcube_array<float>",
+            "isampler1D": "texture1d<int>",
+            "isampler1DArray": "texture1d_array<int>",
+            "isampler2D": "texture2d<int>",
+            "isampler3D": "texture3d<int>",
+            "isamplerCube": "texturecube<int>",
+            "isampler2DArray": "texture2d_array<int>",
+            "isamplerCubeArray": "texturecube_array<int>",
+            "isampler2DMS": "texture2d_ms<int>",
+            "isampler2DMSArray": "texture2d_ms_array<int>",
+            "usampler1D": "texture1d<uint>",
+            "usampler1DArray": "texture1d_array<uint>",
+            "usampler2D": "texture2d<uint>",
+            "usampler3D": "texture3d<uint>",
+            "usamplerCube": "texturecube<uint>",
+            "usampler2DArray": "texture2d_array<uint>",
+            "usamplerCubeArray": "texturecube_array<uint>",
+            "usampler2DMS": "texture2d_ms<uint>",
+            "usampler2DMSArray": "texture2d_ms_array<uint>",
             "accelerationStructureEXT": "instance_acceleration_structure",
             "RaytracingAccelerationStructure": "instance_acceleration_structure",
             "AccelerationStructure": "instance_acceleration_structure",
@@ -1886,6 +1904,24 @@ class MetalCodeGen:
                 "sampler2DArrayShadow",
                 "samplerCubeShadow",
                 "samplerCubeArrayShadow",
+                "isampler1D",
+                "isampler1DArray",
+                "isampler2D",
+                "isampler3D",
+                "isamplerCube",
+                "isampler2DArray",
+                "isamplerCubeArray",
+                "isampler2DMS",
+                "isampler2DMSArray",
+                "usampler1D",
+                "usampler1DArray",
+                "usampler2D",
+                "usampler3D",
+                "usamplerCube",
+                "usampler2DArray",
+                "usamplerCubeArray",
+                "usampler2DMS",
+                "usampler2DMSArray",
                 "iimage1D",
                 "iimage1DArray",
                 "iimage2D",
@@ -10560,6 +10596,24 @@ class MetalCodeGen:
                 "sampler2DArrayShadow",
                 "samplerCubeShadow",
                 "samplerCubeArrayShadow",
+                "isampler1D",
+                "isampler1DArray",
+                "isampler2D",
+                "isampler3D",
+                "isamplerCube",
+                "isampler2DArray",
+                "isamplerCubeArray",
+                "isampler2DMS",
+                "isampler2DMSArray",
+                "usampler1D",
+                "usampler1DArray",
+                "usampler2D",
+                "usampler3D",
+                "usamplerCube",
+                "usampler2DArray",
+                "usamplerCubeArray",
+                "usampler2DMS",
+                "usampler2DMSArray",
                 "iimage1D",
                 "iimage1DArray",
                 "iimage2D",
@@ -18027,20 +18081,24 @@ class MetalCodeGen:
         return explicit_image_format(member, self.attribute_value_to_string)
 
     def is_array_texture_resource(self, texture_type):
-        return texture_type in {
-            "texture1d_array<float>",
-            "texture2d_array<float>",
-            "depth2d_array<float>",
-            "texturecube_array<float>",
-            "depthcube_array<float>",
-        }
+        texture_type = self.resource_base_type(texture_type)
+        if self.is_storage_image_resource(texture_type):
+            return False
+        return texture_type.startswith(
+            (
+                "texture1d_array<",
+                "texture2d_array<",
+                "depth2d_array<",
+                "texturecube_array<",
+                "depthcube_array<",
+            )
+        )
 
     def is_multisample_texture_resource(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return texture_type in {
-            "texture2d_ms<float>",
-            "texture2d_ms_array<float>",
-        }
+        if self.is_storage_image_resource(texture_type):
+            return False
+        return texture_type.startswith(("texture2d_ms<", "texture2d_ms_array<"))
 
     def is_multisample_storage_image_resource(self, texture_type):
         texture_type = self.storage_image_access_agnostic_type(texture_type)
@@ -18076,11 +18134,12 @@ class MetalCodeGen:
         return coord_xyz, layer
 
     def texture_coordinate_parts(self, texture_type, coord):
-        if texture_type == "texture1d_array<float>":
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("texture1d_array<"):
             coord_x = self.vector_component(coord, "x")
             layer = f"uint({self.vector_component(coord, 'y')})"
             return coord_x, layer
-        if texture_type in {"texturecube_array<float>", "depthcube_array<float>"}:
+        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
             return self.cube_array_texture_coordinate_parts(coord)
         return self.array_texture_coordinate_parts(coord)
 
@@ -18092,42 +18151,42 @@ class MetalCodeGen:
         return coord
 
     def texture_gradient_options(self, texture_type, ddx, ddy):
-        if texture_type in {
-            "texturecube<float>",
-            "depthcube<float>",
-            "texturecube_array<float>",
-            "depthcube_array<float>",
-        }:
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith(
+            ("texturecube<", "depthcube<", "texturecube_array<", "depthcube_array<")
+        ):
             return f"gradientcube({ddx}, {ddy})"
-        if texture_type == "texture3d<float>":
+        if texture_type.startswith("texture3d<"):
             return f"gradient3d({ddx}, {ddy})"
         return f"gradient2d({ddx}, {ddy})"
 
     def texture_sampling_capabilities(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        gather_offset_types = {"texture2d<float>", "texture2d_array<float>"}
-        sample_offset_types = {
-            "texture2d<float>",
-            "texture2d_array<float>",
-            "texture3d<float>",
-        }
-        depth_offset_types = {"depth2d<float>", "depth2d_array<float>"}
+        is_sampled_texture = not self.is_storage_image_resource(texture_type)
+        is_texture2d = is_sampled_texture and texture_type.startswith("texture2d<")
+        is_texture2d_array = is_sampled_texture and texture_type.startswith(
+            "texture2d_array<"
+        )
+        is_texture3d = is_sampled_texture and texture_type.startswith("texture3d<")
+        is_texturecube = is_sampled_texture and texture_type.startswith("texturecube<")
+        is_texturecube_array = is_sampled_texture and texture_type.startswith(
+            "texturecube_array<"
+        )
+        is_depth2d = texture_type.startswith("depth2d<")
+        is_depth2d_array = texture_type.startswith("depth2d_array<")
         return {
             "texture_type": texture_type,
             "gather": (
-                texture_type
-                in {
-                    "texture2d<float>",
-                    "texture2d_array<float>",
-                    "texturecube<float>",
-                    "texturecube_array<float>",
-                }
+                is_texture2d
+                or is_texture2d_array
+                or is_texturecube
+                or is_texturecube_array
             ),
-            "gather_offset": texture_type in gather_offset_types,
-            "sample_offset": texture_type in sample_offset_types,
-            "projected_offset": texture_type in sample_offset_types,
-            "compare_offset": texture_type in depth_offset_types,
-            "gather_compare_offset": texture_type in depth_offset_types,
+            "gather_offset": is_texture2d or is_texture2d_array,
+            "sample_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "projected_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "compare_offset": is_depth2d or is_depth2d_array,
+            "gather_compare_offset": is_depth2d or is_depth2d_array,
         }
 
     def texture_gather_supports_offset(self, texture_type):
@@ -19418,10 +19477,27 @@ class MetalCodeGen:
             ),
         )
 
+    def image_format_allows_native_vector_context(self, image_format):
+        return image_format in {"r32f", "r32i", "r32ui"}
+
+    def image_format_context_channel_count_allowed(
+        self, image_format, format_channels, context_channels
+    ):
+        if format_channels == context_channels:
+            return True
+        if not self.image_format_allows_native_vector_context(image_format):
+            return False
+        return format_channels == 1 and context_channels in {1, 4}
+
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(image_type, image_format)
+        value_channels = self.expression_component_count(value_arg)
+        if self.image_format_context_channel_count_allowed(
+            image_format, expected_channels, value_channels
+        ):
+            return
         value_channels = image_store_value_shape_mismatch(
-            expected_channels, self.expression_component_count(value_arg)
+            expected_channels, value_channels
         )
         if value_channels is None:
             return
@@ -19470,6 +19546,10 @@ class MetalCodeGen:
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(image_type, image_format)
+        if self.image_format_context_channel_count_allowed(
+            image_format, loaded_channels, expected_channels
+        ):
+            return
         expected_channels = image_load_result_shape_mismatch(
             loaded_channels,
             expected_channels,

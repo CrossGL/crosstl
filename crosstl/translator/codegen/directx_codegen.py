@@ -762,8 +762,26 @@ class HLSLCodeGen:
             "samplerCube": "TextureCube",
             "sampler2DArray": "Texture2DArray",
             "samplerCubeArray": "TextureCubeArray",
+            "isampler1D": "Texture1D<int4>",
+            "isampler1DArray": "Texture1DArray<int4>",
+            "isampler2D": "Texture2D<int4>",
+            "isampler3D": "Texture3D<int4>",
+            "isamplerCube": "TextureCube<int4>",
+            "isampler2DArray": "Texture2DArray<int4>",
+            "isamplerCubeArray": "TextureCubeArray<int4>",
+            "usampler1D": "Texture1D<uint4>",
+            "usampler1DArray": "Texture1DArray<uint4>",
+            "usampler2D": "Texture2D<uint4>",
+            "usampler3D": "Texture3D<uint4>",
+            "usamplerCube": "TextureCube<uint4>",
+            "usampler2DArray": "Texture2DArray<uint4>",
+            "usamplerCubeArray": "TextureCubeArray<uint4>",
             "sampler2DMS": "Texture2DMS<float4>",
             "sampler2DMSArray": "Texture2DMSArray<float4>",
+            "isampler2DMS": "Texture2DMS<int4>",
+            "isampler2DMSArray": "Texture2DMSArray<int4>",
+            "usampler2DMS": "Texture2DMS<uint4>",
+            "usampler2DMSArray": "Texture2DMSArray<uint4>",
             "sampler2DShadow": "Texture2D",
             "sampler2DArrayShadow": "Texture2DArray",
             "samplerCubeShadow": "TextureCube",
@@ -14488,6 +14506,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             expected_channels, actual_channels
         ):
             return
+        if self.hlsl_scalar_storage_image_vector_value(
+            image_type, image_format, value_arg
+        ):
+            return
         value_channels = image_store_value_shape_mismatch(
             expected_channels, actual_channels
         )
@@ -14549,6 +14571,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             loaded_channels, expected_channels
         ):
             return
+        if self.hlsl_scalar_storage_image_vector_context(image_type, image_format):
+            return
         expected_channels = image_load_result_shape_mismatch(
             loaded_channels,
             expected_channels,
@@ -14576,30 +14600,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return ""
 
     def hlsl_scalar_storage_image_vector_context(self, image_type, image_format):
-        if image_format is not None:
-            return False
         component_type = self.hlsl_storage_image_component_type(image_type)
-        if self.value_component_count(component_type) != 1:
+        component_count = (
+            image_format_or_default_channel_count(image_format, 1)
+            if image_format
+            else self.value_component_count(component_type)
+        )
+        if component_count != 1:
             return False
         if self.expected_component_count() != 4:
             return False
-        return self.expected_component_kind() == self.hlsl_storage_image_component_kind(
-            image_type
+        component_kind = (
+            image_format_component_kind(image_format)
+            if image_format
+            else self.hlsl_storage_image_component_kind(image_type)
         )
+        return self.expected_component_kind() == component_kind
 
     def hlsl_scalar_storage_image_vector_value(
         self, image_type, image_format, value_arg
     ):
-        if image_format is not None:
-            return False
         component_type = self.hlsl_storage_image_component_type(image_type)
-        if self.value_component_count(component_type) != 1:
+        component_count = (
+            image_format_or_default_channel_count(image_format, 1)
+            if image_format
+            else self.value_component_count(component_type)
+        )
+        if component_count != 1:
             return False
         if self.expression_component_count(value_arg) != 4:
             return False
-        return self.expression_component_kind(
-            value_arg
-        ) == self.hlsl_storage_image_component_kind(image_type)
+        component_kind = (
+            image_format_component_kind(image_format)
+            if image_format
+            else self.hlsl_storage_image_component_kind(image_type)
+        )
+        return self.expression_component_kind(value_arg) == component_kind
 
     def three_component_image_store_constructor(self, texture_type):
         constructor = self.four_component_image_store_constructor(texture_type)
