@@ -502,7 +502,7 @@ def test_project_include_resolution_documents_status_reporting():
             "variant-specific conditional output"
         ) in backend_support["notes"]
         assert (
-            "DirectX/HLSL project translation with resolved local headers "
+            "DirectX/HLSL and Metal/MSL project translation with resolved local headers "
             "and variant-specific conditional output"
         ) in backend_support["notes"]
         assert (
@@ -600,6 +600,10 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_native_directx_preprocessor"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_metal_preprocessor"
+        ) in backend_support["evidence"]
 
 
 def test_project_macro_variants_document_artifact_define_maps():
@@ -667,6 +671,10 @@ def test_project_macro_variants_document_artifact_define_maps():
             in backend_support["notes"]
         )
         assert (
+            "Metal/MSL native preprocessing during project translation"
+            in backend_support["notes"]
+        )
+        assert (
             "CUDA/HIP native preprocessing during project translation"
             in backend_support["notes"]
         )
@@ -721,6 +729,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_native_directx_preprocessor"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_metal_preprocessor"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
