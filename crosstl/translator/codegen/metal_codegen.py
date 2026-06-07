@@ -1067,6 +1067,7 @@ class MetalCodeGen:
             "gl_FragColor6": "[[color(6)]]",
             "gl_FragColor7": "[[color(7)]]",
             "gl_FragDepth": "depth(any)",
+            "gl_FragStencilRefEXT": "stencil_ref",
             "SV_TARGET": "color(0)",
             "SV_TARGET0": "color(0)",
             "SV_TARGET1": "color(1)",
@@ -4304,6 +4305,13 @@ class MetalCodeGen:
             expected_type = self.struct_member_builtin_semantic_type(metal_semantic)
             if expected_type is None:
                 continue
+            if expected_type == "invalid":
+                struct_name = getattr(struct_node, "name", "<anonymous>")
+                member_name = getattr(member, "name", "<anonymous>")
+                raise ValueError(
+                    f"Metal struct '{struct_name}' semantic '{semantic}' maps to "
+                    f"'{metal_semantic}' and is not supported"
+                )
             actual_type = self.map_type(self.struct_member_raw_type(member))
             if actual_type != expected_type:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
@@ -4327,6 +4335,8 @@ class MetalCodeGen:
             "sample_id": "uint",
             "sample_mask": "uint",
         }
+        if metal_semantic == "stencil_ref":
+            return "invalid"
         if metal_semantic is None:
             return None
         if metal_semantic.startswith("color("):
@@ -4376,6 +4386,8 @@ class MetalCodeGen:
             return False
         semantic = str(semantic)
         if semantic == "gl_FragDepth":
+            return True
+        if semantic == "gl_FragStencilRefEXT":
             return True
         if metal_semantic == "sample_mask":
             return True
@@ -4458,10 +4470,14 @@ class MetalCodeGen:
             return
 
         semantic_text = str(semantic)
-        is_fragment_output = semantic_text == "gl_FragDepth" or bool(
-            metal_semantic and metal_semantic.startswith("color(")
-        )
-        is_fragment_output = is_fragment_output or metal_semantic == "sample_mask"
+        is_fragment_output = semantic_text in {
+            "gl_FragDepth",
+            "gl_FragStencilRefEXT",
+        } or bool(metal_semantic and metal_semantic.startswith("color("))
+        is_fragment_output = is_fragment_output or metal_semantic in {
+            "sample_mask",
+            "stencil_ref",
+        }
         is_vertex_output = semantic_text == "gl_Position"
 
         if stage_name == "vertex" and is_fragment_output:
@@ -4504,6 +4520,8 @@ class MetalCodeGen:
             "gl_FragDepth": "float",
             "gl_SampleMask": "uint",
         }
+        if semantic == "gl_FragStencilRefEXT" or metal_semantic == "stencil_ref":
+            return "invalid"
         if semantic in output_types:
             return output_types[semantic]
         if metal_semantic and metal_semantic.startswith("color("):

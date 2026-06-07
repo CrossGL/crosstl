@@ -873,6 +873,7 @@ class HLSLCodeGen:
             "gl_FragColor6": "SV_TARGET6",
             "gl_FragColor7": "SV_TARGET7",
             "gl_FragDepth": "SV_DEPTH",
+            "gl_FragStencilRefEXT": "SV_StencilRef",
             "gl_SampleMask": "SV_Coverage",
             "gl_SampleMaskIn": "SV_Coverage",
             "gl_GlobalInvocationID": "SV_DispatchThreadID",
@@ -9593,6 +9594,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         output_types = {
             "SV_POSITION": "float4",
             "SV_DEPTH": "float",
+            "SV_STENCILREF": "uint",
             "SV_COVERAGE": "uint",
             "PSIZE": "float",
         }
@@ -9677,7 +9679,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         forbidden_description = None
         if shader_type == "vertex" and (
-            semantic_key in {"SV_DEPTH", "SV_COVERAGE"}
+            semantic_key in {"SV_DEPTH", "SV_STENCILREF", "SV_COVERAGE"}
             or self.is_hlsl_target_semantic(semantic_key)
         ):
             forbidden_description = "fragment output"
@@ -9687,14 +9689,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "tessellation_evaluation",
             "mesh",
         } and (
-            semantic_key in {"SV_DEPTH", "SV_COVERAGE"}
+            semantic_key in {"SV_DEPTH", "SV_STENCILREF", "SV_COVERAGE"}
             or self.is_hlsl_target_semantic(semantic_key)
         ):
             forbidden_description = "fragment output"
         elif shader_type == "fragment" and semantic_key == "SV_POSITION":
             forbidden_description = "vertex position output"
         elif shader_type == "compute" and (
-            semantic_key in {"SV_POSITION", "SV_DEPTH", "SV_COVERAGE"}
+            semantic_key in {"SV_POSITION", "SV_DEPTH", "SV_STENCILREF", "SV_COVERAGE"}
             or self.is_hlsl_target_semantic(semantic_key)
         ):
             forbidden_description = "graphics output"

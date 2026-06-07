@@ -115,6 +115,23 @@ def test_glsl_tile_image_ext_importer_attribute_roundtrips():
     assert "out_color = colorAttachmentReadEXT(in_color[0]);" in generated
 
 
+def test_glsl_stencil_ref_return_semantic_emits_export_extension():
+    shader = """
+    shader StencilOut {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "#extension GL_ARB_shader_stencil_export : require" in generated
+    assert "gl_FragStencilRefARB = 7;" in generated
+    assert "gl_FragStencilRefEXT" not in generated
+
+
 def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
     shader = """
     shader SynchronizationBuiltins {

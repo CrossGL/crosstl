@@ -2248,6 +2248,31 @@ def test_codegen_canonicalizes_dynamic_render_target_and_depth_semantics():
     parse_crossgl(output)
 
 
+def test_codegen_canonicalizes_stencil_ref_semantic():
+    output = generate_crossgl("""
+        struct PSOutput {
+            float4 color : SV_Target0;
+            uint stencil : SV_StencilRef;
+        };
+
+        [shader("fragment")]
+        PSOutput PSMain(float4 position : SV_Position) {
+            PSOutput output;
+            output.color = float4(1.0, 0.0, 0.0, 1.0);
+            output.stencil = 7;
+            return output;
+        }
+    """)
+
+    assert "uint stencil @ gl_FragStencilRefEXT;" in output
+    assert "@ SV_StencilRef" not in output
+    parse_crossgl(output)
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+
+    assert "uint stencil: SV_StencilRef;" in regenerated_hlsl
+
+
 def test_codegen_register_bindings_emitted():
     output = generate_crossgl(REGISTER_BINDINGS_HLSL)
     assert "@ register" in output

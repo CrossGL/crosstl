@@ -910,6 +910,22 @@ def test_fragment_sample_mask_struct_output_maps_to_slang_coverage():
     assert "gl_SampleMask" not in generated_code
 
 
+def test_fragment_stencil_ref_return_maps_to_slang_semantic():
+    code = """
+    shader main {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint main() : SV_StencilRef" in generated_code
+    assert "gl_FragStencilRefEXT" not in generated_code
+
+
 def test_fragment_sample_mask_rejects_non_uint_slang_type():
     code = """
     shader main {

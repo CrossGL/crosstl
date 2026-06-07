@@ -278,6 +278,7 @@ class SlangCodeGen:
             "gl_PointCoord": "SV_PointCoord",
             "gl_FrontFacing": "SV_IsFrontFace",
             "gl_FragDepth": "SV_Depth",
+            "gl_FragStencilRefEXT": "SV_StencilRef",
             "gl_FragColor": "SV_Target",
             "gl_SampleID": "SV_SampleIndex",
             "gl_SampleMask": "SV_Coverage",
@@ -3773,6 +3774,8 @@ class SlangCodeGen:
             return "position"
         if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
             return "depth"
+        if lower_name == "gl_fragstencilrefext" or mapped_upper == "SV_STENCILREF":
+            return "stencil_ref"
         if lower_name == "gl_samplemask" or mapped_upper == "SV_COVERAGE":
             return "coverage"
         if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
@@ -3849,7 +3852,9 @@ class SlangCodeGen:
                 "expected float type"
             )
 
-        if kind == "coverage" and not self.is_slang_uint_scalar_type(type_name):
+        if kind in {"coverage", "stencil_ref"} and not self.is_slang_uint_scalar_type(
+            type_name
+        ):
             raise ValueError(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "expected uint type"
@@ -3883,6 +3888,7 @@ class SlangCodeGen:
             "color": {"fragment"},
             "coverage": {"fragment"},
             "depth": {"fragment"},
+            "stencil_ref": {"fragment"},
         }[kind]
         if shader_stage not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))

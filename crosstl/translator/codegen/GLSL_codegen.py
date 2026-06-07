@@ -965,6 +965,7 @@ class GLSLCodeGen:
             "gl_FragColor6": "layout(location = 6)",
             "gl_FragColor7": "layout(location = 7)",
             "gl_FragDepth": "gl_FragDepth",
+            "gl_FragStencilRefEXT": "gl_FragStencilRefARB",
             "gl_SampleMask": "gl_SampleMask",
             "SV_Coverage": "gl_SampleMask",
             "sample_mask": "gl_SampleMask",
@@ -1454,8 +1455,30 @@ class GLSLCodeGen:
             lines.append("#extension GL_EXT_ray_query : require")
         if self.uses_ray_tracing_position_fetch(ast, target_stage):
             lines.append("#extension GL_EXT_ray_tracing_position_fetch : require")
+        if self.uses_fragment_stencil_export(ast, target_stage):
+            lines.append("#extension GL_ARB_shader_stencil_export : require")
         lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
         return lines
+
+    def uses_fragment_stencil_export(self, ast, target_stage=None):
+        target_stage = normalize_stage_name(target_stage)
+        if target_stage is not None and target_stage != "fragment":
+            return False
+        if "fragment" not in self.glsl_stage_names(ast, target_stage):
+            return False
+
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                semantic = self.semantic_from_node(node)
+                if semantic is None:
+                    continue
+                mapped_semantic = self.map_semantic(semantic)
+                if mapped_semantic in {
+                    "gl_FragStencilRefARB",
+                    "gl_FragStencilRefEXT",
+                }:
+                    return True
+        return False
 
     def glsl_wave_operations(self, ast, target_stage=None):
         operations = set()
@@ -6203,6 +6226,7 @@ class GLSLCodeGen:
         semantic_text = str(semantic)
         is_fragment_output = mapped_semantic in {
             "gl_FragDepth",
+            "gl_FragStencilRefARB",
             "gl_SampleMask",
         } or semantic_text.startswith("gl_FragColor")
         is_vertex_output = self.is_vertex_builtin_output(mapped_semantic)
@@ -6915,6 +6939,8 @@ class GLSLCodeGen:
         mapped_semantic = self.map_semantic(self.semantic_from_node(member))
         if mapped_semantic == "gl_FragDepth":
             return mapped_semantic
+        if mapped_semantic == "gl_FragStencilRefARB":
+            return mapped_semantic
         if mapped_semantic == "gl_SampleMask":
             return "gl_SampleMask[0]"
 
@@ -6923,7 +6949,12 @@ class GLSLCodeGen:
         return self.stage_io_name_avoiding_reserved(member.name, reserved_names)
 
     def is_fragment_builtin_output_target(self, target):
-        return target in {"gl_FragDepth", "gl_SampleMask", "gl_SampleMask[0]"}
+        return target in {
+            "gl_FragDepth",
+            "gl_FragStencilRefARB",
+            "gl_SampleMask",
+            "gl_SampleMask[0]",
+        }
 
     def fragment_input_member_name(self, member, struct_name):
         if self.fragment_input_builtin_alias(member) is not None:
@@ -7255,6 +7286,11 @@ class GLSLCodeGen:
         if mapped_semantic == "gl_FragDepth":
             return {
                 "name": "gl_FragDepth",
+                "declaration": "",
+            }
+        if mapped_semantic == "gl_FragStencilRefARB":
+            return {
+                "name": "gl_FragStencilRefARB",
                 "declaration": "",
             }
         if mapped_semantic == "gl_SampleMask":

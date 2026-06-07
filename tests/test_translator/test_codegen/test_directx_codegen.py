@@ -124,6 +124,22 @@ def test_directx_compute_rootsignature_attribute_is_not_return_semantic():
     assert "allMemoryBarrier();" not in generated_code
 
 
+def test_hlsl_stencil_ref_return_semantic_codegen():
+    shader = """
+    shader StencilOut {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint PSMain(): SV_StencilRef" in generated_code
+    assert "gl_FragStencilRefEXT" not in generated_code
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {

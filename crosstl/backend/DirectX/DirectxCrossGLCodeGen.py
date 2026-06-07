@@ -350,6 +350,7 @@ class HLSLToCrossGLConverter:
             "SV_Depth": "gl_FragDepth",
             "SV_DepthGreaterEqual": "gl_FragDepth",
             "SV_DepthLessEqual": "gl_FragDepth",
+            "SV_StencilRef": "gl_FragStencilRefEXT",
             # System-value semantics - Compute shader
             "SV_GroupID": "gl_WorkGroupID",
             "SV_GroupThreadID": "gl_LocalInvocationID",

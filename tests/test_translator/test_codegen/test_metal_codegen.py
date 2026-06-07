@@ -5014,6 +5014,47 @@ def test_metal_global_function_constants_validate_declarations(
         MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
+def test_metal_stencil_ref_return_semantic_reports_unsupported():
+    code = """
+    shader StencilOut {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="gl_FragStencilRefEXT.*function return semantic",
+    ):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_metal_stencil_ref_struct_member_reports_unsupported():
+    code = """
+    shader StencilOut {
+        struct FragmentOutput {
+            vec4 color @ gl_FragColor;
+            uint stencil @ gl_FragStencilRefEXT;
+        };
+
+        fragment {
+            FragmentOutput main() {
+                FragmentOutput output;
+                output.color = vec4(1.0);
+                output.stencil = 7;
+                return output;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="stencil_ref.*not supported"):
+        MetalCodeGen().generate(crosstl.translator.parse(code))
+
+
 def test_metal_argument_buffer_resource_members_preserve_id_attributes():
     code = """
     shader ArgumentBufferMemberABI {
