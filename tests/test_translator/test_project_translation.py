@@ -16,6 +16,7 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -1695,6 +1696,134 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "include.resolution": 3,
     }
     assert validation["missingCapabilityCounts"]["include.resolution"] == 3
+
+
+def test_translate_project_records_include_forwarding_for_all_source_frontends(
+    tmp_path, monkeypatch
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    include_dir.joinpath("shared.inc").write_text("// shared\n", encoding="utf-8")
+    source_names = sorted(SOURCE_REGISTRY.names())
+    assert source_names
+    source_overrides = []
+    for source_name in source_names:
+        shader_path = shader_dir / f"{source_name}.shader"
+        shader_path.write_text(SIMPLE_CROSSL, encoding="utf-8")
+        source_overrides.append(f'"shaders/{source_name}.shader" = "{source_name}"')
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def write_shader(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, defines
+        calls.append(
+            {
+                "sourceBackend": source_backend,
+                "includePaths": list(include_paths or ()),
+            }
+        )
+        Path(save_shader).write_text(
+            f"// translated from {source_backend}\n",
+            encoding="utf-8",
+        )
+        return f"// translated from {source_backend}\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_shader)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    include_path = str(include_dir.resolve())
+    expected_by_source = {}
+    expected_by_status = {}
+    unsupported_sources = []
+    for source_name in source_names:
+        supports_include_paths = SOURCE_REGISTRY.get(
+            source_name
+        ).supports_lexer_keyword("include_paths")
+        status = "forwarded" if supports_include_paths else "not-supported"
+        expected_by_source[source_name] = {status: 1}
+        expected_by_status[status] = expected_by_status.get(status, 0) + 1
+        if not supports_include_paths:
+            unsupported_sources.append(source_name)
+
+    artifacts_by_source = {
+        artifact["sourceBackend"]: artifact for artifact in payload["artifacts"]
+    }
+
+    assert validation["success"] is True
+    assert payload["summary"]["translatedCount"] == len(source_names)
+    assert payload["summary"]["includePathProcessingByStatus"] == expected_by_status
+    assert (
+        payload["summary"]["includePathProcessingBySourceBackend"] == expected_by_source
+    )
+    assert payload["diagnosticCounts"] == {
+        "note": 0,
+        "warning": len(unsupported_sources),
+        "error": 0,
+    }
+    assert payload["summary"]["diagnosticsByCode"] == (
+        {"project.translate.include-paths-not-forwarded": len(unsupported_sources)}
+        if unsupported_sources
+        else {}
+    )
+    assert payload["summary"]["missingCapabilityCounts"] == (
+        {"include.forwarding": len(unsupported_sources)} if unsupported_sources else {}
+    )
+    assert [
+        {
+            "sourceBackend": call["sourceBackend"],
+            "includePaths": call["includePaths"],
+        }
+        for call in calls
+    ] == [
+        {"sourceBackend": source_name, "includePaths": [include_path]}
+        for source_name in source_names
+    ]
+    assert {
+        diagnostic["location"]["file"]
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.include-paths-not-forwarded"
+    } == {f"shaders/{source_name}.shader" for source_name in unsupported_sources}
+    for source_name, artifact in artifacts_by_source.items():
+        include_path_processing = artifact["includePathProcessing"]
+        supports_include_paths = SOURCE_REGISTRY.get(
+            source_name
+        ).supports_lexer_keyword("include_paths")
+        assert include_path_processing == {
+            "status": "forwarded" if supports_include_paths else "not-supported",
+            "frontend": "lexer",
+            "supportsIncludePaths": supports_include_paths,
+            "includePathCount": 1,
+        }
 
 
 def test_translate_project_expands_named_variants_with_merged_defines(
