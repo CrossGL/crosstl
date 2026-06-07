@@ -242,6 +242,14 @@ SCALAR_CONSTRUCTOR_TOKENS = {
     "UINT64_T",
 }
 
+COMPOSITE_DECLARATOR_IDENTIFIER_TOKENS = {
+    "FVECTOR",
+    "IVECTOR",
+    "UVECTOR",
+    "BVECTOR",
+    "MATRIX",
+}
+
 
 class HLSLParser:
     """Parse HLSL tokens into the DirectX backend shader AST."""
@@ -344,12 +352,12 @@ class HLSLParser:
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
             attributes.extend(self.parse_attribute_list())
-            if not self.is_identifier_token(self.current_token[0]):
+            if not self.is_declarator_identifier_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_identifier()
+            name = self.parse_declarator_identifier()
             if self.current_token_is_double_colon():
                 name = self.parse_scoped_name(name)
 
@@ -444,12 +452,32 @@ class HLSLParser:
             self.tokens[index][0]
         )
 
+    def is_declarator_identifier_token(self, token_type):
+        return (
+            self.is_identifier_token(token_type)
+            or token_type in COMPOSITE_DECLARATOR_IDENTIFIER_TOKENS
+        )
+
+    def is_declarator_identifier_token_at(self, index):
+        return index < len(self.tokens) and self.is_declarator_identifier_token(
+            self.tokens[index][0]
+        )
+
     def parse_identifier(self):
         if self.is_identifier_token(self.current_token[0]):
             token = self.current_token
             self.eat(token[0])
             return token[1]
         raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
+
+    def parse_declarator_identifier(self):
+        if self.is_declarator_identifier_token(self.current_token[0]):
+            token = self.current_token
+            self.eat(token[0])
+            return token[1]
+        raise SyntaxError(
+            f"Expected declarator identifier, got {self.current_token[0]}"
+        )
 
     def parse_typedef_name(self):
         if self.is_identifier_token(self.current_token[0]) or self.current_token[0] in {
@@ -1112,8 +1140,8 @@ class HLSLParser:
 
         variables = []
         variable_declarations = []
-        if self.is_identifier_token(self.current_token[0]):
-            first_name = self.parse_identifier()
+        if self.is_declarator_identifier_token(self.current_token[0]):
+            first_name = self.parse_declarator_identifier()
             struct_type = name or self.synthetic_struct_type_name(
                 "AnonymousStruct", first_name
             )
@@ -1213,7 +1241,7 @@ class HLSLParser:
 
         self.eat("RBRACE")
 
-        if not self.is_identifier_token(self.current_token[0]):
+        if not self.is_declarator_identifier_token(self.current_token[0]):
             if nested_name is None:
                 raise SyntaxError("Expected identifier after anonymous struct member")
             if self.current_token[0] == "SEMICOLON":
@@ -1223,7 +1251,7 @@ class HLSLParser:
             self.synthetic_structs.append(nested_struct)
             return []
 
-        first_name = self.parse_identifier()
+        first_name = self.parse_declarator_identifier()
         struct_type = nested_name or self.synthetic_struct_type_name(
             parent_name, first_name
         )
@@ -1278,7 +1306,7 @@ class HLSLParser:
             raise SyntaxError(
                 f"Expected overloaded operator name, got {self.current_token[0]}"
             )
-        return self.parse_identifier()
+        return self.parse_declarator_identifier()
 
     def parse_enum(self):
         self.eat("ENUM")
@@ -1831,8 +1859,8 @@ class HLSLParser:
                 qualifiers.extend(self.parse_post_type_qualifiers())
                 attributes.extend(self.parse_attribute_list())
 
-                if self.is_identifier_token(self.current_token[0]):
-                    name = self.parse_identifier()
+                if self.is_declarator_identifier_token(self.current_token[0]):
+                    name = self.parse_declarator_identifier()
                 else:
                     name = ""
 
@@ -1909,7 +1937,7 @@ class HLSLParser:
             return False
 
         type_end = self.skip_type_name_at(index + 1)
-        return type_end is not None and self.is_identifier_token_at(type_end)
+        return type_end is not None and self.is_declarator_identifier_token_at(type_end)
 
     def parse_block(self):
         self.eat("LBRACE")
@@ -2026,7 +2054,7 @@ class HLSLParser:
         while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
             idx += 1
         idx = self.skip_attribute_lists_at(idx)
-        if idx is None or not self.is_identifier_token_at(idx):
+        if idx is None or not self.is_declarator_identifier_token_at(idx):
             return False
 
         idx += 1
@@ -2051,7 +2079,7 @@ class HLSLParser:
         return_type = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes.extend(self.parse_attribute_list())
-        name = self.parse_identifier()
+        name = self.parse_declarator_identifier()
         return self.parse_function(return_type, name, qualifiers, attributes)
 
     def attach_attributes(self, node, attributes):
@@ -2082,7 +2110,7 @@ class HLSLParser:
         if idx is None:
             return False
 
-        if idx >= len(self.tokens) or not self.is_identifier_token_at(idx):
+        if idx >= len(self.tokens) or not self.is_declarator_identifier_token_at(idx):
             return False
         idx += 1
         idx = self.skip_array_suffixes_at(idx)
@@ -2115,7 +2143,7 @@ class HLSLParser:
         idx = self.skip_attribute_lists_at(idx)
         if idx is None:
             return False
-        if not self.is_identifier_token_at(idx):
+        if not self.is_declarator_identifier_token_at(idx):
             return False
 
         idx += 1
@@ -2129,7 +2157,7 @@ class HLSLParser:
 
         while token_type == "COMMA":
             idx += 1
-            if not self.is_identifier_token_at(idx):
+            if not self.is_declarator_identifier_token_at(idx):
                 return False
             idx += 1
             idx = self.skip_array_suffixes_at(idx)
@@ -2280,7 +2308,7 @@ class HLSLParser:
         vtype = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes.extend(self.parse_attribute_list())
-        name = self.parse_identifier()
+        name = self.parse_declarator_identifier()
         declarations = self.parse_variable_declaration_list_rest(
             vtype,
             name,
@@ -2316,7 +2344,7 @@ class HLSLParser:
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
-            name = self.parse_identifier()
+            name = self.parse_declarator_identifier()
 
         if consume_semicolon:
             self.eat("SEMICOLON")

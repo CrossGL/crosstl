@@ -3101,6 +3101,9 @@ class MetalParser:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
                 self.skip_template_disambiguator()
+                if self.is_conversion_operator_call_start():
+                    node = self.parse_conversion_operator_call(node)
+                    continue
                 if self.current_token[0] not in [
                     "IDENTIFIER",
                     "READ",
@@ -3117,6 +3120,9 @@ class MetalParser:
             if self.current_token[0] == "ARROW":
                 self.eat("ARROW")
                 self.skip_template_disambiguator()
+                if self.is_conversion_operator_call_start():
+                    node = self.parse_conversion_operator_call(node)
+                    continue
                 if self.current_token[0] not in [
                     "IDENTIFIER",
                     "READ",
@@ -3160,6 +3166,19 @@ class MetalParser:
                 continue
             break
         return node
+
+    def is_conversion_operator_call_start(self):
+        if self.current_token != ("IDENTIFIER", "operator"):
+            return False
+        next_type = self.peek(1)[0]
+        return next_type not in OPERATOR_OVERLOAD_TOKENS
+
+    def parse_conversion_operator_call(self, node):
+        self.eat("IDENTIFIER")
+        target_type, _qualifiers = self.parse_type_specifier()
+        self.eat("LPAREN")
+        self.eat("RPAREN")
+        return CastNode(target_type, node)
 
     def skip_template_disambiguator(self):
         if (

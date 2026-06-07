@@ -480,6 +480,34 @@ def test_struct_base_list_parsing_from_modular_corpus():
     ]
 
 
+def test_struct_conditional_trait_conformance_parse_from_modular_docs():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-struct-declarations/
+    # "Conformance lists" documents conditional `where` clauses, and
+    # "Trait conformance" documents `&` trait composition.
+    code = """
+    @fieldwise_init
+    struct Pair[T: Copyable & ImplicitlyDestructible](
+        Equatable where conforms_to(T, Equatable),
+        Writable where conforms_to(T, Writable) and T.size > 0,
+        Copyable & ImplicitlyDestructible,
+    ):
+        var first: Self.T
+        var second: Self.T
+    """
+    ast = parse_code(tokenize_code(code))
+    pair = find_struct(ast, "Pair")
+
+    assert pair.base_classes == [
+        "Equatable where conforms_to(T, Equatable)",
+        "Writable where conforms_to(T, Writable) && T.size > 0",
+        "Copyable & ImplicitlyDestructible",
+    ]
+    assert [(member.vtype, member.name) for member in pair.members] == [
+        ("Self.T", "first"),
+        ("Self.T", "second"),
+    ]
+
+
 def test_struct_generic_parameter_list_parsing_from_modular_corpus():
     code = """
     struct AddConstant[value: Int]:

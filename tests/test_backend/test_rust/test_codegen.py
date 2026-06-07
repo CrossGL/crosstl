@@ -7942,6 +7942,27 @@ def test_let_else_conversion():
         pytest.fail(f"Let else conversion failed: {e}")
 
 
+def test_wgpu_let_else_semicolonless_return_codegen():
+    # Reduced from gfx-rs/wgpu commit 6877690dbefa1144c05932dde2d10c52facfee60,
+    # examples/bug-repro/01_texture_atomic_bug/src/main.rs App::window_event.
+    code = """
+    impl App {
+        fn window_event(&mut self) {
+            let Some(state) = &mut self.state else { return };
+            state.render_frame();
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto _rust_match_subject_0 = self.state;" in result
+    assert "if (is_Some(_rust_match_subject_0))" in result
+    assert "state = unwrap_Some(_rust_match_subject_0);" in result
+    assert "if (!_rust_match_matched_0) {\n            return;\n        }" in result
+    assert "state.render_frame();" in result
+
+
 def test_let_else_shadowing_conversion():
     code = """
     fn decode_shadow(value: Option<i32>) -> i32 {

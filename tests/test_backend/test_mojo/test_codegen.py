@@ -1358,6 +1358,27 @@ def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
 
 
+def test_struct_conditional_trait_conformance_codegen_from_modular_docs():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-struct-declarations/
+    # "Conformance lists" conditional `where` example.
+    code = """
+    @fieldwise_init
+    struct Pair[T: Copyable & ImplicitlyDestructible](
+        Equatable where conforms_to(T, Equatable)
+    ):
+        var first: Self.T
+        var second: Self.T
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "struct Pair" in generated_code
+    assert "Self.T first;" in generated_code
+    assert "Self.T second;" in generated_code
+    assert "where conforms_to" not in generated_code
+    assert "Unhandled" not in generated_code
+
+
 def test_if_codegen():
     code = """
     struct VSInput:

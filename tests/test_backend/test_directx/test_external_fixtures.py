@@ -32,6 +32,9 @@ DIRECTX_SHADER_COMPILER_REPO = "https://github.com/microsoft/DirectXShaderCompil
 DIRECTX_SHADER_COMPILER_COMMIT = "517dd5eb5d8cbb46c15fc1230acac1d2f4779092"
 DIRECTX_SHADER_COMPILER_NESTED_ENUM_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 DIRECTX_SHADER_COMPILER_FLOAT64_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
+DIRECTX_SHADER_COMPILER_BUFFER_ACCESS_COMMIT = (
+    "8ed708842c1ccb24bd914eff03125c837a01be71"
+)
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -691,6 +694,35 @@ EXTERNAL_FIXTURES = [
         contains=(
             "uint x = uint(1);",
             "return vec4(component, component, component, component);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_buffer_access_type_like_local_names",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_BUFFER_ACCESS_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/op.buffer.access.hlsl",
+        code=textwrap.dedent("""
+            Buffer<int> intbuf;
+            RWBuffer<int2> int2buf;
+            Buffer<uint3> uint3buf;
+            RWBuffer<float4> float4buf;
+
+            void main() {
+              int address;
+
+              int int1 = intbuf[address];
+              int2 int2 = int2buf[address];
+              uint3 uint3 = uint3buf[address];
+              float b = float4buf[address][2];
+            }
+        """).strip(),
+        contains=(
+            "Buffer<int> intbuf;",
+            "RWBuffer<int2> int2buf;",
+            "int int1 = intbuf[address];",
+            "ivec2 int2 = int2buf[address];",
+            "uvec3 uint3 = uint3buf[address];",
+            "float b = float4buf[address][2];",
         ),
     ),
     ExternalFixture(
