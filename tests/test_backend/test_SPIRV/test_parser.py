@@ -690,6 +690,37 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_LEGACY_BUFFER_BLOCK_MEMBER_ACCESS_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %bName "bName"
+OpMemberName %bName 0 "size"
+OpName %bInst "bInst"
+OpDecorate %bName BufferBlock
+OpMemberDecorate %bName 0 Offset 0
+OpDecorate %bInst DescriptorSet 0
+OpDecorate %bInst Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%bName = OpTypeStruct %int
+%_ptr_Uniform_bName = OpTypePointer Uniform %bName
+%bInst = OpVariable %_ptr_Uniform_bName Uniform
+%int_0 = OpConstant %int 0
+%int_1 = OpConstant %int 1
+%_ptr_Uniform_int = OpTypePointer Uniform %int
+%main = OpFunction %void None %fn
+%label = OpLabel
+%size_ptr = OpAccessChain %_ptr_Uniform_int %bInst %int_0
+%size = OpLoad %int %size_ptr
+%next = OpIAdd %int %size %int_1
+OpStore %size_ptr %next
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_READONLY_BUFFER_BLOCK_ASSEMBLY = """
 ; Reduced from readonly storage-buffer SPIR-V decoration patterns.
 OpCapability Shader
@@ -2088,6 +2119,25 @@ def test_spirv_assembly_buffer_block_parse():
     assert layout.struct_fields == [("vec4", "value")]
     assert layout.qualifiers == [("set", "0"), ("binding", "1")]
     assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_legacy_buffer_block_member_access_parse():
+    tokens = tokenize_code(SPIRV_LEGACY_BUFFER_BLOCK_MEMBER_ACCESS_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+    assignment = ast.functions[0].body[0]
+
+    assert layout.layout_type == "BUFFER"
+    assert layout.struct_fields == [("int", "size")]
+    assert layout.spirv_storage_class == "Uniform"
+    assert isinstance(assignment.left, MemberAccessNode)
+    assert isinstance(assignment.left.object, ArrayAccessNode)
+    assert assignment.left.object.array.name == "bInst"
+    assert assignment.left.object.index == 0
+    assert assignment.left.member == "size"
+    assert isinstance(assignment.right, BinaryOpNode)
+    assert isinstance(assignment.right.left, MemberAccessNode)
+    assert assignment.right.left.member == "size"
 
 
 def test_spirv_assembly_readonly_buffer_block_parse():

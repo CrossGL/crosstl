@@ -1296,6 +1296,8 @@ class MojoToCrossGLConverter:
         """Map a Mojo type name to the closest CrossGL type name."""
         if mojo_type is None:
             return "void"
+        if isinstance(mojo_type, str) and mojo_type.startswith("*"):
+            mojo_type = mojo_type[1:].lstrip()
         mojo_type = self.strip_reference_type(mojo_type)
         mapped_type = self.type_map.get(mojo_type)
         if mapped_type:

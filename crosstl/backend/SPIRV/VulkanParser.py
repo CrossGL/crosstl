@@ -3729,6 +3729,38 @@ class VulkanParser:
                 )
             return access
 
+        if self.spirv_is_structured_buffer_block_access(
+            storage_class, struct_type_id, decorations
+        ):
+            member_name = member_names.get(struct_type_id, {}).get(
+                member_key, f"member{member_key}"
+            )
+            access = MemberAccessNode(
+                ArrayAccessNode(
+                    self.spirv_assembly_operand_expression(
+                        base_operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                    0,
+                ),
+                member_name,
+            )
+            for index_operand in index_operands[1:]:
+                access = ArrayAccessNode(
+                    access,
+                    self.spirv_assembly_operand_expression(
+                        index_operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+            return access
+
         if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
             return None
 
@@ -5000,6 +5032,16 @@ class VulkanParser:
             struct_decorations, "BufferBlock"
         ):
             return True
+        return False
+
+    def spirv_is_structured_buffer_block_access(
+        self, storage_class, struct_type_id, decorations
+    ):
+        struct_decorations = decorations.get(struct_type_id, [])
+        if storage_class == "StorageBuffer":
+            return self.spirv_has_decoration(struct_decorations, "Block")
+        if storage_class == "Uniform":
+            return self.spirv_has_decoration(struct_decorations, "BufferBlock")
         return False
 
     def spirv_function_name_fallback(self, function_id, entry_points_by_id):

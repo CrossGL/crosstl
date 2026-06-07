@@ -2563,6 +2563,13 @@ class MojoParser:
         return False
 
     def parse_type(self):
+        if (
+            self.current_token[0] == "MULTIPLY"
+            and self.peek_token()[0] in self.TYPE_START_TOKENS
+        ):
+            self.eat("MULTIPLY")
+            return f"*{self.parse_type()}"
+
         if self.current_token[0] in self.FUNCTION_TYPE_TOKENS:
             return self.parse_function_type()
 

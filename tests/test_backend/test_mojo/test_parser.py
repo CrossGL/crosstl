@@ -303,6 +303,22 @@ def test_variadic_keyword_parameter_parse_from_current_docs():
     assert loop.iterable.method == "items"
 
 
+def test_heterogeneous_variadic_type_pack_parse_from_current_docs():
+    code = """
+    def count_many_things[*ArgTypes: Intable](*args: *ArgTypes) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "count_many_things")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("args", "*ArgTypes")
+    ]
+    assert getattr(function.params[0], "is_variadic", False)
+    assert not getattr(function.params[0], "is_variadic_keyword", False)
+    assert function.return_type == "Int"
+
+
 def test_function_parameter_separator_markers_parse_from_official_docs():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:

@@ -244,6 +244,19 @@ def test_variadic_keyword_parameter_codegen_from_current_docs():
     assert "Unhandled" not in generated_code
 
 
+def test_heterogeneous_variadic_type_pack_codegen_from_current_docs():
+    code = """
+    def count_many_things[*ArgTypes: Intable](*args: *ArgTypes) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int count_many_things(ArgTypes args)" in generated_code
+    assert "*ArgTypes args" not in generated_code
+    assert "return 0;" in generated_code
+
+
 def test_function_parameter_separator_markers_codegen_drops_markers():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
