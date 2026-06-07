@@ -1826,6 +1826,142 @@ def test_translate_project_records_include_forwarding_for_all_source_frontends(
         }
 
 
+def test_translate_project_records_define_forwarding_for_all_source_frontends(
+    tmp_path, monkeypatch
+):
+    register_default_sources()
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    source_names = sorted(SOURCE_REGISTRY.names())
+    assert source_names
+    source_overrides = []
+    for source_name in source_names:
+        shader_path = shader_dir / f"{source_name}.shader"
+        shader_path.write_text(SIMPLE_CROSSL, encoding="utf-8")
+        source_overrides.append(f'"shaders/{source_name}.shader" = "{source_name}"')
+    source_override_text = "\n".join(source_overrides)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+
+            [project.defines]
+            MODE = "debug"
+            USE_FAST_PATH = "1"
+
+            [project.sources]
+            {source_override_text}
+            """).strip(),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def write_shader(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, include_paths
+        calls.append(
+            {
+                "sourceBackend": source_backend,
+                "defines": dict(defines or {}),
+            }
+        )
+        Path(save_shader).write_text(
+            f"// translated from {source_backend}\n",
+            encoding="utf-8",
+        )
+        return f"// translated from {source_backend}\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_shader)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    defines = {"MODE": "debug", "USE_FAST_PATH": "1"}
+    expected_by_source = {}
+    expected_by_status = {}
+    unsupported_sources = []
+    for source_name in source_names:
+        supports_defines = SOURCE_REGISTRY.get(source_name).supports_lexer_keyword(
+            "defines"
+        )
+        status = "forwarded" if supports_defines else "not-supported"
+        expected_by_source[source_name] = {status: 1}
+        expected_by_status[status] = expected_by_status.get(status, 0) + 1
+        if not supports_defines:
+            unsupported_sources.append(source_name)
+
+    artifacts_by_source = {
+        artifact["sourceBackend"]: artifact for artifact in payload["artifacts"]
+    }
+
+    assert validation["success"] is True
+    assert payload["summary"]["translatedCount"] == len(source_names)
+    assert payload["summary"]["defineProcessingByStatus"] == expected_by_status
+    assert payload["summary"]["defineProcessingBySourceBackend"] == expected_by_source
+    assert payload["summary"]["defineProcessingByVariant"] == {}
+    assert payload["diagnosticCounts"] == {
+        "note": 0,
+        "warning": len(unsupported_sources),
+        "error": 0,
+    }
+    assert payload["summary"]["diagnosticsByCode"] == (
+        {"project.translate.defines-not-forwarded": len(unsupported_sources)}
+        if unsupported_sources
+        else {}
+    )
+    assert payload["summary"]["missingCapabilityCounts"] == (
+        {"macro.defines": len(unsupported_sources)} if unsupported_sources else {}
+    )
+    assert validation["diagnosticsByCode"] == (
+        {"project.translate.defines-not-forwarded": len(unsupported_sources)}
+        if unsupported_sources
+        else {}
+    )
+    assert validation["missingCapabilityCounts"] == (
+        {"macro.defines": len(unsupported_sources)} if unsupported_sources else {}
+    )
+    assert [
+        {
+            "sourceBackend": call["sourceBackend"],
+            "defines": call["defines"],
+        }
+        for call in calls
+    ] == [
+        {"sourceBackend": source_name, "defines": defines}
+        for source_name in source_names
+    ]
+    assert {
+        diagnostic["location"]["file"]
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.defines-not-forwarded"
+    } == {f"shaders/{source_name}.shader" for source_name in unsupported_sources}
+    for source_name, artifact in artifacts_by_source.items():
+        define_processing = artifact["defineProcessing"]
+        supports_defines = SOURCE_REGISTRY.get(source_name).supports_lexer_keyword(
+            "defines"
+        )
+        assert artifact["defines"] == defines
+        assert define_processing == {
+            "status": "forwarded" if supports_defines else "not-supported",
+            "frontend": "lexer",
+            "supportsDefines": supports_defines,
+            "defineCount": 2,
+        }
+
+
 def test_translate_project_expands_named_variants_with_merged_defines(
     tmp_path, monkeypatch
 ):
