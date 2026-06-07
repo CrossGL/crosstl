@@ -7377,6 +7377,64 @@ def test_validate_project_report_rejects_validation_ok_for_failed_report_artifac
     )
 
 
+def test_validate_project_report_rejects_toolchain_runs_for_failed_artifacts(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "toolchain-run-for-failed-artifact-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.glsl",
+                        "status": "failed",
+                        "error": "translation failed",
+                    }
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/simple.glsl",
+                            "command": ["glslangValidator"],
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns[0] must reference a translated "
+        "report.artifacts[0] record"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_validation_records_with_undeclared_targets(
     tmp_path,
 ):

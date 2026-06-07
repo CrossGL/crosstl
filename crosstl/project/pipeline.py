@@ -8437,6 +8437,14 @@ def _toolchain_run_contract_reasons(
             f"{prefix}.sourceBackend must match "
             f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
         )
+    if (
+        referenced_artifact is not None
+        and referenced_artifact[1].get("status") != "translated"
+    ):
+        reasons.append(
+            f"{prefix} must reference a translated "
+            f"report.artifacts[{referenced_artifact[0]}] record"
+        )
 
     command = run.get("command")
     if (

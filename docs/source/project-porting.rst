@@ -171,6 +171,7 @@ file paths or artifact source paths are not repository-relative, project target
 lists are not normalized and deduplicated, diagnostic or artifact targets are
 not declared by the report, artifact sources are not declared translation units,
 embedded validation records reference artifacts not declared by the report,
+embedded toolchain runs reference failed report artifacts,
 validation records contain duplicate identities or inconsistent status fields,
 summarized embedded validation omits declared artifacts, external corpus entry
 presence, discovery, or source-backend fields do not match the project root and
