@@ -599,14 +599,56 @@ def _format_project_validation_report(payload):
         for diagnostic in diagnostics:
             if not isinstance(diagnostic, Mapping):
                 continue
-            lines.append(
-                "- "
-                f"{diagnostic.get('severity', 'unknown')} "
-                f"{diagnostic.get('code', 'unknown')}: "
-                f"{diagnostic.get('message', '')}"
-            )
+            lines.append(_format_project_diagnostic_line(diagnostic))
 
     return "\n".join(lines) + "\n"
+
+
+def _format_project_diagnostic_location(location):
+    if not isinstance(location, Mapping):
+        return None
+
+    file_name = location.get("file")
+    if not isinstance(file_name, str) or not file_name:
+        return None
+
+    text = file_name
+    line = location.get("line")
+    if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+        text = f"{text}:{line}"
+        column = location.get("column")
+        if isinstance(column, int) and not isinstance(column, bool) and column > 0:
+            text = f"{text}:{column}"
+    return text
+
+
+def _format_project_diagnostic_line(diagnostic):
+    line = (
+        "- "
+        f"{diagnostic.get('severity', 'note')} "
+        f"{diagnostic.get('code', 'unknown')}: "
+        f"{diagnostic.get('message', '')}"
+    )
+
+    details = []
+    location = _format_project_diagnostic_location(diagnostic.get("location"))
+    if location:
+        details.append(f"location={location}")
+    target = diagnostic.get("target")
+    if isinstance(target, str) and target:
+        details.append(f"target={target}")
+    missing_capabilities = diagnostic.get("missingCapabilities")
+    if isinstance(missing_capabilities, list):
+        capabilities = [
+            capability
+            for capability in missing_capabilities
+            if isinstance(capability, str) and capability
+        ]
+        if capabilities:
+            details.append(f"missingCapabilities={','.join(capabilities)}")
+    if details:
+        line = f"{line} ({'; '.join(details)})"
+    return line
 
 
 def _sarif_level(severity):
@@ -2309,12 +2351,7 @@ def _format_project_report_inspection(payload):
         for diagnostic in diagnostics:
             if not isinstance(diagnostic, Mapping):
                 continue
-            lines.append(
-                "- "
-                f"{diagnostic.get('severity', 'note')} "
-                f"{diagnostic.get('code', 'unknown')}: "
-                f"{diagnostic.get('message', '')}"
-            )
+            lines.append(_format_project_diagnostic_line(diagnostic))
     truncated_diagnostics = payload.get("truncatedDiagnosticCount", 0)
     if (
         isinstance(truncated_diagnostics, int)

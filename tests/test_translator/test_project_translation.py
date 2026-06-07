@@ -14360,6 +14360,9 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert "Validation missing capabilities: target.backend=1" in result.stdout
     assert "Validation artifacts: 0 ok, 0 failed" in result.stdout
     assert "project.config.unsupported-target" in result.stdout
+    assert "location=.:1:1" in result.stdout
+    assert "target=not-a-backend" in result.stdout
+    assert "missingCapabilities=target.backend" in result.stdout
 
 
 def test_project_cli_inspect_report_sarif_reports_diagnostics(tmp_path):

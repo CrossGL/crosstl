@@ -181,6 +181,9 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]
         assert "invalid-report markers" in backend_support["notes"]
+        assert "diagnostic location, target, and missing-capability context" in (
+            backend_support["notes"]
+        )
         assert "project-config count" in backend_support["notes"]
         assert "variant-name summaries" in backend_support["notes"]
         assert "source-root status" in backend_support["notes"]
@@ -691,6 +694,9 @@ def test_project_diagnostics_document_location_path_checks():
         assert "validation rejects missing diagnostic summary rollups" in (
             backend_support["notes"]
         )
+        assert "text output carries diagnostic location, target, and" in (
+            backend_support["notes"]
+        )
         assert "diagnostics whose targets are not declared by the report" in (
             backend_support["notes"]
         )
@@ -707,6 +713,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_validate_project_sarif_reports_generated_diagnostics"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_fails_on_error_diagnostics"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
