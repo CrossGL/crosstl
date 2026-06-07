@@ -2513,6 +2513,7 @@ class CudaParser:
         self.parse_alignment_attributes()
         name = self.parse_name_component()
         vtype += self.parse_array_suffix()
+        self.skip_bitfield_width()
 
         value = None
         if self.current_token[0] == "ASSIGN":
@@ -2586,6 +2587,7 @@ class CudaParser:
         self.parse_alignment_attributes()
         name = self.parse_name_component()
         vtype += self.parse_array_suffix()
+        self.skip_bitfield_width()
         value = self.parse_variable_initializer(vtype)
 
         if "__shared__" in declarator_qualifiers:
@@ -2641,6 +2643,14 @@ class CudaParser:
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
         return None
+
+    def skip_bitfield_width(self):
+        if self.current_token[0] != "COLON":
+            return
+
+        self.eat("COLON")
+        if self.current_token[0] not in {"COMMA", "SEMICOLON", "EOF"}:
+            self.parse_expression()
 
     def constructor_initializer_name(self, vtype):
         return " ".join(

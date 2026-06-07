@@ -1987,6 +1987,10 @@ class HLSLParser:
             self.parse_class_declaration()
             return None
 
+        if self.looks_like_function_prototype():
+            self.parse_local_function_prototype(attributes)
+            return None
+
         if self.looks_like_declaration():
             qualifiers = self.parse_qualifiers()
             var = self.parse_variable_declaration(
@@ -2003,6 +2007,50 @@ class HLSLParser:
         expr = self.parse_expression()
         self.eat("SEMICOLON")
         return self.attach_attributes(expr, attributes)
+
+    def looks_like_function_prototype(self):
+        idx = self.current_index
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+        idx = self.skip_function_modifier_attributes_at(idx)
+        if idx is None:
+            return False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
+
+        idx = self.skip_type_name_at(idx)
+        if idx is None:
+            return False
+        while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
+            idx += 1
+        idx = self.skip_attribute_lists_at(idx)
+        if idx is None or not self.is_identifier_token_at(idx):
+            return False
+
+        idx += 1
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LPAREN":
+            return False
+        idx = self.skip_parenthesized_list_at(idx)
+        if idx is None:
+            return False
+        while idx < len(self.tokens) and self.is_post_type_qualifier_token_at(idx):
+            idx += 1
+        idx = self.skip_array_suffixes_at(idx)
+        if idx is None or idx >= len(self.tokens):
+            return False
+
+        return self.tokens[idx][0] == "SEMICOLON"
+
+    def parse_local_function_prototype(self, attributes=None):
+        qualifiers = self.parse_qualifiers()
+        attributes = list(attributes or [])
+        attributes.extend(self.parse_function_modifier_attributes())
+        qualifiers.extend(self.parse_qualifiers())
+        return_type = self.parse_type()
+        qualifiers.extend(self.parse_post_type_qualifiers())
+        attributes.extend(self.parse_attribute_list())
+        name = self.parse_identifier()
+        return self.parse_function(return_type, name, qualifiers, attributes)
 
     def attach_attributes(self, node, attributes):
         if node is not None and attributes:

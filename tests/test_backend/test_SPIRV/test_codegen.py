@@ -2666,6 +2666,44 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMAGE_QUERY_FORMAT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/val/val_image_test.cpp
+; Reduced from ValidateImage::QueryFormatSuccess and QueryOrderSuccess.
+OpCapability Shader
+OpCapability ImageQuery
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %format_out %order_out %query_image
+OpExecutionMode %main OriginUpperLeft
+OpName %format_out "formatOut"
+OpName %order_out "orderOut"
+OpName %query_image "queryImage"
+OpDecorate %format_out Location 0
+OpDecorate %order_out Location 1
+OpDecorate %query_image DescriptorSet 0
+OpDecorate %query_image Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%ptr_output_uint = OpTypePointer Output %uint
+%ptr_image = OpTypePointer UniformConstant %image
+%format_out = OpVariable %ptr_output_uint Output
+%order_out = OpVariable %ptr_output_uint Output
+%query_image = OpVariable %ptr_image UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %image %query_image
+%format = OpImageQueryFormat %uint %loaded
+OpStore %format_out %format
+%order = OpImageQueryOrder %uint %loaded
+OpStore %order_out %order
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_IMAGE_QUERY_LOD_LEVELS_SAMPLES_ASSEMBLY = """
 ; Source: SPIR-V spec image query instructions plus Vulkan image query semantics.
 ; Reduced to OpImageQueryLod, OpImageQueryLevels, and OpImageQuerySamples.
@@ -5149,6 +5187,22 @@ def test_spirv_tools_image_query_size_codegen():
     assert "Texture2DMS uImage @set(0) @binding(0);" in generated_code
     assert "Size = textureSize(uImage);" in generated_code
     assert "Size = size;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_image_query_format_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_IMAGE_QUERY_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "uint formatOut @output @location(0);" in generated_code
+    assert "uint orderOut @output @location(1);" in generated_code
+    assert "Texture2D queryImage @set(0) @binding(0);" in generated_code
+    assert "formatOut = spirvImageQueryFormat(queryImage);" in generated_code
+    assert "orderOut = spirvImageQueryOrder(queryImage);" in generated_code
+    assert "formatOut = format;" not in generated_code
+    assert "orderOut = order;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -5203,6 +5203,39 @@ def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     assert "image_atomic_comp_swap" not in result
 
 
+def test_rust_gpu_byte_addressable_buffer_methods_codegen_from_spirv_std_docs():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/spirv-std/src/byte_addressable_buffer.rs.
+    code = """
+    use spirv_std::byte_addressable_buffer::ByteAddressableBuffer;
+
+    fn byte_reads(raw: &ByteAddressableBuffer<&[u32]>) -> u32 {
+        unsafe { raw.load_unchecked::<u32>(0) }
+    }
+
+    fn byte_writes(raw: &mut ByteAddressableBuffer<&mut [u32]>) {
+        unsafe {
+            let value: u32 = raw.load::<u32>(0);
+            raw.store::<u32>(4, value);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint byte_reads(ByteAddressBuffer raw)" in result
+    assert "return buffer_load(raw, 0);" in result
+    assert "void byte_writes(RWByteAddressBuffer raw)" in result
+    assert "uint value = buffer_load(raw, 0);" in result
+    assert "buffer_store(raw, 4, value);" in result
+    assert "ByteAddressableBuffer raw" not in result
+    assert "ByteAddressableBuffer<&" not in result
+    assert ".load" not in result
+    assert ".store" not in result
+    crosstl.translator.parse(result)
+
+
 def test_gpu_multisample_image_sample_helpers_convert_to_crossgl_intrinsics():
     code = """
     fn multisample_image_helpers(

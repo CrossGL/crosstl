@@ -404,6 +404,27 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_local_function_prototype",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/fn.forward-declaration.hlsl",
+        code=textwrap.dedent("""
+            float4 main() : SV_Target
+            {
+              float MulBy2(float f);
+              return float4(MulBy2(.25), 1, 0, 1);
+            }
+
+            float MulBy2(float f) {
+              return f*2;
+            }
+        """).strip(),
+        contains=(
+            "return vec4(MulBy2(0.25), 1, 0, 1);",
+            "float MulBy2(float f)",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_global_scope_enum_type",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
