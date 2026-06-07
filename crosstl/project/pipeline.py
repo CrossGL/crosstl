@@ -10227,7 +10227,12 @@ def _source_map_span_within_anchor_reasons(
 
 
 def _source_map_contract_reasons(
-    index: int, artifact: Mapping[str, Any], *, required: bool = False
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+    declared_targets: set[str] | None = None,
+    require_canonical: bool = False,
 ) -> list[str]:
     if "sourceMap" not in artifact:
         if required:
@@ -10254,9 +10259,18 @@ def _source_map_contract_reasons(
         )
 
     target = source_map.get("target")
-    if not _is_non_empty_string(target):
-        reasons.append(f"{prefix}.target must be a string")
-    elif _is_non_empty_string(artifact.get("target")) and target != artifact["target"]:
+    target_reasons = _target_name_contract_reasons(
+        f"{prefix}.target",
+        target,
+        declared_targets=declared_targets,
+        require_canonical=require_canonical,
+    )
+    reasons.extend(target_reasons)
+    if (
+        _is_non_empty_string(target)
+        and _is_non_empty_string(artifact.get("target"))
+        and target != artifact["target"]
+    ):
         reasons.append(f"{prefix}.target must match artifacts[{index}].target")
 
     reasons.extend(
@@ -10334,6 +10348,8 @@ def _source_remap_contract_reasons(
     *,
     required: bool = False,
     require_closed_fields: bool = False,
+    declared_targets: set[str] | None = None,
+    require_canonical: bool = False,
 ) -> list[str]:
     if "sourceRemap" not in artifact:
         if required:
@@ -10375,9 +10391,18 @@ def _source_remap_contract_reasons(
             reasons.append(f"{prefix}.path must match artifacts[{index}].path")
 
     target = source_remap.get("target")
-    if not _is_non_empty_string(target):
-        reasons.append(f"{prefix}.target must be a string")
-    elif _is_non_empty_string(artifact.get("target")) and target != artifact["target"]:
+    target_reasons = _target_name_contract_reasons(
+        f"{prefix}.target",
+        target,
+        declared_targets=declared_targets,
+        require_canonical=require_canonical,
+    )
+    reasons.extend(target_reasons)
+    if (
+        _is_non_empty_string(target)
+        and _is_non_empty_string(artifact.get("target"))
+        and target != artifact["target"]
+    ):
         reasons.append(f"{prefix}.target must match artifacts[{index}].target")
 
     generated_file = source_remap.get("generatedFile")
@@ -10756,6 +10781,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary and status == "translated",
+                    declared_targets=(
+                        declared_targets
+                        if has_summary and project_targets_valid
+                        else None
+                    ),
+                    require_canonical=has_summary,
                 )
             )
             reasons.extend(
@@ -10769,6 +10800,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         and _is_crossgl_target(target)
                     ),
                     require_closed_fields=has_summary,
+                    declared_targets=(
+                        declared_targets
+                        if has_summary and project_targets_valid
+                        else None
+                    ),
+                    require_canonical=has_summary,
                 )
             )
         if (

@@ -5244,6 +5244,10 @@ def test_validate_project_report_rejects_noncanonical_full_report_targets(tmp_pa
         in diagnostic["message"]
     )
     assert (
+        "artifacts[0].sourceMap.target must use normalized backend name opengl"
+        in diagnostic["message"]
+    )
+    assert (
         "validation.toolchains[0].target must use normalized backend name opengl"
         in diagnostic["message"]
     )
@@ -5253,6 +5257,39 @@ def test_validate_project_report_rejects_noncanonical_full_report_targets(tmp_pa
     )
     assert (
         "validation.toolchainRuns[0].target must use normalized backend name opengl"
+        in diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_noncanonical_source_remap_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    artifact["target"] = "CGL"
+    artifact["sourceMap"]["target"] = "CGL"
+    artifact["sourceRemap"]["target"] = "CGL"
+    report_path = repo / "out" / "noncanonical-source-remap-targets-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].target must use normalized backend name cgl"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceMap.target must use normalized backend name cgl"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceRemap.target must use normalized backend name cgl"
         in diagnostic["message"]
     )
 

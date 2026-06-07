@@ -1071,6 +1071,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "stable repository-relative POSIX report identity paths" in (
             backend_support["notes"]
         )
+        assert "canonical source-map and source-remap target metadata" in (
+            backend_support["notes"]
+        )
         assert "missing source-map and source-remap variant rollups" in (
             backend_support["notes"]
         )
@@ -1164,6 +1167,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_artifact_provenance_"
             "source_backend_rollup"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_noncanonical_source_remap_targets"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
