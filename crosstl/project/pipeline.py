@@ -135,6 +135,9 @@ REPORT_MIGRATION_FIELDS = frozenset(
     )
 )
 REPORT_MIGRATION_ACTION_FIELDS = frozenset(("kind", "severity", "message", "targets"))
+REPORT_DIAGNOSTIC_FIELDS = frozenset(
+    ("severity", "code", "message", "location", "target", "missingCapabilities")
+)
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -6394,11 +6397,17 @@ def _target_list_contract_reasons(
     return []
 
 
-def _diagnostic_location_contract_reasons(prefix: str, value: Any) -> list[str]:
+def _diagnostic_location_contract_reasons(
+    prefix: str, value: Any, *, require_closed_fields: bool = False
+) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(prefix, value, SOURCE_MAP_SPAN_FIELD_SET)
+        if require_closed_fields
+        else []
+    )
     file = value.get("file")
     if not _is_non_empty_string(file):
         reasons.append(f"{prefix}.file must be a string")
@@ -9411,6 +9420,14 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             if not isinstance(diagnostic, Mapping):
                 reasons.append(f"diagnostics[{index}] must be an object")
                 continue
+            if has_summary:
+                reasons.extend(
+                    _unsupported_mapping_field_reasons(
+                        f"diagnostics[{index}]",
+                        diagnostic,
+                        REPORT_DIAGNOSTIC_FIELDS,
+                    )
+                )
             severity = diagnostic.get("severity")
             if severity not in {"note", "warning", "error"}:
                 reasons.append(
@@ -9423,7 +9440,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
             reasons.extend(
                 _diagnostic_location_contract_reasons(
-                    f"diagnostics[{index}].location", diagnostic.get("location")
+                    f"diagnostics[{index}].location",
+                    diagnostic.get("location"),
+                    require_closed_fields=has_summary,
                 )
             )
             if "target" in diagnostic and not _is_non_empty_string(
