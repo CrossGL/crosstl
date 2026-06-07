@@ -28,6 +28,25 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
+REPORT_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "generatedAt",
+        "generator",
+        "project",
+        "summary",
+        "units",
+        "skipped",
+        "artifacts",
+        "diagnosticCounts",
+        "diagnostics",
+        "validation",
+        "migration",
+        "artifactMatrix",
+        "externalCorpus",
+    )
+)
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
     (
@@ -57,6 +76,18 @@ REPORT_PROJECT_FIELDS = frozenset(
         "externalCorpusManifest",
     )
 )
+REPORT_MIGRATION_FIELDS = frozenset(
+    (
+        "scope",
+        "nonGoals",
+        "actionCount",
+        "actionsByKind",
+        "actionsBySeverity",
+        "actionsByTarget",
+        "actions",
+    )
+)
+REPORT_MIGRATION_ACTION_FIELDS = frozenset(("kind", "severity", "message", "targets"))
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -8293,7 +8324,13 @@ def _migration_contract_reasons(
     if not isinstance(migration, Mapping):
         return ["migration must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            "migration", migration, REPORT_MIGRATION_FIELDS
+        )
+        if require_migration
+        else []
+    )
     project = report.get("project")
     project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
     project_targets_valid = isinstance(project_targets, list) and all(
@@ -8322,6 +8359,12 @@ def _migration_contract_reasons(
             if not isinstance(action, Mapping):
                 reasons.append(f"{prefix} must be an object")
                 continue
+            if require_migration:
+                reasons.extend(
+                    _unsupported_mapping_field_reasons(
+                        prefix, action, REPORT_MIGRATION_ACTION_FIELDS
+                    )
+                )
             kind = action.get("kind")
             if not _is_non_empty_string(kind):
                 reasons.append(f"{prefix}.kind must be a string")
@@ -8941,6 +8984,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
 
     reasons = []
     has_summary = "summary" in report
+    if has_summary:
+        reasons.extend(
+            _unsupported_mapping_field_reasons("report", report, REPORT_FIELDS)
+        )
     if report.get("schemaVersion") != REPORT_SCHEMA_VERSION:
         reasons.append(f"expected schemaVersion {REPORT_SCHEMA_VERSION}")
     if report.get("kind") != REPORT_KIND:
