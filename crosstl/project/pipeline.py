@@ -163,6 +163,11 @@ REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS = frozenset(
 REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS = frozenset(
     ("status", "frontend", "supportsIncludePaths", "includePathCount")
 )
+REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
+REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
+REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
+    ("schemaVersion", "path", "target", "generatedFile", "mappingGranularity", "hash")
+)
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -5627,11 +5632,17 @@ def _is_sha256_digest(value: Any) -> bool:
     )
 
 
-def _hash_contract_reasons(prefix: str, value: Any) -> list[str]:
+def _hash_contract_reasons(
+    prefix: str, value: Any, *, require_closed_fields: bool = False
+) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(prefix, value, REPORT_HASH_FIELDS)
+        if require_closed_fields
+        else []
+    )
     if value.get("algorithm") != "sha256":
         reasons.append(f"{prefix}.algorithm must be sha256")
     if not _is_sha256_digest(value.get("value")):
@@ -5640,12 +5651,18 @@ def _hash_contract_reasons(prefix: str, value: Any) -> list[str]:
 
 
 def _source_hash_contract_reasons(
-    index: int, artifact: Mapping[str, Any], *, required: bool = False
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if "sourceHash" not in artifact and not required:
         return []
     return _hash_contract_reasons(
-        f"artifacts[{index}].sourceHash", artifact.get("sourceHash")
+        f"artifacts[{index}].sourceHash",
+        artifact.get("sourceHash"),
+        require_closed_fields=require_closed_fields,
     )
 
 
@@ -5682,12 +5699,18 @@ def _artifact_unit_source_hash_contract_reasons(
 
 
 def _generated_hash_contract_reasons(
-    index: int, artifact: Mapping[str, Any], *, required: bool = False
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if "generatedHash" not in artifact and not required:
         return []
     return _hash_contract_reasons(
-        f"artifacts[{index}].generatedHash", artifact.get("generatedHash")
+        f"artifacts[{index}].generatedHash",
+        artifact.get("generatedHash"),
+        require_closed_fields=require_closed_fields,
     )
 
 
@@ -5708,7 +5731,11 @@ def _expected_provenance_intermediate(artifact: Mapping[str, Any]) -> str | None
 
 
 def _provenance_contract_reasons(
-    index: int, artifact: Mapping[str, Any], *, required: bool = False
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if "provenance" not in artifact:
         if required:
@@ -5720,7 +5747,13 @@ def _provenance_contract_reasons(
     if not isinstance(provenance, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, provenance, REPORT_ARTIFACT_PROVENANCE_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     pipeline = provenance.get("pipeline")
     if not _is_non_empty_string(pipeline):
         reasons.append(f"{prefix}.pipeline must be a string")
@@ -6507,12 +6540,17 @@ def _unit_source_hash_contract_reasons(
     root_path: Path | None = None,
     required: bool = False,
     check_current_file: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if "sourceHash" not in unit and not required:
         return []
 
     prefix = f"units[{index}].sourceHash"
-    reasons = _hash_contract_reasons(prefix, unit.get("sourceHash"))
+    reasons = _hash_contract_reasons(
+        prefix,
+        unit.get("sourceHash"),
+        require_closed_fields=require_closed_fields,
+    )
     if reasons:
         return reasons
 
@@ -6847,6 +6885,7 @@ def _unit_contract_reasons(
             root_path=root_path,
             required=require_source_hash,
             check_current_file=check_current_source_hash,
+            require_closed_fields=require_source_hash,
         )
     )
     reasons.extend(
@@ -9029,7 +9068,11 @@ def _source_map_contract_reasons(
 
 
 def _source_remap_contract_reasons(
-    index: int, artifact: Mapping[str, Any], *, required: bool = False
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if "sourceRemap" not in artifact:
         if required:
@@ -9041,7 +9084,13 @@ def _source_remap_contract_reasons(
     if not isinstance(source_remap, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, source_remap, REPORT_ARTIFACT_SOURCE_REMAP_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     if source_remap.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
         reasons.append(f"{prefix}.schemaVersion must be 1")
 
@@ -9071,7 +9120,13 @@ def _source_remap_contract_reasons(
 
     if source_remap.get("mappingGranularity") != "file":
         reasons.append(f"{prefix}.mappingGranularity must be file")
-    reasons.extend(_hash_contract_reasons(f"{prefix}.hash", source_remap.get("hash")))
+    reasons.extend(
+        _hash_contract_reasons(
+            f"{prefix}.hash",
+            source_remap.get("hash"),
+            require_closed_fields=require_closed_fields,
+        )
+    )
     return reasons
 
 
@@ -9402,6 +9457,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary,
+                    require_closed_fields=has_summary,
                 )
             )
             reasons.extend(
@@ -9416,10 +9472,16 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary and status == "translated",
+                    require_closed_fields=has_summary,
                 )
             )
             reasons.extend(
-                _provenance_contract_reasons(index, artifact, required=has_summary)
+                _provenance_contract_reasons(
+                    index,
+                    artifact,
+                    required=has_summary,
+                    require_closed_fields=has_summary,
+                )
             )
             reasons.extend(
                 _source_map_contract_reasons(
@@ -9438,6 +9500,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         and _is_non_empty_string(target)
                         and _is_crossgl_target(target)
                     ),
+                    require_closed_fields=has_summary,
                 )
             )
         if (

@@ -6929,6 +6929,49 @@ def test_validate_project_report_rejects_unexpected_generated_artifact_fields(
     assert "artifacts[0].unexpected is not allowed" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_unexpected_generated_artifact_metadata_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["units"][0]["sourceHash"]["unexpected"] = "metadata"
+    artifact = payload["artifacts"][0]
+    artifact["sourceHash"]["unexpected"] = "metadata"
+    artifact["generatedHash"]["unexpected"] = "metadata"
+    artifact["provenance"]["unexpected"] = "metadata"
+    artifact["sourceRemap"]["unexpected"] = "metadata"
+    artifact["sourceRemap"]["hash"]["unexpected"] = "metadata"
+    report_path = (
+        repo / "out" / "unexpected-generated-artifact-metadata-fields-report.json"
+    )
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].sourceHash.unexpected is not allowed" in diagnostic["message"]
+    assert "artifacts[0].sourceHash.unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].generatedHash.unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].provenance.unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceRemap.unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+    assert "artifacts[0].sourceRemap.hash.unexpected is not allowed" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_failed_artifacts_without_error(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
