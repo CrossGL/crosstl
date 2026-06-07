@@ -35,6 +35,7 @@ TOKENS = tuple(
         ("COMMENT_SINGLE", r"//(?:\\\r?\n|[^\n])*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
         ("NEWLINE", r"\n+"),
+        ("ESCAPED_NEWLINE", r"\\n"),
         ("ASSIGN_SHIFT_LEFT", r"<<="),
         ("ASSIGN_SHIFT_RIGHT", r">>="),
         ("INCREMENT", r"\+\+"),

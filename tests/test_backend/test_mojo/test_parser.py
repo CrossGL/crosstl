@@ -585,6 +585,61 @@ def test_multiline_parenthesized_expression_parsing():
     assert declaration.value.op == "//"
 
 
+def test_multiline_tuple_element_operator_parsing_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # bb82972c5f55af98ec69a6324383220c0903a8a8,
+    # problems/p19/op/attention.mojo transpose_blocks_per_grid.
+    code = """
+    def configure_attention_grid():
+        comptime transpose_blocks_per_grid = (
+            (d + TRANSPOSE_BLOCK_DIM_XY - 1) // TRANSPOSE_BLOCK_DIM_XY,
+            (seq_len + TRANSPOSE_BLOCK_DIM_XY - 1)
+            // TRANSPOSE_BLOCK_DIM_XY,
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "configure_attention_grid").body[0]
+
+    assert isinstance(declaration.initial_value, TupleNode)
+    first, second = declaration.initial_value.elements
+    assert isinstance(first, BinaryOpNode)
+    assert first.op == "//"
+    assert isinstance(second, BinaryOpNode)
+    assert second.op == "//"
+
+
+def test_comment_trailing_backslash_before_kernel_specialization_from_mojo_gpu_puzzles():
+    # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
+    # bb82972c5f55af98ec69a6324383220c0903a8a8,
+    # solutions/p19/op/attention.mojo attention_orchestration_solution.
+    code = """
+    def launch_attention():
+        var q_2d = q_tensor.reshape(layout_q_2d)
+        # Step 2: Transpose K from (seq_len, d) to K^T (d, seq_len)\\
+        comptime kernel = transpose_kernel[
+            seq_len, d, KTLayout, KLayout, dtype
+        ]
+        ctx.enqueue_function[kernel](k_t, k_tensor)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "launch_attention")
+    kernel = function.body[1]
+    launch = function.body[2]
+
+    assert isinstance(kernel, VariableDeclarationNode)
+    assert kernel.name == "kernel"
+    assert isinstance(kernel.initial_value, ArrayAccessNode)
+    assert isinstance(kernel.initial_value.index, TupleNode)
+    assert [arg.name for arg in kernel.initial_value.index.elements] == [
+        "seq_len",
+        "d",
+        "KTLayout",
+        "KLayout",
+        "dtype",
+    ]
+    assert isinstance(launch, CallNode)
+
+
 def test_struct_generic_member_parsing():
     code = """
     struct Resources:

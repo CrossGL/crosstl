@@ -898,6 +898,35 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: godotengine/godot drivers/gles3/shaders/canvas_occlusion.glsl.
+    # Reduced from modes metadata whose define payloads contain literal "\n"
+    # separators before the first stage marker.
+    ExternalFixture(
+        name="godot-gles3-canvas-occlusion-escaped-mode-defines",
+        repo="https://github.com/godotengine/godot",
+        commit="070dc9897ea1b84ab2a7ec04b9bc1b94f38a0eaf",
+        path="drivers/gles3/shaders/canvas_occlusion.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            /* clang-format off */
+            #[modes]
+
+            mode_sdf =
+            mode_shadow = #define MODE_SHADOW
+            mode_shadow_RGBA = #define MODE_SHADOW \\n#define USE_RGBA_SHADOWS
+
+            #[specializations]
+
+            #[vertex]
+
+            layout(location = 0) in vec3 vertex;
+            uniform highp mat4 projection;
+
+            void main() {
+                gl_Position = projection * vec4(vertex, 1.0);
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="filament-surface-instancing-highp-object-uniforms",
         repo="https://github.com/google/filament",
@@ -1690,6 +1719,28 @@ def test_parse_godot_hash_section_preamble_fixture():
     assert "dithered" not in crossgl
     assert "#VERSION_DEFINES" in crossgl
     assert "compute {" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_parse_godot_escaped_mode_define_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-gles3-canvas-occlusion-escaped-mode-defines"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    vertex = next(var for var in ast.io_variables if var.name == "vertex")
+
+    assert ast.shader_type == "vertex"
+    assert vertex.layout == {"location": "0"}
+    assert vertex.qualifiers == ["in"]
+    assert [function.name for function in ast.functions] == ["main"]
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+    assert "MODE_SHADOW" not in crossgl
+    assert "USE_RGBA_SHADOWS" not in crossgl
+    assert "VertexOutput main(VertexInput input)" in crossgl
     parse_crossgl(crossgl)
 
 

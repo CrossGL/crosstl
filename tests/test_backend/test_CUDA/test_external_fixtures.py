@@ -64,6 +64,11 @@ EXTERNAL_SAMPLES = [
         ],
     },
     {
+        "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "cea7dcd759b81d3059db8b74a3d5d4005ce4a398",
+        "paths": ["README.md"],
+    },
+    {
         "repo": "https://github.com/NVIDIA/cutlass",
         "commit": "2599f2975b06a67d5ee25e4a7292afeda1475c9b",
         "paths": [
@@ -926,6 +931,51 @@ def test_cccl_cub_parenthesized_std_max_call_codegen_reparse():
     expected_call = "std::max((1 * sizeof(int)), block_reduce_temp_bytes);"
     assert f"var smem_size: auto = {expected_call}" in crossgl
     assert "var count: std::size_t = std::size_t(n);" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_readme_span_reduce_kernel_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: cea7dcd759b81d3059db8b74a3d5d4005ce4a398
+    # path: README.md
+    # lines: 274-289
+    source = """
+    template <int block_size>
+    __global__ void reduce(cuda::std::span<int const> data,
+                           cuda::std::span<int> result) {
+      using BlockReduce = cub::BlockReduce<int, block_size>;
+      __shared__ typename BlockReduce::TempStorage temp_storage;
+
+      int const index = threadIdx.x + blockIdx.x * blockDim.x;
+      int sum = 0;
+      if (index < data.size()) {
+        sum += data[index];
+      }
+      sum = BlockReduce(temp_storage).Sum(sum);
+      if (threadIdx.x == 0) {
+        cuda::atomic_ref<int, cuda::thread_scope_device> atomic_result(result.front());
+        atomic_result.fetch_add(sum, cuda::memory_order_relaxed);
+      }
+    }
+    """
+
+    ast = parse_cuda(source)
+    kernel = ast.kernels[0]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert [(param.vtype, param.name) for param in kernel.params] == [
+        ("cuda::std::span<int const>", "data"),
+        ("cuda::std::span<int>", "result"),
+    ]
+    assert "array<i32> data" in crossgl
+    assert "array<i32> result" in crossgl
+    assert "var<workgroup> temp_storage: BlockReduce::TempStorage;" in crossgl
+    assert "if ((index < data.size())) {" in crossgl
+    assert "var atomic_result: cuda::atomic_ref<int, cuda::thread_scope_device>" in (
+        crossgl
+    )
+    assert "cuda::std::span" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

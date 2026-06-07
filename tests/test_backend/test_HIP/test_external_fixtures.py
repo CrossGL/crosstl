@@ -51,6 +51,15 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3",
         "paths": ["HIP-Examples-Applications/Histogram/Histogram.cpp"],
     },
+    "rocwmma": {
+        "url": "https://github.com/ROCm/rocWMMA",
+        "commit": "1e3bed23f981d8ca0ce1b8634e6b91b5ccf91cfb",
+        "paths": [
+            "samples/simple_sgemm.cpp",
+            "samples/simple_hgemm.cpp",
+            "samples/simple_dgemm.cpp",
+        ],
+    },
     "hpc_training": {
         "url": "https://github.com/amd/HPCTrainingExamples",
         "commit": "56b903adadb113097ed4333d0bdc3e3bc537c8a2",
@@ -680,6 +689,53 @@ def test_external_hip_examples_histogram_newline_split_c_style_cast_reparse():
 
     assert "var input: ptr<vec4<u8>> = ptr<vec4<u8>>(sharedArray);" in crossgl
     assert "sharedArray;" not in crossgl
+
+
+def test_external_rocwmma_float_aliases_codegen_reparse():
+    # Upstream: ROCm/rocWMMA@1e3bed23f981d8ca0ce1b8634e6b91b5ccf91cfb,
+    # samples/simple_sgemm.cpp, samples/simple_hgemm.cpp, and
+    # samples/simple_dgemm.cpp.
+    source = """
+    using rocwmma::float16_t;
+    using rocwmma::float32_t;
+    using rocwmma::float64_t;
+
+    __global__ void sgemm_rocwmma_d(uint32_t m,
+                                    float32_t const* a,
+                                    float32_t* d,
+                                    float32_t alpha) {
+        d[threadIdx.x] = a[threadIdx.x] * alpha;
+    }
+
+    __host__ void gemm_test(float32_t alpha, float64_t beta) {
+        float16_t* d_half;
+        float32_t* d_a;
+        float64_t elapsedTimeMs = 0.0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    kernel = ast.statements[0]
+    host = ast.statements[1]
+
+    assert kernel.params[1]["type"] == "float32_t const *"
+    assert kernel.params[2]["type"] == "float32_t *"
+    assert kernel.params[3]["type"] == "float32_t"
+    assert [declaration.vtype for declaration in host.body] == [
+        "float16_t *",
+        "float32_t *",
+        "float64_t",
+    ]
+    assert "@group(0) @binding(1) var<storage, read_write> a: array<f32>" in crossgl
+    assert "@group(0) @binding(2) var<storage, read_write> d: array<f32>" in crossgl
+    assert "f32 alpha" in crossgl
+    assert "f64 beta" in crossgl
+    assert "var d_half: ptr<f16>;" in crossgl
+    assert "var d_a: ptr<f32>;" in crossgl
+    assert "var elapsedTimeMs: f64 = 0.0;" in crossgl
+    assert "float16_t" not in crossgl
+    assert "float32_t" not in crossgl
+    assert "float64_t" not in crossgl
 
 
 def test_external_hpc_training_double2_launch_codegen():
