@@ -5177,6 +5177,27 @@ def test_for_statement_preserves_declaration_initializers():
     assert "ContinueNode(" not in generated_code
 
 
+def test_for_statement_preserves_multiple_declaration_initializers_and_updates():
+    shader = """
+    shader LoopMultiDeclaratorInitializers {
+        float4 helper() {
+            int sum = 0;
+            for (int i = 0, j = 3; i < j; ++i, --j) {
+                sum += i + j;
+            }
+            return float4(sum, 0, 0, 1);
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int i = 0, j = 3; (i < j); ++i, --j)" in generated_code
+    assert "sum += (i + j);" in generated_code
+    assert "return float4(sum, 0, 0, 1);" in generated_code
+    assert "int j = 3" not in generated_code
+
+
 def test_loop_statement_lowers_to_while_true():
     shader = """
     shader LoopNodeSmoke {

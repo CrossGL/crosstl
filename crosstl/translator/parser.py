@@ -2791,12 +2791,19 @@ class Parser:
 
         update = None
         if self.current_token[0] != "RPAREN":
-            update = self.parse_expression()
+            update = self.parse_expression_sequence()
 
         self.eat("RPAREN")
         body = self.parse_statement()
 
         return ForNode(init=init, condition=condition, update=update, body=body)
+
+    def parse_expression_sequence(self):
+        expressions = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_expression())
+        return expressions[0] if len(expressions) == 1 else expressions
 
     def parse_for_in_statement_after_for(self):
         """Parse a ``for pattern in iterable`` loop after ``for`` is consumed."""
@@ -2815,44 +2822,19 @@ class Parser:
 
     def parse_for_loop_variable_declaration(self):
         """Parse variable declarations in for loops (without consuming semicolon)."""
-        qualifiers = []
-
-        while self.current_token[0] in [
-            "CONST",
-            "STATIC",
-            "MUT",
-            "SHARED",
-            "UNIFORM",
-            "BUFFER",
-        ]:
-            qualifiers.append(self.current_token[1])
-            self.eat(self.current_token[0])
-
+        qualifiers = self.parse_variable_qualifiers()
         var_type = self.parse_type()
-        name = self.parse_binding_identifier()
+        declarations = []
+        while True:
+            declarations.append(
+                self.parse_variable_declarator(var_type, qualifiers, [])
+            )
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
 
-        while self.current_token[0] == "LBRACKET":
-            self.eat("LBRACKET")
-            size = None
-            if self.current_token[0] != "RBRACKET":
-                size = self.parse_expression()
-            self.eat("RBRACKET")
-            var_type = ArrayType(var_type, size)
-
-        initial_value = None
-        if self.current_token[0] == "EQUALS":
-            self.eat("EQUALS")
-            initial_value = self.parse_expression()
-
-        # Don't consume semicolon - that's handled by the for loop parser
-
-        return VariableNode(
-            name=name,
-            var_type=var_type,
-            initial_value=initial_value,
-            qualifiers=qualifiers,
-            is_mutable="const" not in qualifiers,
-        )
+        # Don't consume semicolon - that's handled by the for loop parser.
+        return declarations[0] if len(declarations) == 1 else declarations
 
     def parse_while_statement(self):
         """Parse a while loop statement."""

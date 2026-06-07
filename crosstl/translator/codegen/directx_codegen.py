@@ -4631,6 +4631,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if hasattr(node, "update") and node.update:
                 if isinstance(node.update, str):
                     update = node.update
+                elif isinstance(node.update, list):
+                    update = ", ".join(
+                        self.generate_expression(expr).strip().rstrip(";")
+                        for expr in node.update
+                    )
                 else:
                     update = self.generate_expression(node.update).strip().rstrip(";")
 
@@ -4843,11 +4848,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return ""
         if isinstance(init, str):
             return init
-        if isinstance(init, VariableNode) or (
-            hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__)
-        ):
+        if isinstance(init, list):
+            declaration_list = all(isinstance(item, VariableNode) for item in init)
+            return ", ".join(
+                (
+                    self.generate_for_variable_initializer(
+                        item, include_type=not declaration_list or index == 0
+                    )
+                    if isinstance(item, VariableNode)
+                    else self.generate_expression(item).strip().rstrip(";")
+                )
+                for index, item in enumerate(init)
+            )
+        if isinstance(init, VariableNode):
+            return self.generate_for_variable_initializer(init)
+        if hasattr(init, "__class__") and "ExpressionStatement" in str(init.__class__):
             return self.generate_statement(init, 0).strip().rstrip(";")
         return self.generate_expression(init).strip().rstrip(";")
+
+    def generate_for_variable_initializer(self, node, include_type=True):
+        vtype = self.local_variable_declared_type(node)
+        self.local_variable_types[node.name] = self.type_name_string(vtype)
+        name = self.hlsl_declaration_identifier_name(node.name)
+        mapped_type = self.map_type(vtype)
+        declaration = format_c_style_array_declaration(mapped_type, name)
+        if include_type:
+            declaration = f"{self.local_variable_qualifier(node)}{declaration}"
+        else:
+            prefix = f"{mapped_type} "
+            if declaration.startswith(prefix):
+                declaration = declaration[len(prefix) :]
+
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is not None:
+            value = self.generate_expression_with_expected(initial_value, vtype)
+            declaration = f"{declaration} = {value}"
+        return declaration
 
     def generate_expression(self, expr):
         """Render a CrossGL AST expression into HLSL expression syntax."""

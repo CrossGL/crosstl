@@ -1787,7 +1787,10 @@ def test_codegen_for_loop_multiple_declarators_emit_single_type():
 
     assert "for (int left = 0, right = 3; left < right; ++left)" in output
     assert "for (int left = 0, int right = 3;" not in output
-    parse_crossgl(output)
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
+    assert "for (int left = 0, right = 3; (left < right); ++left)" in (regenerated_hlsl)
+    assert "accum += uv.x;" in regenerated_hlsl
+    assert "return float4(accum, uv.y, 0.0, 1.0);" in regenerated_hlsl
 
 
 def test_codegen_geometry_stage():
