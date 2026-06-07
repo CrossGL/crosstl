@@ -9803,6 +9803,7 @@
           "evidence": [
             "tests/test_backend/test_CUDA/test_external_fixtures.py::def test_cuda_samples_simple_atomic_intrinsics_codegen_reparse",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9818,6 +9819,7 @@
           "evidence": [
             "tests/test_backend/test_directx/test_external_fixtures.py::def test_codegen_external_directx_fixture_to_parseable_crossgl",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9833,6 +9835,7 @@
           "evidence": [
             "tests/test_backend/test_HIP/test_external_fixtures.py::def test_external_rocm_bit_extract_builtin_crossgl_reparse",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9848,6 +9851,7 @@
           "evidence": [
             "tests/test_backend/test_metal/test_external_fixtures.py::def test_external_metal_fixture_parse_and_roundtrip",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9863,6 +9867,7 @@
           "evidence": [
             "tests/test_backend/test_mojo/test_external_fixtures.py::def test_codegen_external_mojo_fixture_preserves_function_type_parameters",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9878,6 +9883,7 @@
           "evidence": [
             "tests/test_backend/test_GLSL/test_external_fixtures.py::def test_parse_glslang_layout_only_builtin_spec_constant_fixture",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9893,6 +9899,7 @@
           "evidence": [
             "tests/test_backend/test_rust/test_external_fixtures.py::def test_codegen_external_rust_fixture_to_parseable_crossgl",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9908,6 +9915,7 @@
           "evidence": [
             "tests/test_backend/test_slang/test_external_fixtures.py::def test_external_fixture_codegen_crossgl_reparse",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
@@ -9923,6 +9931,7 @@
           "evidence": [
             "tests/test_backend/test_SPIRV/test_external_fixtures.py::def test_codegen_external_vulkan_fixture_to_parseable_crossgl",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",

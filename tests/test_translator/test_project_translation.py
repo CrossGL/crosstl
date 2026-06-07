@@ -4877,6 +4877,43 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
     }
 
 
+def test_translate_project_records_missing_external_corpus_manifest(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "missing-corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["project"]["config"] == str(config_path.resolve())
+    assert payload["project"]["externalCorpusManifest"] == "missing-corpus.json"
+    assert payload["externalCorpus"] == {
+        "schemaVersion": 1,
+        "manifest": "missing-corpus.json",
+        "status": "missing",
+        "entries": [],
+        "summary": project_pipeline._external_corpus_empty_summary(),
+    }
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.external-corpus-missing"
+    assert diagnostic["severity"] == "warning"
+    assert "missing-corpus.json" in diagnostic["message"]
+
+
 def test_translate_project_skips_invalid_external_corpus_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
