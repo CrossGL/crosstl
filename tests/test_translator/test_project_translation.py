@@ -5374,6 +5374,32 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     assert payload["artifactStatusByTarget"] == {
         "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }
+
+
+def test_validate_project_report_emits_closed_validation_report_schema(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = validate_project_report(report_path)
+
+    assert set(payload) == project_pipeline.VALIDATION_REPORT_FIELDS
+    assert payload["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    assert payload["kind"] == project_pipeline.VALIDATION_REPORT_KIND
+    assert payload["sourceReport"] == str(report_path)
+    assert isinstance(payload["generatedAt"], int)
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 1,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=1),
+        "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
+    }
     assert payload["artifactStatusBySourceBackend"] == {
         "cgl": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }

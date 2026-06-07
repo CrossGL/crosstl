@@ -1073,6 +1073,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "direct validation report artifact target, artifact source backend, "
             "artifact variant"
         ) in backend_support["notes"]
+        assert "closed standalone validation-report field set" in (
+            backend_support["notes"]
+        )
         assert "applied define map consistency" in backend_support["notes"]
         assert "target/variant directory containment" in backend_support["notes"]
         assert "source-root status record and count consistency" in (
@@ -1125,6 +1128,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_groups_artifact_status_by_source_"
             "backend"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_emits_closed_validation_report_schema"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

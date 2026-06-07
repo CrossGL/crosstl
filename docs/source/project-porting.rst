@@ -188,6 +188,8 @@ preserved diagnostics, plus artifact target, artifact source-backend,
 artifact variant, hash-status, source-map status, source-remap status,
 toolchain status, toolchain-run status, toolchain-run target, toolchain-run
 source backend, and toolchain-run variant rollups for validation results.
+The JSON validation report uses schema version 1 with a fixed top-level field
+set so automation can detect contract drift.
 The default output is JSON; ``--format text``
 prints a concise validation summary with the same rollups, and ``--format
 sarif`` emits validation diagnostics as SARIF.
@@ -518,7 +520,8 @@ Project reports are JSON documents with:
   summarized validation artifacts, aggregate validation artifact and validation
   status summary counts, direct validation report artifact target, source
   backend, variant, hash-status, source-map status, source-remap status,
-  toolchain status, and toolchain-run status rollups, failed-artifact text with
+  toolchain status, toolchain-run status rollups, and a closed standalone
+  validation-report field set, failed-artifact text with
   non-OK hash, source-map, and source-remap statuses, bounded validation artifact
   and validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, unit source

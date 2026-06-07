@@ -276,6 +276,33 @@ REPORT_INCLUDE_DEPENDENCY_SCAN_IDENTITY_FIELDS = (
     "variant",
 )
 REPORT_SKIPPED_FIELDS = frozenset(("path", "reason", "sourceOverride"))
+VALIDATION_REPORT_KIND = "crosstl-project-validation-report"
+VALIDATION_REPORT_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceReport",
+        "generatedAt",
+        "success",
+        "diagnosticCounts",
+        "diagnosticsByCode",
+        "missingCapabilityCounts",
+        "artifactStatusByTarget",
+        "artifactStatusBySourceBackend",
+        "artifactStatusByVariant",
+        "toolchainStatusCounts",
+        "toolchainRunStatusCounts",
+        "toolchainRunStatusByTarget",
+        "toolchainRunStatusBySourceBackend",
+        "toolchainRunStatusByVariant",
+        "sourceHashStatusCounts",
+        "generatedHashStatusCounts",
+        "sourceMapStatusCounts",
+        "sourceRemapStatusCounts",
+        "diagnostics",
+        "validation",
+    )
+)
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -5851,7 +5878,7 @@ def _validation_report_payload(
     source_remap_status_counts = validation_summary.get("sourceRemapStatusCounts")
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
-        "kind": "crosstl-project-validation-report",
+        "kind": VALIDATION_REPORT_KIND,
         "sourceReport": str(path),
         "generatedAt": int(time.time()),
         "success": not any(
