@@ -6498,6 +6498,34 @@ def test_metal_stage_io_interpolation_attributes_preserve_semantics():
     assert "[[nointerpolation]]" not in generated_code
 
 
+def test_metal_barycentric_semantics_lower_to_stage_input_attributes():
+    shader = """
+    shader MetalBarycentricStageIO {
+        struct FSInput {
+            vec3 bary @ gl_BaryCoordEXT;
+            vec3 affineBary @ gl_BaryCoordNoPerspEXT;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @gl_FragColor {
+                return vec4(input.bary + input.affineBary, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "float3 bary [[barycentric_coord]];" in generated_code
+    assert (
+        "float3 affineBary [[barycentric_coord]] "
+        "[[center_no_perspective]];" in generated_code
+    )
+    assert "gl_BaryCoord" not in generated_code
+
+
 def test_metal_stage_io_lowered_matrix_and_array_members_preserve_attributes():
     shader = """
     shader ExpandedVertexAttributes {

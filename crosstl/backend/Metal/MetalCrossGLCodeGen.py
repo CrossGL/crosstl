@@ -2855,13 +2855,30 @@ class MetalToCrossGLConverter:
             return ""
 
         outputs = []
+        attr_names = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in semantic
+            if isinstance(attr, AttributeNode)
+        }
+        has_barycentric_coord = "barycentric_coord" in attr_names
+        no_perspective_barycentric = has_barycentric_coord and any(
+            "no_perspective" in attr_name for attr_name in attr_names
+        )
         for attr in semantic:
             if not isinstance(attr, AttributeNode):
                 continue
             name = attr.name
             args = [str(a).strip() for a in attr.args] if attr.args else []
             key = f"{name}({args[0]})" if args else name
-            if context == "parameter" and name == "sample_mask":
+            if name == "barycentric_coord":
+                out = (
+                    "gl_BaryCoordNoPerspEXT"
+                    if no_perspective_barycentric
+                    else "gl_BaryCoordEXT"
+                )
+            elif has_barycentric_coord and "no_perspective" in str(name).lower():
+                continue
+            elif context == "parameter" and name == "sample_mask":
                 out = "gl_SampleMaskIn"
             else:
                 out = self.map_semantics.get(key, self.map_semantics.get(name, None))

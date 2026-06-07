@@ -1090,6 +1090,8 @@ class MetalCodeGen:
             "SV_Depth": "depth(any)",
             # Additional Metal-specific attributes
             "gl_FragCoord": "position",
+            "gl_BaryCoordEXT": "barycentric_coord",
+            "gl_BaryCoordNoPerspEXT": "barycentric_coord",
             "gl_FrontFacing": "is_front_facing",
             "gl_PointCoord": "point_coord",
             "gl_SampleID": "sample_id",
@@ -2428,7 +2430,18 @@ class MetalCodeGen:
             interpolation = self.metal_interpolation_attribute_name(attr)
             if interpolation is not None:
                 return f" [[{interpolation}]]"
+        implied = self.metal_semantic_implied_interpolation_attribute(node)
+        if implied is not None:
+            return f" [[{implied}]]"
         return ""
+
+    def metal_semantic_implied_interpolation_attribute(self, node):
+        semantic = self.semantic_from_node(node)
+        if semantic is None:
+            return None
+        if str(semantic).lower() == "gl_barycoordnoperspext":
+            return "center_no_perspective"
+        return None
 
     def format_struct_resource_array_member(self, member):
         name = getattr(member, "name", None)

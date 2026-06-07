@@ -203,6 +203,35 @@ def test_codegen_fragment_sample_mask_parameter_uses_input_builtin():
     assert "uint coverage [[sample_mask]]" in regenerated
 
 
+def test_codegen_fragment_barycentric_attribute_uses_canonical_builtin():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct FragmentInput {
+        float4 position [[position]];
+        float3 barycentricCoords [[barycentric_coord, center_no_perspective]];
+    };
+
+    fragment float4 fragment_main(FragmentInput input [[stage_in]]) {
+        return float4(input.barycentricCoords, 1.0);
+    }
+    """
+    result = convert(code)
+
+    assert "vec3 barycentricCoords @gl_BaryCoordNoPerspEXT;" in result
+    assert "@barycentric_coord" not in result
+    assert "@center_no_perspective" not in result
+    assert parse_crossgl(result) is not None
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(result))
+
+    assert (
+        "float3 barycentricCoords [[barycentric_coord]] "
+        "[[center_no_perspective]];" in regenerated
+    )
+
+
 def test_codegen_trailing_return_type_helper_from_msl_cxx14_grammar():
     code = """
     #include <metal_stdlib>

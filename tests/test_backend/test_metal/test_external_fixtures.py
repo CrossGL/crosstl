@@ -81,9 +81,7 @@ EXTERNAL_FIXTURES = [
             "Metal Shading Language Specification, section 2.19 Per-Vertex Values"
         ),
         "roundtrip": False,
-        "contains": [
-            "vec3 barycentric_coords @barycentric_coord @center_no_perspective;"
-        ],
+        "contains": ["vec3 barycentric_coords @gl_BaryCoordNoPerspEXT;"],
         "source": (
             """
             #include <metal_stdlib>
