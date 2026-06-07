@@ -92,6 +92,29 @@ def _assert_generated_output_is_usable(generated):
     assert "<crosstl." not in generated
 
 
+def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
+    source_text = (
+        "shader LineEndingSmoke {\r\n"
+        "    float helper(float value) {\r\n"
+        "        return value + 1.0;\r\n"
+        "    }\r\n"
+        "}\r\n"
+    )
+    source_path = tmp_path / "line-ending-smoke.cgl"
+    output_path = tmp_path / "out.cgl"
+    source_path.write_bytes(source_text.encode("utf-8"))
+
+    generated = crosstl.translate(
+        str(source_path),
+        backend="cgl",
+        save_shader=str(output_path),
+        format_output=False,
+    )
+
+    assert generated == source_text
+    assert output_path.read_bytes() == source_path.read_bytes()
+
+
 def test_root_package_exposes_documented_registry_helpers():
     assert {"supported_backends", "supported_sources", "translate"}.issubset(
         crosstl.__all__

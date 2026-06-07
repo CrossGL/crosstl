@@ -155,7 +155,7 @@ def translate(
         )
 
     if save_shader is not None:
-        with open(save_shader, "w", encoding="utf-8") as file:
+        with open(save_shader, "w", encoding="utf-8", newline="") as file:
             file.write(generated_code)
 
     return generated_code
