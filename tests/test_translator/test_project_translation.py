@@ -7048,6 +7048,50 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     )
 
 
+def test_validate_project_report_rejects_blank_project_config_list_entries(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "blank-project-config-list-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "sourceRoots": [" "],
+                    "includePatterns": [""],
+                    "excludePatterns": ["\t"],
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "includeDirs": ["  "],
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceRoots entries must be non-empty strings" in (
+        diagnostic["message"]
+    )
+    assert "project.includePatterns entries must be non-empty strings" in (
+        diagnostic["message"]
+    )
+    assert "project.excludePatterns entries must be non-empty strings" in (
+        diagnostic["message"]
+    )
+    assert "project.includeDirs entries must be non-empty strings" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_invalid_project_config_paths(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

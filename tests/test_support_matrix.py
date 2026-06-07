@@ -1240,6 +1240,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "summary rollups including source override counts" in (
             backend_support["notes"]
         )
+        assert "non-empty scan-scope list entries" in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
@@ -1279,6 +1280,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_malformed_source_root_status_"
             "records"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_blank_project_config_list_entries"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

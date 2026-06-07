@@ -8020,6 +8020,8 @@ def _skipped_contract_reasons(
 def _config_string_list_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         return [f"{prefix} must be a list of strings"]
+    if any(not item.strip() for item in value):
+        return [f"{prefix} entries must be non-empty strings"]
     return []
 
 
