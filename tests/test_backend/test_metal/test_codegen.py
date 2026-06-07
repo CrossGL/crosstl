@@ -3381,5 +3381,31 @@ def test_codegen_preserves_native_address_space_qualifiers():
     assert "unsupported Metal address-space call" not in metal
 
 
+def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct TransparentFragmentValues {
+        half4 color;
+    };
+
+    kernel void resolve(
+        imageblock<TransparentFragmentValues> blockData [[threadgroup_imageblock]],
+        ushort2 localThreadID [[thread_position_in_threadgroup]]) {
+        threadgroup_imageblock TransparentFragmentValues* fragmentValues =
+            blockData.data(localThreadID);
+        half4 color = fragmentValues->color;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "threadgroup_imageblock TransparentFragmentValues* fragmentValues" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "threadgroup_imageblock TransparentFragmentValues* fragmentValues" in metal
+    assert "thread TransparentFragmentValues* fragmentValues" not in metal
+
+
 if __name__ == "__main__":
     pytest.main()

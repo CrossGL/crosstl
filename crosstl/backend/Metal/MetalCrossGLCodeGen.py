@@ -1385,7 +1385,13 @@ class MetalToCrossGLConverter:
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
         address_spaces = []
-        for qualifier in ("threadgroup", "thread", "device", "constant"):
+        for qualifier in (
+            "threadgroup_imageblock",
+            "threadgroup",
+            "thread",
+            "device",
+            "constant",
+        ):
             if qualifier in qualifiers and qualifier not in address_spaces:
                 address_spaces.append(qualifier)
         return f"{' '.join(address_spaces)} " if address_spaces else ""

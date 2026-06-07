@@ -5660,7 +5660,13 @@ class MetalCodeGen:
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
-        for address_space in ("constant", "device", "threadgroup", "thread"):
+        for address_space in (
+            "constant",
+            "device",
+            "threadgroup_imageblock",
+            "threadgroup",
+            "thread",
+        ):
             if address_space in qualifiers:
                 return f"{address_space} "
         if qualifiers & {"const", "readonly"}:
@@ -5713,6 +5719,8 @@ class MetalCodeGen:
                 ):
                     const_prefix = "const "
                 return f"{const_prefix}{address_space} "
+        if "threadgroup_imageblock" in qualifiers | attributes:
+            return "threadgroup_imageblock "
         if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
             return "threadgroup "
         if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
@@ -11289,6 +11297,8 @@ class MetalCodeGen:
             address_spaces.append("ray_data")
         if qualifiers & {"device", "global", "storage"}:
             address_spaces.append("device")
+        if "threadgroup_imageblock" in qualifiers:
+            address_spaces.append("threadgroup_imageblock")
         if qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
             address_spaces.append("threadgroup")
         if qualifiers & {"thread", "function", "local", "private"}:

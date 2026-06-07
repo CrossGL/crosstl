@@ -132,6 +132,7 @@ VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
         "PRIVATE",
         "GLOBAL",
         "LOCAL",
+        "THREADGROUP_IMAGEBLOCK",
         "THREADGROUP",
         "WORKGROUP",
     }
@@ -163,6 +164,7 @@ VARIABLE_QUALIFIER_NAMES = frozenset(
         "device",
         "constant",
         "thread",
+        "threadgroup_imageblock",
         "threadgroup",
         "workgroup",
         "storage",
