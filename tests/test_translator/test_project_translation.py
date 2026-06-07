@@ -1578,6 +1578,79 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_missing_current_include_dependencies(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    payload["units"][0].pop("includeDependencies")
+    payload["summary"]["includeDependencyCount"] = 0
+    payload["summary"]["includeDependenciesByKind"] = {}
+    payload["summary"]["includeDependenciesByStatus"] = {}
+    payload["summary"]["includeDependenciesByResolvedFrom"] = {}
+    payload["summary"]["includeDependenciesBySourceBackend"] = {}
+    payload["summary"]["includeDependenciesBySourceBackendStatus"] = {}
+    payload["summary"]["includeDependenciesByVariant"] = {}
+    report_path = repo / "missing-current-include-dependencies-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies must include current include dependency "
+        "unit source:2:1 resolved local include local.inc"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_extra_current_include_dependencies(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    dependency = dict(payload["units"][0]["includeDependencies"][0])
+    dependency["line"] = 99
+    payload["units"][0]["includeDependencies"].append(dependency)
+    payload["summary"]["includeDependencyCount"] = 2
+    payload["summary"]["includeDependenciesByKind"] = {"local": 2}
+    payload["summary"]["includeDependenciesByStatus"] = {"resolved": 2}
+    payload["summary"]["includeDependenciesByResolvedFrom"] = {"source": 2}
+    payload["summary"]["includeDependenciesBySourceBackend"] = {"opengl": 2}
+    payload["summary"]["includeDependenciesBySourceBackendStatus"] = {
+        "opengl": {"resolved": 2}
+    }
+    report_path = repo / "extra-current-include-dependencies-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies contains include dependency not found "
+        "in current source: unit source:99:1 resolved local include local.inc"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_undeclared_include_dependency_variants(
     tmp_path,
 ):

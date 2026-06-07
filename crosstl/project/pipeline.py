@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -261,6 +262,18 @@ REPORT_INCLUDE_DEPENDENCY_FIELDS = frozenset(
         "resolvedFromDefine",
         "variant",
     )
+)
+REPORT_INCLUDE_DEPENDENCY_SCAN_IDENTITY_FIELDS = (
+    "source",
+    "include",
+    "kind",
+    "status",
+    "line",
+    "column",
+    "resolvedPath",
+    "resolvedFrom",
+    "resolvedFromDefine",
+    "variant",
 )
 REPORT_SKIPPED_FIELDS = frozenset(("path", "reason", "sourceOverride"))
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
@@ -7167,6 +7180,107 @@ def _current_include_dependency_contract_reasons(
     return reasons
 
 
+def _include_dependency_scan_key(
+    dependency: Mapping[str, Any],
+) -> tuple[tuple[str, str | int], ...] | None:
+    key: list[tuple[str, str | int]] = []
+    for field_name in REPORT_INCLUDE_DEPENDENCY_SCAN_IDENTITY_FIELDS:
+        if field_name not in dependency:
+            continue
+        value = dependency[field_name]
+        if field_name in {"line", "column"}:
+            if not isinstance(value, int) or isinstance(value, bool):
+                return None
+        elif not isinstance(value, str):
+            return None
+        key.append((field_name, value))
+    return tuple(key)
+
+
+def _include_dependency_scan_label(
+    key: tuple[tuple[str, str | int], ...],
+) -> str:
+    values = dict(key)
+    source = str(values.get("source", "unit source"))
+    line = values.get("line", "?")
+    column = values.get("column", "?")
+    status = str(values.get("status", "unknown"))
+    kind = str(values.get("kind", "include"))
+    include_value = str(values.get("include", "<unknown>"))
+    label = f"{source}:{line}:{column} {status} {kind} include {include_value}"
+    variant = values.get("variant")
+    if isinstance(variant, str) and variant:
+        label = f"{label} variant {variant}"
+    return label
+
+
+def _current_include_dependency_scan_contract_reasons(
+    index: int,
+    unit: Mapping[str, Any],
+    dependencies: Sequence[Any],
+    *,
+    root_path: Path | None,
+    include_config: ProjectConfig | None,
+) -> list[str]:
+    if root_path is None or include_config is None:
+        return []
+
+    unit_path_value = unit.get("path")
+    if not (
+        _is_non_empty_string(unit_path_value)
+        and _is_report_identity_path(unit_path_value)
+    ):
+        return []
+
+    unit_path = (root_path / unit_path_value).resolve()
+    if not _is_relative_to(unit_path, root_path) or not unit_path.is_file():
+        return []
+
+    current_dependencies, _ = _scan_include_dependencies(
+        include_config,
+        unit_path,
+        unit_path_value,
+    )
+    current_keys = [
+        key
+        for dependency in current_dependencies
+        for key in (_include_dependency_scan_key(dependency),)
+        if key is not None
+    ]
+
+    reported_keys = []
+    for dependency in dependencies:
+        if not isinstance(dependency, Mapping):
+            return []
+        key = _include_dependency_scan_key(dependency)
+        if key is None:
+            return []
+        reported_keys.append(key)
+
+    expected_counts = Counter(current_keys)
+    reported_counts = Counter(reported_keys)
+    missing = expected_counts - reported_counts
+    extra = reported_counts - expected_counts
+    if not missing and not extra:
+        return []
+
+    prefix = f"units[{index}].includeDependencies"
+    reasons = []
+    for key, count in sorted(missing.items()):
+        suffix = f" ({count} records)" if count > 1 else ""
+        reasons.append(
+            f"{prefix} must include current include dependency "
+            f"{_include_dependency_scan_label(key)}{suffix}"
+        )
+    for key, count in sorted(extra.items()):
+        suffix = f" ({count} records)" if count > 1 else ""
+        reasons.append(
+            f"{prefix} contains include dependency not found in current source: "
+            f"{_include_dependency_scan_label(key)}{suffix}"
+        )
+    return reasons
+
+
 def _unit_include_dependencies_contract_reasons(
     index: int,
     unit: Mapping[str, Any],
@@ -7175,7 +7289,16 @@ def _unit_include_dependencies_contract_reasons(
     project: Mapping[str, Any] | None = None,
     require_closed_fields: bool = False,
 ) -> list[str]:
+    include_config = _project_config_for_include_validation(project, root_path)
     if "includeDependencies" not in unit:
+        if require_closed_fields:
+            return _current_include_dependency_scan_contract_reasons(
+                index,
+                unit,
+                [],
+                root_path=root_path,
+                include_config=include_config,
+            )
         return []
 
     dependencies = unit.get("includeDependencies")
@@ -7183,7 +7306,6 @@ def _unit_include_dependencies_contract_reasons(
         return [f"units[{index}].includeDependencies must be a list"]
 
     reasons = []
-    include_config = _project_config_for_include_validation(project, root_path)
     declared_variants = (
         frozenset(include_config.variants) if include_config is not None else None
     )
@@ -7204,6 +7326,16 @@ def _unit_include_dependencies_contract_reasons(
                 dependency_index,
                 unit,
                 dependency,
+                root_path=root_path,
+                include_config=include_config,
+            )
+        )
+    if require_closed_fields:
+        reasons.extend(
+            _current_include_dependency_scan_contract_reasons(
+                index,
+                unit,
+                dependencies,
                 root_path=root_path,
                 include_config=include_config,
             )

@@ -416,7 +416,9 @@ Project reports are JSON documents with:
   ``includeDependencies`` records for project-level include triage. Resolved
   include dependencies record repository-relative include paths, resolution
   source, and SHA-256 hashes so report validation can detect include file
-  content drift after scan. Recursive include scans stop at include cycles and
+  content drift after scan. Full report validation also re-scans current source
+  files and rejects missing or extra include dependency records. Recursive include
+  scans stop at include cycles and
   emit ``project.scan.include-cycle`` diagnostics with ``include.resolution``
   missing-capability rollups while preserving the dependency that closes the
   cycle for triage.
