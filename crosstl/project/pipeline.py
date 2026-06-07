@@ -500,7 +500,13 @@ VARIANT_OUTPUT_SAFE_CHARS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
 INCLUDE_DIRECTIVE_RE = re.compile(r"^\s*#\s*include\s+(?P<body>.+?)\s*$")
+INCLUDE_CONDITIONAL_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*(?P<directive>if|ifdef|ifndef|elif|else|endif)\b(?P<body>.*?)\s*$"
+)
 INCLUDE_LITERAL_RE = re.compile(r'^(?P<open>["<])(?P<path>[^">]+)(?P<close>[">])')
+INCLUDE_CONDITION_TOKEN_RE = re.compile(
+    r"defined|&&|\|\||!|\(|\)|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|\S"
+)
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -1995,6 +2001,200 @@ def _include_literal_from_define(
     return define_name, kind, include_path
 
 
+@dataclass
+class _IncludeConditionalFrame:
+    parent_active: bool
+    branch_active: bool
+    branch_taken: bool
+
+
+def _strip_preprocessor_line_comment(value: str) -> str:
+    return value.split("//", 1)[0].strip()
+
+
+def _include_condition_tokens(expression: str) -> list[str] | None:
+    tokens = INCLUDE_CONDITION_TOKEN_RE.findall(
+        _strip_preprocessor_line_comment(expression)
+    )
+    if not tokens:
+        return None
+    allowed_operators = {"defined", "&&", "||", "!", "(", ")"}
+    for token in tokens:
+        if token in allowed_operators:
+            continue
+        if token.isdigit():
+            continue
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", token):
+            continue
+        return None
+    return tokens
+
+
+def _define_condition_value(value: str) -> bool | None:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if re.match(r"^[+-]?[0-9]+$", stripped):
+        return int(stripped, 10) != 0
+    if stripped.lower() == "true":
+        return True
+    if stripped.lower() == "false":
+        return False
+    return None
+
+
+def _include_if_expression_value(config: ProjectConfig, expression: str) -> bool | None:
+    tokens = _include_condition_tokens(expression)
+    if tokens is None:
+        return None
+    index = 0
+
+    def parse_or() -> bool | None:
+        nonlocal index
+        value = parse_and()
+        while index < len(tokens) and tokens[index] == "||":
+            index += 1
+            right = parse_and()
+            if value is None or right is None:
+                value = None
+            else:
+                value = value or right
+        return value
+
+    def parse_and() -> bool | None:
+        nonlocal index
+        value = parse_not()
+        while index < len(tokens) and tokens[index] == "&&":
+            index += 1
+            right = parse_not()
+            if value is None or right is None:
+                value = None
+            else:
+                value = value and right
+        return value
+
+    def parse_not() -> bool | None:
+        nonlocal index
+        if index < len(tokens) and tokens[index] == "!":
+            index += 1
+            value = parse_not()
+            return None if value is None else not value
+        return parse_atom()
+
+    def parse_atom() -> bool | None:
+        nonlocal index
+        if index >= len(tokens):
+            return None
+        token = tokens[index]
+        if token == "(":
+            index += 1
+            value = parse_or()
+            if index >= len(tokens) or tokens[index] != ")":
+                return None
+            index += 1
+            return value
+        if token == "defined":
+            index += 1
+            if index < len(tokens) and tokens[index] == "(":
+                index += 1
+                if index >= len(tokens):
+                    return None
+                name = tokens[index]
+                index += 1
+                if index >= len(tokens) or tokens[index] != ")":
+                    return None
+                index += 1
+            elif index < len(tokens):
+                name = tokens[index]
+                index += 1
+            else:
+                return None
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                return None
+            return name in config.defines
+        index += 1
+        if token.isdigit():
+            return int(token, 10) != 0
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", token):
+            if token not in config.defines:
+                return False
+            return _define_condition_value(config.defines[token])
+        return None
+
+    value = parse_or()
+    if index != len(tokens):
+        return None
+    return value
+
+
+def _include_condition_value(
+    config: ProjectConfig, directive: str, expression: str
+) -> bool | None:
+    expression = _strip_preprocessor_line_comment(expression)
+    if directive == "ifdef":
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", expression):
+            return None
+        return expression in config.defines
+    if directive == "ifndef":
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", expression):
+            return None
+        return expression not in config.defines
+    return _include_if_expression_value(config, expression)
+
+
+def _include_conditionals_active(stack: Sequence[_IncludeConditionalFrame]) -> bool:
+    return all(frame.branch_active for frame in stack)
+
+
+def _apply_include_conditional_directive(
+    config: ProjectConfig,
+    stack: list[_IncludeConditionalFrame],
+    directive: str,
+    expression: str,
+) -> None:
+    if directive in {"if", "ifdef", "ifndef"}:
+        parent_active = _include_conditionals_active(stack)
+        condition = _include_condition_value(config, directive, expression)
+        branch_active = (
+            parent_active if condition is None else parent_active and condition
+        )
+        stack.append(
+            _IncludeConditionalFrame(
+                parent_active=parent_active,
+                branch_active=branch_active,
+                branch_taken=parent_active and condition is True,
+            )
+        )
+        return
+
+    if directive == "elif":
+        if not stack:
+            return
+        frame = stack[-1]
+        if frame.branch_taken:
+            frame.branch_active = False
+            return
+        condition = _include_condition_value(config, "if", expression)
+        frame.branch_active = (
+            frame.parent_active
+            if condition is None
+            else frame.parent_active and condition
+        )
+        frame.branch_taken = frame.parent_active and condition is True
+        return
+
+    if directive == "else":
+        if not stack:
+            return
+        frame = stack[-1]
+        frame.branch_active = frame.parent_active and not frame.branch_taken
+        frame.branch_taken = frame.branch_taken or frame.branch_active
+        return
+
+    if directive == "endif" and stack:
+        stack.pop()
+
+
 def _include_search_roots(
     config: ProjectConfig, source_path: Path, kind: str
 ) -> list[tuple[str, Path]]:
@@ -2165,7 +2365,19 @@ def _scan_include_dependencies_for_source(
         )
         return dependencies, diagnostics
 
+    conditional_stack: list[_IncludeConditionalFrame] = []
     for line_number, line in enumerate(lines, start=1):
+        conditional = INCLUDE_CONDITIONAL_DIRECTIVE_RE.match(line)
+        if conditional:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                conditional.group("directive"),
+                conditional.group("body"),
+            )
+            continue
+        if not _include_conditionals_active(conditional_stack):
+            continue
         directive = INCLUDE_DIRECTIVE_RE.match(line)
         if not directive:
             continue

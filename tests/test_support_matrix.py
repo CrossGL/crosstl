@@ -527,6 +527,10 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "includeDependencies records" in backend_support["notes"]
         assert (
+            "simple #if, #ifdef, #ifndef, #elif, #else, and #endif branches"
+            in backend_support["notes"]
+        )
+        assert (
             "summary rollups including source-backend, source-backend status, "
             "resolution-source, and variant counts"
         ) in backend_support["notes"]
@@ -545,6 +549,23 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_records_include_dependency_resolution"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_skips_inactive_ifdef_include_dependencies"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_records_variant_conditional_include_dependencies"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_honors_ifndef_else_in_nested_include_dependencies"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_keeps_includes_for_unsupported_conditional_"
+            "expressions"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

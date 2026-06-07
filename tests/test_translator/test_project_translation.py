@@ -1063,6 +1063,238 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
     assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 3}
 
 
+def test_scan_project_skips_inactive_ifdef_include_dependencies(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "fast.inc").write_text("vec4 fast_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #ifdef USE_FAST_PATH
+            #include "fast.inc"
+            #else
+            #include "missing.inc"
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            USE_FAST_PATH = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "fast.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 3,
+            "column": 1,
+            "resolvedPath": "shaders/fast.inc",
+            "resolvedHash": project_pipeline._source_hash(shader_dir / "fast.inc"),
+            "resolvedFrom": "source",
+        }
+    ]
+
+
+def test_scan_project_records_variant_conditional_include_dependencies(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (shader_dir / "debug.inc").write_text("vec4 debug_color();\n", encoding="utf-8")
+    (include_dir / "release.inc").write_text(
+        "vec4 release_color();\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if defined(DEBUG_HEADER)
+            #include DEBUG_HEADER
+            #elif defined(RELEASE_HEADER)
+            #include RELEASE_HEADER
+            #else
+            #include "missing.inc"
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+
+            [project.variants.debug]
+            DEBUG_HEADER = '"debug.inc"'
+
+            [project.variants.release]
+            RELEASE_HEADER = "<release.inc>"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "debug.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 3,
+            "column": 1,
+            "resolvedFromDefine": "DEBUG_HEADER",
+            "variant": "debug",
+            "resolvedPath": "shaders/debug.inc",
+            "resolvedHash": project_pipeline._source_hash(shader_dir / "debug.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "include": "release.inc",
+            "kind": "system",
+            "status": "resolved",
+            "line": 5,
+            "column": 1,
+            "resolvedFromDefine": "RELEASE_HEADER",
+            "variant": "release",
+            "resolvedPath": "includes/release.inc",
+            "resolvedHash": project_pipeline._source_hash(include_dir / "release.inc"),
+            "resolvedFrom": "include-dir",
+        },
+    ]
+    assert payload["summary"]["includeDependenciesByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+
+
+def test_scan_project_honors_ifndef_else_in_nested_include_dependencies(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (include_dir / "shared.inc").write_text("vec4 shared_color();\n", encoding="utf-8")
+    (shader_dir / "material.inc").write_text(
+        textwrap.dedent("""
+            #ifndef USE_SHARED
+            #include "missing-local.inc"
+            #else
+            #include <shared.inc>
+            #endif
+            vec4 material_color();
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "material.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+
+            [project.defines]
+            USE_SHARED = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "material.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "shaders/material.inc",
+            "resolvedHash": project_pipeline._source_hash(shader_dir / "material.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/material.inc",
+            "include": "shared.inc",
+            "kind": "system",
+            "status": "resolved",
+            "line": 4,
+            "column": 1,
+            "resolvedPath": "includes/shared.inc",
+            "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedFrom": "include-dir",
+        },
+    ]
+
+
+def test_scan_project_keeps_includes_for_unsupported_conditional_expressions(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "fast.inc").write_text("vec4 fast_color();\n", encoding="utf-8")
+    (shader_dir / "fallback.inc").write_text(
+        "vec4 fallback_color();\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if USE_FAST_PATH == 1
+            #include "fast.inc"
+            #else
+            #include "fallback.inc"
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            USE_FAST_PATH = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert [
+        (dependency["include"], dependency["status"])
+        for dependency in payload["units"][0]["includeDependencies"]
+    ] == [("fast.inc", "resolved"), ("fallback.inc", "resolved")]
+    assert payload["summary"]["includeDependencyCount"] == 2
+
+
 def test_scan_project_records_nested_include_dependencies(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
