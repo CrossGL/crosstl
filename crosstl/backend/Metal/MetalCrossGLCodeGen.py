@@ -2195,6 +2195,8 @@ class MetalToCrossGLConverter:
         storage_type = self.map_storage_texture_type(alias.alias_type)
         if storage_type:
             return storage_type
+        if self.normalized_metal_type(alias.alias_type) == "half":
+            return "f16"
         return self.map_type(alias.alias_type)
 
     def is_resource_type_alias(self, alias):

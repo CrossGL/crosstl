@@ -820,6 +820,33 @@ def test_rust_gpu_image_query_lod_method_codegen_from_upstream_compiletest():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_fetch_with_lod_method_codegen_from_upstream_compiletest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/fetch_with_lod.rs.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::Image;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] image: &Image!(2D, type=f32, sampled),
+        output: &mut glam::Vec4,
+    ) {
+        let texel = image.fetch_with_lod(glam::IVec2::new(0, 1), 0);
+        *output = texel;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "sampler2D image @ set(0) @ binding(0)" in result
+    assert "let texel = texelFetch(image, ivec2(0, 1), 0);" in result
+    assert "output = texel;" in result
+    assert ".fetch_with_lod(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_image_gather_method_codegen_from_spirv_std_api():
     # Reduced from spirv_std::image::Image gather API:
     # https://embarkstudios.github.io/rust-gpu/api/spirv_std/image/type.Image2dArray.html

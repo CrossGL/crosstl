@@ -1553,6 +1553,9 @@ class HLSLToCrossGLConverter:
                 qualifiers.append(qualifier_name)
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
+    def should_emit_const_qualifier(self, node):
+        return getattr(node, "value", None) is not None
+
     def format_global_storage_qualifier_prefix(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         ordered = []
@@ -1562,7 +1565,7 @@ class HLSLToCrossGLConverter:
             ordered.append("groupshared")
         if "static" in qualifiers:
             ordered.append("static")
-        if "const" in qualifiers:
+        if "const" in qualifiers and self.should_emit_const_qualifier(node):
             ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
@@ -1571,7 +1574,7 @@ class HLSLToCrossGLConverter:
         ordered = []
         if "static" in qualifiers:
             ordered.append("static")
-        if "const" in qualifiers:
+        if "const" in qualifiers and self.should_emit_const_qualifier(node):
             ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
