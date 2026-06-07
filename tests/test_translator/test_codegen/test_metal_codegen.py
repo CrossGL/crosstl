@@ -3462,6 +3462,92 @@ def test_metal_narrow_integer_aliases_map_to_valid_metal_integer_types():
         assert invalid_token not in generated_code
 
 
+def test_metal_generic_vector_constructors_emit_metal_names():
+    shader = """
+    shader GenericVectorAliasSmoke {
+        vec2<f16> halfPair(vec2<f16> input) {
+            vec2<f16> inc = vec2<f16>(1.0, 2.0);
+            return input + inc;
+        }
+
+        vec2<f64> precisePair(vec2<f64> input) {
+            vec2<f64> inc = vec2<f64>(1.0, 2.0);
+            return input + inc;
+        }
+
+        vec2<i8> signedBytes(vec2<i8> input) {
+            vec2<i8> inc = vec2<i8>(1, 2);
+            return input + inc;
+        }
+
+        vec4<u8> unsignedBytes(vec4<u8> input) {
+            vec4<u8> inc = vec4<u8>(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+
+        vec3<i16> signedShorts(vec3<i16> input) {
+            vec3<i16> inc = vec3<i16>(1, 2, 3);
+            return input + inc;
+        }
+
+        vec2<u16> unsignedShorts(vec2<u16> input) {
+            vec2<u16> inc = vec2<u16>(1u, 2u);
+            return input + inc;
+        }
+
+        vec3<i32> signedInts(vec3<i32> input) {
+            vec3<i32> inc = vec3<i32>(1, 2, 3);
+            return input + inc;
+        }
+
+        vec4<u32> unsignedInts(vec4<u32> input) {
+            vec4<u32> inc = vec4<u32>(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+
+        vec2<bool> flags(vec2<bool> input) {
+            vec2<bool> inc = vec2<bool>(true, false);
+            return input;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "half2 halfPair(half2 input)" in generated_code
+    assert "half2 inc = half2(1.0, 2.0);" in generated_code
+    assert "double2 precisePair(double2 input)" in generated_code
+    assert "double2 inc = double2(1.0, 2.0);" in generated_code
+    assert "int2 signedBytes(int2 input)" in generated_code
+    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "uint4 unsignedBytes(uint4 input)" in generated_code
+    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "int3 signedShorts(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint2 unsignedShorts(uint2 input)" in generated_code
+    assert "uint2 inc = uint2(1u, 2u);" in generated_code
+    assert "int3 signedInts(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint4 unsignedInts(uint4 input)" in generated_code
+    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "bool2 flags(bool2 input)" in generated_code
+    assert "bool2 inc = bool2(true, false);" in generated_code
+
+    for invalid_token in (
+        "f162",
+        "i82",
+        "u84",
+        "i163",
+        "u162",
+        "i323",
+        "u324",
+        "vec2<",
+        "vec3<",
+        "vec4<",
+    ):
+        assert invalid_token not in generated_code
+
+
 def test_metal_packed_vector_aliases_map_to_standard_metal_vectors():
     shader = """
     shader PackedVectorAliasSmoke {

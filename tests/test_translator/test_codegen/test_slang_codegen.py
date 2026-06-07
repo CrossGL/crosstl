@@ -10680,6 +10680,54 @@ def test_generic_vector_constructors_emit_slang_names():
     assert "vec4<" not in generated_code
 
 
+def test_narrow_generic_vector_constructors_emit_slang_vector_types():
+    code = """
+    shader main {
+        vec2<i8> narrowSigned(vec2<i8> input) {
+            vec2<i8> inc = vec2<i8>(1, 2);
+            return input + inc;
+        }
+
+        vec4<u8> narrowUnsigned(vec4<u8> input) {
+            vec4<u8> inc = vec4<u8>(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+
+        vec3<i16> signedShort(vec3<i16> input) {
+            vec3<i16> inc = vec3<i16>(1, 2, 3);
+            return input + inc;
+        }
+
+        vec2<u16> unsignedShort(vec2<u16> input) {
+            vec2<u16> inc = vec2<u16>(1u, 2u);
+            return input + inc;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vector<int8_t, 2> narrowSigned(vector<int8_t, 2> input)" in generated_code
+    assert "vector<int8_t, 2> inc = vector<int8_t, 2>(1, 2);" in generated_code
+    assert (
+        "vector<uint8_t, 4> narrowUnsigned(vector<uint8_t, 4> input)" in generated_code
+    )
+    assert (
+        "vector<uint8_t, 4> inc = vector<uint8_t, 4>(1u, 2u, 3u, 4u);" in generated_code
+    )
+    assert "vector<int16_t, 3> signedShort(vector<int16_t, 3> input)" in generated_code
+    assert "vector<int16_t, 3> inc = vector<int16_t, 3>(1, 2, 3);" in generated_code
+    assert (
+        "vector<uint16_t, 2> unsignedShort(vector<uint16_t, 2> input)" in generated_code
+    )
+    assert "vector<uint16_t, 2> inc = vector<uint16_t, 2>(1u, 2u);" in generated_code
+
+    for invalid_token in ("i82", "u84", "i163", "u162", "vec2<", "vec3<", "vec4<"):
+        assert invalid_token not in generated_code
+
+
 def test_scalar_aliases_emit_slang_fundamental_type_names():
     # Slang's fundamental scalar type names are float/int/uint/double
     # (with *_t aliases), not CrossGL's f32/i32/u32/f64 spellings.

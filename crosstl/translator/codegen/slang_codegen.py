@@ -4485,6 +4485,8 @@ class SlangCodeGen:
                 return f"uvec{type_node.size}"
             if element_type == "bool":
                 return f"bvec{type_node.size}"
+            if element_type in {"i8", "u8", "i16", "u16"}:
+                return f"vec{type_node.size}<{element_type}>"
             return f"{element_type}{type_node.size}"
         return str(type_node)
 
@@ -10240,6 +10242,10 @@ class SlangCodeGen:
             "float16": "half",
             "f32": "float",
             "f64": "double",
+            "i8": "int8_t",
+            "u8": "uint8_t",
+            "i16": "int16_t",
+            "u16": "uint16_t",
             "i32": "int",
             "u32": "uint",
             "half": "half",
@@ -10258,6 +10264,18 @@ class SlangCodeGen:
             "vec2<f64>": "double2",
             "vec3<f64>": "double3",
             "vec4<f64>": "double4",
+            "vec2<i8>": "vector<int8_t, 2>",
+            "vec3<i8>": "vector<int8_t, 3>",
+            "vec4<i8>": "vector<int8_t, 4>",
+            "vec2<u8>": "vector<uint8_t, 2>",
+            "vec3<u8>": "vector<uint8_t, 3>",
+            "vec4<u8>": "vector<uint8_t, 4>",
+            "vec2<i16>": "vector<int16_t, 2>",
+            "vec3<i16>": "vector<int16_t, 3>",
+            "vec4<i16>": "vector<int16_t, 4>",
+            "vec2<u16>": "vector<uint16_t, 2>",
+            "vec3<u16>": "vector<uint16_t, 3>",
+            "vec4<u16>": "vector<uint16_t, 4>",
             "vec2<i32>": "int2",
             "vec3<i32>": "int3",
             "vec4<i32>": "int4",
