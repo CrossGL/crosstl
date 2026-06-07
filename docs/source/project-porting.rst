@@ -311,6 +311,10 @@ came from the source directory or a configured include directory. A directive
 that uses one project define, such as ``#include PROJECT_HEADER``, is resolved
 when that define's value is a quoted or angle-bracket include target; the
 dependency keeps ``resolvedFromDefine`` so the report remains actionable.
+Resolved include files are scanned recursively for additional dependencies.
+Nested dependency records keep ``source`` when the directive came from a
+resolved include file rather than the root translation unit, so diagnostics and
+inspection output can point to the include file that introduced the dependency.
 Unresolved system includes are recorded without warning because they often
 refer to SDK or toolchain headers. Missing local includes, dynamic include
 expressions, and include paths that resolve outside the repository emit

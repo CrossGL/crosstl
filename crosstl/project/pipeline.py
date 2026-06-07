@@ -248,6 +248,7 @@ REPORT_UNIT_FIELDS = frozenset(
 )
 REPORT_INCLUDE_DEPENDENCY_FIELDS = frozenset(
     (
+        "source",
         "include",
         "kind",
         "status",
@@ -1930,21 +1931,82 @@ def _include_resolution_diagnostic(
     return None
 
 
-def _scan_include_dependencies(
-    config: ProjectConfig, unit_path: Path, relative_path: str
+def _include_cycle_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    include_path: str,
+    location: SourceLocation,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.scan.include-cycle",
+        message=(
+            f"Include directive in {relative_path}:{line_number} creates a "
+            f"cycle and was not scanned recursively: {include_path}"
+        ),
+        location=location,
+        missing_capabilities=["include.resolution"],
+    )
+
+
+def _scan_resolved_include_dependencies(
+    config: ProjectConfig,
+    unit_relative_path: str,
+    resolved_path: str,
+    *,
+    line_number: int,
+    include_path: str,
+    location: SourceLocation,
+    include_stack: tuple[str, ...],
+    scanned_sources: set[str],
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    if resolved_path in include_stack:
+        return [], [
+            _include_cycle_diagnostic(
+                relative_path=location.file,
+                line_number=line_number,
+                include_path=include_path,
+                location=location,
+            )
+        ]
+    if resolved_path in scanned_sources:
+        return [], []
+    return _scan_include_dependencies_for_source(
+        config,
+        unit_relative_path,
+        (config.root / resolved_path).resolve(),
+        resolved_path,
+        include_stack=(*include_stack, resolved_path),
+        scanned_sources=scanned_sources,
+    )
+
+
+def _scan_include_dependencies_for_source(
+    config: ProjectConfig,
+    unit_relative_path: str,
+    source_path: Path,
+    source_relative_path: str,
+    *,
+    include_stack: tuple[str, ...],
+    scanned_sources: set[str],
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = []
+    scanned_sources.add(source_relative_path)
 
     try:
-        lines = unit_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
         diagnostics.append(
             ProjectDiagnostic(
                 severity="warning",
                 code="project.scan.include-read-failed",
-                message=f"Could not scan include directives in {relative_path}: {exc}",
-                location=SourceLocation(file=relative_path),
+                message=(
+                    f"Could not scan include directives in {source_relative_path}: "
+                    f"{exc}"
+                ),
+                location=SourceLocation(file=source_relative_path),
                 missing_capabilities=["include.resolution"],
             )
         )
@@ -1957,7 +2019,7 @@ def _scan_include_dependencies(
         raw_body = directive.group("body").strip()
         column = max(1, line.find("#") + 1)
         location = SourceLocation(
-            file=relative_path,
+            file=source_relative_path,
             line=line_number,
             column=column,
             end_line=line_number,
@@ -1970,7 +2032,7 @@ def _scan_include_dependencies(
             if define_literal is not None:
                 define_name, kind, include_path = define_literal
                 status, resolved_path, resolved_from = _resolve_include_dependency(
-                    config, unit_path, kind, include_path
+                    config, source_path, kind, include_path
                 )
                 dependency = {
                     "include": include_path,
@@ -1980,6 +2042,8 @@ def _scan_include_dependencies(
                     "column": column,
                     "resolvedFromDefine": define_name,
                 }
+                if source_relative_path != unit_relative_path:
+                    dependency["source"] = source_relative_path
                 if resolved_path:
                     dependency["resolvedPath"] = resolved_path
                     dependency["resolvedHash"] = _source_hash(
@@ -1989,7 +2053,7 @@ def _scan_include_dependencies(
                     dependency["resolvedFrom"] = resolved_from
                 dependencies.append(dependency)
                 diagnostic = _include_resolution_diagnostic(
-                    relative_path=relative_path,
+                    relative_path=source_relative_path,
                     line_number=line_number,
                     status=status,
                     include_path=include_path,
@@ -1998,6 +2062,21 @@ def _scan_include_dependencies(
                 )
                 if diagnostic is not None:
                     diagnostics.append(diagnostic)
+                if resolved_path:
+                    nested_dependencies, nested_diagnostics = (
+                        _scan_resolved_include_dependencies(
+                            config,
+                            unit_relative_path,
+                            resolved_path,
+                            line_number=line_number,
+                            include_path=include_path,
+                            location=location,
+                            include_stack=include_stack,
+                            scanned_sources=scanned_sources,
+                        )
+                    )
+                    dependencies.extend(nested_dependencies)
+                    diagnostics.extend(nested_diagnostics)
                 continue
 
             dependency = {
@@ -2007,6 +2086,8 @@ def _scan_include_dependencies(
                 "line": line_number,
                 "column": column,
             }
+            if source_relative_path != unit_relative_path:
+                dependency["source"] = source_relative_path
             dependencies.append(dependency)
             diagnostics.append(
                 ProjectDiagnostic(
@@ -2024,7 +2105,7 @@ def _scan_include_dependencies(
 
         kind, include_path = literal
         status, resolved_path, resolved_from = _resolve_include_dependency(
-            config, unit_path, kind, include_path
+            config, source_path, kind, include_path
         )
         dependency = {
             "include": include_path,
@@ -2033,6 +2114,8 @@ def _scan_include_dependencies(
             "line": line_number,
             "column": column,
         }
+        if source_relative_path != unit_relative_path:
+            dependency["source"] = source_relative_path
         if resolved_path:
             dependency["resolvedPath"] = resolved_path
             dependency["resolvedHash"] = _source_hash(config.root / resolved_path)
@@ -2040,7 +2123,7 @@ def _scan_include_dependencies(
             dependency["resolvedFrom"] = resolved_from
         dependencies.append(dependency)
         diagnostic = _include_resolution_diagnostic(
-            relative_path=relative_path,
+            relative_path=source_relative_path,
             line_number=line_number,
             status=status,
             include_path=include_path,
@@ -2048,8 +2131,36 @@ def _scan_include_dependencies(
         )
         if diagnostic is not None:
             diagnostics.append(diagnostic)
+        if resolved_path:
+            nested_dependencies, nested_diagnostics = (
+                _scan_resolved_include_dependencies(
+                    config,
+                    unit_relative_path,
+                    resolved_path,
+                    line_number=line_number,
+                    include_path=include_path,
+                    location=location,
+                    include_stack=include_stack,
+                    scanned_sources=scanned_sources,
+                )
+            )
+            dependencies.extend(nested_dependencies)
+            diagnostics.extend(nested_diagnostics)
 
     return dependencies, diagnostics
+
+
+def _scan_include_dependencies(
+    config: ProjectConfig, unit_path: Path, relative_path: str
+) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
+    return _scan_include_dependencies_for_source(
+        config,
+        relative_path,
+        unit_path,
+        relative_path,
+        include_stack=(relative_path,),
+        scanned_sources=set(),
+    )
 
 
 def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
@@ -5219,8 +5330,12 @@ def _inspection_include_dependency_sample(
     if not _is_non_empty_string(include) or not _is_non_empty_string(status):
         return None
 
+    dependency_source = dependency.get("source")
+    sample_source = (
+        dependency_source if _is_non_empty_string(dependency_source) else unit_path
+    )
     sample: dict[str, Any] = {
-        "source": unit_path if _is_non_empty_string(unit_path) else None,
+        "source": sample_source if _is_non_empty_string(sample_source) else None,
         "sourceBackend": (
             source_backend if _is_non_empty_string(source_backend) else None
         ),
@@ -6743,6 +6858,10 @@ def _include_dependency_contract_reasons(
     if not _is_non_empty_string(include_value):
         reasons.append(f"{prefix}.include must be a string")
 
+    source = dependency.get("source")
+    if "source" in dependency:
+        reasons.extend(_repository_path_contract_reasons(f"{prefix}.source", source))
+
     kind = dependency.get("kind")
     if kind not in INCLUDE_DEPENDENCY_KINDS:
         reasons.append(
@@ -6850,7 +6969,7 @@ def _current_include_dependency_contract_reasons(
     include_value = dependency.get("include")
     kind = dependency.get("kind")
     status = dependency.get("status")
-    source_path = unit.get("path")
+    source_path = dependency.get("source", unit.get("path"))
     if not (
         _is_non_empty_string(include_value)
         and kind in INCLUDE_DEPENDENCY_KINDS

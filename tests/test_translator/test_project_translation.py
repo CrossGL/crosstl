@@ -823,6 +823,131 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
     assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 3}
 
 
+def test_scan_project_records_nested_include_dependencies(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    nested_dir = shader_dir / "include"
+    include_dir = repo / "includes"
+    nested_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (nested_dir / "constants.inc").write_text(
+        "vec4 nested_color();\n",
+        encoding="utf-8",
+    )
+    (include_dir / "shared.inc").write_text(
+        "vec4 shared_color();\n",
+        encoding="utf-8",
+    )
+    (nested_dir / "material.inc").write_text(
+        textwrap.dedent("""
+            #include "constants.inc"
+            #include <shared.inc>
+            vec4 material_color();
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "include/material.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "include/material.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "shaders/include/material.inc",
+            "resolvedHash": project_pipeline._source_hash(nested_dir / "material.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/include/material.inc",
+            "include": "constants.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "resolvedPath": "shaders/include/constants.inc",
+            "resolvedHash": project_pipeline._source_hash(nested_dir / "constants.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/include/material.inc",
+            "include": "shared.inc",
+            "kind": "system",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "includes/shared.inc",
+            "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedFrom": "include-dir",
+        },
+    ]
+    assert payload["summary"]["includeDependencyCount"] == 3
+    assert payload["summary"]["includeDependenciesByKind"] == {
+        "local": 2,
+        "system": 1,
+    }
+    assert payload["summary"]["includeDependenciesByStatus"] == {"resolved": 3}
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {
+        "include-dir": 1,
+        "source": 2,
+    }
+    assert inspection["includeDependencies"]["resolvedDependencies"] == [
+        {
+            "source": "shaders/main.frag",
+            "sourceBackend": "opengl",
+            "include": "include/material.inc",
+            "status": "resolved",
+            "kind": "local",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "shaders/include/material.inc",
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/include/material.inc",
+            "sourceBackend": "opengl",
+            "include": "constants.inc",
+            "status": "resolved",
+            "kind": "local",
+            "line": 1,
+            "column": 1,
+            "resolvedPath": "shaders/include/constants.inc",
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/include/material.inc",
+            "sourceBackend": "opengl",
+            "include": "shared.inc",
+            "status": "resolved",
+            "kind": "system",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "includes/shared.inc",
+            "resolvedFrom": "include-dir",
+        },
+    ]
+
+
 def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
