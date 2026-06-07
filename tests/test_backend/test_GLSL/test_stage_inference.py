@@ -43,7 +43,7 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
             [
                 "compute {",
                 "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
-                "iimage2D color1 @set(0) @binding(2) @rgba32i @writeonly;",
+                "iimage2D color1 @set(0) @binding(2) @rgba32i @writeonly @highp;",
                 "imageStore(color1, offset, ivec4(1));",
             ],
             id="glslang-spv-qcom-es-tile-shading-compute",

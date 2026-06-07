@@ -713,6 +713,38 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureGather(tex, uv)" in glsl
 
 
+def test_codegen_gles_precision_qualified_sampler_roundtrip():
+    # Reduced from common ES texture shader idioms: precision defaults,
+    # precision-qualified sampler uniforms, and texture() sampling.
+    code = textwrap.dedent("""
+        #version 300 es
+        precision mediump float;
+        precision lowp sampler2D;
+
+        layout(location = 0) in highp vec2 coord;
+        layout(location = 0) out lowp vec4 fragColor;
+        uniform highp sampler2D texSampler;
+
+        void main()
+        {
+            lowp vec4 col = texture(texSampler, coord);
+            fragColor = col;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler2D texSampler @highp;" in crossgl
+    assert "vec2 coord @location(0) @highp;" in crossgl
+    assert "vec4 col @lowp = texture(texSampler, input.coord);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "precision lowp sampler2D;" in glsl
+    assert "layout(binding = 0) uniform highp sampler2D texSampler;" in glsl
+    assert "layout(location = 0) in highp vec2 coord;" in glsl
+    assert "lowp vec4 col = texture(texSampler, coord);" in glsl
+
+
 def test_codegen_native_shadow_texture_imports_compare_helpers():
     code = textwrap.dedent("""
         #version 460 core
@@ -1253,14 +1285,14 @@ def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
 
     assert "__samplerExternal2DY2YEXT sExt;" in crossgl
-    assert "__samplerExternal2DY2YEXT highExt;" in crossgl
+    assert "__samplerExternal2DY2YEXT highExt @highp;" in crossgl
     assert "cbuffer Uniforms" not in crossgl
     assert "texture(sExt, vec2(0.2))" in crossgl
     assert "texture(highExt, vec2(0.2))" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "uniform __samplerExternal2DY2YEXT sExt;" in glsl
-    assert "uniform __samplerExternal2DY2YEXT highExt;" in glsl
+    assert "uniform highp __samplerExternal2DY2YEXT highExt;" in glsl
     assert "texture(sExt, vec2(0.2))" in glsl
     assert "texture(highExt, vec2(0.2))" in glsl
 

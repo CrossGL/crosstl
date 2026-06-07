@@ -8005,6 +8005,143 @@ class TestCudaCodeGen:
             "lambda(vec3<f32> color, { prepare(color); return color; }));" in result
         )
 
+    def test_public_cccl_fold_expression_statement_conversion(self):
+        code = """
+        template <typename... InputIt>
+        __device__ void prefetch(InputIt... ins) {
+            (..., (void)(ins += 1));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "0 /* CUDA fold expression (...,(void)(ins += 1)) is not directly "
+            "supported in CrossGL */;" in result
+        )
+
+    def test_public_cutlass_parenthesized_fold_expression_return_conversion(self):
+        code = """
+        template <class Coord, class Shape, class Stride, int... Is>
+        __device__ auto crd2idx_ttt(Coord const& coord,
+                                    Shape const& shape,
+                                    Stride const& stride,
+                                    seq<Is...>) {
+            return (... + crd2idx(get<Is>(coord), get<Is>(shape), get<Is>(stride)));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "return 0 /* CUDA fold expression" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_cccl_parameter_pack_types_are_crossgl_safe(self):
+        code = """
+        template <typename... InTs>
+        __device__ void transform(RandomAccessIteratorIn... ins,
+                                  kernel_arg<RandomAccessIteratorsIn>... args,
+                                  const InTs*... ptrs) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "RandomAccessIteratorIn_pack ins" in result
+        assert "kernel_arg_RandomAccessIteratorsIn_pack args" in result
+        assert "ptr<InTs>_pack ptrs" not in result
+        assert "ptr_InTs_pack ptrs" in result
+        assert "..." not in result
+
+    def test_public_cccl_std_namespace_scalar_parameter_types_are_crossgl_safe(self):
+        code = """
+        __device__ void bulk_copy(::cuda::std::uint32_t total_copied,
+                                  std::uint64_t total_size) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "u32 total_copied" in result
+        assert "std::uint64_t total_size" in result
+
+    def test_public_cccl_operator_overload_function_names_are_crossgl_safe(self):
+        code = """
+        template <class... Types>
+        __device__ bool operator==(variant<Types...> const& __lhs,
+                                   variant<Types...> const& __rhs) {
+            return true;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "bool operator_equal(" in result
+        assert "bool operator==(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_cutlass_unnamed_kernel_parameters_get_synthetic_names(self):
+        code = """
+        __global__ void gemm_device(CStride dC, CSmemLayout, CThreadLayout tC) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "CSmemLayout _unused_param_1" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_rapids_digit_separator_numeric_literals_are_crossgl_safe(self):
+        code = """
+        __device__ uint32_t rotate(uint32_t x) {
+            return ((x & 0xFFFF'0000u) << 16) | (x & 0xFFFFu);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "0xFFFF0000u" in result
+        assert "'" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_restrict_pointer_qualifier_conversion(self):
         code = """
         __global__ void kernel(const float* __restrict__ input,

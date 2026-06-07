@@ -16059,6 +16059,7 @@ class MetalCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_metal_address_space_attribute(attr)
                 or self.is_metal_struct_member_abi_attribute(attr)
@@ -16151,6 +16152,7 @@ class MetalCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
             ):
                 continue
@@ -16184,9 +16186,10 @@ class MetalCodeGen:
             if node is not None
             else None
         )
-        component_type = self.scalar_image_format_components().get(
-            explicit_format
-        ) or self.vector_image_format_components().get(explicit_format)
+        component_type = self.metal_texture_element_attribute_type(node) or (
+            self.scalar_image_format_components().get(explicit_format)
+            or self.vector_image_format_components().get(explicit_format)
+        )
         texture_types = {
             "image1D": "texture1d",
             "iimage1D": "texture1d",
@@ -16223,6 +16226,19 @@ class MetalCodeGen:
                 access = "read"
             return f"{texture_type}<{component_type}, access::{access}>"
         return self.map_type(vtype)
+
+    def is_metal_texture_element_attribute(self, attr):
+        return str(getattr(attr, "name", "")).lower() in {
+            "metal_texture_element_half",
+        }
+
+    def metal_texture_element_attribute_type(self, node):
+        if node is None:
+            return None
+        for attr in getattr(node, "attributes", []) or []:
+            if self.is_metal_texture_element_attribute(attr):
+                return "half"
+        return None
 
     def default_image_component_type(self, vtype):
         base_type = self.resource_base_type(vtype)

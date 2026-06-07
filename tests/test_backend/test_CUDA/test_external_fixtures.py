@@ -167,6 +167,33 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
 
 
+def test_cuda_samples_interval_template_specializations_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/interval/cuda_interval_rounded_arith.h
+    source = """
+    template <class T> struct rounded_arith {};
+    template <> struct rounded_arith<float> {};
+    template <> struct rounded_arith<double> {};
+
+    __device__ void use_specializations(rounded_arith<float>* f,
+                                        rounded_arith<double>* d) {
+        return;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "struct rounded_arith_f32 {" in crossgl
+    assert "struct rounded_arith_f64 {" in crossgl
+    assert "ptr<rounded_arith_f32> f" in crossgl
+    assert "ptr<rounded_arith_f64> d" in crossgl
+    assert "rounded_arith<float>" not in crossgl
+    assert "rounded_arith<double>" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_native_saxpy_round_trip_regenerates_native_cuda(tmp_path):
     source = """
     __global__ void saxpy(float* y, const float* x, float a, unsigned int n) {
@@ -235,6 +262,73 @@ def test_tiny_cuda_nn_unroll_macro_markers_before_for_loops_parse_and_codegen():
     assert body[0].sync_type == "__syncthreads"
     assert "TCNN_PRAGMA_UNROLL" not in crossgl
     assert "_Pragma" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_tiny_cuda_nn_enable_if_return_type_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: src/fully_fused_mlp.cu
+    source = """
+    template <typename T>
+    std::enable_if_t<!std::is_same<__half, T>::value>
+    mlp_fused_backward(cudaStream_t stream) {
+        return;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "void mlp_fused_backward(cudaStream_t stream)" in crossgl
+    assert "std::enable_if_t" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cufftdx_scoped_storage_types_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/CUDALibrarySamples
+    # commit: 830c6b0e5b4bf44e6d487c8505dbe42ef243b8a9
+    # path: MathDx/cuFFTDx/02_simple_fft_block/simple_fft_block.cu
+    source = """
+    __global__ void block_fft_kernel(FFT::value_type* data) {
+        FFT::value_type thread_data[FFT::storage_size];
+        data[threadIdx.x] = thread_data[0];
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "array<FFT_value_type>" in crossgl
+    assert "array<FFT::value_type, FFT::storage_size>" in crossgl
+    assert "data: array<FFT::value_type>" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_tiny_cuda_nn_wmma_type_positions_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: src/fully_fused_mlp.cu
+    source = """
+    template <uint32_t WIDTH>
+    __device__ void threadblock_last_layer_forward(
+        nvcuda::wmma::layout_t output_layout) {
+        wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> act_frag;
+        wmma::fragment<wmma::accumulator, 16, 16, 16, float> result_frag[2];
+        if (output_layout == wmma::mem_row_major) {
+            return;
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "nvcuda_wmma_layout_t output_layout" in crossgl
+    assert "var act_frag: wmma_fragment_wmma_matrix_a_" in crossgl
+    assert "var result_frag: wmma_fragment_wmma_accumulator_" in crossgl
+    assert "nvcuda::wmma::layout_t" not in crossgl
+    assert "wmma::fragment" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -586,6 +680,29 @@ def test_cuda_samples_monte_carlo_reserved_in_parameter_codegen_reparse():
     assert "Real reduce_sum(Real in_, cooperative_groups_thread_block cta)" in crossgl
     assert "sdata[ltid] = in_;" in crossgl
     assert "Real in," not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_dxtc_thread_group_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/5_Domain_Specific/dxtc/dxtc.cu
+    source = """
+    namespace cg = cooperative_groups;
+
+    __device__ void sortColors(const float *values,
+                               int *ranks,
+                               cg::thread_group tile) {
+        cg::sync(tile);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "cooperative_groups_thread_group tile" in crossgl
+    assert "cg::thread_group" not in crossgl
+    assert "cooperative_groups thread_group.sync not directly supported" in crossgl
     assert_crossgl_reparse(crossgl)
 
 

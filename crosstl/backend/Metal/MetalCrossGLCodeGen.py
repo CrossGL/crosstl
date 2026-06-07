@@ -1214,7 +1214,9 @@ class MetalToCrossGLConverter:
             elif qualifier == "kernel":
                 code += "    // Compute Shader\n"
                 code += "    compute {\n"
-                code += self.generate_function(f)
+                code += self.generate_function(
+                    f, stage_entry=self.should_emit_kernel_stage_entry(f)
+                )
                 code += "    }\n\n"
             elif qualifier in self.rt_qualifiers:
                 code += f"    // {qualifier} function\n"
@@ -1480,6 +1482,7 @@ class MetalToCrossGLConverter:
             part for part in [address_space_annotations, semantic] if part
         )
         access = self.storage_texture_access_attribute(var)
+        storage_format = self.storage_texture_format_attributes(var)
         name = (
             self.declare_identifier(var.name)
             if declare_name
@@ -1492,6 +1495,8 @@ class MetalToCrossGLConverter:
             parts.append(semantic)
         if access:
             parts.append(access)
+        if storage_format:
+            parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
     def format_global_decl(self, var, include_semantic=False):
@@ -1558,6 +1563,53 @@ class MetalToCrossGLConverter:
         }:
             return host_name
         return func.name
+
+    def should_emit_kernel_stage_entry(self, func):
+        if getattr(func, "name", None) == "main":
+            return False
+        return self.kernel_stage_entry_builtin_types_supported(func)
+
+    def kernel_stage_entry_builtin_types_supported(self, func):
+        # Keep imported kernels on the explicit stage-entry path only when the
+        # current Metal generator can validate their builtin parameter shapes.
+        expected_types = {
+            "thread_position_in_grid": {"uint", "uint2", "uint3"},
+            "thread_position_in_threadgroup": {"uint3"},
+            "threadgroup_position_in_grid": {"uint3"},
+            "thread_index_in_threadgroup": {"uint"},
+            "threads_per_threadgroup": {"uint3"},
+            "threadgroups_per_grid": {"uint3"},
+            "thread_index_in_simdgroup": {"uint"},
+            "threads_per_simdgroup": {"uint"},
+        }
+        for param in getattr(func, "params", []) or []:
+            semantic = self.compute_builtin_attribute_name(param)
+            if semantic is None:
+                continue
+            allowed_types = expected_types.get(semantic)
+            if allowed_types is None:
+                continue
+            param_type = self.normalized_metal_type(getattr(param, "vtype", None))
+            if param_type not in allowed_types:
+                return False
+        return True
+
+    def compute_builtin_attribute_name(self, var):
+        compute_builtins = {
+            "thread_position_in_grid",
+            "thread_position_in_threadgroup",
+            "threadgroup_position_in_grid",
+            "thread_index_in_threadgroup",
+            "threads_per_threadgroup",
+            "threadgroups_per_grid",
+            "thread_index_in_simdgroup",
+            "threads_per_simdgroup",
+        }
+        for attr in getattr(var, "attributes", []) or []:
+            name = str(getattr(attr, "name", "")).lower()
+            if name in compute_builtins:
+                return name
+        return None
 
     def function_host_name(self, func):
         for attr in getattr(func, "attributes", []) or []:
@@ -2528,6 +2580,25 @@ class MetalToCrossGLConverter:
             "access::read_write": "@readwrite",
         }
         return access_attributes.get(access, "")
+
+    def storage_texture_format_attributes(self, var):
+        if not (
+            id(var) in self.storage_texture_declaration_ids
+            or getattr(var, "name", None) in self.current_storage_texture_names
+            or getattr(var, "name", None) in self.global_storage_texture_names
+        ):
+            return ""
+
+        _, generic_args = self.access_qualified_texture_parts(
+            getattr(var, "vtype", None)
+        )
+        if not generic_args:
+            return ""
+
+        element_type = self.normalized_metal_type(generic_args[0])
+        if element_type == "half":
+            return "@rgba16f @metal_texture_element_half"
+        return ""
 
     def split_generic_arguments(self, inner):
         args = []

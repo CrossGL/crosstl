@@ -1148,6 +1148,15 @@ class GLSLToCrossGLConverter:
 
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def precision_qualifier_attribute_suffix(self, var):
+        qualifiers = {str(q).lower() for q in getattr(var, "qualifiers", []) or []}
+        attributes = [
+            f"@{qualifier}"
+            for qualifier in ("lowp", "mediump", "highp")
+            if qualifier in qualifiers
+        ]
+        return f" {' '.join(attributes)}" if attributes else ""
+
     def layout_attribute_suffix(self, layout):
         layout = layout or {}
         attributes = []
@@ -1971,7 +1980,9 @@ class GLSLToCrossGLConverter:
             for uniform in resource_uniforms:
                 var_type = self.convert_type(uniform.vtype)
                 var_name = uniform.name
-                attributes = self.image_resource_attribute_suffix(uniform)
+                attributes = self.image_resource_attribute_suffix(
+                    uniform
+                ) + self.precision_qualifier_attribute_suffix(uniform)
                 array_suffix = self.array_suffix(uniform)
                 result += (
                     self.indent_str

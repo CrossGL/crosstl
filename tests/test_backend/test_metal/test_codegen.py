@@ -1687,19 +1687,19 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
 
     kernel void compute_main(device float* data [[buffer(0)]],
                              constant float* input [[buffer(1)]],
-                             uint tid [[thread_position_in_grid]]) {
-        float value = input[tid];
-        data[tid] = value * 2.0;
+                             uint3 tid [[thread_position_in_grid]]) {
+        float value = input[tid.x];
+        data[tid.x] = value * 2.0;
     }
     """
     crossgl = convert(code)
 
     assert "RWStructuredBuffer<float> data @buffer(0)" in crossgl
     assert "StructuredBuffer<float> input @buffer(1)" in crossgl
-    assert "float value = buffer_load(input, tid);" in crossgl
-    assert "buffer_store(data, tid, value * 2.0);" in crossgl
-    assert "data[tid]" not in crossgl
-    assert "input[tid]" not in crossgl
+    assert "float value = buffer_load(input, tid.x);" in crossgl
+    assert "buffer_store(data, tid.x, value * 2.0);" in crossgl
+    assert "data[tid.x]" not in crossgl
+    assert "input[tid.x]" not in crossgl
 
     ast = parse_crossgl(crossgl)
     assert ast is not None
@@ -1707,13 +1707,14 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "RWStructuredBuffer<float> data" in hlsl
     assert "StructuredBuffer<float> input" in hlsl
-    assert "float value = input.Load(tid);" in hlsl
-    assert "data.Store(tid, (value * 2.0));" in hlsl
+    assert "float value = input.Load(tid.x);" in hlsl
+    assert "data.Store(tid.x, (value * 2.0));" in hlsl
 
     metal = MetalCodeGen().generate(ast)
-    assert "void compute_main(device float* data, const device float* input" in metal
-    assert "float value = input[tid];" in metal
-    assert "data[tid] = value * 2.0;" in metal
+    assert "kernel void compute_main(device float* data" in metal
+    assert "const device float* input" in metal
+    assert "float value = input[tid.x];" in metal
+    assert "data[tid.x] = value * 2.0;" in metal
 
 
 def test_codegen_buffer_pointer_typedef_resource_resolves_element_contract():
@@ -2573,6 +2574,42 @@ def test_codegen_preserves_storage_texture_access_modes():
 
     shader_ast = parse_crossgl(result)
     assert shader_ast is not None
+
+
+def test_codegen_kernel_texture_read_write_roundtrips_as_stage_entry():
+    # Mirrors the public Metal image-processing idiom documented by Apple and
+    # Metal by Example: compute kernels reading and writing texture2d resources.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void convertToGrayscale(
+        texture2d<half, access::read> inTexture [[texture(0)]],
+        texture2d<half, access::write> outTexture [[texture(1)]],
+        uint2 gid [[thread_position_in_grid]]) {
+        half4 color = inTexture.read(gid);
+        half gray = dot(color.rgb, half3(0.299h, 0.587h, 0.114h));
+        outTexture.write(half4(gray, gray, gray, color.a), gid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "@ stage_entry" in crossgl
+    assert "image2D inTexture @texture(0) @readonly" in crossgl
+    assert "image2D outTexture @texture(1) @writeonly" in crossgl
+    assert crossgl.count("@rgba16f @metal_texture_element_half") == 2
+    assert "imageLoad(inTexture, gid)" in crossgl
+    assert "imageStore(outTexture, gid" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+
+    assert "kernel void convertToGrayscale(" in metal
+    assert "texture2d<half, access::read> inTexture [[texture(0)]]" in metal
+    assert "texture2d<half, access::write> outTexture [[texture(1)]]" in metal
+    assert "inTexture.read(uint2(gid))" in metal
+    assert "outTexture.write(half4(gray, gray, gray, color.a), uint2(gid))" in metal
+    assert "kernel void kernel_main()" not in metal
 
 
 def test_codegen_texture_query_methods_lower_to_crossgl_queries():

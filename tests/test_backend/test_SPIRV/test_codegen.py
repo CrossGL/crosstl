@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from typing import List
 
 import pytest
@@ -166,6 +168,67 @@ OpFunctionEnd
 %fs_label = OpLabel
 %loaded_frag = OpLoad %v4float %varying_in
 OpStore %frag_out %loaded_frag
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_GLSLANG_LINKED_VERTEX_FRAGMENT_MAIN_ASSEMBLY = """
+; Reduced from glslangValidator -V vertex/fragment modules linked with spirv-link.
+; The linked module keeps both external entry point names as "main" and uses
+; location 0 for a vertex output and a fragment input with the same debug name.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "main" %vertex_uv %in_uv %position
+OpEntryPoint Fragment %fs "main" %out_color %frag_uv
+OpExecutionMode %fs OriginUpperLeft
+OpName %vs "main"
+OpName %fs "main"
+OpName %vertex_uv "uv"
+OpName %in_uv "inUV"
+OpName %position "gl_Position"
+OpName %frag_uv "uv"
+OpName %out_color "outColor"
+OpName %albedo "albedo"
+OpDecorate %vertex_uv Location 0
+OpDecorate %in_uv Location 1
+OpDecorate %position BuiltIn Position
+OpDecorate %frag_uv Location 0
+OpDecorate %out_color Location 0
+OpDecorate %albedo DescriptorSet 0
+OpDecorate %albedo Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_input_v2float = OpTypePointer Input %v2float
+%ptr_output_v2float = OpTypePointer Output %v2float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%one = OpConstant %float 1.0
+%zero = OpConstant %float 0.0
+%const_pos = OpConstantComposite %v4float %zero %zero %zero %one
+%vertex_uv = OpVariable %ptr_output_v2float Output
+%in_uv = OpVariable %ptr_input_v2float Input
+%position = OpVariable %ptr_output_v4float Output
+%frag_uv = OpVariable %ptr_input_v2float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%albedo = OpVariable %ptr_sampled UniformConstant
+%vs = OpFunction %void None %fn
+%vs_label = OpLabel
+%loaded_uv = OpLoad %v2float %in_uv
+OpStore %vertex_uv %loaded_uv
+OpStore %position %const_pos
+OpReturn
+OpFunctionEnd
+%fs = OpFunction %void None %fn
+%fs_label = OpLabel
+%loaded_albedo = OpLoad %sampled %albedo
+%loaded_frag_uv = OpLoad %v2float %frag_uv
+%sample = OpImageSampleImplicitLod %v4float %loaded_albedo %loaded_frag_uv
+OpStore %out_color %sample
 OpReturn
 OpFunctionEnd
 """
@@ -4904,6 +4967,65 @@ def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():
     assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
     assert re.search(r'OpEntryPoint Fragment %\d+ "fs_main"', downstream_code)
     assert downstream_code.count("OpFunction ") == 2
+
+
+def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_path):
+    tokens = tokenize_code(SPIRV_GLSLANG_LINKED_VERTEX_FRAGMENT_MAIN_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert generated_code.count("void main()") == 2
+    assert "float2 uv @output @location(0);" in generated_code
+    assert "float2 uv @input @location(0);" in generated_code
+    assert "Texture2D albedo @set(0) @binding(1);" in generated_code
+
+    reparsed = parse_crossgl(generated_code)
+    downstream_code = VulkanSPIRVCodeGen().generate(reparsed)
+
+    uv_ids = set(re.findall(r'OpName %(\d+) "uv"', downstream_code))
+    assert len(uv_ids) == 2
+    output_uv_ids = {
+        match.group(1)
+        for match in re.finditer(
+            r"%(?P<id>\d+) = OpVariable %(?P<ptr>\d+) Output", downstream_code
+        )
+        if match.group("id") in uv_ids
+    }
+    input_uv_ids = {
+        match.group(1)
+        for match in re.finditer(
+            r"%(?P<id>\d+) = OpVariable %(?P<ptr>\d+) Input", downstream_code
+        )
+        if match.group("id") in uv_ids
+    }
+    assert len(output_uv_ids) == 1
+    assert len(input_uv_ids) == 1
+    assert output_uv_ids != input_uv_ids
+    assert re.search(r"OpDecorate %\d+ BuiltIn Position", downstream_code)
+    assert "Unknown type Texture2D" not in downstream_code
+    assert "texture requires a sampled image operand" not in downstream_code
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as and spirv_val:
+        assembly_path = tmp_path / "roundtrip.spvasm"
+        binary_path = tmp_path / "roundtrip.spv"
+        assembly_path.write_text(downstream_code, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "spv1.0",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.0", str(binary_path)],
+            check=True,
+        )
 
 
 def test_spirv_assembly_matrix_interface_codegen():

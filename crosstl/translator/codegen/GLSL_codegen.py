@@ -2780,8 +2780,14 @@ class GLSLCodeGen:
                     mapped_type, resource_binding, node
                 )
                 memory_qualifiers = self.resource_memory_qualifiers(node)
-                qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-                code += f"{layout} {qualifier_prefix}uniform {declaration};\n"
+                precision_qualifiers = self.resource_precision_qualifiers(node)
+                qualifier_parts = []
+                if memory_qualifiers:
+                    qualifier_parts.append(memory_qualifiers)
+                qualifier_parts.append("uniform")
+                if precision_qualifiers:
+                    qualifier_parts.append(precision_qualifiers)
+                code += f"{layout} {' '.join(qualifier_parts)} {declaration};\n"
                 self.advance_resource_binding(
                     resource_binding_cursors,
                     binding_namespace,
@@ -7873,7 +7879,23 @@ class GLSLCodeGen:
         return names
 
     def local_variable_qualifier(self, node):
-        return "const " if "const" in getattr(node, "qualifiers", []) else ""
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                qualifiers.add(str(attr_name).lower())
+
+        parts = []
+        if "const" in qualifiers:
+            parts.append("const")
+        parts.extend(
+            qualifier
+            for qualifier in ("lowp", "mediump", "highp")
+            if qualifier in qualifiers
+        )
+        return f"{' '.join(parts)} " if parts else ""
 
     def global_variable_qualifier(self, node):
         qualifier_prefix = self.glsl_variable_qualifier_prefix(node)
@@ -14666,6 +14688,7 @@ class GLSLCodeGen:
             resource_count,
             self.image_format_qualifier(mapped_type, node),
             self.resource_memory_qualifiers(node),
+            self.resource_precision_qualifiers(node),
         )
 
     def global_resource_shape(self, node):
@@ -15793,6 +15816,14 @@ class GLSLCodeGen:
         if image_format:
             return f"layout({image_format}, binding = {binding})"
         return f"layout(binding = {binding})"
+
+    def resource_precision_qualifiers(self, node):
+        qualifiers = [
+            qualifier
+            for qualifier in self.glsl_variable_qualifier_prefix(node).split()
+            if qualifier in self.GLSL_PRECISION_QUALIFIERS
+        ]
+        return " ".join(qualifiers)
 
     def resource_memory_qualifiers(self, node):
         supported = {

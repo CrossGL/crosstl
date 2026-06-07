@@ -243,6 +243,7 @@ class CudaToCrossGLConverter:
         self.variable_type_scopes = [{}]
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
+        self.cuda_record_names = set()
         self.global_resource_binding_count = 0
 
     def generate(self, ast_node):
@@ -260,6 +261,7 @@ class CudaToCrossGLConverter:
         self.struct_resource_member_hints = self.collect_struct_resource_member_hints(
             ast_node
         )
+        self.cuda_record_names = self.collect_cuda_record_names(ast_node)
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
@@ -277,11 +279,19 @@ class CudaToCrossGLConverter:
 
     def generic_visit(self, node):
         if isinstance(node, str):
+            if self.is_cuda_numeric_literal_text(node):
+                return node.replace("'", "")
             return self.output_identifier_name(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
             return str(node)
+
+    def is_cuda_numeric_literal_text(self, value):
+        text = str(value)
+        return (
+            "'" in text and bool(text) and (text[0].isdigit() or text.startswith("."))
+        )
 
     def emit(self, code):
         if code.strip():
@@ -320,6 +330,101 @@ class CudaToCrossGLConverter:
 
     def is_simple_identifier(self, name):
         return isinstance(name, str) and name.isidentifier()
+
+    def sanitize_crossgl_type_identifier(self, name):
+        parts = []
+        for char in str(name):
+            if char.isalnum() or char == "_":
+                parts.append(char)
+            elif char == ":":
+                if not parts or parts[-1] != "_":
+                    parts.append("_")
+            elif not parts or parts[-1] != "_":
+                parts.append("_")
+
+        sanitized = "".join(parts).strip("_") or "anonymous"
+        if sanitized[0].isdigit():
+            sanitized = f"type_{sanitized}"
+        return self.sanitize_identifier_name(sanitized)
+
+    def convert_unknown_cuda_template_type_to_crossgl(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if not template_args:
+            return None
+
+        converted_parts = [self.sanitize_crossgl_type_identifier(base_name)]
+        for arg in template_args:
+            converted_arg = self.convert_cuda_type_to_crossgl(arg)
+            converted_parts.append(self.sanitize_crossgl_type_identifier(converted_arg))
+        return "_".join(part for part in converted_parts if part)
+
+    def convert_cuda_parameter_pack_type_to_crossgl(self, cuda_type):
+        if "..." not in str(cuda_type):
+            return None
+
+        base_type = str(cuda_type).replace("...", "").strip()
+        if not base_type:
+            return "parameter_pack"
+
+        converted_base_type = self.convert_cuda_type_to_crossgl(base_type)
+        return f"{self.sanitize_crossgl_type_identifier(converted_base_type)}_pack"
+
+    def convert_cuda_record_name_to_crossgl(self, name):
+        template_record_name = self.convert_unknown_cuda_template_type_to_crossgl(name)
+        if template_record_name is not None:
+            return template_record_name
+        return self.sanitize_crossgl_type_identifier(name)
+
+    def collect_cuda_record_names(self, node):
+        return {
+            struct.name
+            for struct in getattr(node, "structs", []) or []
+            if hasattr(struct, "name")
+        }
+
+    def convert_cuda_function_name_to_crossgl(self, name):
+        operator_name = self.convert_cuda_operator_function_name_to_crossgl(name)
+        if operator_name is not None:
+            return operator_name
+        if self.is_simple_identifier(name):
+            return self.sanitize_identifier_name(name)
+        return self.sanitize_crossgl_type_identifier(name)
+
+    def convert_cuda_operator_function_name_to_crossgl(self, name):
+        if not isinstance(name, str) or not name.startswith("operator"):
+            return None
+
+        operator_symbol = name[len("operator") :].strip()
+        operator_mapping = {
+            "==": "equal",
+            "!=": "not_equal",
+            "<": "less",
+            ">": "greater",
+            "<=": "less_equal",
+            ">=": "greater_equal",
+            "+": "add",
+            "-": "subtract",
+            "*": "multiply",
+            "/": "divide",
+            "%": "modulo",
+            "&&": "logical_and",
+            "||": "logical_or",
+            "!": "logical_not",
+            "&": "bitwise_and",
+            "|": "bitwise_or",
+            "^": "bitwise_xor",
+            "~": "bitwise_not",
+            "<<": "shift_left",
+            ">>": "shift_right",
+            "[]": "subscript",
+            "()": "call",
+        }
+        return f"operator_{operator_mapping.get(operator_symbol, 'overload')}"
+
+    def crossgl_parameter_name(self, param, index):
+        if getattr(param, "name", ""):
+            return self.register_identifier_name(param.name)
+        return f"_unused_param_{index}"
 
     def collect_user_function_names(self, node):
         names = set()
@@ -3759,7 +3864,8 @@ class CudaToCrossGLConverter:
             self.emit(f"// {node.directive} {node.content}")
 
     def visit_StructNode(self, node):
-        self.emit(f"struct {node.name} {{")
+        struct_name = self.convert_cuda_record_name_to_crossgl(node.name)
+        self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
         for member in node.members:
@@ -3800,6 +3906,7 @@ class CudaToCrossGLConverter:
     def visit_FunctionNode(self, node):
         """Render a CUDA function node as a CrossGL function."""
         return_type = self.convert_cuda_type_to_crossgl(node.return_type)
+        function_name = self.convert_cuda_function_name_to_crossgl(node.name)
         params = []
 
         self.push_resource_object_hint_scope(
@@ -3810,16 +3917,16 @@ class CudaToCrossGLConverter:
         self.push_identifier_name_scope()
         self.push_vector1_name_scope()
         try:
-            for param in node.params:
+            for index, param in enumerate(node.params):
                 param_type = self.convert_cuda_variable_type_to_crossgl(
                     param.vtype, param.name
                 )
                 self.register_vector1_name(param.name, param.vtype)
-                param_name = self.register_identifier_name(param.name)
+                param_name = self.crossgl_parameter_name(param, index)
                 params.append(f"{param_type} {param_name}")
 
             param_str = ", ".join(params)
-            self.emit(f"{return_type} {node.name}({param_str}) {{")
+            self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()
@@ -3881,11 +3988,12 @@ class CudaToCrossGLConverter:
         self.push_identifier_name_scope()
         self.push_vector1_name_scope()
         try:
-            for param in kernel.params:
+            for index, param in enumerate(kernel.params):
                 self.register_vector1_name(param.name, param.vtype)
-                param_name = self.register_identifier_name(param.name)
+                param_name = self.crossgl_parameter_name(param, index)
                 if "*" in param.vtype:
                     element_type = self.convert_cuda_pointer_element_type(param.vtype)
+                    element_type = self.crossgl_safe_generic_type_argument(element_type)
                     storage_type = self.format_crossgl_type_syntax(
                         f"array<{element_type}>"
                     )
@@ -4365,6 +4473,8 @@ class CudaToCrossGLConverter:
 
         if raw_name == "lambda":
             return self.format_lambda_call(node.args)
+        if raw_name == "cuda_fold_expression":
+            return self.format_cuda_fold_expression(node.args)
 
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
@@ -5310,6 +5420,7 @@ class CudaToCrossGLConverter:
         base_type, template_args = self.parse_cpp_template(type_name)
         base_name = self.cooperative_group_base_name(type_name)
         if base_name in {
+            "thread_group",
             "thread_block",
             "grid_group",
             "multi_grid_group",
@@ -5687,6 +5798,13 @@ class CudaToCrossGLConverter:
             return arg
         return self.visit(arg)
 
+    def format_cuda_fold_expression(self, args):
+        expression = args[0] if args else ""
+        return (
+            f"0 /* CUDA fold expression {expression} is not directly supported "
+            "in CrossGL */"
+        )
+
     def is_get_method_call(self, node):
         return (
             isinstance(node.name, MemberAccessNode)
@@ -5740,7 +5858,7 @@ class CudaToCrossGLConverter:
             alias_type = node.alias_type
         else:
             alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
-        self.emit(f"typedef {alias_type} {node.name};")
+        self.emit(f"// typedef {alias_type} {node.name};")
 
     def format_atomic_argument(self, arg, index):
         if index == 0 and isinstance(arg, UnaryOpNode) and arg.op == "&":
@@ -6109,6 +6227,12 @@ class CudaToCrossGLConverter:
         cuda_type = self.strip_dependent_template_disambiguators(cuda_type)
         cuda_type = self.strip_type_qualifiers(cuda_type)
 
+        parameter_pack_type = self.convert_cuda_parameter_pack_type_to_crossgl(
+            cuda_type
+        )
+        if parameter_pack_type is not None:
+            return parameter_pack_type
+
         type_mapping = {
             "void": "void",
             "bool": "bool",
@@ -6146,6 +6270,9 @@ class CudaToCrossGLConverter:
             **self.VECTOR_TYPE_MAPPING,
             "dim3": "vec3<u32>",
         }
+        unqualified_type = self.unqualified_leading_cuda_std_type_name(cuda_type)
+        if unqualified_type is not None and unqualified_type in type_mapping:
+            return type_mapping[unqualified_type]
 
         cooperative_group_type = self.convert_cooperative_group_type(cuda_type)
         if cooperative_group_type is not None:
@@ -6163,6 +6290,14 @@ class CudaToCrossGLConverter:
         if span_type is not None:
             return span_type
 
+        enable_if_type = self.convert_enable_if_type(cuda_type)
+        if enable_if_type is not None:
+            return enable_if_type
+
+        wmma_type = self.convert_cuda_wmma_type(cuda_type)
+        if wmma_type is not None:
+            return wmma_type
+
         if self.has_array_suffix(cuda_type):
             return self.convert_cuda_array_type(cuda_type, type_mapping)
 
@@ -6172,7 +6307,25 @@ class CudaToCrossGLConverter:
         if self.is_decltype_type_name(cuda_type):
             return "auto"
 
-        return type_mapping.get(cuda_type, cuda_type)
+        template_type = None
+        if cuda_type in self.cuda_record_names:
+            template_type = self.convert_unknown_cuda_template_type_to_crossgl(
+                cuda_type
+            )
+        if template_type is not None:
+            return template_type
+
+        mapped_type = type_mapping.get(cuda_type)
+        if mapped_type is not None:
+            return mapped_type
+        return cuda_type
+
+    def unqualified_leading_cuda_std_type_name(self, cuda_type):
+        normalized_type = str(cuda_type)
+        prefix = "::cuda::std::"
+        if normalized_type.startswith(prefix):
+            return normalized_type[len(prefix) :]
+        return None
 
     def strip_dependent_template_disambiguators(self, type_name):
         return str(type_name).replace("::template ", "::")
@@ -6191,6 +6344,11 @@ class CudaToCrossGLConverter:
 
     def format_crossgl_type_syntax(self, type_name):
         return str(type_name).replace(">>", "> >")
+
+    def crossgl_safe_generic_type_argument(self, type_name):
+        if "::" in str(type_name):
+            return self.sanitize_crossgl_type_identifier(type_name)
+        return type_name
 
     def convert_cuda_resource_type(self, cuda_type):
         base_name, template_args = self.parse_cpp_template(cuda_type)
@@ -6219,6 +6377,30 @@ class CudaToCrossGLConverter:
         ):
             return f"array<{element_type}, {template_args[1]}>"
         return f"array<{element_type}>"
+
+    def convert_enable_if_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if base_name in {"std::enable_if_t", "::std::enable_if_t"} and template_args:
+            return "void"
+        return None
+
+    def convert_cuda_wmma_type(self, cuda_type):
+        normalized_type = self.resolve_namespace_alias_name(str(cuda_type).strip())
+        base_name, template_args = self.parse_cpp_template(normalized_type)
+        if not self.is_cuda_wmma_type_name(base_name):
+            return None
+
+        if not template_args:
+            return self.sanitize_crossgl_type_identifier(normalized_type)
+
+        converted_parts = [self.sanitize_crossgl_type_identifier(base_name)]
+        for arg in template_args:
+            converted_arg = self.convert_cuda_type_to_crossgl(arg)
+            converted_parts.append(self.sanitize_crossgl_type_identifier(converted_arg))
+        return "_".join(part for part in converted_parts if part)
+
+    def is_cuda_wmma_type_name(self, type_name):
+        return str(type_name).startswith(("wmma::", "nvcuda::wmma::"))
 
     def is_dynamic_span_extent(self, extent):
         extent = self.resolve_namespace_alias_name(str(extent).strip())

@@ -144,6 +144,7 @@ class VulkanSPIRVCodeGen:
 
         self.required_capabilities = set()
         self.global_variables = {}
+        self.stage_global_variables = {}
         self.local_variables = {}
         self.named_constants = {}
         self.named_constant_debug_ids = set()
@@ -1482,6 +1483,36 @@ class VulkanSPIRVCodeGen:
         if stage is None:
             return None
         return (id(stage), name)
+
+    def stage_global_variable_key(self, stage, name: str):
+        if stage is None:
+            return None
+        return (id(stage), name)
+
+    def current_stage_global_variable(self, name: str) -> Optional[SpirvId]:
+        key = self.stage_global_variable_key(self.current_stage, name)
+        if key is None:
+            return None
+        return self.stage_global_variables.get(key)
+
+    def resolve_global_variable(self, name: str) -> Optional[SpirvId]:
+        return self.current_stage_global_variable(name) or self.global_variables.get(
+            name
+        )
+
+    def global_variable_exists_for_current_stage(self, name: str) -> bool:
+        if self.current_stage_global_variable(name) is not None:
+            return True
+        return name in self.global_variables
+
+    def register_global_variable_name(
+        self, name: str, variable: SpirvId, storage_class: str
+    ):
+        if self.current_stage is not None and storage_class in {"Input", "Output"}:
+            key = self.stage_global_variable_key(self.current_stage, name)
+            self.stage_global_variables[key] = variable
+            return
+        self.global_variables[name] = variable
 
     def register_stage_local_function(
         self,
@@ -2973,6 +3004,35 @@ class VulkanSPIRVCodeGen:
             return None
 
         return sampled_image_id, coord_id, extra_args, metadata
+
+    def call_resource_constructor(
+        self, type_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        metadata = self.resource_type_info(type_name)
+        if metadata is None or not args:
+            return None
+
+        first_metadata = self.resource_metadata_for_value(args[0])
+        if metadata.get("kind") == "sampled_image":
+            if first_metadata and first_metadata.get("kind") == "sampled_image":
+                return args[0]
+            if (
+                len(args) >= 2
+                and first_metadata
+                and first_metadata.get("kind") == "texture"
+            ):
+                return self.combine_texture_and_sampler(
+                    type_name, args[0], args[1], first_metadata
+                )
+
+        if metadata.get("kind") == "texture":
+            if first_metadata and first_metadata.get("kind") in {
+                "texture",
+                "sampled_image",
+            }:
+                return args[0]
+
+        return None
 
     def combine_texture_and_sampler(
         self,
@@ -7659,7 +7719,7 @@ class VulkanSPIRVCodeGen:
         if direct_name:
             variable = self.local_variables.get(
                 direct_name
-            ) or self.global_variables.get(direct_name)
+            ) or self.resolve_global_variable(direct_name)
             if variable is not None:
                 value_type = self.variable_value_types.get(variable.id)
                 if value_type is not None:
@@ -10072,7 +10132,48 @@ class VulkanSPIRVCodeGen:
                 return component_type, int(type_str[len(prefix) :])
         return None
 
+    def normalize_resource_type_name(self, type_str: str) -> str:
+        compact = re.sub(r"\s+", "", str(type_str))
+        direct_aliases = {
+            "Texture1D": "sampler1D",
+            "Texture1DArray": "sampler1DArray",
+            "Texture2D": "sampler2D",
+            "Texture2DArray": "sampler2DArray",
+            "Texture2DMS": "sampler2DMS",
+            "Texture2DMSArray": "sampler2DMSArray",
+            "Texture3D": "sampler3D",
+            "TextureCube": "samplerCube",
+            "TextureCubeArray": "samplerCubeArray",
+        }
+        if compact in direct_aliases:
+            return direct_aliases[compact]
+
+        texture_match = re.fullmatch(
+            r"Texture(1D|2D|3D|Cube)(MS)?(Array)?<([^>]+)>", compact
+        )
+        if texture_match:
+            dim, ms_suffix, array_suffix, component_type = texture_match.groups()
+            prefix = {
+                "int": "i",
+                "uint": "u",
+            }.get(self.normalize_primitive_name(component_type), "")
+            return f"{prefix}sampler{dim}" f"{ms_suffix or ''}{array_suffix or ''}"
+
+        storage_match = re.fullmatch(
+            r"RWTexture(1D|2D|3D|Cube)(MS)?(Array)?(?:<([^>]+)>)?", compact
+        )
+        if storage_match:
+            dim, ms_suffix, array_suffix, component_type = storage_match.groups()
+            prefix = {
+                "int": "i",
+                "uint": "u",
+            }.get(self.normalize_primitive_name(component_type or "float"), "")
+            return f"{prefix}image{dim}{ms_suffix or ''}{array_suffix or ''}"
+
+        return compact
+
     def resource_type_info(self, type_str: str):
+        type_str = self.normalize_resource_type_name(type_str)
         sampler_info = {
             "sampler": {"kind": "sampler"},
             "texture1D": {
@@ -13359,7 +13460,9 @@ class VulkanSPIRVCodeGen:
             return self.map_crossgl_type(expr.literal_type)
         if isinstance(expr, (IdentifierNode, VariableNode, str)):
             name = expr if isinstance(expr, str) else expr.name
-            variable = self.local_variables.get(name) or self.global_variables.get(name)
+            variable = self.local_variables.get(name) or self.resolve_global_variable(
+                name
+            )
             if variable is not None:
                 wrapped_type = self.uniform_block_wrapped_member_type(variable)
                 if wrapped_type is not None:
@@ -13616,6 +13719,29 @@ class VulkanSPIRVCodeGen:
             or self.is_glsl_buffer_block_node(node)
         )
 
+    def global_interface_builtin_variable(
+        self, node: VariableNode, storage_class: str, type_id: SpirvId
+    ) -> Optional[SpirvId]:
+        semantic = self.semantic_from_node(node)
+        if semantic is None and self.stage_builtin_info(getattr(node, "name", "")):
+            semantic = node.name
+        if semantic is None:
+            return None
+
+        semantic = self.spirv_interface_semantic_alias(
+            str(semantic), self.current_execution_model, storage_class
+        )
+        builtin = self.entry_point_builtin_variable(semantic, storage_class)
+        if builtin is None:
+            return None
+
+        builtin_type = self.variable_value_types.get(builtin.id)
+        if builtin_type is not None:
+            self.validate_spirv_builtin_semantic_type(
+                semantic, type_id.type.base_type, "interface declaration"
+            )
+        return builtin
+
     def process_global_variable_declaration(
         self, node: VariableNode, default_storage_class: str = "Private"
     ) -> SpirvId:
@@ -13646,13 +13772,17 @@ class VulkanSPIRVCodeGen:
             initializer = self.process_constant_expression(initial_value, var_type)
 
         if storage_class == "Input":
-            location = self.global_interface_location(node, "Input")
-            var_id = self.register_input(node.name, var_type, location, 0)
-            self.decorate_global_interface_variable(node, var_id)
+            var_id = self.global_interface_builtin_variable(node, "Input", var_type)
+            if var_id is None:
+                location = self.global_interface_location(node, "Input")
+                var_id = self.register_input(node.name, var_type, location, 0)
+                self.decorate_global_interface_variable(node, var_id)
         elif storage_class == "Output":
-            location = self.global_interface_location(node, "Output")
-            var_id = self.register_output(node.name, var_type, location, 0)
-            self.decorate_global_interface_variable(node, var_id)
+            var_id = self.global_interface_builtin_variable(node, "Output", var_type)
+            if var_id is None:
+                location = self.global_interface_location(node, "Output")
+                var_id = self.register_output(node.name, var_type, location, 0)
+                self.decorate_global_interface_variable(node, var_id)
         else:
             var_id = self.create_variable(
                 var_type, storage_class, node.name, initializer
@@ -13679,7 +13809,7 @@ class VulkanSPIRVCodeGen:
                 self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
                 self.uniform_buffers.append(var_id)
 
-        self.global_variables[node.name] = var_id
+        self.register_global_variable_name(node.name, var_id, storage_class)
         if self.has_attribute(node, "precise"):
             self.precise_global_variables.add(node.name)
         return var_id
@@ -15608,7 +15738,7 @@ class VulkanSPIRVCodeGen:
         if name is None:
             return None
 
-        pointer = self.local_variables.get(name) or self.global_variables.get(name)
+        pointer = self.local_variables.get(name) or self.resolve_global_variable(name)
         metadata = (
             self.resource_metadata_for_pointer(pointer) if pointer is not None else None
         )
@@ -15629,7 +15759,7 @@ class VulkanSPIRVCodeGen:
         if name is None:
             return None
 
-        pointer = self.local_variables.get(name) or self.global_variables.get(name)
+        pointer = self.local_variables.get(name) or self.resolve_global_variable(name)
         metadata = (
             self.storage_buffer_access_metadata_for_pointer(pointer)
             if pointer is not None
@@ -17389,7 +17519,7 @@ class VulkanSPIRVCodeGen:
 
         pointer = (
             self.local_variables.get(name)
-            or self.global_variables.get(name)
+            or self.resolve_global_variable(name)
             or self.cbuffer_member_pointer(name)
             or self.ensure_tessellation_patch_constant_input(name)
             or self.ensure_compute_builtin(name)
@@ -17726,7 +17856,7 @@ class VulkanSPIRVCodeGen:
             return mutable_id
 
         var_id = (
-            self.global_variables.get(name)
+            self.resolve_global_variable(name)
             or self.ensure_tessellation_patch_constant_input(name)
             or self.ensure_stage_builtin(name)
         )
@@ -19342,16 +19472,18 @@ class VulkanSPIRVCodeGen:
                 return self.get_variable_value(var_id)
             elif expr in self.named_constants:
                 return self.named_constants[expr]
-            elif expr in self.global_variables:
-                var_id = self.global_variables[expr]
-                self.mark_interface_variable_if_needed(var_id)
-                self.mark_builtin_interface_variable(var_id)
-                return self.get_variable_value(var_id)
-            elif expr in self.cbuffer_members:
-                member_pointer = self.cbuffer_member_pointer(expr)
-                if member_pointer is not None:
-                    return self.get_variable_value(member_pointer)
             else:
+                var_id = self.resolve_global_variable(expr)
+                if var_id is not None:
+                    self.mark_interface_variable_if_needed(var_id)
+                    self.mark_builtin_interface_variable(var_id)
+                    return self.get_variable_value(var_id)
+
+                if expr in self.cbuffer_members:
+                    member_pointer = self.cbuffer_member_pointer(expr)
+                    if member_pointer is not None:
+                        return self.get_variable_value(member_pointer)
+
                 patch_input = self.ensure_tessellation_patch_constant_input(expr)
                 if patch_input is not None:
                     return self.get_variable_value(patch_input)
@@ -19405,16 +19537,18 @@ class VulkanSPIRVCodeGen:
                 return self.get_variable_value(var_id)
             elif expr.name in self.named_constants:
                 return self.named_constants[expr.name]
-            elif expr.name in self.global_variables:
-                var_id = self.global_variables[expr.name]
-                self.mark_interface_variable_if_needed(var_id)
-                self.mark_builtin_interface_variable(var_id)
-                return self.get_variable_value(var_id)
-            elif expr.name in self.cbuffer_members:
-                member_pointer = self.cbuffer_member_pointer(expr.name)
-                if member_pointer is not None:
-                    return self.get_variable_value(member_pointer)
             else:
+                var_id = self.resolve_global_variable(expr.name)
+                if var_id is not None:
+                    self.mark_interface_variable_if_needed(var_id)
+                    self.mark_builtin_interface_variable(var_id)
+                    return self.get_variable_value(var_id)
+
+                if expr.name in self.cbuffer_members:
+                    member_pointer = self.cbuffer_member_pointer(expr.name)
+                    if member_pointer is not None:
+                        return self.get_variable_value(member_pointer)
+
                 patch_input = self.ensure_tessellation_patch_constant_input(expr.name)
                 if patch_input is not None:
                     return self.get_variable_value(patch_input)
@@ -19645,6 +19779,11 @@ class VulkanSPIRVCodeGen:
                 if result_type is None or result_type.type.base_type == "void":
                     return None
                 return self.default_value_for_type(result_type)
+
+            if self.is_resource_type_name(callee_name):
+                constructed_resource = self.call_resource_constructor(callee_name, args)
+                if constructed_resource is not None:
+                    return constructed_resource
 
             if (
                 callee_name in self.resource_function_names()
@@ -21318,7 +21457,7 @@ class VulkanSPIRVCodeGen:
                 )
                 try:
                     for var in getattr(stage, "local_variables", []):
-                        if var.name not in self.global_variables:
+                        if not self.global_variable_exists_for_current_stage(var.name):
                             self.process_global_variable_declaration(var)
                 finally:
                     self.current_execution_model = previous_execution_model
