@@ -3653,6 +3653,46 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     }
 
 
+def test_source_map_rollups_count_fine_grained_artifact_maps():
+    rollups = project_pipeline._source_map_rollups(
+        [
+            {
+                "sourceMap": {"mappingGranularity": "file"},
+                "target": "cgl",
+                "sourceBackend": "cgl",
+            },
+            {
+                "sourceMap": {"mappingGranularity": "line"},
+                "target": "metal",
+                "sourceBackend": "metal",
+                "variant": "debug",
+            },
+            {
+                "sourceMap": {"mappingGranularity": "statement"},
+                "target": "metal",
+                "sourceBackend": "metal",
+            },
+        ]
+    )
+
+    assert rollups == {
+        "sourceMapCount": 3,
+        "fineGrainedSourceMapCount": 2,
+        "sourceMapsByGranularity": {
+            "file": 1,
+            "line": 1,
+            "statement": 1,
+        },
+        "sourceMapsByTarget": {"cgl": 1, "metal": 2},
+        "sourceMapsBySourceBackend": {"cgl": 1, "metal": 2},
+        "sourceMapsByVariant": {"debug": 1},
+        "sourceRemapCount": 0,
+        "sourceRemapsByTarget": {},
+        "sourceRemapsBySourceBackend": {},
+        "sourceRemapsByVariant": {},
+    }
+
+
 def test_file_level_source_map_spans_use_utf8_byte_offsets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

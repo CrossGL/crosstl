@@ -1029,10 +1029,19 @@ def _artifact_counts_by_variant(
 
 
 def _source_map_counts(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    source_map_count = sum(1 for artifact in artifacts if artifact.get("sourceMap"))
+    source_map_count = 0
+    fine_grained_source_map_count = 0
+    for artifact in artifacts:
+        source_map = artifact.get("sourceMap")
+        if not isinstance(source_map, Mapping):
+            continue
+        source_map_count += 1
+        granularity = source_map.get("mappingGranularity")
+        if _is_non_empty_string(granularity) and granularity != "file":
+            fine_grained_source_map_count += 1
     return {
         "sourceMapCount": source_map_count,
-        "fineGrainedSourceMapCount": 0,
+        "fineGrainedSourceMapCount": fine_grained_source_map_count,
     }
 
 
