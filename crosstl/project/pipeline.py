@@ -5026,6 +5026,10 @@ def _inspection_artifact_matrix_summary(
     sample_limit: int = ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     sample_limit = max(0, sample_limit)
+    artifact_records = _record_sequence(artifacts)
+    if not isinstance(artifact_matrix, Mapping) and not artifact_records:
+        return {"available": False}
+
     matrix_source = "report"
     for _attempt in range(2):
         if isinstance(artifact_matrix, Mapping):
@@ -5051,7 +5055,6 @@ def _inspection_artifact_matrix_summary(
     else:  # pragma: no cover - loop always returns or breaks within two attempts
         return {"available": False}
 
-    artifact_records = _record_sequence(artifacts)
     emitted_count = len(artifact_records)
     translated_count = sum(
         1 for artifact in artifact_records if artifact.get("status") == "translated"

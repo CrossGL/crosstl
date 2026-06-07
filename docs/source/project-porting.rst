@@ -511,9 +511,9 @@ Project reports are JSON documents with:
   variant matrix.
   Scan-only reports omit this object because they intentionally contain no
   translated or failed artifacts. Report inspection also includes sampled
-  missing and extra artifact identities from report-provided or derived matrix
-  metadata, so incomplete batch outputs are visible without opening every
-  artifact record.
+  missing and extra artifact identities from report-provided or translation
+  artifact-derived matrix metadata, so incomplete batch outputs are visible
+  without opening every artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact

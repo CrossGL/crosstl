@@ -162,14 +162,23 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_does_not_derive_scan_only_artifact_matrix"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_omits_scan_only_artifact_matrix"
+        ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert (
             "source-map count, source-map artifact samples, source-remap artifact "
             "samples, and provenance rollups"
         ) in backend_support["notes"]
         assert (
-            "report-or-derived metadata source plus sampled missing and extra "
-            "artifact identities"
+            "report-or-translation-artifact-derived metadata source, does not "
+            "derive artifact-matrix gaps for scan-only reports, plus sampled "
+            "missing and extra artifact identities"
         ) in backend_support["notes"]
         assert (
             "validation status, diagnostic-code, missing-capability, "
@@ -332,6 +341,14 @@ def test_project_report_inspection_documents_rollups():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_does_not_derive_scan_only_artifact_matrix"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_omits_scan_only_artifact_matrix"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_truncated_sections"
         ) in backend_support["evidence"]
         assert (
@@ -364,6 +381,9 @@ def test_project_report_inspection_documents_rollups():
             "target rollups, bounded migration action samples with custom limits, "
             "target lists, and truncation metadata"
         ) in backend_support["notes"]
+        assert "does not derive artifact-matrix gaps for scan-only reports" in (
+            backend_support["notes"]
+        )
 
 
 def test_project_migration_actions_are_first_class_support_feature():
