@@ -3360,11 +3360,31 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
     report_path = repo / "translated" / "portability-report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+    inspection_text = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
     assert validation["success"] is True
+    assert inspection_text.returncode == 0
     assert payload["project"]["variants"] == {"debug": {"MODE": "debug"}}
     assert payload["project"]["variantCount"] == 1
     assert payload["project"]["variantDefineCounts"] == {"debug": 1}
+    assert payload["project"]["selectedVariants"] == ["debug"]
+    assert inspection["report"]["project"]["selectedVariants"] == ["debug"]
+    assert "Selected variants: debug" in inspection_text.stdout
     assert payload["summary"]["artifactCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["artifactsByVariant"] == {
@@ -7071,6 +7091,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                     "variants": {"debug": "not a define map", "": {"MODE": 1}},
                     "variantCount": "1",
                     "variantDefineCounts": {"debug": 1},
+                    "selectedVariants": ["profile"],
                 },
                 "artifacts": [],
             }
@@ -7119,6 +7140,9 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
         diagnostic["message"]
     )
     assert "project.variantDefineCounts must match project.variants" in (
+        diagnostic["message"]
+    )
+    assert "project.selectedVariants must be listed in project.variants" in (
         diagnostic["message"]
     )
 
@@ -13692,6 +13716,7 @@ def test_project_cli_report_records_variant_metadata(tmp_path):
         "debug": 1,
         "release": 2,
     }
+    assert payload["project"]["selectedVariants"] == []
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 0
 
@@ -14021,6 +14046,7 @@ def test_project_cli_translate_project_limits_named_variants_to_selected(tmp_pat
     payload = json.loads(result.stdout)
 
     assert payload["project"]["variants"] == {"debug": {"MODE": "debug"}}
+    assert payload["project"]["selectedVariants"] == ["debug"]
     assert payload["summary"]["artifactCount"] == 1
     assert payload["summary"]["artifactsByVariant"] == {
         "debug": {

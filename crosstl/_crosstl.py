@@ -839,6 +839,20 @@ def _format_project_variant_names(project):
     return "Project variants: " + ", ".join(names)
 
 
+def _format_project_selected_variants(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    selected_variants = project.get("selectedVariants")
+    if not isinstance(selected_variants, list):
+        return None
+
+    names = [name for name in selected_variants if isinstance(name, str) and name]
+    if not names:
+        return None
+    return "Selected variants: " + ", ".join(names)
+
+
 def _format_project_variant_define_counts(project):
     if not isinstance(project, Mapping):
         return None
@@ -1954,6 +1968,10 @@ def _format_project_report_inspection(payload):
     project_variant_names = _format_project_variant_names(project)
     if project_variant_names:
         lines.insert(project_insert_index, project_variant_names)
+        project_insert_index += 1
+    project_selected_variants = _format_project_selected_variants(project)
+    if project_selected_variants:
+        lines.insert(project_insert_index, project_selected_variants)
         project_insert_index += 1
     project_variant_define_counts = _format_project_variant_define_counts(project)
     if project_variant_define_counts:

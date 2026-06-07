@@ -687,8 +687,9 @@ def test_project_macro_variants_document_artifact_define_maps():
             backend_support["notes"]
         )
         assert (
-            "inspection summaries and text output expose variant names "
-            "and per-variant define counts" in backend_support["notes"]
+            "inspection summaries and text output expose variant names, "
+            "selected-variant summaries for scoped runs, and per-variant "
+            "define counts" in backend_support["notes"]
         )
         assert "report CLI variant metadata" in backend_support["notes"]
         assert (

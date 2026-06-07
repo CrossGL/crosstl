@@ -99,6 +99,7 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variants",
         "variantCount",
         "variantDefineCounts",
+        "selectedVariants",
         "externalCorpusManifest",
     )
 )
@@ -2633,6 +2634,7 @@ class ProjectConfig:
     include_dirs: Sequence[str] = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    selected_variants: Sequence[str] = ()
     external_corpus_manifest: str | None = None
 
     def normalized_targets(self) -> list[str]:
@@ -3114,6 +3116,7 @@ class ProjectPortabilityReport:
                 },
                 "variantCount": len(self.config.variants),
                 "variantDefineCounts": _variant_define_counts(self.config.variants),
+                "selectedVariants": list(self.config.selected_variants),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
             "summary": {
@@ -3473,6 +3476,7 @@ def _config_with_selected_variants(
     return replace(
         config,
         variants={name: config.variants[name] for name in selected},
+        selected_variants=tuple(selected),
     )
 
 
@@ -3967,6 +3971,7 @@ def translate_project(
             include_dirs=config.include_dirs,
             defines=config.defines,
             variants=config.variants,
+            selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
         )
     config = _config_with_selected_variants(config, variants)
@@ -5681,6 +5686,11 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         )
         if "variantDefineCounts" not in summary:
             summary["variantDefineCounts"] = _variant_define_counts(variants)
+    selected_variants = project.get("selectedVariants")
+    if isinstance(selected_variants, list):
+        summary["selectedVariants"] = [
+            name for name in selected_variants if isinstance(name, str) and name
+        ]
     return summary
 
 
@@ -7639,6 +7649,11 @@ def _project_config_for_include_validation(
         include_dirs=tuple(include_dirs),
         defines=dict(defines),
         variants=variants,
+        selected_variants=tuple(
+            name
+            for name in project.get("selectedVariants", [])
+            if _is_non_empty_string(name)
+        ),
         output_dir=output_dir,
     )
 
@@ -8690,6 +8705,27 @@ def _project_metadata_contract_reasons(
                 "project.variantDefineCounts must map variant names to "
                 "non-negative integers"
             )
+
+    if _optional_project_field(
+        project, "selectedVariants", required=require_full_metadata
+    ):
+        selected_variant_reasons = _config_string_list_contract_reasons(
+            "project.selectedVariants", project.get("selectedVariants")
+        )
+        reasons.extend(selected_variant_reasons)
+        selected_variants = project.get("selectedVariants")
+        if (
+            not selected_variant_reasons
+            and isinstance(selected_variants, list)
+            and variants_is_mapping
+        ):
+            unknown_selected_variants = [
+                name for name in selected_variants if name not in variants
+            ]
+            if unknown_selected_variants:
+                reasons.append(
+                    "project.selectedVariants must be listed in project.variants"
+                )
 
     if _optional_project_field(
         project, "externalCorpusManifest", required=require_full_metadata
