@@ -3931,6 +3931,32 @@ def test_hlsl_global_resource_register_spaces_keep_independent_cursors():
     assert "RWStructuredBuffer<int> defaultBuffer : register(u0);" in generated_code
 
 
+def test_hlsl_layout_sets_lower_to_register_spaces():
+    code = """
+    shader LayoutSetResourceSpaces {
+        layout(set = 0, binding = 4) uniform sampler2D baseMap;
+        layout(set = 1, binding = 4) uniform sampler2D detailMap;
+        layout(set = 1, binding = 5) uniform sampler detailSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return texture(baseMap, uv) + texture(detailMap, detailSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D baseMap : register(t4);" in generated_code
+    assert "SamplerState baseMapSampler : register(s0);" in generated_code
+    assert "Texture2D detailMap : register(t4, space1);" in generated_code
+    assert "SamplerState detailSampler : register(s5, space1);" in generated_code
+    assert "detailMap.Sample(detailSampler, uv)" in generated_code
+
+
 def test_hlsl_implicit_sampler_inherits_global_texture_register_space():
     code = """
     shader ImplicitSamplerSpaces {

@@ -343,6 +343,7 @@ UAV_RESOURCE_BUFFER_TYPE_NAMES = frozenset(
 
 SAMPLER_STATE_TYPE_NAMES = frozenset(
     {
+        "comparison_sampler",
         "sampler",
         "samplerstate",
         "samplercomparisonstate",

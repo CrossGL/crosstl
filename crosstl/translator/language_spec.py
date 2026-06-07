@@ -334,7 +334,7 @@ def _classify_sampler_image(canonical_name: str) -> str:
     lowered = canonical_name.lower()
     if lowered.startswith(("image", "iimage", "uimage")):
         return "storage-image"
-    if lowered.startswith("sampler"):
+    if lowered.startswith("sampler") or lowered == "comparison_sampler":
         return "sampler"
     return "resource"
 

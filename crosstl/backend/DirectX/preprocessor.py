@@ -533,22 +533,42 @@ class HLSLPreprocessor:
         i = 0
         while i < len(tokens):
             tok_type, _tok_val = tokens[i]
-            if tok_type == "hash" and i + 1 < len(tokens):
-                next_type, next_val = tokens[i + 1]
+            if tok_type == "hash":
+                next_idx = self._next_non_ws_token(tokens, i + 1)
+                if next_idx is None:
+                    output.append(self._token_value(tokens[i], param_map))
+                    i += 1
+                    continue
+                next_type, next_val = tokens[next_idx]
                 if next_type == "ident" and next_val in param_map:
                     output.append(self._stringize(param_map[next_val]))
-                    i += 2
+                    i = next_idx + 1
                     continue
             if tok_type == "paste" and output:
-                if i + 1 < len(tokens):
-                    next_val = self._token_value(tokens[i + 1], param_map)
+                next_idx = self._next_non_ws_token(tokens, i + 1)
+                trailing_ws = []
+                while output and output[-1].isspace():
+                    trailing_ws.append(output.pop())
+                if output and next_idx is not None:
+                    next_val = self._token_value(tokens[next_idx], param_map)
                     prev = output.pop()
                     output.append(prev + next_val)
-                    i += 2
+                    i = next_idx + 1
                     continue
+                output.extend(reversed(trailing_ws))
             output.append(self._token_value(tokens[i], param_map))
             i += 1
         return "".join(output)
+
+    def _next_non_ws_token(
+        self, tokens: List[Tuple[str, str]], start: int
+    ) -> Optional[int]:
+        i = start
+        while i < len(tokens) and tokens[i][0] == "ws":
+            i += 1
+        if i >= len(tokens):
+            return None
+        return i
 
     def _stringize(self, value: str) -> str:
         collapsed = re.sub(r"\s+", " ", value.strip())

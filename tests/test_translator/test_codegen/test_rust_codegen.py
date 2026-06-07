@@ -17892,6 +17892,49 @@ def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_resource_array_member_sample_maps_to_rust_helper_and_compile(tmp_path):
+    code = """
+    shader ResourceArrayAccessShader {
+        const int MAP_COUNT = 2;
+        sampler2D shadowMaps[MAP_COUNT];
+        comparison_sampler comparisonSamplers[2];
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                vec4 shadow = shadowMaps[1].sample(
+                    comparisonSamplers[0],
+                    vec2(0.5, 0.5)
+                );
+                vec4 mipShadow = shadowMaps[1].sample(
+                    comparisonSamplers[0],
+                    vec2(0.5, 0.5),
+                    level(1.0)
+                );
+                return shadow + mipShadow;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static COMPARISON_SAMPLERS: std::sync::LazyLock<[Sampler; 2]>" in (
+        generated_code
+    )
+    assert (
+        "let shadow: Vec4<f32> = sample_sampler(SHADOW_MAPS[1], "
+        "(*COMPARISON_SAMPLERS)[0], Vec2::<f32>::new(0.5, 0.5));"
+    ) in generated_code
+    assert (
+        "let mipShadow: Vec4<f32> = sample_lod_sampler(SHADOW_MAPS[1], "
+        "(*COMPARISON_SAMPLERS)[0], Vec2::<f32>::new(0.5, 0.5), 1.0);"
+    ) in generated_code
+    assert ".sample(" not in generated_code
+    assert "level(" not in generated_code
+    assert "comparison_sampler" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_resource_bundle_member_helpers_and_non_copy_array_alias_compile(tmp_path):
     code = """
     shader ResourceBundleProbe {

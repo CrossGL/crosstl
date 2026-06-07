@@ -1860,6 +1860,42 @@ def test_codegen_pascal_case_mesh_attributes_infer_stage():
     assert ShaderStage.MESH in shader_ast.stages
 
 
+def test_codegen_plain_numthreads_dispatch_mesh_main_infers_task_stage():
+    code = textwrap.dedent("""
+        struct Payload {
+            uint meshlet;
+        };
+
+        groupshared Payload s_Payload;
+
+        [RootSignature(ROOT_SIG)]
+        [NumThreads(32, 1, 1)]
+        void main(
+            uint gtid : SV_GroupThreadID,
+            uint dtid : SV_DispatchThreadID,
+            uint gid : SV_GroupID
+        ) {
+            bool visible = dtid < 4;
+            if (visible) {
+                s_Payload.meshlet = dtid;
+            }
+
+            DispatchMesh(1, 1, 1, s_Payload);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "task {" in crossgl
+    assert "compute {" not in crossgl
+    assert "@ NumThreads(32, 1, 1)" in crossgl
+    assert "DispatchMesh(1, 1, 1, s_Payload);" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    assert ShaderStage.TASK in shader_ast.stages
+    assert ShaderStage.COMPUTE not in shader_ast.stages
+
+
 def test_codegen_mesh_payload_parameters_roundtrip():
     code = textwrap.dedent("""
         struct MeshPayload {

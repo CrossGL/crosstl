@@ -2037,6 +2037,33 @@ def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
     assert "__reduce_add_sync(mask, mySum);" not in crossgl
 
 
+def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/reductionMultiBlockCG/reductionMultiBlockCG.cu
+    source = """
+    namespace cg = cooperative_groups;
+
+    __device__ void reduceBlock(double *sdata, const cg::thread_block &cta) {
+        const unsigned int tid = cta.thread_rank();
+        cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+        sdata[tid] = cg::reduce(tile32, sdata[tid], cg::plus<double>());
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert isinstance(body[2].right, FunctionCallNode)
+    assert body[2].right.name == "cg::reduce"
+    assert_crossgl_reparse(crossgl)
+    assert "sdata[tid] = WaveActiveSum(sdata[tid]);" in crossgl
+    assert "cg::reduce" not in crossgl
+    assert "cooperative_groups::reduce" not in crossgl
+
+
 def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
     source = """
     namespace cg = cooperative_groups;

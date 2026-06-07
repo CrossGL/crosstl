@@ -1832,7 +1832,9 @@ class HLSLParser:
         else:
             body = self.parse_block()
 
-        qualifier = self.infer_function_qualifier(name, attributes, params, semantic)
+        qualifier = self.infer_function_qualifier(
+            name, attributes, params, semantic, body
+        )
 
         function = FunctionNode(
             return_type=return_type,
@@ -1855,7 +1857,7 @@ class HLSLParser:
             self.eat("CONST")
         return qualifiers
 
-    def infer_function_qualifier(self, name, attributes, params, semantic):
+    def infer_function_qualifier(self, name, attributes, params, semantic, body=None):
         attribute_names = {str(attr.name).lower() for attr in attributes}
         for attr in attributes:
             if attr.name.lower() == "shader" and attr.args:
@@ -1927,6 +1929,10 @@ class HLSLParser:
             return "tessellation_control"
         if "domain" in attribute_names:
             return "tessellation_evaluation"
+        if "numthreads" in attribute_names and self.contains_function_call(
+            body, "DispatchMesh"
+        ):
+            return "task"
         if "numthreads" in attribute_names:
             return "compute"
         if semantic:
@@ -1953,6 +1959,37 @@ class HLSLParser:
             if str(getattr(param, "semantic", "")).upper() == "SV_DISPATCHTHREADID":
                 return "compute"
         return None
+
+    def contains_function_call(self, node, function_name):
+        target_name = str(function_name).lower()
+        visited = set()
+
+        def walk(current):
+            if current is None or isinstance(current, (str, int, float, bool)):
+                return False
+
+            current_id = id(current)
+            if current_id in visited:
+                return False
+            visited.add(current_id)
+
+            if isinstance(current, FunctionCallNode):
+                callee = getattr(current, "name", None)
+                if isinstance(callee, str) and callee.lower() == target_name:
+                    return True
+
+            if isinstance(current, dict):
+                return any(walk(value) for value in current.values())
+
+            if isinstance(current, (list, tuple, set)):
+                return any(walk(value) for value in current)
+
+            if hasattr(current, "__dict__"):
+                return any(walk(value) for value in vars(current).values())
+
+            return False
+
+        return walk(node)
 
     def is_geometry_stream_type(self, param_type):
         base = str(param_type or "").split("<", 1)[0].strip()
