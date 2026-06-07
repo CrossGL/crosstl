@@ -6948,6 +6948,10 @@ class HipToCrossGLConverter:
         if unique_ptr_type is not None:
             return unique_ptr_type
 
+        std_container_type = self.convert_std_container_type(hip_type)
+        if std_container_type is not None:
+            return std_container_type
+
         resource_type = self.convert_hip_resource_type(hip_type)
         if resource_type is not None:
             return resource_type
@@ -6992,6 +6996,17 @@ class HipToCrossGLConverter:
         target_type, _ = self.unwrap_array_template_type(template_args[0])
         return f"ptr<{self.convert_hip_type_to_crossgl(target_type)}>"
 
+    def convert_std_container_type(self, hip_type):
+        base_name, template_args = self.parse_cpp_template(hip_type)
+        if self.is_std_vector_base_name(base_name) and template_args:
+            element_type = self.convert_hip_type_to_crossgl(template_args[0])
+            return f"array<{element_type}>"
+        if self.is_std_array_base_name(base_name) and len(template_args) >= 2:
+            element_type = self.convert_hip_type_to_crossgl(template_args[0])
+            size = template_args[1].strip()
+            return f"array<{element_type}, {size}>"
+        return None
+
     def is_unique_ptr_type_name(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)
         type_name = self.resolve_type_alias(type_name)
@@ -7003,6 +7018,12 @@ class HipToCrossGLConverter:
 
     def is_std_unique_ptr_base_name(self, base_name):
         return base_name in {"unique_ptr", "std::unique_ptr"}
+
+    def is_std_vector_base_name(self, base_name):
+        return base_name in {"vector", "std::vector"}
+
+    def is_std_array_base_name(self, base_name):
+        return base_name in {"array", "std::array"}
 
     def is_std_make_unique_base_name(self, base_name):
         return base_name in {"make_unique", "std::make_unique"}

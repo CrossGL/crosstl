@@ -15992,7 +15992,7 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var h: std::vector<float> = std::vector<float>(n);" in result
+        assert "var h: array<f32> = std::vector<float>(n);" in result
         assert (
             "// HIP memory copy: h.data() -> d, bytes: "
             "(h.size() * sizeof(float)), kind: hipMemcpyHostToDevice"
@@ -16017,8 +16017,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var h: std::array<float, 4> = {1.0f, 2.0f, 3.0f, 4.0f};" in result
-        assert "var zeros: std::array<float, 4> = {};" in result
+        assert "var h: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};" in result
+        assert "var zeros: array<f32, 4> = {};" in result
         assert (
             "// HIP memory copy: h.data() -> d, bytes: "
             "(h.size() * sizeof(float)), kind: hipMemcpyHostToDevice"
@@ -16121,10 +16121,11 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "void prepare(std::vector<float> h) {" in result
+        assert "void prepare(array<f32> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
-        assert "u32 count(std::vector<float> h) {" in result
+        assert "u32 count(array<f32> h) {" in result
         assert "return h.size();" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_multi_declarator_host_setup_conversion(self):
         code = """
@@ -16143,9 +16144,9 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var a: std::vector<float> = std::vector<float>(n);" in result
-        assert "var b: std::vector<float> = std::vector<float>(n);" in result
-        assert "var c: std::vector<float> = std::vector<float>(n);" in result
+        assert "var a: array<f32> = std::vector<float>(n);" in result
+        assert "var b: array<f32> = std::vector<float>(n);" in result
+        assert "var c: array<f32> = std::vector<float>(n);" in result
         assert "var d_a: ptr<f32>;" in result
         assert "var d_b: ptr<f32>;" in result
         assert "var x: i32 = 1;" in result
@@ -16490,8 +16491,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var ids: std::array<unsigned int, 4> = {};" in result
-        assert "var flags: std::vector<const unsigned int>;" in result
+        assert "var ids: array<u32, 4> = {};" in result
+        assert "var flags: array<u32>;" in result
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 
@@ -16514,8 +16515,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var table: std::vector<std::array<unsigned int, 4>>;" in result
-        assert "var rows: std::vector<std::vector<float>>;" in result
+        assert "var table: array<array<u32, 4>>;" in result
+        assert "var rows: array<array<f32>>;" in result
         assert "var pointer: ptr<ptr<f32>> = new<ptr<f32>>(nullptr);" in result
         assert "var owned: ptr<f32> = new_array<f32>(n);" in result
         assert "std::unique_ptr" not in result
@@ -16545,7 +16546,7 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "typedef ptr<f32> HostBuffer;" in result
-        assert "typedef std::vector<std::array<unsigned int, 4>> Table;" in result
+        assert "typedef array<array<u32, 4>> Table;" in result
         assert "typedef ptr<f32> LocalBuffer;" in result
         assert "var h: HostBuffer = new_array<f32>(n);" in result
         assert "var hp: ptr<HostBuffer> = (&h);" in result
