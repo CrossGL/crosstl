@@ -877,6 +877,8 @@ class MetalCodeGen:
             "bool2": "bool2",
             "bool3": "bool3",
             "bool4": "bool4",
+            "sampler": "sampler",
+            "comparison_sampler": "sampler",
             "sampler1D": "texture1d<float>",
             "sampler1DArray": "texture1d_array<float>",
             "sampler2D": "texture2d<float>",
@@ -1938,7 +1940,7 @@ class MetalCodeGen:
                     image_formats=self.image_variable_formats,
                 )
                 texture_register = max(texture_register, binding + resource_count)
-            elif vtype in ["sampler"]:
+            elif self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}:
                 binding = self.explicit_resource_binding_index(
                     node, {"binding", "sampler"}, ("s",)
                 )
@@ -10523,7 +10525,7 @@ class MetalCodeGen:
         return f"{table_type} {name}"
 
     def is_sampler_type(self, vtype):
-        return self.resource_base_type(vtype) == "sampler"
+        return self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}
 
     def is_acceleration_structure_type(self, vtype):
         return self.resource_base_type(vtype) in {
@@ -10543,6 +10545,7 @@ class MetalCodeGen:
             or self.is_intersection_function_table_type(vtype)
             or self.resource_base_type(vtype)
             in {
+                "comparison_sampler",
                 "sampler",
                 "sampler1D",
                 "sampler1DArray",

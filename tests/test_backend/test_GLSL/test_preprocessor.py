@@ -3,6 +3,7 @@ import pytest
 from crosstl import translate
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.backend.GLSL.preprocessor import GLSLPreprocessor
 
 
 def test_preprocessor_conditional_expansion():
@@ -273,6 +274,26 @@ def test_preprocessor_stringize():
     tokens = GLSLLexer(code).tokenize()
     values = [tok[1] for tok in tokens]
     assert '"hello"' in values
+
+
+def test_preprocessor_stringize_and_paste_allow_operator_whitespace():
+    code = """
+    #version 450 core
+    #define STRINGIFY_WITH_SPACE(arg) debugPrintfEXT( # arg
+    #define PASTE_WITH_SPACE(arg) pasted_## arg
+    #define JOIN_WITH_SPACE(left, right) left ## right
+    STRINGIFY_WITH_SPACE(aaa1));
+    float PASTE_WITH_SPACE(symbol2);
+    int JOIN_WITH_SPACE(test, _value);
+    void main() { }
+    """
+
+    processed = GLSLPreprocessor().preprocess(code)
+
+    assert 'debugPrintfEXT( "aaa1");' in processed
+    assert "float pasted_symbol2;" in processed
+    assert "int test_value;" in processed
+    assert "# aaa1" not in processed
 
 
 def test_preprocessor_extension_directive():

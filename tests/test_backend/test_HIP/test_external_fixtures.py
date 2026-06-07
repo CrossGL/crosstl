@@ -47,6 +47,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
         "paths": ["Common/rocdecode_utils.hpp"],
     },
+    "rocm_examples_runtime_compilation": {
+        "url": "https://github.com/ROCm/rocm-examples",
+        "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
+        "paths": ["HIP-Basic/runtime_compilation/main.hip"],
+    },
     "hip_examples": {
         "url": "https://github.com/ROCm/HIP-Examples",
         "commit": "cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3",
@@ -348,6 +353,45 @@ def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
     assert launch.kernel_name == "saxpy_kernel"
     assert "fn saxpy_kernel(" in crossgl
     assert "Kernel launch: saxpy_kernel<<<" in crossgl
+
+
+def test_external_rocm_runtime_compilation_adjacent_raw_string_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
+    # HIP-Basic/runtime_compilation/main.hip.
+    source = r"""
+    static constexpr auto saxpy_kernel{
+        "#include \"test_header.h\"\n"
+        "#include \"test_header1.h\"\n"
+        R"(
+extern "C" __global__ void saxpy_kernel()
+{
+}
+)"};
+
+    int main() {
+        hiprtcProgram prog;
+        hiprtcCreateProgram(&prog,
+                            saxpy_kernel,
+                            "saxpy_kernel.cu",
+                            0,
+                            nullptr,
+                            nullptr);
+        return 0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    declaration = ast.statements[0]
+    assert isinstance(declaration, VariableNode)
+    assert "test_header1.h" in declaration.value.elements[0]
+    assert 'extern "C" __global__ void saxpy_kernel' in declaration.value.elements[0]
+    assert 'R"(' not in crossgl
+    assert ')"' not in crossgl
+    assert "var saxpy_kernel: auto = " in crossgl
+    assert 'extern \\"C\\" __global__ void saxpy_kernel' in crossgl
+    assert "HIPRTC create program: output: prog, source: saxpy_kernel" in crossgl
+    assert 'name: "saxpy_kernel.cu"' in crossgl
 
 
 def test_external_rocm_convolution_std_array_template_extent_codegen():

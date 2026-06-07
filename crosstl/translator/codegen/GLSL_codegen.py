@@ -1206,6 +1206,7 @@ class GLSLCodeGen:
             "double": "double",
             "void": "void",
             "sampler": "sampler",
+            "comparison_sampler": "sampler",
             "texture1D": "texture1D",
             "texture1DArray": "texture1DArray",
             "texture2D": "texture2D",
@@ -13937,7 +13938,7 @@ class GLSLCodeGen:
         yield from walk(root)
 
     def is_sampler_type(self, vtype):
-        return self.resource_base_type(vtype) == "sampler"
+        return self.resource_base_type(vtype) in {"sampler", "comparison_sampler"}
 
     def structured_buffer_type_name(self, vtype):
         return str(self.resource_base_type(vtype)).split("<", 1)[0]

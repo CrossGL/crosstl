@@ -5008,6 +5008,12 @@ class CudaToCrossGLConverter:
                 return self.format_cooperative_group_member_call(
                     group_metadata, base_name, node.args[1:]
                 )
+        if base_name == "reduce" and node.args:
+            group_metadata = self.resolve_cooperative_group_metadata(node.args[0])
+            if group_metadata is not None:
+                return self.format_cooperative_group_reduce_call(
+                    group_metadata, node.args[1:]
+                )
         return None
 
     def format_cooperative_group_member_call(self, group_metadata, member, args):
@@ -5093,6 +5099,31 @@ class CudaToCrossGLConverter:
             return f"WaveReadLaneAt({formatted_args[0]}, {formatted_args[1]})"
 
         return None
+
+    def format_cooperative_group_reduce_call(self, group_metadata, args):
+        group_kind = group_metadata["kind"]
+        if (
+            group_kind == "thread_block_tile"
+            and group_metadata.get("tile_size") == "32"
+            and group_metadata.get("parent_kind") == "thread_block"
+            and len(args) == 2
+            and self.cooperative_group_reduce_operator(args[1]) == "plus"
+        ):
+            return f"WaveActiveSum({self.visit(args[0])})"
+
+        return self.format_unsupported_cooperative_group_expression(
+            group_kind, "reduce", args=args
+        )
+
+    def cooperative_group_reduce_operator(self, expression):
+        if not isinstance(expression, FunctionCallNode) or expression.args:
+            return None
+
+        if not isinstance(expression.name, str):
+            return None
+
+        base_call_name, _ = self.parse_cpp_template(expression.name)
+        return self.cooperative_group_base_name(base_call_name)
 
     def format_thread_block_size_expression(self):
         return "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z)"

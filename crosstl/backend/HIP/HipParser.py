@@ -4230,6 +4230,7 @@ class HipParser:
     def parse_string_literal_sequence(self):
         token = self.consume("STRING")
         value = token.value + self.parse_user_defined_literal_suffix(token)
+        last_value = token.value
         self.skip_newlines()
 
         while self.match("STRING"):
@@ -4237,13 +4238,30 @@ class HipParser:
             next_value = next_token.value + self.parse_user_defined_literal_suffix(
                 next_token
             )
-            if value.endswith('"') and next_value.startswith('"'):
+            if (
+                value.endswith('"')
+                and next_value.startswith('"')
+                and not self.is_cpp_raw_string_literal(last_value)
+            ):
                 value = value[:-1] + next_value[1:]
             else:
                 value += next_value
+            last_value = next_token.value
             self.skip_newlines()
 
         return value
+
+    def is_cpp_raw_string_literal(self, value):
+        if not isinstance(value, str):
+            return False
+
+        text = value.lstrip()
+        for prefix in ("u8", "u", "U", "L"):
+            if text.startswith(prefix):
+                text = text[len(prefix) :]
+                break
+
+        return text.startswith('R"')
 
     def parse_character_literal(self):
         token = self.consume("CHAR_LIT")

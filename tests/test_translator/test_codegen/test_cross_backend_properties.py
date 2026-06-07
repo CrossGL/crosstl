@@ -12,6 +12,7 @@ from crosstl.translator.ast import PointerType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 
 IDENTIFIER_SUFFIXES = st.from_regex(r"[a-z][a-z0-9_]{0,10}", fullmatch=True)
 
@@ -501,6 +502,77 @@ def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved(
     assert "depth2d<float>" in metal
     assert ".sample_compare(" in metal
     assert re.search(r"\bsampler\b", metal)
+
+
+def test_comparison_sampler_array_is_an_explicit_sampler_resource():
+    shader = """
+    shader ComparisonSamplerArrayRole {
+        compute {
+            layout(set = 0, binding = 2) uniform sampler2DShadow shadowMap;
+            layout(set = 0, binding = 4) comparison_sampler shadowCompareSamplers[2];
+
+            void main() {
+                float visibility = textureCompare(
+                    shadowMap,
+                    shadowCompareSamplers[0],
+                    vec2(0.5, 0.5),
+                    0.25
+                );
+                float lodVisibility = textureCompareLod(
+                    shadowMap,
+                    shadowCompareSamplers[1],
+                    vec2(0.25, 0.75),
+                    0.33,
+                    1.0
+                );
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+    mojo = MojoCodeGen().generate(ast)
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+        ("mojo", mojo),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+
+    assert "SamplerComparisonState shadowCompareSamplers[2]" in hlsl
+    assert (
+        "shadowMap.SampleCmp(shadowCompareSamplers[0], "
+        "float2(0.5, 0.5), 0.25)" in hlsl
+    )
+    assert (
+        "shadowMap.SampleCmpLevel(shadowCompareSamplers[1], "
+        "float2(0.25, 0.75), 0.33, 1.0)" in hlsl
+    )
+
+    assert "comparison_sampler" not in glsl
+    assert "shadowCompareSamplers" not in glsl
+    assert "texture(shadowMap, vec3(vec2(0.5, 0.5), 0.25))" in glsl
+    assert "textureLod(shadowMap, vec3(vec2(0.25, 0.75), 0.33), 1.0)" in glsl
+
+    assert "array<sampler, 2> shadowCompareSamplers [[sampler(4)]]" in metal
+    assert (
+        "shadowMap.sample_compare(shadowCompareSamplers[0], "
+        "float2(0.5, 0.5), 0.25)" in metal
+    )
+    assert (
+        "shadowMap.sample_compare(shadowCompareSamplers[1], "
+        "float2(0.25, 0.75), 0.33, level(1.0))" in metal
+    )
+
+    assert "name=shadowCompareSamplers kind=sampler" in mojo
+    assert "InlineArray[Sampler, 2](Sampler(), Sampler())" in mojo
+    assert "_crossgl_texture_compare_sampler_Texture2DShadow_Sampler" in mojo
+    assert "_crossgl_texture_compare_lod_sampler_Texture2DShadow_Sampler" in mojo
 
 
 @settings(max_examples=20, deadline=None)

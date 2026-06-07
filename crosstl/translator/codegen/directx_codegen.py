@@ -797,6 +797,7 @@ class HLSLCodeGen:
             "image2DMS": "RWTexture2DMS<float4>",
             "image2DMSArray": "RWTexture2DMSArray<float4>",
             "sampler": "SamplerState",
+            "comparison_sampler": "SamplerComparisonState",
         }
         self.function_map = {
             "atomicAdd": "InterlockedAdd",

@@ -330,6 +330,7 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "samplerCubeArrayShadow": "TextureCubeArrayShadow",
     "samplerCubeShadow": "TextureCubeShadow",
     "sampler": "Sampler",
+    "comparison_sampler": "Sampler",
     "SamplerState": "Sampler",
     "SamplerComparisonState": "Sampler",
     "image1D": "Image1D",
