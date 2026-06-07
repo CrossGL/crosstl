@@ -2920,6 +2920,84 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
     assert "release" not in json.dumps(payload)
 
 
+def test_translate_project_sanitizes_variant_output_segments(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "translated"
+
+            [project.defines]
+            MODE = "base"
+
+            [project.variants."qa/profile"]
+            MODE = "qa"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_defines(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths
+        text = json.dumps({"defines": dict(defines or {})}, sort_keys=True)
+        Path(save_shader).write_text(text, encoding="utf-8")
+        return text
+
+    monkeypatch.setattr(project_pipeline, "translate", write_defines)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    variant_segment = project_pipeline._variant_output_segment("qa/profile")
+    expected_path = f"translated/opengl/{variant_segment}/simple.glsl"
+
+    assert validation["success"] is True
+    assert variant_segment != "qa/profile"
+    assert "/" not in variant_segment
+    assert payload["project"]["variants"] == {"qa/profile": {"MODE": "qa"}}
+    assert payload["summary"]["artifactsByVariant"] == {
+        "qa/profile": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    }
+    assert payload["artifactMatrix"]["statusByVariant"] == {
+        "qa/profile": {
+            "expectedArtifactCount": 1,
+            "emittedArtifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "missingArtifactCount": 0,
+            "extraArtifactCount": 0,
+            "complete": True,
+        }
+    }
+    assert payload["artifacts"][0]["variant"] == "qa/profile"
+    assert payload["artifacts"][0]["path"] == expected_path
+    assert payload["artifacts"][0]["defines"] == {"MODE": "qa"}
+    assert validation["artifactStatusByVariant"] == {
+        "qa/profile": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert (repo / expected_path).exists()
+    assert not (
+        repo / "translated" / "opengl" / "qa" / "profile" / "simple.glsl"
+    ).exists()
+
+
 def test_translate_project_rejects_unknown_selected_variant(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

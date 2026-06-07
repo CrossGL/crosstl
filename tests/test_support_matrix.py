@@ -544,6 +544,9 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "de-duplicates repeated selections before artifact planning" in (
             backend_support["notes"]
         )
+        assert "sanitizes unsafe variant names into stable output path segments" in (
+            backend_support["notes"]
+        )
         assert (
             "malformed define/variant metadata including empty mapping keys and "
             "forged variant define counts"
@@ -627,6 +630,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_limits_named_variants_to_selected"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_sanitizes_variant_output_segments"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
