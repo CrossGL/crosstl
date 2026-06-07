@@ -152,6 +152,10 @@ def test_project_report_inspection_is_first_class_support_feature():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_emits_closed_inspection_report_schema"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_derives_missing_artifact_matrix_gaps"
         ) in backend_support["evidence"]
         assert (
@@ -321,6 +325,7 @@ def test_project_report_inspection_documents_rollups():
         assert "source-override" in backend_support["notes"]
         assert "skipped source-override" in backend_support["notes"]
         assert "negative sample-limit rejection" in backend_support["notes"]
+        assert "closed inspection-report field set" in backend_support["notes"]
         assert (
             "validation artifact and validation toolchain-run samples with "
             "custom limits"

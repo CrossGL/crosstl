@@ -13123,6 +13123,33 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     ]
 
 
+def test_inspect_project_report_emits_closed_inspection_report_schema(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = inspect_project_report(report_path)
+
+    assert set(payload) <= project_pipeline.REPORT_INSPECTION_FIELDS
+    assert (project_pipeline.REPORT_INSPECTION_FIELDS - {"externalCorpus"}) == set(
+        payload
+    )
+    assert payload["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    assert payload["kind"] == project_pipeline.REPORT_INSPECTION_KIND
+    assert payload["sourceReport"] == str(report_path)
+    assert isinstance(payload["generatedAt"], int)
+
+
 def test_inspect_project_report_samples_migration_actions(tmp_path):
     report_path = _write_large_migration_report(tmp_path / "repo")
 

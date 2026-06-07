@@ -221,6 +221,9 @@ record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
 present-but-undiscovered external corpus entries with configurable sample
 limits, and migration actions.
+The JSON inspection report uses schema version 1 with a fixed top-level field
+set so automation can detect contract drift while optional report sections
+remain data-dependent.
 Migration action inspection is bounded and records truncation counts for large
 reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for

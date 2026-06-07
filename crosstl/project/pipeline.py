@@ -48,6 +48,31 @@ REPORT_FIELDS = frozenset(
         "externalCorpus",
     )
 )
+REPORT_INSPECTION_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceReport",
+        "generatedAt",
+        "success",
+        "report",
+        "sourceMaps",
+        "artifactProvenance",
+        "defineProcessing",
+        "includeDependencies",
+        "includePathProcessing",
+        "artifactMatrix",
+        "diagnosticCount",
+        "truncatedDiagnosticCount",
+        "failedArtifactCount",
+        "truncatedFailedArtifactCount",
+        "failedArtifacts",
+        "diagnostics",
+        "validation",
+        "migration",
+        "externalCorpus",
+    )
+)
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
     (
