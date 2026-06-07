@@ -4753,6 +4753,57 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     ]
 
 
+def test_translate_project_emits_closed_portability_report_schema(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+
+    assert set(payload) == project_pipeline.REPORT_FIELDS - {"externalCorpus"}
+    assert set(payload["generator"]) == project_pipeline.REPORT_GENERATOR_FIELDS
+    assert set(payload["project"]) == project_pipeline.REPORT_PROJECT_FIELDS
+    assert set(payload["summary"]) == project_pipeline.REPORT_SUMMARY_FIELDS
+    assert (
+        set(payload["artifactMatrix"]) == project_pipeline.REPORT_ARTIFACT_MATRIX_FIELDS
+    )
+    assert set(payload["migration"]) == project_pipeline.REPORT_MIGRATION_FIELDS
+    assert set(payload["migration"]["actions"][0]) == (
+        project_pipeline.REPORT_MIGRATION_ACTION_FIELDS
+    )
+
+    unit = payload["units"][0]
+    assert set(unit) == project_pipeline.REPORT_UNIT_FIELDS - {
+        "sourceOverride",
+        "includeDependencies",
+    }
+    assert set(unit["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
+
+    artifact = payload["artifacts"][0]
+    assert set(artifact) == project_pipeline.REPORT_ARTIFACT_FIELDS - {
+        "variant",
+        "error",
+        "sourceRemap",
+    }
+    assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
+    assert set(artifact["generatedHash"]) == project_pipeline.REPORT_HASH_FIELDS
+    assert set(artifact["defineProcessing"]) == (
+        project_pipeline.REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS
+    )
+    assert set(artifact["includePathProcessing"]) == (
+        project_pipeline.REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS
+    )
+    assert set(artifact["provenance"]) == (
+        project_pipeline.REPORT_ARTIFACT_PROVENANCE_FIELDS
+    )
+
+    source_map = artifact["sourceMap"]
+    assert set(source_map) == project_pipeline.SOURCE_MAP_PAYLOAD_FIELDS
+    assert set(source_map["source"]) == project_pipeline.SOURCE_MAP_SPAN_FIELD_SET
+    assert set(source_map["generated"]) == project_pipeline.SOURCE_MAP_SPAN_FIELD_SET
+    assert set(source_map["mappings"][0]) == project_pipeline.SOURCE_MAP_MAPPING_FIELDS
+
+
 def test_translate_project_records_bridge_artifact_provenance_rollups(
     tmp_path,
     monkeypatch,

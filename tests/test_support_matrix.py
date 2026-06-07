@@ -809,6 +809,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             backend_support["notes"]
         )
         assert "artifactMatrix metadata" in backend_support["notes"]
+        assert "closed top-level report field set" in backend_support["notes"]
         assert "artifact records whose targets are not declared by the report" in (
             backend_support["notes"]
         )
@@ -841,6 +842,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_records_artifact_matrix_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_emits_closed_portability_report_schema"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
