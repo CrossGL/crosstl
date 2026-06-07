@@ -255,10 +255,23 @@ def _parse_project_source_overrides(values):
     return overrides
 
 
+def _parse_project_source_roots(values):
+    source_roots = []
+    for value in values or []:
+        source_root = value.strip()
+        if not source_root:
+            raise ValueError("--source-root entries must be non-empty")
+        source_roots.append(source_root)
+    return tuple(source_roots)
+
+
 def _load_project_config_from_args(args):
     from .project import load_project_config
 
     config = load_project_config(args.root, args.config)
+    source_roots = _parse_project_source_roots(
+        getattr(args, "source_root", None),
+    )
     include_dirs = tuple(config.include_dirs) + tuple(
         getattr(args, "include_dir", None) or ()
     )
@@ -267,13 +280,15 @@ def _load_project_config_from_args(args):
         getattr(args, "source_override", None)
     )
     if (
-        include_dirs == tuple(config.include_dirs)
+        not source_roots
+        and include_dirs == tuple(config.include_dirs)
         and not define_overrides
         and not source_overrides
     ):
         return config
     return replace(
         config,
+        source_roots=source_roots or tuple(config.source_roots),
         include_dirs=include_dirs,
         defines={**dict(config.defines), **define_overrides},
         source_overrides={**dict(config.source_overrides), **source_overrides},
@@ -281,6 +296,14 @@ def _load_project_config_from_args(args):
 
 
 def _add_project_override_args(parser):
+    parser.add_argument(
+        "--source-root",
+        action="append",
+        help=(
+            "Project source root override; repeatable. Replaces configured "
+            "source roots for this command."
+        ),
+    )
     parser.add_argument(
         "--include-dir",
         action="append",

@@ -237,7 +237,8 @@ def test_project_repo_scan_documents_source_root_status():
         assert "validates skipped source override provenance" in (
             backend_support["notes"]
         )
-        assert "scan/report CLI source override rollups" in (backend_support["notes"])
+        assert "scan/report CLI source-root overrides" in (backend_support["notes"])
+        assert "source override rollups" in (backend_support["notes"])
         assert "validation rejects missing scan summary rollups" in (
             backend_support["notes"]
         )
@@ -278,7 +279,15 @@ def test_project_repo_scan_documents_source_root_status():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scan_applies_source_root_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_report_applies_source_backend_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_report_records_source_root_overrides"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

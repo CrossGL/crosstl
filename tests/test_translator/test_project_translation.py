@@ -12844,6 +12844,98 @@ def test_project_cli_report_applies_source_backend_overrides(tmp_path):
     assert payload["units"][0]["sourceOverride"] == "cgl"
 
 
+def test_project_cli_scan_applies_source_root_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    configured_dir = repo / "configured"
+    shader_dir.mkdir(parents=True)
+    configured_dir.mkdir()
+    (shader_dir / "scoped.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (configured_dir / "ignored.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["configured"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--source-root",
+            "shaders",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["project"]["sourceRoots"] == ["shaders"]
+    assert payload["project"]["sourceRootCount"] == 1
+    assert payload["project"]["sourceRootStatus"] == [
+        {
+            "path": "shaders",
+            "resolvedPath": str(shader_dir.resolve()),
+            "status": "active",
+            "scanVisible": True,
+        }
+    ]
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["units"][0]["path"] == "shaders/scoped.cgl"
+
+
+def test_project_cli_report_records_source_root_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    output = tmp_path / "portability-report.json"
+    shader_dir = repo / "shaders"
+    configured_dir = repo / "configured"
+    shader_dir.mkdir(parents=True)
+    configured_dir.mkdir()
+    (shader_dir / "scoped.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (configured_dir / "ignored.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["configured"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            str(repo),
+            "--source-root",
+            "shaders",
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result.stdout == f"Wrote {output}\n"
+    assert payload["project"]["sourceRoots"] == ["shaders"]
+    assert payload["project"]["sourceRootCount"] == 1
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["units"][0]["path"] == "shaders/scoped.cgl"
+
+
 def test_project_cli_translate_project_applies_include_dir_and_define_overrides(
     tmp_path,
 ):
@@ -13066,6 +13158,30 @@ def test_project_cli_scan_rejects_empty_define_override(tmp_path):
 
     assert result.returncode == 1
     assert "Error: --define entries must use NAME or NAME=VALUE" in result.stdout
+
+
+def test_project_cli_scan_rejects_empty_source_root_override(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--source-root",
+            " ",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Error: --source-root entries must be non-empty" in result.stdout
 
 
 def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):

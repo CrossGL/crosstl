@@ -145,11 +145,12 @@ Project translation exits nonzero when the report contains failed artifacts or
 error diagnostics.
 
 Project scan, report, and translation commands also accept repeatable
-``--include-dir``, ``--define``, and ``--source-override`` overrides. CLI
-defines use ``NAME`` or ``NAME=VALUE`` syntax and override matching names loaded
-from ``crosstl.toml``. CLI source overrides use ``PATTERN=BACKEND`` syntax and
-override matching source patterns loaded from ``crosstl.toml``. These overrides
-are recorded in the emitted project report.
+``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``
+overrides. CLI source roots replace the configured source roots for that
+command. CLI defines use ``NAME`` or ``NAME=VALUE`` syntax and override matching
+names loaded from ``crosstl.toml``. CLI source overrides use ``PATTERN=BACKEND``
+syntax and override matching source patterns loaded from ``crosstl.toml``.
+These overrides are recorded in the emitted project report.
 
 Unsupported target backend names are reported as configuration diagnostics in
 scan, report, and translation output. Translation still records per-artifact
@@ -286,7 +287,9 @@ segments are reported as configuration diagnostics and skipped. Source
 overrides allow extensionless or non-standard files to be assigned to a
 registered source backend. Override patterns are also considered during default
 discovery, so override-only files do not require broad include globs. CLI source
-overrides are merged with this configuration before scan or translation.
+roots replace the configured source roots before scan, report, or translation.
+CLI source overrides are merged with this configuration before scan, report, or
+translation.
 Invalid override backend names are reported as configuration diagnostics.
 Explicit broad include patterns may also match compiled shader artifacts or
 known source formats that CrossTL cannot parse yet. Project scans keep those
