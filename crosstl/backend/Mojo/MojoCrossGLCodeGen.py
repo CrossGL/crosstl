@@ -124,6 +124,8 @@ class MojoToCrossGLConverter:
         self.imported_function_aliases = {}
         self.scoped_value_names = []
         self.function_body_depth = 0
+        self.loop_else_guard_counter = 0
+        self.loop_else_guard_stack = []
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -590,12 +592,15 @@ class MojoToCrossGLConverter:
 
         saved_body_depth = self.function_body_depth
         self.function_body_depth = 0
+        saved_loop_else_guard_stack = self.loop_else_guard_stack
+        self.loop_else_guard_stack = []
         self.push_value_scope(param_names)
         try:
             if hasattr(func, "body") and func.body:
                 code += self.generate_function_body(func.body, indent + 1)
         finally:
             self.pop_value_scope()
+            self.loop_else_guard_stack = saved_loop_else_guard_stack
             self.function_body_depth = saved_body_depth
 
         code += f"{indent_str}}}\n\n"
@@ -645,7 +650,12 @@ class MojoToCrossGLConverter:
                     else:
                         code += f"return {self.generate_expression(stmt.value)};\n"
                 elif isinstance(stmt, BreakNode):
-                    code += "break;\n"
+                    loop_else_guard = self.current_loop_else_guard()
+                    if loop_else_guard:
+                        code += f"{loop_else_guard} = false;\n"
+                        code += f"{indent_str}break;\n"
+                    else:
+                        code += "break;\n"
                 elif isinstance(stmt, ContinueNode):
                     code += "continue;\n"
                 elif isinstance(stmt, BinaryOpNode):
@@ -762,11 +772,18 @@ class MojoToCrossGLConverter:
             self.generate_expression(node.condition) if node.condition else "true"
         )
         update = self.generate_expression(node.update) if node.update else ""
+        else_body = getattr(node, "else_body", []) or []
+        loop_else_guard = self.begin_loop_else_guard(else_body)
 
-        code = f"for ({init}; {condition}; {update}) {{\n"
-        if hasattr(node, "body") and node.body:
-            code += self.generate_function_body(node.body, indent + 1)
+        code = self.generate_loop_else_guard_declaration(loop_else_guard, indent)
+        code += f"for ({init}; {condition}; {update}) {{\n"
+        try:
+            if hasattr(node, "body") and node.body:
+                code += self.generate_function_body(node.body, indent + 1)
+        finally:
+            self.end_loop_else_guard(loop_else_guard)
         code += indent_str + "}\n"
+        code += self.generate_loop_else_block(loop_else_guard, else_body, indent)
         return code
 
     def generate_with_block(self, node, indent):
@@ -822,16 +839,24 @@ class MojoToCrossGLConverter:
     def generate_range_for_loop(self, node, indent):
         indent_str = "    " * indent
         target = self.generate_declaration_name(node.name)
+        else_body = getattr(node, "else_body", []) or []
+        loop_else_guard = self.begin_loop_else_guard(else_body)
 
         if isinstance(node.name, str) and self.is_range_call(node.iterable):
-            code = self.generate_range_call_for_loop(node)
+            code = self.generate_loop_else_guard_declaration(loop_else_guard, indent)
+            code += self.generate_range_call_for_loop(node)
         else:
             iterable = self.generate_expression(node.iterable)
-            code = f"for {target} in {iterable} {{\n"
+            code = self.generate_loop_else_guard_declaration(loop_else_guard, indent)
+            code += f"for {target} in {iterable} {{\n"
 
-        if hasattr(node, "body") and node.body:
-            code += self.generate_function_body(node.body, indent + 1)
+        try:
+            if hasattr(node, "body") and node.body:
+                code += self.generate_function_body(node.body, indent + 1)
+        finally:
+            self.end_loop_else_guard(loop_else_guard)
         code += indent_str + "}\n"
+        code += self.generate_loop_else_block(loop_else_guard, else_body, indent)
         return code
 
     def is_range_call(self, node):
@@ -922,10 +947,48 @@ class MojoToCrossGLConverter:
         condition = (
             self.generate_expression(node.condition) if node.condition else "true"
         )
+        else_body = getattr(node, "else_body", []) or []
+        loop_else_guard = self.begin_loop_else_guard(else_body)
 
-        code = f"while ({condition}) {{\n"
-        if hasattr(node, "body") and node.body:
-            code += self.generate_function_body(node.body, indent + 1)
+        code = self.generate_loop_else_guard_declaration(loop_else_guard, indent)
+        code += f"while ({condition}) {{\n"
+        try:
+            if hasattr(node, "body") and node.body:
+                code += self.generate_function_body(node.body, indent + 1)
+        finally:
+            self.end_loop_else_guard(loop_else_guard)
+        code += indent_str + "}\n"
+        code += self.generate_loop_else_block(loop_else_guard, else_body, indent)
+        return code
+
+    def begin_loop_else_guard(self, else_body):
+        guard = None
+        if else_body:
+            guard = f"__mojo_loop_completed_{self.loop_else_guard_counter}"
+            self.loop_else_guard_counter += 1
+        self.loop_else_guard_stack.append(guard)
+        return guard
+
+    def end_loop_else_guard(self, guard):
+        self.loop_else_guard_stack.pop()
+
+    def current_loop_else_guard(self):
+        if not self.loop_else_guard_stack:
+            return None
+        return self.loop_else_guard_stack[-1]
+
+    def generate_loop_else_guard_declaration(self, guard, indent):
+        if guard is None:
+            return ""
+        return f"bool {guard} = true;\n{'    ' * indent}"
+
+    def generate_loop_else_block(self, guard, else_body, indent):
+        if guard is None:
+            return ""
+
+        indent_str = "    " * indent
+        code = f"{indent_str}if ({guard}) {{\n"
+        code += self.generate_function_body(else_body, indent + 1)
         code += indent_str + "}\n"
         return code
 
@@ -964,16 +1027,20 @@ class MojoToCrossGLConverter:
 
         code = f"switch ({expression}) {{\n"
 
-        if hasattr(node, "cases") and node.cases:
-            for case in node.cases:
-                if hasattr(case, "condition") and case.condition is not None:
-                    case_value = self.generate_expression(case.condition)
-                    code += indent_str + f"    case {case_value}:\n"
-                else:
-                    code += indent_str + "    default:\n"
+        self.loop_else_guard_stack.append(None)
+        try:
+            if hasattr(node, "cases") and node.cases:
+                for case in node.cases:
+                    if hasattr(case, "condition") and case.condition is not None:
+                        case_value = self.generate_expression(case.condition)
+                        code += indent_str + f"    case {case_value}:\n"
+                    else:
+                        code += indent_str + "    default:\n"
 
-                if hasattr(case, "body") and case.body:
-                    code += self.generate_function_body(case.body, indent + 2)
+                    if hasattr(case, "body") and case.body:
+                        code += self.generate_function_body(case.body, indent + 2)
+        finally:
+            self.loop_else_guard_stack.pop()
 
         code += indent_str + "}\n"
         return code

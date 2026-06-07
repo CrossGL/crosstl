@@ -1628,7 +1628,9 @@ class MojoParser:
             update = self.parse_expression()
             self.eat("COLON")
             body = self.parse_block()
-            return ForNode(init, condition, update, body)
+            node = ForNode(init, condition, update, body)
+            node.else_body = self.parse_loop_else_body()
+            return node
 
         except Exception:
             self.pos = saved_pos
@@ -1644,6 +1646,7 @@ class MojoParser:
                 body = self.parse_block()
                 node = RangeForNode("", var_name, iterable, body)
                 node.target_convention = convention
+                node.else_body = self.parse_loop_else_body()
                 return node
 
         raise SyntaxError(
@@ -1665,7 +1668,18 @@ class MojoParser:
         condition = self.parse_expression()
         self.eat("COLON")
         body = self.parse_block()
-        return WhileNode(condition, body)
+        node = WhileNode(condition, body)
+        node.else_body = self.parse_loop_else_body()
+        return node
+
+    def parse_loop_else_body(self):
+        self.skip_newlines()
+        if self.current_token[0] != "ELSE":
+            return []
+
+        self.eat("ELSE")
+        self.eat("COLON")
+        return self.parse_block()
 
     def parse_with_statement(self):
         self.eat("WITH")

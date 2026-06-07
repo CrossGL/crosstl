@@ -2381,6 +2381,52 @@ def test_modular_image_pipeline_blur_chained_bounds_parse():
     assert col_bounds.right.right.name == "width"
 
 
+def test_for_else_parse_from_official_compound_statement_reference():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-compound-statements/
+    # "Loops and else clauses" documents that a for-else block skips the
+    # else body when break exits the loop.
+    code = """
+    def search(items: List[Int], target: Int):
+        var found = False
+        for item in items:
+            if item == target:
+                found = True
+                break
+        else:
+            print("not found")
+    """
+    ast = parse_code(tokenize_code(code))
+    loop = find_function(ast, "search").body[1]
+
+    assert isinstance(loop, RangeForNode)
+    assert loop.name == "item"
+    assert loop.iterable.name == "items"
+    assert isinstance(loop.body[0], IfNode)
+    assert isinstance(loop.body[0].if_body[1], BreakNode)
+    assert loop.else_body[0].name == "print"
+
+
+def test_while_else_parse_from_official_control_flow_docs():
+    # Reduced from https://docs.modular.com/mojo/manual/control-flow/
+    # "The while statement" documents while loops with else clauses.
+    code = """
+    def main():
+        var n = 5
+        while n < 4:
+            print(n)
+            n += 1
+        else:
+            print("Loop completed")
+    """
+    ast = parse_code(tokenize_code(code))
+    loop = find_function(ast, "main").body[1]
+
+    assert isinstance(loop, WhileNode)
+    assert isinstance(loop.condition, BinaryOpNode)
+    assert len(loop.body) == 2
+    assert loop.else_body[0].name == "print"
+
+
 def test_try_except_parse_from_layout_tensor_gpu_docs():
     code = """
     def main():

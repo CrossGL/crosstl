@@ -3228,11 +3228,12 @@ class MetalParser:
         name = node.name if isinstance(node, VariableNode) else node.member
         if name in self.known_function_templates:
             return self.template_argument_list_followed_by_call(
-                follow_token_types={"LPAREN", "SCOPE"},
+                follow_token_types={"LPAREN", "SCOPE", "LBRACE"},
                 require_type_like_argument=False,
             )
         return self.template_argument_list_followed_by_call(
-            follow_token_types={"LPAREN", "SCOPE"}, require_type_like_argument=True
+            follow_token_types={"LPAREN", "SCOPE", "LBRACE"},
+            require_type_like_argument=True,
         )
 
     def is_template_variable_suffix(self, node):

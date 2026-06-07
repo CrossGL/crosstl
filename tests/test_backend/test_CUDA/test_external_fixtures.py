@@ -46,6 +46,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
             "cpp/5_Domain_Specific/dxtc/dxtc.cu",
+            "cpp/5_Domain_Specific/stereoDisparity/stereoDisparity_kernel.cuh",
             "cpp/6_Performance/transpose/transpose.cu",
             "cpp/9_CUDA_Tile/Benchmark_Common/matmul_benchmark.h",
         ],
@@ -2095,6 +2096,51 @@ def test_cuda_samples_dxtc_bitfield_struct_members_parse_and_codegen():
     assert "u16 u;" in crossgl
     assert " : 5" not in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_stereo_disparity_usad4_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/5_Domain_Specific/stereoDisparity/stereoDisparity_kernel.cuh
+    source = """
+    __device__ unsigned int __usad4(unsigned int A,
+                                    unsigned int B,
+                                    unsigned int C = 0) {
+        unsigned int result;
+
+        asm("vabsdiff4.u32.u32.u32.add"
+            " %0, %1, %2, %3;"
+            : "=r"(result)
+            : "r"(A), "r"(B), "r"(C));
+
+        return result;
+    }
+
+    __global__ void stereoDisparityKernel(unsigned int *g_odata,
+                                          unsigned int imLeft,
+                                          unsigned int imRight,
+                                          unsigned int seed) {
+        unsigned int cost = __usad4(imLeft, imRight);
+        unsigned int biasedCost = __usad4(imLeft, imRight, seed);
+        g_odata[threadIdx.x] = cost + biasedCost;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert ast.functions[0].name == "__usad4"
+    assert body[0].value.name == "__usad4"
+    assert body[1].value.name == "__usad4"
+    assert_crossgl_reparse(crossgl)
+    assert 'CUDA inline PTX: "vabsdiff4.u32.u32.u32.add %0, %1, %2, %3;"' in crossgl
+    assert "((imLeft & 0xffu) > (imRight & 0xffu))" in crossgl
+    assert "(((imLeft >> 24) & 0xffu) > ((imRight >> 24) & 0xffu))" in crossgl
+    assert "+ seed);" in crossgl
+    assert "__usad4(imLeft, imRight)" not in crossgl
+    assert "__usad4(imLeft, imRight, seed)" not in crossgl
 
 
 def test_cuda_samples_dxtc_rintf_color_quantization_codegen_reparse():

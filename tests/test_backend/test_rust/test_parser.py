@@ -5412,6 +5412,31 @@ def test_rust_gpu_mouse_shader_tuple_struct_destructure_parse():
     assert method.body[1].value.op == "-"
 
 
+def test_rust_gpu_mouse_shader_max_element_method_parse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/mouse-shader/src/lib.rs Rectangle::distance.
+    code = """
+    impl Shape for Rectangle {
+        fn distance(self, p: Vec2) -> f32 {
+            let diff = p - self.center;
+            let diff = vec2(diff.x.abs(), diff.y.abs());
+            (diff - self.size / 2.0).max_element()
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    method = ast.impl_blocks[0].methods[0]
+    final_expression = method.body[-1]
+
+    assert isinstance(final_expression, FunctionCallNode)
+    assert isinstance(final_expression.name, MemberAccessNode)
+    assert final_expression.name.member == "max_element"
+    assert isinstance(final_expression.name.object, BinaryOpNode)
+    assert final_expression.args == []
+
+
 def test_rust_gpu_reduce_shader_inferred_cast_target_parse():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

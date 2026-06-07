@@ -2790,24 +2790,9 @@ class HLSLToCrossGLConverter:
             elif isinstance(node, IncludeNode):
                 code += f"    #include {node.path}\n"
         for node in ast.global_variables:
-            self.record_variable_type(
-                node, self.global_variable_types, self.global_resource_array_dims
-            )
-            code += self.format_attributes(getattr(node, "attributes", []), 1)
-            code += self.format_resource_qualifier_attributes(node, 1)
-            code += self.format_binding_attributes(node, 1)
-            code += self.format_matrix_layout_attributes(node, 1)
-            storage_prefix = self.format_global_storage_qualifier_prefix(node)
-            precise_prefix = self.format_precise_qualifier_prefix(node)
-            array_suffix = self.format_array_suffixes(node)
-            initializer = ""
-            if getattr(node, "value", None) is not None:
-                initializer = f" = {self.generate_expression(node.value)}"
-            code += (
-                f"    {storage_prefix}{precise_prefix}{self.map_variable_type(node)} "
-                f"{self.render_identifier(node.name)}"
-                f"{array_suffix}{initializer};\n"
-            )
+            code += self.generate_global_variable_declaration(node)
+        for node in self.collect_struct_variable_declarations(ast.structs):
+            code += self.generate_global_variable_declaration(node)
         if ast.cbuffers:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -2845,6 +2830,32 @@ class HLSLToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def collect_struct_variable_declarations(self, structs):
+        declarations = []
+        for struct in structs or []:
+            declarations.extend(getattr(struct, "variable_declarations", []) or [])
+        return declarations
+
+    def generate_global_variable_declaration(self, node):
+        self.record_variable_type(
+            node, self.global_variable_types, self.global_resource_array_dims
+        )
+        code = self.format_attributes(getattr(node, "attributes", []), 1)
+        code += self.format_resource_qualifier_attributes(node, 1)
+        code += self.format_binding_attributes(node, 1)
+        code += self.format_matrix_layout_attributes(node, 1)
+        storage_prefix = self.format_global_storage_qualifier_prefix(node)
+        precise_prefix = self.format_precise_qualifier_prefix(node)
+        array_suffix = self.format_array_suffixes(node)
+        initializer = ""
+        if getattr(node, "value", None) is not None:
+            initializer = f" = {self.generate_expression(node.value)}"
+        return (
+            code
+            + f"    {storage_prefix}{precise_prefix}{self.map_variable_type(node)} "
+            f"{self.render_identifier(node.name)}{array_suffix}{initializer};\n"
+        )
 
     def generate_cbuffers(self, ast):
         code = ""

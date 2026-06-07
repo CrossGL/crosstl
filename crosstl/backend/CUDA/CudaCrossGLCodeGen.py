@@ -223,6 +223,7 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphTailLaunch": "tail",
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
+    CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
     CROSSGL_RESERVED_IDENTIFIERS = {"in", "var"}
 
     def __init__(self):
@@ -677,6 +678,12 @@ class CudaToCrossGLConverter:
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.user_function_names
+
+    def is_cuda_intrinsic_override_function(self, func_name):
+        if not isinstance(func_name, str):
+            return False
+        normalized_name = func_name[2:] if func_name.startswith("::") else func_name
+        return normalized_name in self.CUDA_INTRINSIC_OVERRIDE_NAMES
 
     def push_resource_object_hint_scope(self, hints):
         self.resource_object_hint_scopes.append(hints)
@@ -4309,6 +4316,11 @@ class CudaToCrossGLConverter:
         if unique_ptr_init is not None:
             return unique_ptr_init
 
+        if self.is_cuda_intrinsic_override_function(raw_name):
+            integer_intrinsic = self.format_cuda_integer_intrinsic_call(raw_name, args)
+            if integer_intrinsic is not None:
+                return integer_intrinsic
+
         if self.is_user_defined_function(raw_name):
             return f"{raw_name}({args_str})"
 
@@ -4739,6 +4751,9 @@ class CudaToCrossGLConverter:
                 f"((({args[0]} > {args[1]}) ? ({args[0]} - {args[1]}) : "
                 f"({args[1]} - {args[0]})) + {args[2]})"
             )
+        if function_name == "__usad4" and len(args) in {2, 3}:
+            bias = args[2] if len(args) == 3 else "0u"
+            return self.format_cuda_usad4_intrinsic(args[0], args[1], bias)
         if function_name in {
             "__funnelshift_l",
             "__funnelshift_lc",
@@ -4747,6 +4762,33 @@ class CudaToCrossGLConverter:
         }:
             return self.format_cuda_integer_intrinsic_diagnostic(function_name, args)
         return None
+
+    def format_cuda_usad4_intrinsic(self, left, right, bias):
+        differences = [
+            self.format_cuda_unsigned_byte_absdiff(left, right, shift)
+            for shift in (0, 8, 16, 24)
+        ]
+        result = differences[0]
+        for difference in differences[1:]:
+            result = f"({result} + {difference})"
+
+        if self.normalize_cuda_integer_literal(bias) == "0":
+            return result
+        return f"({result} + {bias})"
+
+    def format_cuda_unsigned_byte_absdiff(self, left, right, shift):
+        left_byte = self.format_cuda_packed_byte(left, shift)
+        right_byte = self.format_cuda_packed_byte(right, shift)
+        return (
+            f"(({left_byte} > {right_byte}) ? ({left_byte} - {right_byte}) : "
+            f"({right_byte} - {left_byte}))"
+        )
+
+    def format_cuda_packed_byte(self, value, shift):
+        operand = self.format_bitwise_operand(value)
+        if shift == 0:
+            return f"({operand} & 0xffu)"
+        return f"(({operand} >> {shift}) & 0xffu)"
 
     def format_cuda_integer_intrinsic_diagnostic(self, function_name, args):
         args_text = ", ".join(args)
