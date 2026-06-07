@@ -786,7 +786,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert "non-empty source-map mappings" in backend_support["notes"]
-        assert "single file-level source-map mapping" in backend_support["notes"]
+        assert "file-level source-map mapping cardinality" in backend_support["notes"]
+        assert "fine-grained positive-length source-map mappings" in (
+            backend_support["notes"]
+        )
         assert "source-map summary rollups" in backend_support["notes"]
         assert "source-map summary rollups including variant rollups" in (
             backend_support["notes"]
@@ -1016,7 +1019,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "required translated artifact source maps" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
         assert "non-empty source-map mappings" in backend_support["notes"]
-        assert "single file-level source-map mapping" in backend_support["notes"]
+        assert "file-level source-map mapping cardinality" in backend_support["notes"]
+        assert "fine-grained positive-length source-map mappings" in (
+            backend_support["notes"]
+        )
         assert "repository-relative file paths" in backend_support["notes"]
         assert "required summarized validation artifact status fields" in (
             backend_support["notes"]

@@ -258,6 +258,33 @@ def test_support_project_feature_evidence_references_existing_tests():
     assert missing_tests == []
 
 
+def test_support_project_source_map_notes_document_granularity_contract():
+    catalog = json.loads(
+        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
+    )
+    checked_features = {"project.validation_hooks", "project.source_provenance"}
+    stale_phrase = "single file-level source-map mapping"
+    required_phrases = (
+        "file-level source-map mapping cardinality",
+        "fine-grained positive-length source-map mappings",
+    )
+
+    stale_notes = []
+    missing_notes = []
+    for feature in catalog["features"]:
+        if feature.get("id") not in checked_features:
+            continue
+        for backend, support in feature.get("support", {}).items():
+            notes = support.get("notes", "")
+            if stale_phrase in notes:
+                stale_notes.append(f"{feature.get('id')}:{backend}")
+            if not all(phrase in notes for phrase in required_phrases):
+                missing_notes.append(f"{feature.get('id')}:{backend}")
+
+    assert stale_notes == []
+    assert missing_notes == []
+
+
 def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(
     tmp_path,
 ):

@@ -164,11 +164,12 @@ Validate artifacts referenced by a report:
 
 Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, source-map
-mapping lists are empty or do not contain one file-level mapping, source-map or
-diagnostic location spans are internally inconsistent, diagnostic location file
-paths or artifact source paths are not repository-relative, project target lists
-are not normalized and deduplicated, diagnostic or artifact targets are not
-declared by the report, artifact sources are not declared translation units,
+mapping lists are empty, file-granularity source maps do not contain one
+file-level mapping, finer-grained mappings are not positive-length, source-map
+or diagnostic location spans are internally inconsistent, diagnostic location
+file paths or artifact source paths are not repository-relative, project target
+lists are not normalized and deduplicated, diagnostic or artifact targets are
+not declared by the report, artifact sources are not declared translation units,
 embedded validation records reference artifacts not declared by the report,
 validation records contain duplicate identities or inconsistent status fields,
 summarized embedded validation omits declared artifacts, external corpus entry
@@ -519,8 +520,9 @@ Project reports are JSON documents with:
   error metadata rejection, required artifact provenance and provenance value
   checks, failed artifact generated metadata rejection, required translated
   artifact source maps, required CrossGL artifact source remaps, source-map
-  record shape, non-empty mapping list, single file-level mapping, span
-  consistency, anchor consistency, current file-level source-map span coverage,
+  record shape, non-empty mapping list, file-level mapping cardinality,
+  positive-length finer-grained mappings, span consistency, anchor consistency,
+  current file-level source-map span coverage,
   source-remap metadata shape, sidecar hash, closed compiler sidecar field
   sets, and sidecar content checks, external
   corpus record, per-entry artifact count, required manifest-entry accounting,
