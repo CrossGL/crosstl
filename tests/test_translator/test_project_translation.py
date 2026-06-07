@@ -13043,6 +13043,53 @@ def test_project_cli_translate_project_applies_source_backend_overrides(tmp_path
     assert payload["artifacts"][0]["sourceBackend"] == "cgl"
 
 
+def test_project_cli_translate_project_applies_source_root_overrides(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    configured_dir = repo / "configured"
+    shader_dir.mkdir(parents=True)
+    configured_dir.mkdir()
+    (shader_dir / "scoped.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (configured_dir / "ignored.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["configured"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output-dir",
+            "translated",
+            "--source-root",
+            "shaders",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["project"]["sourceRoots"] == ["shaders"]
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["units"][0]["path"] == "shaders/scoped.cgl"
+    assert payload["artifacts"][0]["path"] == "translated/cgl/shaders/scoped.cgl"
+    assert (repo / "translated" / "cgl" / "shaders" / "scoped.cgl").exists()
+    assert not (repo / "translated" / "cgl" / "configured" / "ignored.cgl").exists()
+
+
 def test_project_cli_translate_project_limits_named_variants_to_selected(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

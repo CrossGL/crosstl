@@ -5395,7 +5395,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5406,12 +5406,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5422,12 +5423,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "metal": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5438,12 +5440,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5454,12 +5457,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "cuda": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5470,12 +5474,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "hip": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5486,12 +5491,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "mojo": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5502,12 +5508,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5518,12 +5525,13 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         },
         "slang": {
           "status": "supported",
-          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
@@ -5534,7 +5542,8 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
             "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
-            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ]
         }
       }

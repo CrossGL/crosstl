@@ -853,6 +853,7 @@ def test_project_batch_translation_documents_artifact_matrix_rollups():
             "real translator coverage for multiple units, all supported target "
             "backends, and variants"
         ) in backend_support["notes"]
+        assert "command-scoped source-root overrides" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_records_artifact_matrix_metadata"
@@ -869,6 +870,10 @@ def test_project_batch_translation_documents_artifact_matrix_rollups():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_artifact_matrix_gaps"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_translate_project_applies_source_root_overrides"
         ) in backend_support["evidence"]
 
 
