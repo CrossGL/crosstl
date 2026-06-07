@@ -139,10 +139,13 @@ Translate every discovered unit to one or more targets:
      --target metal \
      --target opengl \
      --output-dir crosstl-out \
-     --report crosstl-out/portability-report.json
+     --report crosstl-out/portability-report.json \
+     --run-toolchains
 
 Project translation exits nonzero when the report contains failed artifacts or
 error diagnostics.
+``--run-toolchains`` implies artifact validation and records any available
+bounded toolchain smoke-check results in the generated portability report.
 
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``

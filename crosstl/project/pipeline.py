@@ -3659,6 +3659,7 @@ def translate_project(
     variants: Sequence[str] | str | None = None,
     format_output: bool = False,
     validate: bool = False,
+    run_toolchains: bool = False,
 ) -> ProjectPortabilityReport:
     """Translate all discovered project units to one or more target backends."""
     config = (
@@ -3821,9 +3822,13 @@ def translate_project(
 
     validation = (
         _validate_artifacts(artifacts, selected_targets, config)
-        if validate
+        if validate or run_toolchains
         else {"toolchains": [], "artifacts": []}
     )
+    if run_toolchains:
+        toolchain_runs = _run_toolchain_smoke(artifacts, config.root)
+        validation["toolchainRuns"] = toolchain_runs
+        validation["_diagnostics"].extend(_toolchain_run_diagnostics(toolchain_runs))
     diagnostics.extend(validation.pop("_diagnostics", []))
     return ProjectPortabilityReport(
         config=config,

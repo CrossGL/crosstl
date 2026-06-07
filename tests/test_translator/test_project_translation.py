@@ -5946,6 +5946,78 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
     }
 
 
+def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == ["glslangValidator", "--stdin"]
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert kwargs["input"]
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "opengl",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "glslangValidator",
+                    "path": "/usr/bin/glslangValidator",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["summary"] == {
+        "artifactCount": 1,
+        "okCount": 1,
+        "failedCount": 0,
+        "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
+        "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "sourceMapStatusCounts": _source_map_status_counts(ok=1),
+        "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
+    }
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "opengl",
+            "path": "out/opengl/simple.glsl",
+            "command": ["glslangValidator", "--stdin"],
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "validation ok",
+            "stderr": "",
+        }
+    ]
+
+
 def test_validate_project_report_emits_closed_validation_report_schema(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -12588,6 +12660,47 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert "Wrote" in result.stdout
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
+
+
+def test_project_cli_translate_project_run_toolchains_records_validation(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output-dir",
+            "out",
+            "--run-toolchains",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "cgl",
+            "status": "not-configured",
+            "tools": [],
+            "message": "No validation toolchain hook is configured for this target.",
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["summary"]["artifactCount"] == 1
+    assert payload["validation"]["summary"]["okCount"] == 1
+    assert payload["validation"]["toolchainRuns"] == []
 
 
 def test_project_cli_report_help_has_clean_stderr():

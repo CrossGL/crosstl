@@ -348,6 +348,7 @@ def _run_translate_project(args):
         variants=args.variant,
         format_output=not args.no_format,
         validate=args.validate,
+        run_toolchains=args.run_toolchains,
     )
     payload = report.to_json()
     if args.report:
@@ -2600,6 +2601,14 @@ def _build_parser():
         "--validate",
         action="store_true",
         help="Validate emitted artifacts and record available toolchains",
+    )
+    translate_project_parser.add_argument(
+        "--run-toolchains",
+        action="store_true",
+        help=(
+            "Run lightweight optional toolchain smoke checks when tools exist; "
+            "implies artifact validation"
+        ),
     )
     translate_project_parser.add_argument(
         "--no-format", action="store_true", help="Disable code formatting"
