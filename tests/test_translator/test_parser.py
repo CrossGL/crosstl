@@ -4283,6 +4283,26 @@ def test_conflicting_interpolation_metadata_fails_validation(declaration, messag
         parse_code(tokenize_code(code))
 
 
+def test_wgsl_style_arrow_return_attributes_parse_before_return_type():
+    code = """
+    shader WgslReturnAttribute {
+        fragment {
+            fn main() -> @location(0) vec4 {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    entry = ast.stages[ShaderStage.FRAGMENT].entry_point
+
+    assert isinstance(entry.return_type, VectorType)
+    assert entry.return_type.size == 4
+    assert [attr.name for attr in entry.attributes] == ["location"]
+    assert entry.attributes[0].arguments[0].value == 0
+
+
 @pytest.mark.parametrize(
     ("declaration", "message"),
     [

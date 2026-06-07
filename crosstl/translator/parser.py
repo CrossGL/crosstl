@@ -1530,6 +1530,7 @@ class Parser:
 
         if self.is_arrow_token():
             self.eat_arrow()
+            attributes.extend(self.parse_return_type_attributes())
             return_type = self.parse_type()
 
         post_attributes = self.parse_post_declaration_attributes()
@@ -1559,6 +1560,10 @@ class Parser:
             is_async="async" in qualifiers,
             is_unsafe="unsafe" in qualifiers,
         )
+
+    def parse_return_type_attributes(self):
+        """Parse WGSL-style metadata between ``->`` and the return type."""
+        return self.parse_attribute_annotations(allow_single_square=False)
 
     def parse_parameter_list(self):
         """Parse a comma-separated function parameter list."""
