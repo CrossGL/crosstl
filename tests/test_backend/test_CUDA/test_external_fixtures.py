@@ -371,6 +371,35 @@ def test_cuda_math_api_floats2half2_rn_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_math_api_half2_float2_vector_conversions_codegen_reparse():
+    # Source inspiration:
+    # NVIDIA CUDA Math API v13.3, Half Precision Conversion and Data Movement.
+    # URL:
+    # https://docs.nvidia.com/cuda/cuda-math-api/cuda_math_api/group__CUDA__MATH____HALF__MISC.html
+    source = """
+    __device__ float2 convert_half2_vectors(float2 input, half2 packed) {
+        half2 converted = __float22half2_rn(input);
+        float2 unpacked = ::__half22float2(packed);
+        return make_float2(unpacked.x + input.x, unpacked.y + input.y);
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "__float22half2_rn"
+    assert body[1].value.name == "::__half22float2"
+    assert "var converted: vec2<f16> = vec2<f16>(input.x, input.y);" in crossgl
+    assert "var unpacked: vec2<f32> = vec2<f32>(packed.x, packed.y);" in crossgl
+    assert (
+        "return vec2<f32>((unpacked.x + input.x), (unpacked.y + input.y));" in crossgl
+    )
+    assert "__float22half2_rn" not in crossgl
+    assert "__half22float2" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_tile_matmul_half2float_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

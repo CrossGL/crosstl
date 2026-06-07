@@ -4017,6 +4017,41 @@ def test_codegen_tiled_resource_status_loads_import_as_diagnostics():
     parse_crossgl(crossgl)
 
 
+def test_codegen_texture_load_mixed_vector_locations_from_texture_array_docs():
+    # Source shape: Microsoft Texture2DArray::Load uses a packed integer location.
+    code = textwrap.dedent("""
+        Texture2DArray<float4> tiles : register(t0);
+        Texture3D<float4> volume : register(t1);
+
+        float4 main(
+            int2 pixel : TEXCOORD0,
+            int layer : TEXCOORD1,
+            int z : TEXCOORD2,
+            int mip : TEXCOORD3
+        ) : SV_Target0 {
+            int4 packedTile = int4(pixel, layer, mip);
+            float4 fromMixedCtor = tiles.Load(int4(pixel, layer, mip));
+            float4 fromPacked = tiles.Load(packedTile);
+            float4 fromVolume = volume.Load(int4(pixel, z, mip));
+            return fromMixedCtor + fromPacked + fromVolume;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "fromMixedCtor = texelFetch(tiles, ivec3(pixel, layer), mip);" in crossgl
+    assert "fromPacked = texelFetch(tiles, packedTile.xyz, packedTile.w);" in crossgl
+    assert "fromVolume = texelFetch(volume, ivec3(pixel, z), mip);" in crossgl
+    assert "texelFetch(tiles, ivec4(pixel, layer, mip), 0)" not in crossgl
+    assert "texelFetch(volume, ivec4(pixel, z, mip), 0)" not in crossgl
+    assert ".Load(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "tiles.Load(int4(int3(pixel, layer), mip))" in hlsl
+    assert "tiles.Load(int4(packedTile.xyz, packedTile.w))" in hlsl
+    assert "volume.Load(int4(int3(pixel, z), mip))" in hlsl
+
+
 def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
     code = textwrap.dedent("""
         Texture1D ramp : register(t0);

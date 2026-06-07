@@ -98,6 +98,7 @@ class RustToCrossGLConverter:
         "fetch",
         "fetch_with",
         "gather",
+        "gather_with",
         "query_levels",
         "query_samples",
         "query_size",
@@ -4156,6 +4157,15 @@ class RustToCrossGLConverter:
         if sample_with_call is not None:
             return sample_with_call
 
+        gather_with_call = self.format_rust_gpu_gather_with_method_call(
+            method_name,
+            obj,
+            args,
+            mapped_resource_type,
+        )
+        if gather_with_call is not None:
+            return gather_with_call
+
         fetch_with_call = self.format_rust_gpu_fetch_with_method_call(
             method_name,
             obj,
@@ -4201,6 +4211,29 @@ class RustToCrossGLConverter:
 
         call_args = [obj] + args[:-1] + operand_args
         return f"{intrinsic}({', '.join(call_args)})"
+
+    def format_rust_gpu_gather_with_method_call(
+        self,
+        method_name,
+        obj,
+        args,
+        mapped_resource_type,
+    ):
+        if method_name != "gather_with" or len(args) != 4:
+            return None
+        if not mapped_resource_type.startswith("sampler"):
+            return None
+
+        parsed_operand = self.parse_rust_gpu_sample_with_operand(args[-1])
+        if parsed_operand is None:
+            return None
+
+        operand_name, operand_args = parsed_operand
+        if operand_name != "offset":
+            return None
+
+        call_args = [obj] + args[:2] + operand_args + [args[2]]
+        return f"textureGatherOffset({', '.join(call_args)})"
 
     def format_rust_gpu_fetch_with_method_call(
         self,

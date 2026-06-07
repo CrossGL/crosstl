@@ -4555,8 +4555,26 @@ class CudaToCrossGLConverter:
             return f"f16({args[0]})"
         if function_name == "__float2half2_rn" and len(args) == 1:
             return self.format_vector_constructor("vec2", [args[0], args[0]], "f16")
+        if function_name == "__float22half2_rn" and len(args) == 1:
+            return self.format_vector_constructor(
+                "vec2",
+                [
+                    self.format_vector_component_access(args[0], "x"),
+                    self.format_vector_component_access(args[0], "y"),
+                ],
+                "f16",
+            )
         if function_name == "__floats2half2_rn" and len(args) == 2:
             return self.format_vector_constructor("vec2", args, "f16")
+        if function_name == "__half22float2" and len(args) == 1:
+            return self.format_vector_constructor(
+                "vec2",
+                [
+                    self.format_vector_component_access(args[0], "x"),
+                    self.format_vector_component_access(args[0], "y"),
+                ],
+                "f32",
+            )
         if function_name == "__half2float" and len(args) == 1:
             return f"f32({args[0]})"
         if function_name == "__low2float" and len(args) == 1:

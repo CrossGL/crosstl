@@ -1171,23 +1171,87 @@ class HLSLToCrossGLConverter:
             return None
 
         if not isinstance(location_arg, VectorConstructorNode):
-            return None
+            rendered_location = self.generate_expression(location_arg, is_main)
+            component_count = self.numeric_vector_component_count(
+                self.expression_value_raw_type(location_arg)
+            )
+            if component_count != coord_components + 1:
+                return None
+
+            swizzles = ("x", "y", "z", "w")
+            lod = self.swizzle_rendered_expression(
+                rendered_location, swizzles[coord_components]
+            )
+            if coord_components == 1:
+                coord = self.swizzle_rendered_expression(rendered_location, "x")
+            else:
+                coord = self.swizzle_rendered_expression(
+                    rendered_location, "".join(swizzles[:coord_components])
+                )
+            return coord, lod
 
         ctor_args = getattr(location_arg, "args", None)
         if not ctor_args:
             return None
 
         if len(ctor_args) == 2 and coord_components > 1:
+            first_components = self.numeric_vector_component_count(
+                self.expression_value_raw_type(ctor_args[0])
+            )
+            second_components = self.numeric_vector_component_count(
+                self.expression_value_raw_type(ctor_args[1])
+            )
+            if first_components != coord_components or second_components:
+                return None
             return (
                 self.generate_expression(ctor_args[0], is_main),
                 self.generate_expression(ctor_args[1], is_main),
             )
+
+        split_location = self.split_texture_load_constructor_arguments(
+            ctor_args, coord_components, is_main
+        )
+        if split_location is not None:
+            return split_location
 
         if len(ctor_args) != coord_components + 1:
             return None
 
         lod = self.generate_expression(ctor_args[-1], is_main)
         coord_args = [self.generate_expression(arg, is_main) for arg in ctor_args[:-1]]
+        if coord_components == 1:
+            coord = coord_args[0]
+        else:
+            coord = f"ivec{coord_components}({', '.join(coord_args)})"
+        return coord, lod
+
+    def split_texture_load_constructor_arguments(
+        self, ctor_args, coord_components, is_main=False
+    ):
+        coord_args = []
+        consumed_components = 0
+        lod_arg = None
+
+        for arg in ctor_args:
+            arg_components = (
+                self.numeric_vector_component_count(self.expression_value_raw_type(arg))
+                or 1
+            )
+            if consumed_components + arg_components <= coord_components:
+                coord_args.append(self.generate_expression(arg, is_main))
+                consumed_components += arg_components
+                continue
+
+            if consumed_components == coord_components and arg_components == 1:
+                lod_arg = arg
+                continue
+
+            return None
+
+        if consumed_components != coord_components or lod_arg is None:
+            return None
+
+        lod = self.generate_expression(lod_arg, is_main)
         if coord_components == 1:
             coord = coord_args[0]
         else:

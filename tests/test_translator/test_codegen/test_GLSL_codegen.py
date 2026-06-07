@@ -15291,6 +15291,50 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
     assert "textureProjGradOffset(" not in generated_code
 
 
+def test_opengl_texture_offset_non_const_extension_allows_dynamic_offsets():
+    shader = """
+    #version 450 core
+    #extension GL_EXT_texture_offset_non_const : enable
+
+    shader NonConstTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            vec3 uvq @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            int lod @ TEXCOORD3;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 sampled = textureOffset(colorMap, linearSampler, input.uv, input.offset);
+                vec4 fetched = texelFetchOffset(colorMap, ivec2(input.uv), input.lod, input.offset);
+                vec4 projected = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                return sampled + fetched + projected;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "#extension GL_EXT_texture_offset_non_const : enable" in generated_code
+    assert "vec4 sampled = textureOffset(colorMap, uv, offset);" in generated_code
+    assert (
+        "vec4 fetched = texelFetchOffset(colorMap, ivec2(uv), lod, offset);"
+        in generated_code
+    )
+    assert (
+        "vec4 projected = textureProjOffset(colorMap, uvq, offset);" in generated_code
+    )
+    assert "texel offsets must be compile-time integer constants" not in generated_code
+    assert "linearSampler" not in generated_code
+
+
 def test_opengl_direct_projected_texture_stage_input_members():
     shader = """
     shader DirectProjectedTexture {
