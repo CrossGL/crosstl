@@ -4364,6 +4364,7 @@ def test_validate_project_report_rejects_unexpected_generated_report_fields(
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
     payload["unexpected"] = "metadata"
+    payload["summary"]["unexpected"] = "metadata"
     payload["migration"]["unexpected"] = "metadata"
     payload["migration"]["actions"][0]["unexpected"] = "metadata"
     report_path = repo / "unexpected-generated-report-fields.json"
@@ -4376,6 +4377,7 @@ def test_validate_project_report_rejects_unexpected_generated_report_fields(
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "report.unexpected is not allowed" in diagnostic["message"]
+    assert "summary.unexpected is not allowed" in diagnostic["message"]
     assert "migration.unexpected is not allowed" in diagnostic["message"]
     assert "migration.actions[0].unexpected is not allowed" in diagnostic["message"]
 

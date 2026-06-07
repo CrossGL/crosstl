@@ -76,6 +76,53 @@ REPORT_PROJECT_FIELDS = frozenset(
         "externalCorpusManifest",
     )
 )
+REPORT_SUMMARY_FIELDS = frozenset(
+    (
+        "unitCount",
+        "skippedCount",
+        "targetCount",
+        "artifactCount",
+        "translatedCount",
+        "failedCount",
+        "diagnosticCounts",
+        "diagnosticsByCode",
+        "missingCapabilityCounts",
+        "unitsBySourceBackend",
+        "unitsByExtension",
+        "unitsBySourceOverride",
+        "includeDependencyCount",
+        "includeDependenciesByKind",
+        "includeDependenciesByStatus",
+        "includeDependenciesByResolvedFrom",
+        "includeDependenciesBySourceBackend",
+        "includeDependenciesBySourceBackendStatus",
+        "skippedByReason",
+        "skippedByExtension",
+        "skippedBySourceOverride",
+        "artifactsBySourceBackend",
+        "artifactsByVariant",
+        "artifactsByTarget",
+        "artifactProvenanceByPipeline",
+        "artifactProvenanceByIntermediate",
+        "artifactProvenanceIntermediateBySourceBackend",
+        "sourceMapCount",
+        "fineGrainedSourceMapCount",
+        "sourceMapsByGranularity",
+        "sourceMapsByTarget",
+        "sourceMapsBySourceBackend",
+        "sourceMapsByVariant",
+        "sourceRemapCount",
+        "sourceRemapsByTarget",
+        "sourceRemapsBySourceBackend",
+        "sourceRemapsByVariant",
+        "defineProcessingByStatus",
+        "defineProcessingBySourceBackend",
+        "defineProcessingByVariant",
+        "includePathProcessingByStatus",
+        "includePathProcessingBySourceBackend",
+        "includePathProcessingByVariant",
+    )
+)
 REPORT_MIGRATION_FIELDS = frozenset(
     (
         "scope",
@@ -8434,7 +8481,9 @@ def _summary_contract_reasons(
     if not isinstance(summary, Mapping):
         return ["summary must be an object"]
 
-    reasons = []
+    reasons = _unsupported_mapping_field_reasons(
+        "summary", summary, REPORT_SUMMARY_FIELDS
+    )
     if isinstance(units, list):
         reasons.extend(
             _count_field_contract_reasons(
