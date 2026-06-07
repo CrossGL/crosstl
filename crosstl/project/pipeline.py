@@ -6058,6 +6058,28 @@ def _inspection_include_dependency_summary(
     }
 
 
+def _inspection_source_map_span(span: Any) -> dict[str, int] | None:
+    if not isinstance(span, Mapping):
+        return None
+
+    fields = (
+        "line",
+        "column",
+        "endLine",
+        "endColumn",
+        "offset",
+        "endOffset",
+        "length",
+    )
+    sample = {}
+    for field_name in fields:
+        value = span.get(field_name)
+        if not _is_non_negative_int(value):
+            return None
+        sample[field_name] = value
+    return sample
+
+
 def _inspection_source_map_artifact(
     artifact: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -6078,6 +6100,9 @@ def _inspection_source_map_artifact(
     source = source_map.get("source")
     if isinstance(source, Mapping) and _is_non_empty_string(source.get("file")):
         sample["sourceFile"] = source.get("file")
+        source_span = _inspection_source_map_span(source)
+        if source_span:
+            sample["sourceSpan"] = source_span
 
     source_map_target = source_map.get("target")
     if _is_non_empty_string(source_map_target):
@@ -6086,6 +6111,9 @@ def _inspection_source_map_artifact(
     generated = source_map.get("generated")
     if isinstance(generated, Mapping) and _is_non_empty_string(generated.get("file")):
         sample["generatedFile"] = generated.get("file")
+        generated_span = _inspection_source_map_span(generated)
+        if generated_span:
+            sample["generatedSpan"] = generated_span
 
     mappings = source_map.get("mappings")
     if isinstance(mappings, list):

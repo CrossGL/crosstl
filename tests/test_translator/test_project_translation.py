@@ -94,6 +94,21 @@ def _source_remap_status_counts(**overrides):
     return counts
 
 
+def _inspection_span_sample(span):
+    return {
+        field_name: span[field_name]
+        for field_name in (
+            "line",
+            "column",
+            "endLine",
+            "endColumn",
+            "offset",
+            "endOffset",
+            "length",
+        )
+    }
+
+
 def _refresh_artifact_summary(payload):
     artifacts = payload["artifacts"]
     summary = payload["summary"]
@@ -14752,6 +14767,15 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
+    source_span = _inspection_span_sample(
+        project_pipeline._file_span(repo / "simple.cgl", "simple.cgl").to_json()
+    )
+    generated_span = _inspection_span_sample(
+        project_pipeline._file_span(
+            repo / "out" / "cgl" / "simple.cgl",
+            "out/cgl/simple.cgl",
+        ).to_json()
+    )
 
     assert payload["kind"] == "crosstl-project-report-inspection"
     assert payload["sourceReport"] == str(report_path)
@@ -14779,6 +14803,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceFile": "simple.cgl",
                 "sourceMapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
+                "sourceSpan": source_span,
+                "generatedSpan": generated_span,
                 "mappingCount": len(
                     project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
                 ),
@@ -15415,6 +15441,15 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
+    source_span = _inspection_span_sample(
+        project_pipeline._file_span(repo / "simple.cgl", "simple.cgl").to_json()
+    )
+    generated_span = _inspection_span_sample(
+        project_pipeline._file_span(
+            repo / "out" / "cgl" / "simple.cgl",
+            "out/cgl/simple.cgl",
+        ).to_json()
+    )
 
     assert result.returncode == 0
     assert "Wrote" in result.stdout
@@ -15443,6 +15478,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceFile": "simple.cgl",
                 "sourceMapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
+                "sourceSpan": source_span,
+                "generatedSpan": generated_span,
                 "mappingCount": len(
                     project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
                 ),
@@ -16263,10 +16300,23 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     )
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     source_hash_preview = f"{source_hash['algorithm']}:{source_hash['value'][:12]}..."
+    source_span = _inspection_span_sample(
+        project_pipeline._file_span(repo / "simple.cgl", "simple.cgl").to_json()
+    )
+    generated_span = _inspection_span_sample(
+        project_pipeline._file_span(
+            repo / "out" / "cgl" / "simple.cgl",
+            "out/cgl/simple.cgl",
+        ).to_json()
+    )
+    source_span_preview = crosstl_cli._format_source_map_span_preview(source_span)
+    generated_span_preview = crosstl_cli._format_source_map_span_preview(generated_span)
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, granularity=line, "
-        f"mappings={line_mapping_count}, sourceHash={source_hash_preview})"
+        f"mappings={line_mapping_count}, sourceSpan={source_span_preview}, "
+        f"generatedSpan={generated_span_preview}, "
+        f"sourceHash={source_hash_preview})"
     ) in result.stdout
     assert "Source remap artifacts:" in result.stdout
     source_remap_hash = project_pipeline._source_hash(
@@ -16342,10 +16392,23 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
     )
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     source_hash_preview = f"{source_hash['algorithm']}:{source_hash['value'][:12]}..."
+    source_span = _inspection_span_sample(
+        project_pipeline._file_span(repo / "simple.cgl", "simple.cgl").to_json()
+    )
+    generated_span = _inspection_span_sample(
+        project_pipeline._file_span(
+            repo / "out" / "cgl" / "simple.cgl",
+            "out/cgl/simple.cgl",
+        ).to_json()
+    )
+    source_span_preview = crosstl_cli._format_source_map_span_preview(source_span)
+    generated_span_preview = crosstl_cli._format_source_map_span_preview(generated_span)
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, sourceMapTarget=opengl, "
         f"granularity=line, mappings={line_mapping_count}, "
+        f"sourceSpan={source_span_preview}, "
+        f"generatedSpan={generated_span_preview}, "
         f"sourceHash={source_hash_preview})"
     ) in result.stdout
     assert (

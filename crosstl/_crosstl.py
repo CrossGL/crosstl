@@ -940,6 +940,31 @@ def _format_source_remap_counts(summary):
     return f"Source remaps: {source_remap_count}"
 
 
+def _format_source_map_span_preview(span):
+    if not isinstance(span, Mapping):
+        return None
+
+    values = {}
+    for field_name in (
+        "line",
+        "column",
+        "endLine",
+        "endColumn",
+        "offset",
+        "length",
+    ):
+        value = span.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return None
+        values[field_name] = value
+
+    return (
+        f"{values['line']}:{values['column']}-"
+        f"{values['endLine']}:{values['endColumn']}"
+        f"@{values['offset']}+{values['length']}"
+    )
+
+
 def _format_source_map_artifact_line(artifact):
     if not isinstance(artifact, Mapping):
         return None
@@ -978,6 +1003,12 @@ def _format_source_map_artifact_line(artifact):
         and mapping_count >= 0
     ):
         details.append(f"mappings={mapping_count}")
+    source_span = _format_source_map_span_preview(artifact.get("sourceSpan"))
+    if source_span:
+        details.append(f"sourceSpan={source_span}")
+    generated_span = _format_source_map_span_preview(artifact.get("generatedSpan"))
+    if generated_span:
+        details.append(f"generatedSpan={generated_span}")
     source_hash_preview = _format_hash_preview(
         artifact.get("sourceHashAlgorithm"),
         artifact.get("sourceHash"),
