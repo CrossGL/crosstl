@@ -1311,6 +1311,27 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "llama_cpp_range_designated_array_initializer",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_COMMIT,
+        "source_path": (
+            "ggml/src/ggml-metal/ggml-metal.metal, " "kernel_mul_mv_ext_q4_f32_impl"
+        ),
+        "roundtrip": False,
+        "contains": ["[0 ... r1ptg-1] = 0.0f"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template<short r1ptg>
+            void init_sums() {
+                float sumf[r1ptg] = { [ 0 ... r1ptg - 1 ] = 0.0f };
+            }
+        """
+        ),
+    },
+    {
         "name": "imgui_backend_uchar_color_half_sample",
         "repo_url": IMGUI_REPO,
         "commit": IMGUI_COMMIT,

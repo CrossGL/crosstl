@@ -1898,6 +1898,57 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_RAY_QUERY_CONVERT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source paths: Test/rayQuery-OpConvertUToAccelerationStructureKHR.comp and
+; Test/baseResults/rayQuery-OpConvertUToAccelerationStructureKHR.comp.out
+; Reduced from rayQueryInitializeEXT(rayQuery, accelerationStructureEXT(tlas), ...).
+OpCapability Shader
+OpCapability RayQueryKHR
+OpExtension "SPV_KHR_ray_query"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %main "main"
+OpName %ray_query "rayQuery"
+OpName %Params "Params"
+OpMemberName %Params 0 "tlas"
+OpName %params "params"
+OpDecorate %Params Block
+OpMemberDecorate %Params 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%rayquery = OpTypeRayQueryKHR
+%ptr_private_rayquery = OpTypePointer Private %rayquery
+%uint = OpTypeInt 32 0
+%uvec2 = OpTypeVector %uint 2
+%Params = OpTypeStruct %uvec2
+%ptr_pc = OpTypePointer PushConstant %Params
+%int = OpTypeInt 32 1
+%zero_i = OpConstant %int 0
+%ptr_pc_uvec2 = OpTypePointer PushConstant %uvec2
+%accel = OpTypeAccelerationStructureKHR
+%zero = OpConstant %uint 0
+%float = OpTypeFloat 32
+%vec3 = OpTypeVector %float 3
+%zero_f = OpConstant %float 0.0
+%origin = OpConstantComposite %vec3 %zero_f %zero_f %zero_f
+%one_f = OpConstant %float 1.0
+%direction = OpConstantComposite %vec3 %one_f %one_f %one_f
+%ray_query = OpVariable %ptr_private_rayquery Private
+%params = OpVariable %ptr_pc PushConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+%ptr = OpAccessChain %ptr_pc_uvec2 %params %zero_i
+%encoded = OpLoad %uvec2 %ptr
+%tlas = OpConvertUToAccelerationStructureKHR %accel %encoded
+OpRayQueryInitializeKHR %ray_query %tlas %zero %zero %origin %zero_f %direction %one_f
+OpRayQueryTerminateKHR %ray_query
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY = """
 ; Reduced from Vulkan storage-image SPIR-V mapping examples.
 OpCapability Shader
@@ -5440,6 +5491,25 @@ def test_spirv_ray_tracing_acceleration_structure_resource_codegen_reparse():
     parse_crossgl(generated_code)
     assert "accelerationStructureEXT topLevelAS @set(0) @binding(3);" in generated_code
     assert "%top_level_as" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_ray_query_convert_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_RAY_QUERY_CONVERT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer Params @push_constant" in generated_code
+    assert "uint2 tlas;" in generated_code
+    assert "rayQueryEXT rayQuery;" in generated_code
+    assert (
+        "rayQueryInitializeEXT(rayQuery, accelerationStructureEXT(tlas), 0, 0, "
+        "float3(0.0, 0.0, 0.0), 0.0, float3(1.0, 1.0, 1.0), 1.0);" in generated_code
+    )
+    assert "rayQueryTerminateEXT(rayQuery);" in generated_code
+    assert "OpRayQuery" not in generated_code
+    assert "%ray_query" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

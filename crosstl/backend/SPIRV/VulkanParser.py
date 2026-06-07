@@ -279,6 +279,10 @@ class VulkanParser:
         "OpEmitVertex": "EmitVertex",
         "OpEndPrimitive": "EndPrimitive",
     }
+    SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS = {
+        "OpRayQueryInitializeKHR": "rayQueryInitializeEXT",
+        "OpRayQueryTerminateKHR": "rayQueryTerminateEXT",
+    }
     SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS = {
         "OpGroupNonUniformBitwiseAnd": "And",
         "OpGroupNonUniformBitwiseOr": "Or",
@@ -911,6 +915,11 @@ class VulkanParser:
                 types[result_id] = {
                     "kind": "acceleration_structure",
                     "name": "accelerationStructureEXT",
+                }
+            elif result_id and opcode in {"OpTypeRayQueryKHR", "OpTypeRayQueryNV"}:
+                types[result_id] = {
+                    "kind": "ray_query",
+                    "name": "rayQueryEXT",
                 }
             elif result_id and opcode == "OpTypePointer" and len(operands) >= 2:
                 types[result_id] = {
@@ -2261,6 +2270,19 @@ class VulkanParser:
             if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:
                 statements.append(
                     self.spirv_assembly_geometry_emit_statement(
+                        opcode,
+                        operands,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
+            if opcode in self.SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS:
+                statements.append(
+                    self.spirv_assembly_ray_query_statement(
                         opcode,
                         operands,
                         expressions,
@@ -4685,6 +4707,29 @@ class VulkanParser:
     ):
         return FunctionCallNode(
             self.SPIRV_GEOMETRY_EMIT_FUNCTIONS[opcode],
+            [
+                self.spirv_assembly_operand_expression(
+                    operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                for operand in operands
+            ],
+        )
+
+    def spirv_assembly_ray_query_statement(
+        self,
+        opcode,
+        operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            self.SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS[opcode],
             [
                 self.spirv_assembly_operand_expression(
                     operand,

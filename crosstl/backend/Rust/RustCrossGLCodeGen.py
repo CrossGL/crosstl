@@ -10351,8 +10351,55 @@ class RustToCrossGLConverter:
     def strip_trait_object_type(self, type_name):
         for prefix in ("impl ", "dyn "):
             if type_name.startswith(prefix):
-                return type_name[len(prefix) :].strip()
+                return self.strip_trait_bound_type(type_name[len(prefix) :].strip())
         return type_name
+
+    def strip_trait_bound_type(self, type_name):
+        for bound in self.split_top_level_type_bounds(type_name):
+            bound = bound.strip()
+            if bound and not self.is_lifetime_type_argument(bound):
+                return self.strip_associated_type_constraints(bound)
+        return type_name
+
+    def split_top_level_type_bounds(self, type_name):
+        bounds = []
+        current = []
+        depth = 0
+
+        for char in type_name:
+            if char == "+" and depth == 0:
+                bound = "".join(current).strip()
+                if bound:
+                    bounds.append(bound)
+                current = []
+                continue
+
+            if char in "<[(":
+                depth += 1
+            elif char in ">])":
+                depth = max(0, depth - 1)
+
+            current.append(char)
+
+        bound = "".join(current).strip()
+        if bound:
+            bounds.append(bound)
+        return bounds
+
+    def strip_associated_type_constraints(self, type_name):
+        generic = self.parse_generic_type(type_name)
+        if generic is None:
+            return type_name
+
+        base_name, args = generic
+        kept_args = [
+            arg
+            for arg in args
+            if "=" not in arg and not self.is_lifetime_type_argument(arg)
+        ]
+        if not kept_args:
+            return base_name
+        return f"{base_name}<{', '.join(kept_args)}>"
 
     def split_array_type(self, type_name):
         if not type_name or "[" not in type_name:

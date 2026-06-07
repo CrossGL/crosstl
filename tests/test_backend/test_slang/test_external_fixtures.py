@@ -1290,6 +1290,50 @@ EXTERNAL_FIXTURES = [
         ],
         "not_contains": ["__target_switch", "return 1.0;"],
     },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: docs/generated/tests/conformance/basics-program-execution/
+        # dispatch-3d-group-coords-functional.slang
+        "id": "slang_dispatch_group_thread_relational_condition",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": (
+            "docs/generated/tests/conformance/basics-program-execution/"
+            "dispatch-3d-group-coords-functional.slang"
+        ),
+        "source": (
+            """
+            RWStructuredBuffer<uint> outputBuffer;
+
+            [numthreads(2, 3, 1)]
+            void computeMain(uint3 groupID     : SV_GroupID,
+                             uint3 groupThread : SV_GroupThreadID)
+            {
+                uint idx = groupThread.y * 2u + groupThread.x;
+                uint groupInRange =
+                    (groupID.x == 0u && groupID.y == 0u && groupID.z == 0u)
+                        ? 1u : 0u;
+                uint threadInRange =
+                    (groupThread.x < 2u && groupThread.y < 3u &&
+                     groupThread.z == 0u)
+                        ? 1u : 0u;
+
+                outputBuffer[idx] = groupInRange & threadInRange;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "layout(local_size_x = 2, local_size_y = 3, local_size_z = 1) in;",
+            "uvec3 groupID @ gl_WorkGroupID",
+            "uvec3 groupThread @ gl_LocalInvocationID",
+            (
+                "uint threadInRange = (groupThread.x < 2u && "
+                "groupThread.y < 3u && groupThread.z == 0u ? 1u : 0u);"
+            ),
+            "outputBuffer[idx] = groupInRange & threadInRange;",
+        ],
+    },
 ]
 
 

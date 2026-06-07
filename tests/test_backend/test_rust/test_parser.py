@@ -5272,6 +5272,29 @@ def test_impl_callable_trait_parameter_type_parsing_from_rust_gpu():
     assert ast.functions[1].generics == ["F: FnMut(Value) -> Option<Value>"]
 
 
+def test_wgpu_spawn_impl_future_static_bound_parsing_from_upstream():
+    # Reduced from gfx-rs/wgpu commit
+    # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
+    # examples/features/src/hello_triangle/mod.rs spawn.
+    code = """
+    use std::future::Future;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn(f: impl Future<Output = ()> + 'static) {
+        pollster::block_on(f);
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "spawn"
+    assert function.params[0].name == "f"
+    assert function.params[0].vtype == "impl Future<Output =()> + 'static"
+    assert function.attributes[0].name == "cfg"
+    assert function.body[0].name == "pollster::block_on"
+
+
 def test_trait_default_method_body_parsing():
     code = """
     trait ShaderMath {
