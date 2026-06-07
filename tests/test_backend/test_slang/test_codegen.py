@@ -2489,6 +2489,55 @@ def test_texture_gather_cmp_method_call_codegen_from_core_module_docs():
     cgl_translator.parse(generated_code)
 
 
+def test_texture_gather_cmp_four_offsets_codegen_from_upstream_texturegather_test():
+    # Source: shader-slang/slang@5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+    # tests/cross-compile/glsl-texturegather.slang uses GatherCmp and
+    # GatherCmpRed with four integer offsets.
+    code = """
+    Texture2D t;
+    SamplerComparisonState sc;
+    Sampler2DShadow combinedShadow;
+
+    float4 main(
+        float2 loc,
+        float cmp,
+        int2 off0,
+        int2 off1,
+        int2 off2,
+        int2 off3
+    ) {
+        float4 explicitOffsets = t.GatherCmp(
+            sc, loc, cmp, off0, off1, off2, off3);
+        float4 redOffsets = t.GatherCmpRed(
+            sc, loc, cmp, off0, off1, off2, off3);
+        float4 combinedOffsets = combinedShadow.GatherCmp(
+            loc, cmp, off0, off1, off2, off3);
+        return explicitOffsets + redOffsets + combinedOffsets;
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "sampler2D t;" in generated_code
+    assert "sampler sc;" in generated_code
+    assert "sampler2DShadow combinedShadow;" in generated_code
+    assert (
+        "vec4 explicitOffsets = textureGatherCompareOffsets("
+        "t, sc, loc, cmp, off0, off1, off2, off3);" in generated_code
+    )
+    assert (
+        "vec4 redOffsets = textureGatherCompareOffsets("
+        "t, sc, loc, cmp, off0, off1, off2, off3);" in generated_code
+    )
+    assert (
+        "vec4 combinedOffsets = textureGatherCompareOffsets("
+        "combinedShadow, loc, cmp, off0, off1, off2, off3);" in generated_code
+    )
+    assert ".GatherCmp" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_texture_lod_query_method_codegen_from_current_slang_intrinsic_test():
     # Source: shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
     # tests/hlsl-intrinsic/texture/texture-calculate-level-of-detail.slang

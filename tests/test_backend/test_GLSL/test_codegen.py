@@ -614,6 +614,12 @@ def test_codegen_resource_function_descriptors():
         "resource": "texture",
         "operation": "sample_projected",
     }
+    assert converter.resource_function_descriptor("textureProjOffset") == {
+        "name": "textureProjOffset",
+        "function": "textureProjOffset",
+        "resource": "texture",
+        "operation": "sample_projected",
+    }
     assert converter.resource_function_descriptor("texelFetch") == {
         "name": "texelFetch",
         "function": "texelFetch",
@@ -871,6 +877,42 @@ def test_codegen_legacy_lod_grad_texture_intrinsics_from_bgfx_examples():
     assert "textureLod(s_texCube, vec3(1.0), 1.0)" in glsl
     assert "textureGrad(s_texColor, vUV, vec2(1.0), vec2(1.0))" in glsl
     assert "textureLodOffset(s_texColor, vUV, 0.0, ivec2(1))" in glsl
+
+
+def test_codegen_projected_texture_offset_from_glslang_non_const_offset():
+    # Reduced from KhronosGroup/glslang Test/spv.textureoffset_non_const.vert.
+    code = textwrap.dedent("""
+        #version 450 core
+        #extension GL_EXT_texture_offset_non_const : enable
+
+        layout(location = 4) in vec2 a_in0;
+        layout(location = 10) in ivec2 offsetValue;
+        layout(location = 0) out vec4 v_color0;
+        layout(binding = 0) uniform sampler2D u_sampler;
+        layout(binding = 1) uniform texture2D u_texture;
+        layout(binding = 2) uniform sampler u_linear;
+
+        void main()
+        {
+            v_color0 = textureProjOffset(
+                u_sampler, vec3(a_in0, 1.0), offsetValue);
+            v_color0 += textureProjOffset(
+                sampler2D(u_texture, u_linear), vec3(a_in0, 1.0), offsetValue);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert (
+        "textureProjOffset(u_sampler, vec3(input.a_in0, 1.0), input.offsetValue)"
+        in crossgl
+    )
+    assert (
+        "textureProjOffset("
+        "u_texture, u_linear, vec3(input.a_in0, 1.0), input.offsetValue)" in crossgl
+    )
+    assert "sampler2D(u_texture, u_linear)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_vertex_clip_distance_builtin_from_sascha_willems_offscreen():

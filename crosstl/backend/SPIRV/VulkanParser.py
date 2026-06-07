@@ -1315,6 +1315,43 @@ class VulkanParser:
                 expression_type_ids[result_id] = operands[0]
                 continue
 
+            if (
+                result_id
+                and opcode.startswith("OpImageSparseSample")
+                and len(operands) >= 3
+            ):
+                expressions[result_id] = (
+                    self.spirv_assembly_image_sparse_sample_expression(
+                        opcode,
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if result_id and opcode == "OpImageSparseTexelsResident":
+                if len(operands) >= 2:
+                    expressions[result_id] = FunctionCallNode(
+                        "spirvSparseTexelsResident",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode in {"OpImageGather", "OpImageDrefGather"}:
                 if len(operands) >= 4:
                     expressions[result_id] = (
@@ -3007,6 +3044,14 @@ class VulkanParser:
                 member_index = self.spirv_integer_constant_operand(index_operand, {})
                 member_types = type_info.get("member_types", [])
                 if member_index is not None and 0 <= member_index < len(member_types):
+                    sparse_extract = self.spirv_sparse_image_result_extract_expression(
+                        expression, member_index
+                    )
+                    if sparse_extract is not None:
+                        expression = sparse_extract
+                        current_type_id = member_types[member_index]
+                        continue
+
                     member_key = str(member_index)
                     member_name = member_names.get(current_type_id, {}).get(member_key)
                     if member_name is not None:
@@ -3020,6 +3065,19 @@ class VulkanParser:
             )
 
         return expression
+
+    def spirv_sparse_image_result_extract_expression(self, expression, member_index):
+        if not (
+            isinstance(expression, FunctionCallNode)
+            and expression.name.startswith("spirvImageSparseSample")
+        ):
+            return None
+
+        if member_index == 0:
+            return FunctionCallNode("spirvSparseResidencyCode", [expression])
+        if member_index == 1:
+            return FunctionCallNode("spirvSparseTexel", [expression])
+        return None
 
     def spirv_composite_index_type_id(self, type_id, index_operand, types):
         type_info = types.get(type_id, {})
@@ -3280,6 +3338,43 @@ class VulkanParser:
             args.append(bias)
 
         return FunctionCallNode("".join(function_parts), args)
+
+    def spirv_assembly_image_sparse_sample_expression(
+        self,
+        opcode,
+        image_operand,
+        coordinate_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        sample = self.spirv_assembly_image_sample_expression(
+            opcode,
+            image_operand,
+            coordinate_operand,
+            image_operands,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        function_name = self.spirv_sparse_image_sample_function_name(
+            opcode, sample.name
+        )
+        return FunctionCallNode(function_name, sample.args)
+
+    def spirv_sparse_image_sample_function_name(self, opcode, sample_function_name):
+        if sample_function_name.startswith("spirvTexture"):
+            suffix = sample_function_name[len("spirvTexture") :]
+        elif sample_function_name.startswith("texture"):
+            suffix = sample_function_name[len("texture") :]
+        else:
+            suffix = self.spirv_fallback_identifier(sample_function_name, "sample")
+
+        dref = "Dref" if "Dref" in opcode else ""
+        return f"spirvImageSparseSample{dref}{suffix}"
 
     def spirv_assembly_image_gather_expression(
         self,

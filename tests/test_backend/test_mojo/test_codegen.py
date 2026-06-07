@@ -1036,7 +1036,7 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
         "void kernel(UnsafePointer[Int64, MutAnyOrigin] output, "
         "UnsafePointer[UInt8, MutAnyOrigin] input, int n) "
         "@ __llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA = "
-        "StaticTuple[Int32, 1](Int32(block_dim)))"
+        "StaticTuple[Int32, 1](int(block_dim)))"
     ) in generated_code
     assert (
         "stack_allocation[bin_width, Int64, "
@@ -2611,6 +2611,27 @@ def test_float64_simd_constructor_from_modular_docs_reparses_crossgl():
     assert "dvec4 reduce_example()" in generated_code
     assert "var data = dvec4(10.5, 20.3, 30.1, 40.7);" in generated_code
     assert "SIMD[DType.float64, 4]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_numeric_alias_constructor_codegen_from_modular_numeric_docs_reparses_crossgl():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-numeric-types/
+    # Numeric scalar aliases are SIMD-backed Mojo types and can be called as
+    # constructors; CrossGL should see the mapped scalar constructors instead.
+    code = """
+    fn fragment_main(raw: UInt32, alpha: Float64) -> Float32:
+        let normalized = Float32(raw) / Float32(UInt32(255))
+        return Float32(normalized + Float32(alpha))
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float fragment_main(uint raw, double alpha)" in generated_code
+    assert "let normalized = (float(raw) / float(uint(255)));" in generated_code
+    assert "return float((normalized + float(alpha)));" in generated_code
+    assert "Float32(" not in generated_code
+    assert "UInt32(" not in generated_code
     parse_crossgl(generated_code)
 
 
