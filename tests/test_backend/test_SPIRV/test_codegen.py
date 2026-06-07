@@ -932,6 +932,54 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_SIMPLE_LOOP_MERGE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/opt/loop_optimizations/unroll_simple.cpp
+; Source test: DoNotDuplicateDecorationsOnLoopCarriedValue.
+; Reduced from the OpLoopMerge header -> condition -> body -> latch shape,
+; adapted to a function-local counter so no phi reconstruction is required.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %out_value "outValue"
+OpName %counter "counter"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%bool = OpTypeBool
+%ptr_function_int = OpTypePointer Function %int
+%ptr_output_int = OpTypePointer Output %int
+%zero = OpConstant %int 0
+%one = OpConstant %int 1
+%four = OpConstant %int 4
+%out_value = OpVariable %ptr_output_int Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%counter = OpVariable %ptr_function_int Function %zero
+OpBranch %header
+%header = OpLabel
+OpLoopMerge %merge %latch None
+OpBranch %condition
+%condition = OpLabel
+%i = OpLoad %int %counter
+%lt = OpSLessThan %bool %i %four
+OpBranchConditional %lt %body %merge
+%body = OpLabel
+OpStore %out_value %i
+OpBranch %latch
+%latch = OpLabel
+%current = OpLoad %int %counter
+%next = OpIAdd %int %current %one
+OpStore %counter %next
+OpBranch %header
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_OPSELECT_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -4852,6 +4900,25 @@ def test_spirv_glslang_grouped_switch_targets_codegen_reparse():
     assert generated_code.count("break;") == 2
     assert "OpSwitch" not in generated_code
     assert "OpSelectionMerge" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_simple_loop_merge_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_SIMPLE_LOOP_MERGE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int outValue @output @location(0);" in generated_code
+    assert "int counter = 0;" in generated_code
+    assert "while ((counter < 4)) {" in generated_code
+    assert "outValue = counter;" in generated_code
+    assert "counter = (counter + 1);" in generated_code
+    assert generated_code.index("outValue = counter;") < generated_code.index(
+        "counter = (counter + 1);"
+    )
+    assert "OpLoopMerge" not in generated_code
+    assert "OpBranchConditional" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

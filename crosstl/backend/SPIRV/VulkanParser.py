@@ -2349,7 +2349,7 @@ class VulkanParser:
             if opcode == "OpReturn":
                 statements.append(ReturnNode())
 
-        structured_statements = self.spirv_assembly_simple_switch_body(
+        structured_statements = self.spirv_assembly_simple_loop_body(
             raw_instructions,
             expressions,
             names,
@@ -2360,6 +2360,18 @@ class VulkanParser:
             variables_by_id,
             constants,
         )
+        if structured_statements is None:
+            structured_statements = self.spirv_assembly_simple_switch_body(
+                raw_instructions,
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
         if structured_statements is None:
             structured_statements = self.spirv_assembly_simple_selection_body(
                 raw_instructions,
@@ -2376,6 +2388,253 @@ class VulkanParser:
             return structured_statements
 
         return statements
+
+    def spirv_assembly_simple_loop_body(
+        self,
+        raw_instructions,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        loop_merge_indices = [
+            index
+            for index, (_result_id, opcode, _operands, _line_number) in enumerate(
+                raw_instructions
+            )
+            if opcode == "OpLoopMerge"
+        ]
+        if len(loop_merge_indices) != 1:
+            return None
+
+        labels = self.spirv_assembly_label_indices(raw_instructions)
+        loop_index = loop_merge_indices[0]
+        result_id, _opcode, loop_operands, _line_number = raw_instructions[loop_index]
+        if result_id is not None or len(loop_operands) < 2:
+            return None
+        if loop_index + 1 >= len(raw_instructions):
+            return None
+
+        merge_label, continue_label = loop_operands[:2]
+        if merge_label not in labels or continue_label not in labels:
+            return None
+
+        header_index = self.spirv_assembly_enclosing_label_index(
+            raw_instructions, loop_index
+        )
+        if header_index is None:
+            return None
+        header_label = raw_instructions[header_index][0]
+
+        header_instructions = raw_instructions[header_index + 1 : loop_index]
+        if header_instructions:
+            return None
+
+        loop_shape = self.spirv_assembly_loop_shape_from_condition_block(
+            raw_instructions,
+            labels,
+            loop_index,
+            merge_label,
+        )
+        if loop_shape is None:
+            return None
+
+        condition_operand, body_label, inverted_condition, condition_instructions = (
+            loop_shape
+        )
+        if body_label not in labels:
+            return None
+
+        if not self.spirv_assembly_instruction_slice_is_expression_only(
+            condition_instructions,
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        ):
+            return None
+
+        body_instructions = self.spirv_assembly_loop_block_body_instructions(
+            raw_instructions, labels, body_label, {continue_label}
+        )
+        continue_instructions = self.spirv_assembly_loop_block_body_instructions(
+            raw_instructions, labels, continue_label, {header_label}
+        )
+        if body_instructions is None or continue_instructions is None:
+            return None
+        if not self.spirv_assembly_selection_block_is_simple(body_instructions):
+            return None
+        if not self.spirv_assembly_selection_block_is_simple(continue_instructions):
+            return None
+
+        prelude = self.spirv_assembly_linear_statements(
+            raw_instructions[:header_index],
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        body = self.spirv_assembly_linear_statements(
+            body_instructions,
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        body.extend(
+            self.spirv_assembly_linear_statements(
+                continue_instructions,
+                expressions,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                types,
+                variables_by_id,
+                constants,
+            )
+        )
+        postlude = self.spirv_assembly_linear_statements(
+            raw_instructions[labels[merge_label] + 1 :],
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        condition = self.spirv_assembly_operand_expression(
+            condition_operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        if inverted_condition:
+            condition = UnaryOpNode("!", condition)
+
+        return [*prelude, WhileNode(condition, body), *postlude]
+
+    def spirv_assembly_loop_shape_from_condition_block(
+        self,
+        raw_instructions,
+        labels,
+        loop_index,
+        merge_label,
+    ):
+        _branch_id, branch_opcode, branch_operands, _branch_line = raw_instructions[
+            loop_index + 1
+        ]
+        if branch_opcode != "OpBranch" or not branch_operands:
+            return None
+
+        condition_label = branch_operands[0]
+        condition_block = self.spirv_assembly_block_instructions(
+            raw_instructions, labels, condition_label
+        )
+        if not condition_block:
+            return None
+
+        branch = condition_block[-1]
+        _result_id, opcode, operands, _line_number = branch
+        if opcode != "OpBranchConditional" or len(operands) < 3:
+            return None
+
+        shape = self.spirv_assembly_loop_condition_shape(operands, merge_label)
+        if shape is None:
+            return None
+        condition_operand, body_label, inverted_condition = shape
+        return (
+            condition_operand,
+            body_label,
+            inverted_condition,
+            condition_block[:-1],
+        )
+
+    def spirv_assembly_loop_condition_shape(self, branch_operands, merge_label):
+        condition_operand, true_label, false_label = branch_operands[:3]
+        if false_label == merge_label:
+            return condition_operand, true_label, False
+        if true_label == merge_label:
+            return condition_operand, false_label, True
+        return None
+
+    def spirv_assembly_enclosing_label_index(self, raw_instructions, instruction_index):
+        for index in range(instruction_index, -1, -1):
+            result_id, opcode, _operands, _line_number = raw_instructions[index]
+            if result_id and opcode == "OpLabel":
+                return index
+        return None
+
+    def spirv_assembly_block_instructions(self, raw_instructions, labels, label):
+        start = labels.get(label)
+        if start is None:
+            return None
+
+        block = []
+        for instruction in raw_instructions[start + 1 :]:
+            _result_id, opcode, _operands, _line_number = instruction
+            if opcode == "OpLabel":
+                break
+            block.append(instruction)
+        return block
+
+    def spirv_assembly_loop_block_body_instructions(
+        self, raw_instructions, labels, label, branch_targets
+    ):
+        block = self.spirv_assembly_block_instructions(raw_instructions, labels, label)
+        if block is None or not block:
+            return None
+
+        _result_id, opcode, operands, _line_number = block[-1]
+        if opcode != "OpBranch" or not operands or operands[0] not in branch_targets:
+            return None
+        return block[:-1]
+
+    def spirv_assembly_instruction_slice_is_expression_only(
+        self,
+        instructions,
+        expressions,
+        names,
+        decorations,
+        member_decorations,
+        member_names,
+        types,
+        variables_by_id,
+        constants,
+    ):
+        if not self.spirv_assembly_selection_block_is_simple(instructions):
+            return False
+        statements = self.spirv_assembly_linear_statements(
+            instructions,
+            expressions,
+            names,
+            decorations,
+            member_decorations,
+            member_names,
+            types,
+            variables_by_id,
+            constants,
+        )
+        return not statements
 
     def spirv_assembly_simple_switch_body(
         self,

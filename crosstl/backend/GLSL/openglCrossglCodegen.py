@@ -1458,10 +1458,25 @@ class GLSLToCrossGLConverter:
             and self.has_push_constant_layout(struct)
         )
 
+    def is_descriptor_set_uniform_block_struct(self, struct):
+        if not getattr(struct, "interface_block", False):
+            return False
+        if self.has_push_constant_layout(struct):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(struct, "interface_qualifiers", []) or []
+        }
+        layout = getattr(struct, "interface_layout", None) or {}
+        return "uniform" in qualifiers and self.layout_has_key(layout, "set")
+
     def push_constant_block_name(self, var):
+        return self.uniform_block_name(var)
+
+    def uniform_block_name(self, var):
         return getattr(var, "interface_block", None) or getattr(var, "vtype", None)
 
-    def push_constant_block_fields(self, block_name, uniforms):
+    def uniform_block_fields(self, block_name, uniforms):
         block_struct = self.structs_by_name.get(block_name)
         if block_struct is not None:
             return getattr(block_struct, "members", None) or getattr(
@@ -1469,7 +1484,25 @@ class GLSLToCrossGLConverter:
             )
         return uniforms
 
-    def record_flattened_push_constant_instance(self, block_name, uniforms, fields):
+    def uniform_block_layout(self, block_name, uniforms):
+        layout = {}
+        block_struct = self.structs_by_name.get(block_name)
+        if block_struct is not None:
+            layout.update(getattr(block_struct, "interface_layout", None) or {})
+        for uniform in uniforms:
+            layout.update(getattr(uniform, "layout", None) or {})
+        return layout
+
+    def layout_value(self, layout, name):
+        for key, value in (layout or {}).items():
+            if str(key).lower() == name:
+                return value
+        return None
+
+    def layout_has_key(self, layout, name):
+        return any(str(key).lower() == name for key in layout or {})
+
+    def record_flattened_uniform_block_instance(self, block_name, uniforms, fields):
         field_names = {getattr(field, "name", None) for field in fields}
         field_names.discard(None)
         if not field_names:
@@ -1491,10 +1524,50 @@ class GLSLToCrossGLConverter:
                 self.flattened_uniform_block_instances[instance_name] = field_names
 
     def generate_push_constant_block(self, block_name, uniforms):
-        fields = self.push_constant_block_fields(block_name, uniforms)
-        self.record_flattened_push_constant_instance(block_name, uniforms, fields)
+        fields = self.uniform_block_fields(block_name, uniforms)
+        self.record_flattened_uniform_block_instance(block_name, uniforms, fields)
 
         result = f"cbuffer {block_name} @push_constant {{\n"
+        self.increase_indent()
+        for field in fields:
+            var_type = self.convert_type(getattr(field, "vtype", ""))
+            var_name = getattr(field, "name", "")
+            array_suffix = self.array_suffix(field)
+            result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
+        self.decrease_indent()
+        result += self.indent_str + "};\n"
+        return result
+
+    def descriptor_set_uniform_block_name(self, var):
+        if self.is_push_constant_uniform(var) or getattr(var, "is_array", False):
+            return None
+
+        block_name = self.uniform_block_name(var)
+        if not block_name or block_name not in self.structs_by_name:
+            return None
+
+        layout = self.uniform_block_layout(block_name, [var])
+        if not self.layout_has_key(layout, "set"):
+            return None
+        return block_name
+
+    def descriptor_set_uniform_block_attribute_suffix(self, block_name, uniforms):
+        layout = self.uniform_block_layout(block_name, uniforms)
+        attributes = []
+        for name in ("set", "binding"):
+            value = self.layout_value(layout, name)
+            if value is not None:
+                attributes.append(f"@{name}({self.layout_value_to_string(value)})")
+        return f" {' '.join(attributes)}" if attributes else ""
+
+    def generate_descriptor_set_uniform_block(self, block_name, uniforms):
+        fields = self.uniform_block_fields(block_name, uniforms)
+        self.record_flattened_uniform_block_instance(block_name, uniforms, fields)
+
+        attributes = self.descriptor_set_uniform_block_attribute_suffix(
+            block_name, uniforms
+        )
+        result = f"cbuffer {block_name}{attributes} {{\n"
         self.increase_indent()
         for field in fields:
             var_type = self.convert_type(getattr(field, "vtype", ""))
@@ -1738,7 +1811,9 @@ class GLSLToCrossGLConverter:
         for struct in self.structs_for_crossgl_output(node.structs):
             if struct.name in self.converted_ssbo_struct_names:
                 continue
-            if self.is_push_constant_interface_block_struct(struct):
+            if self.is_push_constant_interface_block_struct(
+                struct
+            ) or self.is_descriptor_set_uniform_block_struct(struct):
                 continue
             result += self.indent_str + self.generate_struct(struct) + "\n\n"
 
@@ -1781,13 +1856,20 @@ class GLSLToCrossGLConverter:
                 and not self.is_subroutine_qualified(u)
             ]
             push_constant_blocks = {}
+            descriptor_set_uniform_blocks = {}
             ordinary_data_uniforms = []
             for uniform in data_uniforms:
                 if self.is_push_constant_uniform(uniform):
                     block_name = self.push_constant_block_name(uniform)
                     push_constant_blocks.setdefault(block_name, []).append(uniform)
                 else:
-                    ordinary_data_uniforms.append(uniform)
+                    block_name = self.descriptor_set_uniform_block_name(uniform)
+                    if block_name:
+                        descriptor_set_uniform_blocks.setdefault(block_name, []).append(
+                            uniform
+                        )
+                    else:
+                        ordinary_data_uniforms.append(uniform)
 
             for uniform in resource_uniforms:
                 var_type = self.convert_type(uniform.vtype)
@@ -1808,6 +1890,11 @@ class GLSLToCrossGLConverter:
 
             for block_name, uniforms in push_constant_blocks.items():
                 result += self.indent_str + self.generate_push_constant_block(
+                    block_name, uniforms
+                )
+
+            for block_name, uniforms in descriptor_set_uniform_blocks.items():
+                result += self.indent_str + self.generate_descriptor_set_uniform_block(
                     block_name, uniforms
                 )
 
