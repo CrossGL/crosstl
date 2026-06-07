@@ -3394,6 +3394,8 @@ class VulkanParser:
     def spirv_sparse_image_sample_function_name(self, opcode, sample_function_name):
         if sample_function_name.startswith("spirvTexture"):
             suffix = sample_function_name[len("spirvTexture") :]
+        elif "Dref" in opcode and sample_function_name.startswith("textureCompare"):
+            suffix = sample_function_name[len("textureCompare") :]
         elif sample_function_name.startswith("texture"):
             suffix = sample_function_name[len("texture") :]
         else:

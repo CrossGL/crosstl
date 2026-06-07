@@ -3026,6 +3026,29 @@ class TestHipParser:
         assert reduction_kernel.attributes == ["__launch_bounds__(BlockSize)"]
         assert reduction_kernel.params[0]["type"] == "float *"
 
+    def test_official_hip_post_parameter_work_group_size_attribute_parsing(self):
+        code = """
+        __global__ void dot(double *a, double *b, const int n)
+            __attribute__((amdgpu_flat_work_group_size(1, 512))) {
+            a[threadIdx.x] = b[threadIdx.x];
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "dot"
+        assert kernel.attributes == [
+            "__attribute__((amdgpu_flat_work_group_size(1,512)))"
+        ]
+        assert kernel.params == [
+            {"type": "double *", "name": "a"},
+            {"type": "double *", "name": "b"},
+            {"type": "const int", "name": "n"},
+        ]
+        assert isinstance(kernel.body[0], AssignmentNode)
+
     def test_rocwmma_kernel_macro_with_launch_bounds_from_corpus(self):
         code = """
         ROCWMMA_KERNEL void __launch_bounds__(256) gemm(float* out) {

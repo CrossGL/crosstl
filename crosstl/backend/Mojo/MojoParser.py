@@ -689,13 +689,32 @@ class MojoParser:
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in self.FUNCTION_EFFECT_IDENTIFIERS
         ):
+            effect_name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.skip_layout_tokens()
             if self.current_token[0] == "LPAREN":
                 self.skip_balanced_group("LPAREN", "RPAREN")
             elif self.current_token[0] == "LBRACE":
                 self.skip_balanced_group("LBRACE", "RBRACE")
+            elif effect_name == "raises":
+                self.parse_optional_raises_error_type()
             self.skip_layout_tokens()
+
+    def parse_optional_raises_error_type(self):
+        if not self.is_raises_error_type_start():
+            return None
+        return self.parse_type()
+
+    def is_raises_error_type_start(self):
+        if self.current_token[0] in self.STATEMENT_END_TOKENS | {"COLON", "MINUS"}:
+            return False
+        if self.current_token[0] == "IDENTIFIER" and self.current_token[1] in (
+            self.FUNCTION_EFFECT_IDENTIFIERS | {"where"}
+        ):
+            return False
+        return self.current_token[0] in (
+            self.TYPE_START_TOKENS | self.FUNCTION_TYPE_TOKENS
+        )
 
     def parse_function_capture_list(self):
         if not self.is_function_capture_list():
@@ -2417,7 +2436,8 @@ class MojoParser:
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in self.FUNCTION_EFFECT_IDENTIFIERS
         ):
-            type_name += f" {self.current_token[1]}"
+            effect_name = self.current_token[1]
+            type_name += f" {effect_name}"
             self.eat("IDENTIFIER")
             self.skip_layout_tokens()
             if self.current_token[0] == "LBRACKET":
@@ -2426,6 +2446,10 @@ class MojoParser:
                 type_name += self.parse_parenthesized_type_suffix()
             elif self.current_token[0] == "LBRACE":
                 type_name += self.parse_braced_type_suffix()
+            elif effect_name == "raises":
+                error_type = self.parse_optional_raises_error_type()
+                if error_type:
+                    type_name += f" {error_type}"
             self.skip_layout_tokens()
 
         if self.current_token[0] == "MINUS" and self.peek_token()[0] == "GREATER_THAN":

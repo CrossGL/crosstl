@@ -2950,6 +2950,38 @@ def test_codegen_raytracing_qualifiers_output():
     assert "callable_main" in result
 
 
+def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec():
+    # Apple Metal Shading Language Specification, section 4 Address Spaces:
+    # ray_data and object_data are address-space attributes for payload references.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct RayPayload {
+        float value;
+    };
+
+    struct ObjectPayload {
+        float value;
+    };
+
+    intersection void intersectPayload(ray_data RayPayload& payload [[payload]],
+                                       object_data ObjectPayload& objectPayload [[payload]]) {
+        payload.value = objectPayload.value;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RayPayload& payload @ray_data @payload" in crossgl
+    assert "ObjectPayload& objectPayload @object_data @payload" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "ray_data RayPayload& payload [[payload]]" in metal
+    assert "object_data ObjectPayload& objectPayload [[payload]]" in metal
+    assert "thread RayPayload& payload" not in metal
+    assert "thread ObjectPayload& objectPayload" not in metal
+
+
 def test_codegen_enum_and_typedef():
     code = """
     typedef int32_t MyInt;

@@ -1350,6 +1350,25 @@ class MetalToCrossGLConverter:
                 address_spaces.append(qualifier)
         return f"{' '.join(address_spaces)} " if address_spaces else ""
 
+    def address_space_qualifier_annotations(self, var):
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(var, "attributes", []) or []
+        }
+        annotations = []
+        for qualifier in ("ray_data", "object_data"):
+            compact = qualifier.replace("_", "")
+            if (
+                qualifier in qualifiers
+                and qualifier not in attributes
+                and compact not in attributes
+            ):
+                annotations.append(f"@{qualifier}")
+        return " ".join(annotations)
+
     def is_sampler_variable(self, var):
         return self.is_sampler_type(getattr(var, "vtype", None))
 
@@ -1405,6 +1424,10 @@ class MetalToCrossGLConverter:
             self.map_semantic(getattr(var, "attributes", None))
             if include_semantic
             else ""
+        )
+        address_space_annotations = self.address_space_qualifier_annotations(var)
+        semantic = " ".join(
+            part for part in [address_space_annotations, semantic] if part
         )
         access = self.storage_texture_access_attribute(var)
         name = (
