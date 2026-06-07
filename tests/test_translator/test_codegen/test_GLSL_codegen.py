@@ -6391,6 +6391,64 @@ def test_glsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
     assert "imageStore(maskImage, pixel, uvec4(mask2D));" in generated_code
 
 
+def test_glsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/StorageImageExplicitFormatShader.cgl.
+    code = """
+    shader StorageImageExplicitFormatShader {
+        compute {
+            layout(local_size_x = 2, local_size_y = 2, local_size_z = 1) in;
+            layout(set = 0, binding = 0, format = r32f) readonly uniform image2D readColor;
+            layout(set = 0, binding = 1, format = r32i) readonly uniform iimage2D readLabel;
+            layout(set = 0, binding = 2, format = r32ui) readonly uniform uimage2D readMask;
+            layout(set = 0, binding = 3, format = r32ui) writeonly uniform uimage2D writeMask;
+            layout(set = 0, binding = 4) buffer vec4* colors;
+            layout(set = 0, binding = 5) buffer ivec4* labels;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(readColor, pixel);
+                ivec4 label = imageLoad(readLabel, pixel);
+                uvec4 mask = imageLoad(readMask, pixel);
+                imageStore(writeMask, pixel, mask);
+                colors[0] = color;
+                labels[0] = label;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert (
+        "layout(r32f, binding = 0) readonly uniform image2D readColor;"
+        in generated_code
+    )
+    assert (
+        "layout(r32i, binding = 1) readonly uniform iimage2D readLabel;"
+        in generated_code
+    )
+    assert (
+        "layout(r32ui, binding = 2) readonly uniform uimage2D readMask;"
+        in generated_code
+    )
+    assert (
+        "layout(r32ui, binding = 3) writeonly uniform uimage2D writeMask;"
+        in generated_code
+    )
+    assert "vec4 color = imageLoad(readColor, pixel);" in generated_code
+    assert "ivec4 label = imageLoad(readLabel, pixel);" in generated_code
+    assert "uvec4 mask = imageLoad(readMask, pixel);" in generated_code
+    assert "imageStore(writeMask, pixel, mask);" in generated_code
+    assert "vec4 color = imageLoad(readColor, pixel).x;" not in generated_code
+    assert "ivec4 label = imageLoad(readLabel, pixel).x;" not in generated_code
+    assert "uvec4 mask = imageLoad(readMask, pixel).x;" not in generated_code
+    assert "imageStore(writeMask, pixel, uvec4(mask));" not in generated_code
+
+
 def test_glsl_rg_image_scalar_and_vector_load_store():
     code = """
     shader RGImageScalarVector {

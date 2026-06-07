@@ -25513,6 +25513,38 @@ def test_mojo_image_atomics_in_compute_shader():
     assert "imageAtomicCompSwap" not in generated_code
 
 
+def test_mojo_image_atomic_uint_constructor_value_infers_unsigned_type():
+    code = """
+    uimage2D unsignedCounters;
+
+    shader StorageImageAtomicShader {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint unsignedOld = imageAtomicAdd(
+                    unsignedCounters,
+                    pixel,
+                    uint(1.0)
+                );
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert (
+        "fn _crossgl_image_atomic_add_UImage2D_SIMD_DType_int32_2_UInt32"
+        "(arg0: UImage2D, arg1: SIMD[DType.int32, 2], arg2: UInt32)"
+        " -> UInt32:" in generated_code
+    )
+    assert (
+        "_crossgl_image_atomic_add_UImage2D_SIMD_DType_int32_2_UInt32"
+        "(unsignedCounters, pixel, UInt32(1.0))" in generated_code
+    )
+    assert "imageAtomicAdd" not in generated_code
+
+
 def test_mojo_storage_image_load_store_operations():
     code = """
     image2D colorImage;

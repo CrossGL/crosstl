@@ -164,6 +164,7 @@ class RustCodeGen:
             "samplerCubeShadow": "DepthTextureCube<f32>",
             "samplerCubeArrayShadow": "DepthTextureCubeArray<f32>",
             "sampler": "Sampler",
+            "comparison_sampler": "Sampler",
             "SamplerState": "Sampler",
             "SamplerComparisonState": "Sampler",
             "Texture1D": "Texture1D<f32>",
@@ -9311,6 +9312,15 @@ class RustCodeGen:
                 helper_name = "sample_offset_sampler"
             return helper(helper_name, [texture_expr, *member_args])
 
+        if operation in {"sample", "texture"}:
+            return self.generate_rust_lowercase_texture_sample_member_call(
+                operation,
+                texture_expr,
+                member_args,
+                texture_type,
+                helper,
+            )
+
         if operation in {"SampleLevel", "SampleLOD"}:
             self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
             helper_name = (
@@ -9448,6 +9458,172 @@ class RustCodeGen:
             return helper("texture_calculate_lod", [texture_expr, *member_args])
 
         return None
+
+    def generate_rust_lowercase_texture_sample_member_call(
+        self,
+        operation,
+        texture_expr,
+        member_args,
+        texture_type,
+        helper,
+    ):
+        self.require_rust_texture_member_arg_count(
+            operation,
+            member_args,
+            {1, 2, 3, 4},
+        )
+        has_sampler = self.is_sampler_type(self.expression_result_type(member_args[0]))
+        coord_index = 1 if has_sampler else 0
+        if len(member_args) <= coord_index:
+            raise ValueError(
+                self.rust_texture_member_error(operation, "missing coordinates")
+            )
+
+        sampler_suffix = "_sampler" if has_sampler else ""
+        base_args = [texture_expr]
+        if has_sampler:
+            base_args.append(member_args[0])
+        coord = member_args[coord_index]
+        tail_args = member_args[coord_index + 1 :]
+
+        if not tail_args:
+            helper_name = (
+                f"sample_shadow{sampler_suffix}"
+                if self.is_shadow_texture_type(texture_type)
+                else f"sample{sampler_suffix}"
+            )
+            return helper(helper_name, [*base_args, coord])
+
+        if len(tail_args) > 2:
+            raise ValueError(
+                self.rust_texture_member_error(
+                    operation,
+                    "expected at most 2 sample option argument(s), "
+                    f"got {len(tail_args)}",
+                )
+            )
+
+        option = self.rust_texture_sample_option(tail_args[0])
+        offset = tail_args[1] if len(tail_args) == 2 else None
+        shadow = self.is_shadow_texture_type(texture_type)
+
+        if option is None:
+            if offset is not None:
+                raise ValueError(
+                    self.rust_texture_member_error(
+                        operation,
+                        "unrecognized sample option before offset",
+                    )
+                )
+            if shadow:
+                raise ValueError(
+                    self.rust_texture_member_error(
+                        operation,
+                        "shadow texture offsets are unavailable",
+                    )
+                )
+            return helper(
+                f"sample_offset{sampler_suffix}",
+                [*base_args, coord, tail_args[0]],
+            )
+
+        option_name, option_args = option
+        if option_name == "bias":
+            if len(option_args) != 1:
+                raise ValueError(
+                    self.rust_texture_member_error(
+                        operation,
+                        "bias sample option requires 1 argument",
+                    )
+                )
+            if offset is not None:
+                if shadow:
+                    raise ValueError(
+                        self.rust_texture_member_error(
+                            operation,
+                            "shadow texture offsets are unavailable",
+                        )
+                    )
+                return helper(
+                    f"sample_offset_bias{sampler_suffix}",
+                    [*base_args, coord, offset, option_args[0]],
+                )
+            helper_name = (
+                f"sample_shadow_bias{sampler_suffix}"
+                if shadow
+                else f"sample_bias{sampler_suffix}"
+            )
+            return helper(helper_name, [*base_args, coord, option_args[0]])
+
+        if shadow:
+            raise ValueError(
+                self.rust_texture_member_error(
+                    operation,
+                    f"{option_name} sample option is unavailable for shadow textures",
+                )
+            )
+
+        if option_name == "level":
+            if len(option_args) != 1:
+                raise ValueError(
+                    self.rust_texture_member_error(
+                        operation,
+                        "level sample option requires 1 argument",
+                    )
+                )
+            helper_name = (
+                f"sample_lod_offset{sampler_suffix}"
+                if offset is not None
+                else f"sample_lod{sampler_suffix}"
+            )
+            helper_args = [*base_args, coord, option_args[0]]
+            if offset is not None:
+                helper_args.append(offset)
+            return helper(helper_name, helper_args)
+
+        if option_name == "gradient":
+            if len(option_args) != 2:
+                raise ValueError(
+                    self.rust_texture_member_error(
+                        operation,
+                        "gradient sample option requires 2 arguments",
+                    )
+                )
+            helper_name = (
+                f"sample_grad_offset{sampler_suffix}"
+                if offset is not None
+                else f"sample_grad{sampler_suffix}"
+            )
+            helper_args = [*base_args, coord, *option_args]
+            if offset is not None:
+                helper_args.append(offset)
+            return helper(helper_name, helper_args)
+
+        raise ValueError(
+            self.rust_texture_member_error(
+                operation,
+                f"unrecognized sample option {option_name}",
+            )
+        )
+
+    def rust_texture_member_error(self, operation, detail):
+        return "Unsup" f"ported Rust texture member operation {operation}; {detail}"
+
+    def rust_texture_sample_option(self, arg):
+        if not isinstance(arg, FunctionCallNode):
+            return None
+        option_name = self.function_call_name(getattr(arg, "function", None))
+        if option_name is None:
+            return None
+        option_name = str(option_name).rsplit("::", 1)[-1]
+        option_args = list(getattr(arg, "arguments", getattr(arg, "args", [])) or [])
+        if option_name == "level":
+            return "level", option_args
+        if option_name == "bias":
+            return "bias", option_args
+        if option_name in {"gradient2d", "gradient3d", "gradientcube"}:
+            return "gradient", option_args
+        return option_name, option_args
 
     def require_rust_texture_member_arg_count(self, operation, args, expected_counts):
         if len(args) not in expected_counts:

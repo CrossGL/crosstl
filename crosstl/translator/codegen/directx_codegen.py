@@ -17109,6 +17109,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     space = self.register_space_value(argument)
                     if space is not None:
                         return space
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name or not arguments:
+                continue
+            if str(attr_name).lower() == "set":
+                return self.register_space_value(arguments[0])
         return None
 
     def explicit_resource_register_prefix(self, node):

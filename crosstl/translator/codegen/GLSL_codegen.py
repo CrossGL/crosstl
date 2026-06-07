@@ -13030,6 +13030,11 @@ class GLSLCodeGen:
     def image_store_value_expression(
         self, texture_type, image_format, value, value_type=None
     ):
+        if self.allows_native_glsl_image_four_component_value(
+            self.image_store_channel_count(texture_type, image_format),
+            self.value_component_count(value_type),
+        ):
+            return value
         return storage_image_store_value_expression(
             image_format,
             value,
@@ -13098,6 +13103,12 @@ class GLSLCodeGen:
             ),
         )
 
+    def allows_native_glsl_image_four_component_value(
+        self, image_channels, value_channels
+    ):
+        """Return true when scalar image formats use GLSL's native gvec4 value."""
+        return value_channels == 4 and image_channels == 1
+
     def expected_component_kind(self):
         return numeric_component_kind_from_type(
             self.current_expression_expected_type,
@@ -13149,8 +13160,15 @@ class GLSLCodeGen:
 
     def validate_image_store_value_shape(self, texture_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(texture_type, image_format)
+        value_channels = self.expression_component_count(value_arg)
+        if self.allows_native_glsl_image_four_component_value(
+            expected_channels,
+            value_channels,
+        ):
+            return
         value_channels = image_store_value_shape_mismatch(
-            expected_channels, self.expression_component_count(value_arg)
+            expected_channels,
+            value_channels,
         )
         if value_channels is None:
             return
@@ -13216,6 +13234,11 @@ class GLSLCodeGen:
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(texture_type, image_format)
+        if self.allows_native_glsl_image_four_component_value(
+            loaded_channels,
+            expected_channels,
+        ):
+            return
         expected_channels = image_load_result_shape_mismatch(
             loaded_channels,
             expected_channels,

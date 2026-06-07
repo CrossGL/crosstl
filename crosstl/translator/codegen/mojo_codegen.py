@@ -13918,6 +13918,8 @@ class MojoCodeGen:
                 return func_name
             if func_name in self.function_return_types:
                 return self.function_return_types[func_name]
+            if func_name in self.scalar_constructor_map:
+                return func_name
             if func_name in {"fract", "frac"} and expr.args:
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name == "roundEven" and expr.args:
