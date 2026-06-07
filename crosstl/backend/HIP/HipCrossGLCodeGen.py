@@ -5358,6 +5358,17 @@ class HipToCrossGLConverter:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__byte_perm" and len(args) == 3:
             return self.format_hip_byte_perm(args[0], args[1], args[2])
+        if (
+            function_name
+            in {
+                "__funnelshift_l",
+                "__funnelshift_lc",
+                "__funnelshift_r",
+                "__funnelshift_rc",
+            }
+            and len(args) == 3
+        ):
+            return self.format_hip_funnelshift(function_name, args[0], args[1], args[2])
         if function_name == "__bitextract_u32" and len(args) == 3:
             return self.format_hip_unsigned_bit_extract(args[0], args[1], args[2])
         if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
@@ -5402,6 +5413,16 @@ class HipToCrossGLConverter:
         else:
             mask = f"((1u << {width}) - 1u)"
         return f"(({value} >> {offset}) & {mask})"
+
+    def format_hip_funnelshift(self, function_name, low, high, shift):
+        shift_amount = f"({shift} & 31u)"
+        if function_name.endswith("lc") or function_name.endswith("rc"):
+            shift_amount = f"min({shift}, 32u)"
+
+        source = f"((u64({high}) << 32u) | u64({low}))"
+        if function_name.endswith("l") or function_name.endswith("lc"):
+            return f"u32(({source} << {shift_amount}) >> 32u)"
+        return f"u32({source} >> {shift_amount})"
 
     def format_hip_float_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

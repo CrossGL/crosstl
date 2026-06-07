@@ -945,6 +945,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SUBGROUP_BROADCAST_ASSEMBLY = """
+; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Test/glsl.450.subgroup.frag ballot_works subgroupBroadcast(f4, 0).
+; Lowering source: SPIRV/GlslangToSpv.cpp maps EOpSubgroupBroadcast to
+; OpGroupNonUniformBroadcast.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformBallot
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %in_color %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %in_color "inColor"
+OpName %out_color "outColor"
+OpDecorate %in_color Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%uint = OpTypeInt 32 0
+%scope_subgroup = OpConstant %uint 3
+%lane_zero = OpConstant %uint 0
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%in_color = OpVariable %ptr_input_v4float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %in_color
+%broadcast = OpGroupNonUniformBroadcast %v4float %scope_subgroup %loaded %lane_zero
+OpStore %out_color %broadcast
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_UNIFORM_CONSTANT_RESOURCE_ASSEMBLY = """
 ; Reduced from combined image/sampler SPIR-V assembly emitted by Vulkan toolchains.
 OpCapability Shader
@@ -2235,6 +2270,20 @@ def test_spirv_subgroup_broadcast_and_reduce_parse():
     assert body[1].right.name == "subgroupAdd"
     assert body[1].right.args[0].name == "value"
     assert isinstance(body[2], ReturnNode)
+
+
+def test_glslang_subgroup_broadcast_parse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SUBGROUP_BROADCAST_ASSEMBLY)
+    ast = parse_code(tokens)
+    body = ast.functions[0].body
+
+    assert ast.functions[0].spirv_execution_model == "Fragment"
+    assert isinstance(body[0], AssignmentNode)
+    assert isinstance(body[0].right, FunctionCallNode)
+    assert body[0].right.name == "subgroupBroadcast"
+    assert body[0].right.args[0].name == "inColor"
+    assert body[0].right.args[1] == "0"
+    assert isinstance(body[1], ReturnNode)
 
 
 def test_spirv_assembly_uniform_constant_resources_parse():

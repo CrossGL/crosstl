@@ -1464,6 +1464,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_SUBGROUP_BROADCAST_ASSEMBLY = """
+; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Test/glsl.450.subgroup.frag ballot_works subgroupBroadcast(f4, 0).
+; Lowering source: SPIRV/GlslangToSpv.cpp maps EOpSubgroupBroadcast to
+; OpGroupNonUniformBroadcast.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformBallot
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %in_color %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %in_color "inColor"
+OpName %out_color "outColor"
+OpDecorate %in_color Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%uint = OpTypeInt 32 0
+%scope_subgroup = OpConstant %uint 3
+%lane_zero = OpConstant %uint 0
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%in_color = OpVariable %ptr_input_v4float Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %v4float %in_color
+%broadcast = OpGroupNonUniformBroadcast %v4float %scope_subgroup %loaded %lane_zero
+OpStore %out_color %broadcast
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_ATOMIC_LOAD_STORE_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -5039,6 +5074,20 @@ def test_spirv_subgroup_broadcast_and_reduce_codegen_reparse():
     assert "broadcastOut = broadcast;" not in generated_code
     assert "sumOut = sum;" not in generated_code
     assert "OpGroupNonUniform" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_subgroup_broadcast_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_SUBGROUP_BROADCAST_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inColor @input @location(0);" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "outColor = subgroupBroadcast(inColor, 0);" in generated_code
+    assert "outColor = broadcast;" not in generated_code
+    assert "OpGroupNonUniformBroadcast" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

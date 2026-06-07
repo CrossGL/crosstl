@@ -5,6 +5,7 @@ import pytest
 
 from crosstl.backend.GLSL.OpenglAst import (
     AssignmentNode,
+    BinaryOpNode,
     DiscardNode,
     DoWhileNode,
     ForNode,
@@ -219,6 +220,33 @@ EXTERNAL_FIXTURES = [
             void main()
             {
                 uvec2Out = clockRealtime2x32EXT(1);
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/preprocessor.edge_cases.vert.
+    # Exercises block comments inside macro replacement lists before logical
+    # line splitting.
+    ExternalFixture(
+        name="glslang-preprocessor-edge-case-block-comment-macros",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/preprocessor.edge_cases.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 310 es
+            #define X(Y) /*
+                            */ Y + 2
+
+            #define Y(Z) 2 * Z// asdf
+
+            #define Z(Y) /*
+                            */ \\
+              2 /*
+                   */ + 3 \\
+                * Y
+
+            void main() {
+              gl_Position = vec4(X(3) + Y(4) + Z(2));
             }
         """).strip(),
     ),
@@ -1205,6 +1233,29 @@ def test_parse_glslang_spirv_instruction_prefix_fixture():
     assert intrinsic.params[0].name == "_param0"
     assert intrinsic.body == []
     assert main.body[0].left.name == "uvec2Out"
+
+
+def test_parse_glslang_preprocessor_edge_case_block_comment_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-preprocessor-edge-case-block-comment-macros"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    main = next(function for function in ast.functions if function.name == "main")
+    assignment = main.body[0]
+    expr = assignment.right.args[0]
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.left.name == "gl_Position"
+    assert assignment.right.name.name == "vec4"
+    assert isinstance(expr, BinaryOpNode)
+    assert (
+        "output.gl_Position = vec4(((((3 + 2) + (2 * 4)) + 2) + (3 * 2)));" in crossgl
+    )
+    parse_crossgl(crossgl)
 
 
 def test_parse_glslang_memory_scope_semantics_qualifier_fixture():
