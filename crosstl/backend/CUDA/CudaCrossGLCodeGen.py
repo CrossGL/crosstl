@@ -3633,6 +3633,24 @@ class CudaToCrossGLConverter:
         elif name == "cudaGraphDestroy":
             if args:
                 return [f"// CUDA graph destroy: {args[0]}"]
+        elif name in {"cudaLaunchKernelExC", "cudaLaunchKernelEx"}:
+            if len(node.args) >= 2:
+                config = self.format_runtime_pointer_target(node.args[0])
+                function = self.format_cuda_kernel_function_reference(node.args[1])
+                launch_args = node.args[2:]
+                if name == "cudaLaunchKernelExC" and launch_args:
+                    launch_args = self.resolve_packed_launch_args([launch_args[0]])
+
+                comment = (
+                    f"// CUDA launch kernel ex: config: {config}, "
+                    f"function: {function}"
+                )
+                if launch_args:
+                    args_str = ", ".join(
+                        self.format_kernel_launch_arg(arg) for arg in launch_args
+                    )
+                    comment += f", args: {args_str}"
+                return [comment]
         elif name == "cuGraphDestroyNode":
             if args:
                 return [f"// CUDA driver graph destroy node: {args[0]}"]
@@ -3645,6 +3663,13 @@ class CudaToCrossGLConverter:
     def format_runtime_pointer_target(self, arg):
         if isinstance(arg, CastNode):
             return self.format_runtime_pointer_target(arg.expression)
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.visit(arg.operand)
+        return self.visit(arg)
+
+    def format_cuda_kernel_function_reference(self, arg):
+        if isinstance(arg, CastNode):
+            return self.format_cuda_kernel_function_reference(arg.expression)
         if isinstance(arg, UnaryOpNode) and arg.op == "&":
             return self.visit(arg.operand)
         return self.visit(arg)

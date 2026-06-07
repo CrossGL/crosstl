@@ -1657,7 +1657,7 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
             return False
         index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)

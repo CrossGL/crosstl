@@ -1624,6 +1624,27 @@ class TestCudaParser:
         assert isinstance(ast.functions[0].body[4], FunctionCallNode)
         assert ast.functions[0].body[4].name == "cudaLaunchKernel"
 
+    def test_cuda_runtime_launch_function_addresses_are_unwrapped(self):
+        code = """
+        void host(void** packedArgs, int stream) {
+            cudaLaunchKernel((const void*)&kernel, 1, 32, packedArgs, 0, stream);
+            cudaLaunchCooperativeKernel(
+                (void*)&cooperativeKernel<float>, 1, 32, packedArgs, 0, stream);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        first_launch = ast.functions[0].body[0]
+        second_launch = ast.functions[0].body[1]
+
+        assert isinstance(first_launch, KernelLaunchNode)
+        assert first_launch.kernel_name == "kernel"
+        assert isinstance(second_launch, KernelLaunchNode)
+        assert second_launch.kernel_name == "cooperativeKernel<float>"
+
     def test_cuda_launch_cooperative_kernel_api_parsing(self):
         code = """
         void host(void** params) {

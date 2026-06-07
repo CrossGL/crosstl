@@ -1848,6 +1848,38 @@ class TestCudaCodeGen:
         assert "// Arguments: data, n" in result
         assert "array<ptr<void>>({(&data), (&n)})" not in result
 
+    def test_cuda_launch_kernel_ex_api_conversion(self):
+        code = """
+        void host(float* data, int n, void** packedArgs) {
+            cudaLaunchConfig_t config;
+            cudaLaunchKernelExC(&config, (const void*)&kernel, packedArgs);
+            cudaError_t err = cudaLaunchKernelEx(&config, kernel, data, n);
+            checkCudaErrors(cudaLaunchKernelEx(&config, kernel, data, n));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "// CUDA launch kernel ex: config: config, function: kernel, "
+            "args: packedArgs"
+        ) in result
+        assert (
+            result.count(
+                "// CUDA launch kernel ex: config: config, function: kernel, "
+                "args: data, n"
+            )
+            == 2
+        )
+        assert "var err: cudaError_t = cudaSuccess;" in result
+        assert "cudaLaunchKernelEx" not in result
+        assert "checkCudaErrors" not in result
+
     def test_compound_literal_packed_args_declaration_conversion(self):
         code = """
         void host(float* data, int n, int stream) {

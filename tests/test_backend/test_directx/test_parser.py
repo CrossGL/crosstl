@@ -601,6 +601,25 @@ def test_parse_post_semantic_interpolation_modifiers_from_hlsl_function_docs():
     assert material_id.qualifiers == ["nointerpolation"]
 
 
+def test_parse_clipplanes_function_modifier_from_hlsl_function_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-function-syntax
+    ast = parse_code("""
+    inline clipplanes(userClip0, userClip1) precise float4 VSMain(
+        float3 position : POSITION
+    ) : SV_Position {
+        return float4(position, 1.0);
+    }
+    """)
+
+    function = ast.functions[0]
+
+    assert function.name == "VSMain"
+    assert function.qualifiers == ["inline", "precise", "vertex"]
+    assert [(attr.name, attr.args) for attr in function.attributes] == [
+        ("clipplanes", ["userClip0", "userClip1"])
+    ]
+
+
 def test_parse_center_interpolation_modifier_from_dxc_center_keyword():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/HLSLFileCheck/hlsl/types/modifiers/center/center_kwd.hlsl
