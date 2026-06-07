@@ -4712,6 +4712,53 @@ def test_metal_texture_sampler_and_buffer_bindings_are_independent():
     assert "values[0]" in generated_code
 
 
+def test_metal_descriptor_sets_pack_into_free_flat_resource_slots():
+    code = """
+    shader MetalMultiSetResourcePacking {
+        struct Params {
+            float value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) uniform Params frameParams;
+            layout(set = 1, binding = 0) uniform Params materialParams;
+            layout(set = 0, binding = 1) buffer float* values;
+            layout(set = 2, binding = 1) buffer float* history;
+            layout(set = 0, binding = 4) uniform sampler2D baseMap;
+            layout(set = 1, binding = 4) uniform sampler2D detailMap;
+            layout(set = 0, binding = 2) sampler linearSampler;
+            layout(set = 1, binding = 2) sampler shadowSampler;
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec4 base = texture(baseMap, linearSampler, uv);
+                vec4 detail = texture(detailMap, shadowSampler, uv);
+                values[0] = frameParams.value + materialParams.value +
+                    base.x + detail.x;
+                history[0] = values[0];
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "constant Params& frameParams [[buffer(0)]]" in generated_code
+    assert "constant Params& materialParams [[buffer(2)]]" in generated_code
+    assert "device float* values [[buffer(1)]]" in generated_code
+    assert "device float* history [[buffer(3)]]" in generated_code
+    assert "texture2d<float> baseMap [[texture(4)]]" in generated_code
+    assert "texture2d<float> detailMap [[texture(0)]]" in generated_code
+    assert "sampler linearSampler [[sampler(2)]]" in generated_code
+    assert "sampler shadowSampler [[sampler(0)]]" in generated_code
+    assert "baseMap.sample(linearSampler, uv)" in generated_code
+    assert "detailMap.sample(shadowSampler, uv)" in generated_code
+
+
 def test_metal_auto_bindings_skip_later_explicit_global_bindings():
     code = """
     shader LateExplicitBindingsMetal {

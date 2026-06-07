@@ -4994,7 +4994,7 @@ class SlangCodeGen:
             space += 1
 
     def next_available_slang_vk_binding(self, descriptor_set, count, preferred=None):
-        count = 1 if count is None else max(count, 1)
+        count = 1
         ranges = self.slang_used_vk_bindings.get(descriptor_set, [])
         candidates = []
         if preferred is not None:
@@ -5034,7 +5034,7 @@ class SlangCodeGen:
         )
 
     def advance_slang_vk_binding(self, descriptor_set, start, count):
-        count = 1 if count is None else max(count, 1)
+        count = 1
         self.slang_vk_binding_cursors[descriptor_set] = max(
             self.slang_vk_binding_cursors.get(descriptor_set, 0),
             start + count,
@@ -5062,7 +5062,7 @@ class SlangCodeGen:
         ranges.append((start, end, name))
 
     def reserve_slang_vk_binding_range(self, descriptor_set, start, count, name):
-        count = 1 if count is None else max(count, 1)
+        count = 1
         end = start + count - 1
         ranges = self.slang_used_vk_bindings.setdefault(descriptor_set, [])
         for used_start, used_end, used_name in ranges:

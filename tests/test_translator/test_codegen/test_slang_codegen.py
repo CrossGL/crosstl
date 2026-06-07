@@ -10847,6 +10847,29 @@ def test_conflicting_slang_resource_binding_metadata_raises(resource_source, mes
         generate_code(ast)
 
 
+def test_slang_vulkan_descriptor_arrays_do_not_reserve_adjacent_bindings():
+    code = """
+    shader SlangAdjacentVkDescriptorArrayBindings {
+        sampler2D maps[2] @binding(0);
+        sampler states @binding(1);
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] Sampler2D<float4> maps[2] "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] SamplerState states " ": register(s1);" in generated_code
+    )
+
+
 def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
     code = """
     shader AutoResourceBindings {
@@ -10873,7 +10896,7 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "[[vk::binding(7, 0)]] cbuffer Camera : register(b0)" in generated_code
+    assert "[[vk::binding(6, 0)]] cbuffer Camera : register(b0)" in generated_code
     assert (
         "[[vk::binding(0, 0)]] Sampler2D<float4> firstTexture "
         ": register(t0);" in generated_code
@@ -10903,7 +10926,7 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
         ": register(s0);" in generated_code
     )
     assert (
-        "[[vk::binding(6, 0)]] RWTexture2D<uint> counters "
+        "[[vk::binding(4, 0)]] RWTexture2D<uint> counters "
         ": register(u0);" in generated_code
     )
 

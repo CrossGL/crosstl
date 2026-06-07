@@ -542,6 +542,8 @@ class HLSLCodeGen:
         """Initialize DirectX type maps and per-generation resource state."""
         self.texture_variables = set()
         self.sampler_variables = set()
+        self.global_mixed_sampler_names = set()
+        self.global_mixed_sampler_aliases = {}
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
@@ -892,6 +894,8 @@ class HLSLCodeGen:
 
         self.texture_variables = set()
         self.sampler_variables = set()
+        self.global_mixed_sampler_names = set()
+        self.global_mixed_sampler_aliases = {}
         self.current_sampler_parameters = set()
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
@@ -1194,6 +1198,11 @@ class HLSLCodeGen:
             self.collect_unsupported_glsl_buffer_block_functions(functions)
         )
         self.validate_global_resource_shadows(ast)
+        self.global_mixed_sampler_names = self.collect_global_mixed_sampler_names(ast)
+        self.global_mixed_sampler_aliases = {
+            name: self.hlsl_comparison_sampler_alias_name(name)
+            for name in self.global_mixed_sampler_names
+        }
         self.validate_explicit_sampler_role_conflicts(ast)
         code = "\n"
         preprocessors = getattr(ast, "preprocessors", []) or []
@@ -1414,7 +1423,11 @@ class HLSLCodeGen:
             mapped_type = self.hlsl_struct_buffer_resource_type(
                 node, vtype
             ) or self.map_resource_type_with_format(vtype, node)
-            if var_name in comparison_sampler_names and mapped_type == "SamplerState":
+            if (
+                var_name in comparison_sampler_names
+                and mapped_type == "SamplerState"
+                and var_name not in self.global_mixed_sampler_names
+            ):
                 mapped_type = "SamplerComparisonState"
             is_hlsl_resource_global = (
                 mapped_type.startswith("Texture")
@@ -1664,6 +1677,17 @@ class HLSLCodeGen:
             if not qualifier and not is_hlsl_resource_global:
                 qualifier = self.local_variable_qualifier(node)
             code += f"{qualifier}{declaration}{register};\n"
+            if (
+                mapped_type == "SamplerState"
+                and var_name in self.global_mixed_sampler_aliases
+            ):
+                alias_name = self.global_mixed_sampler_aliases[var_name]
+                alias_type = f"SamplerComparisonState{array_suffix}"
+                alias_declaration = format_c_style_array_declaration(
+                    alias_type, alias_name
+                )
+                self.sampler_variables.add(alias_name)
+                code += f"{alias_declaration}{register};\n"
 
             if mapped_type.startswith("Texture"):
                 sampler_name = f"{var_name}Sampler"
@@ -6549,6 +6573,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 sampler_names.add(var_name)
         return sampler_names
 
+    def collect_global_mixed_sampler_names(self, root):
+        global_sampler_names = self.collect_global_sampler_names(root)
+        comparison_sampler_names = self.collect_explicit_sampler_resource_names(
+            root, self.comparison_texture_function_names()
+        ) | self.collect_comparison_sampler_arguments(
+            root, self.comparison_sampler_parameters
+        )
+        regular_sampler_names = self.collect_explicit_sampler_resource_names(
+            root, self.regular_texture_function_names()
+        ) | self.collect_regular_sampler_arguments(
+            root, self.regular_sampler_parameters
+        )
+        return (comparison_sampler_names & regular_sampler_names) & global_sampler_names
+
     def collect_global_resource_names(self, root):
         resource_names = set()
         for node in self.global_resource_declaration_nodes(root):
@@ -6616,6 +6654,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 (comparison_sampler_names & regular_sampler_names)
                 & global_sampler_names
             )
+            if name not in self.global_mixed_sampler_names
         ]
 
         function_names = set(self.comparison_sampler_parameters) | set(
@@ -13510,6 +13549,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         texture_base_name = self.expression_name(args[0]) or texture_name
         if explicit_sampler:
             sampler_name = self.generate_expression(args[1])
+            if self.texture_call_uses_comparison_sampler(func_name):
+                sampler_name = self.hlsl_comparison_sampler_alias_expression(
+                    args[1], sampler_name
+                )
         elif self.implicit_call_uses_regular_sampler(func_name):
             member_sampler = self.hlsl_implicit_member_sampler_name(
                 args[0],
@@ -13536,6 +13579,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         coord = self.generate_expression(args[coord_index])
         extra_args = args[coord_index + 1 :]
         return texture_name, sampler_name, coord, extra_args
+
+    def texture_call_uses_comparison_sampler(self, func_name):
+        return bool(
+            func_name
+            and (
+                is_texture_compare_operation(func_name)
+                or is_texture_gather_compare_operation(func_name)
+            )
+        )
+
+    def hlsl_comparison_sampler_alias_name(self, sampler_name):
+        return f"{sampler_name}_cglComparison"
+
+    def hlsl_comparison_sampler_alias_expression(self, sampler_arg, rendered):
+        sampler_name = self.expression_name(sampler_arg)
+        alias_name = self.global_mixed_sampler_aliases.get(sampler_name)
+        if not alias_name:
+            return rendered
+        if rendered == sampler_name:
+            return alias_name
+        if rendered.startswith(f"{sampler_name}["):
+            return f"{alias_name}{rendered[len(sampler_name):]}"
+        return rendered
 
     def generate_call_arguments(self, func_name, args, type_func_name=None):
         parameter_types = self.function_parameter_types.get(type_func_name or func_name)

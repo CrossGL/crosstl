@@ -631,6 +631,7 @@ class MetalCodeGen:
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
+        self.metal_resource_binding_indices_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.cbuffer_variables = []
@@ -1152,6 +1153,7 @@ class MetalCodeGen:
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
+        self.metal_resource_binding_indices_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
@@ -1580,9 +1582,16 @@ class MetalCodeGen:
         sampler_register = 0
         buffer_register = 0
         used_resource_bindings = {}
-        buffer_register = self.reserve_cbuffer_bindings(used_resource_bindings)
+        source_resource_bindings = {}
+        self.pre_reserve_cbuffer_bindings(
+            used_resource_bindings, source_resource_bindings
+        )
         self.reserve_explicit_global_resource_bindings(
-            global_vars, used_resource_bindings
+            global_vars, used_resource_bindings, source_resource_bindings
+        )
+        buffer_register = self.reserve_cbuffer_bindings(
+            used_resource_bindings,
+            source_resource_bindings,
         )
         for i, node in enumerate(global_vars):
             resource_count = 1
@@ -1632,13 +1641,15 @@ class MetalCodeGen:
                 declaration = self.format_metal_argument_buffer_global(
                     node, vtype, var_name
                 )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 code += declaration
                 buffer_register = max(buffer_register, binding + resource_count)
@@ -1656,13 +1667,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 self.glsl_buffer_block_variables.append(
                     (node, binding, lowered_block, array_size)
@@ -1700,13 +1713,15 @@ class MetalCodeGen:
                         buffer_register,
                         binding_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     binding_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 self.metal_buffer_resource_variables.append(
                     (node, binding, vtype, array_size, metal_buffer_address_space)
@@ -1725,13 +1740,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 mapped_type = self.map_resource_type_with_format(vtype, node)
                 if array_size is not None:
@@ -1762,13 +1779,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 if array_size is not None:
                     self.unsupported_metal_ray_function_table_array_variables[
@@ -1797,13 +1816,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 if array_size is not None:
                     self.unsupported_metal_ray_function_table_array_variables[
@@ -1832,13 +1853,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 self.structured_buffer_variables.append(
                     (node, binding, vtype, array_size)
@@ -1956,13 +1979,15 @@ class MetalCodeGen:
                         texture_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "texture",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    texture_register,
                 )
                 self.texture_variables.append((node, binding, mapped_type, array_size))
                 self.texture_variable_types[node.name] = mapped_type
@@ -1987,13 +2012,15 @@ class MetalCodeGen:
                         sampler_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "sampler",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    sampler_register,
                 )
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
@@ -15811,6 +15838,58 @@ class MetalCodeGen:
                 return binding
         return None
 
+    def explicit_resource_set_index(self, node):
+        if not hasattr(node, "attributes"):
+            return None
+
+        selected_set = None
+        selected_description = None
+        node_name = self.resource_node_name(node, "<anonymous>")
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in {"set", "space"}:
+                source = (
+                    self.attribute_value_to_string(arguments[0]) if arguments else None
+                )
+                set_index = (
+                    self.binding_index_value(arguments[0], ("set", "space"))
+                    if len(arguments) == 1
+                    else None
+                )
+                description = (
+                    f"{attr_name} {source if source is not None else '<missing>'}"
+                )
+            elif attr_name == "register" and len(arguments) > 1:
+                source = self.attribute_value_to_string(arguments[1])
+                set_index = self.binding_index_value(arguments[1], ("space", "set"))
+                description = (
+                    f"register space {source if source is not None else '<missing>'}"
+                )
+            else:
+                continue
+
+            if set_index is None:
+                raise ValueError(
+                    "Invalid Metal resource binding metadata for "
+                    f"'{node_name}': {description} must resolve to a concrete "
+                    "integer set"
+                )
+            if selected_set is None:
+                selected_set = set_index
+                selected_description = description
+                continue
+            if selected_set != set_index:
+                raise ValueError(
+                    "Conflicting Metal resource binding metadata for "
+                    f"'{node_name}': {selected_description} differs from "
+                    f"{description}"
+                )
+        return selected_set
+
     def semantic_from_node(self, node):
         if hasattr(node, "semantic"):
             return node.semantic
@@ -16936,6 +17015,15 @@ class MetalCodeGen:
             vtype = "float"
         return vtype, resource_count
 
+    def resource_node_name(self, node, default=None):
+        if node is None:
+            return default
+        return getattr(
+            node,
+            "name",
+            getattr(node, "variable_name", getattr(node, "type_name", default)),
+        )
+
     def global_resource_binding_metadata(self, node):
         var_name = getattr(node, "name", getattr(node, "variable_name", None))
         if not var_name:
@@ -16949,6 +17037,11 @@ class MetalCodeGen:
             prefixes = ("b", "u", "t")
         elif self.is_glsl_buffer_block_variable(node, vtype):
             return None
+        elif self.metal_buffer_resource_address_space(node, vtype) is not None:
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+            resource_count = self.metal_buffer_resource_binding_count(node)
         elif self.is_structured_buffer_type(vtype):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
@@ -16981,19 +17074,22 @@ class MetalCodeGen:
             return None
         return namespace, binding, resource_count, var_name
 
-    def reserve_explicit_global_resource_bindings(self, global_vars, used_bindings):
+    def reserve_explicit_global_resource_bindings(
+        self, global_vars, used_bindings, source_bindings
+    ):
         for node in global_vars:
             metadata = self.global_resource_binding_metadata(node)
             if metadata is None:
                 continue
             namespace, binding, resource_count, var_name = metadata
-            self.reserve_resource_binding_range(
+            self.pre_reserve_explicit_resource_binding(
                 used_bindings,
-                "Metal",
+                source_bindings,
                 namespace,
                 binding,
                 resource_count,
                 var_name,
+                node,
             )
 
     def next_available_resource_binding(
@@ -17015,22 +17111,25 @@ class MetalCodeGen:
                 return binding_index
             binding_index = conflict_end + 1
 
-    def reserve_cbuffer_bindings(self, used_bindings):
-        buffer_index = 0
+    def pre_reserve_cbuffer_bindings(self, used_bindings, source_bindings):
         for cbuffer in self.cbuffer_variables:
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
             )
             if binding is None:
                 continue
-            self.reserve_resource_binding_range(
+            self.pre_reserve_explicit_resource_binding(
                 used_bindings,
-                "Metal",
+                source_bindings,
                 "buffer",
                 binding,
                 1,
                 getattr(cbuffer, "name", "<anonymous>"),
+                cbuffer,
             )
+
+    def reserve_cbuffer_bindings(self, used_bindings, source_bindings):
+        buffer_index = 0
         for cbuffer in self.cbuffer_variables:
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
@@ -17042,17 +17141,125 @@ class MetalCodeGen:
                     buffer_index,
                     1,
                 )
-            self.reserve_resource_binding_range(
+            binding = self.reserve_or_remap_resource_binding(
                 used_bindings,
-                "Metal",
+                source_bindings,
                 "buffer",
                 binding,
                 1,
                 getattr(cbuffer, "name", "<anonymous>"),
+                cbuffer,
+                buffer_index,
             )
             self.cbuffer_binding_indices[id(cbuffer)] = binding
             buffer_index = max(buffer_index, binding + 1)
         return buffer_index
+
+    def pre_reserve_explicit_resource_binding(
+        self, used_bindings, source_bindings, namespace, binding, count, name, node
+    ):
+        if binding is None:
+            return None
+        descriptor_set = self.explicit_resource_set_index(node)
+        if descriptor_set not in (None, 0):
+            return None
+        self.reserve_resource_binding_range(
+            used_bindings,
+            "Metal",
+            namespace,
+            binding,
+            count,
+            name,
+        )
+        self.metal_resource_binding_indices_by_id[id(node)] = binding
+        return binding
+
+    def reserve_or_remap_resource_binding(
+        self,
+        used_bindings,
+        source_bindings,
+        namespace,
+        binding,
+        count,
+        name,
+        node,
+        cursor,
+    ):
+        cached = self.metal_resource_binding_indices_by_id.get(id(node))
+        if cached is not None:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                namespace,
+                cached,
+                count,
+                name,
+            )
+            return cached
+
+        descriptor_set = self.explicit_resource_set_index(node)
+        if binding is None:
+            binding = self.next_available_resource_binding(
+                used_bindings,
+                namespace,
+                cursor,
+                count,
+            )
+
+        if descriptor_set not in (None, 0):
+            self.reserve_source_resource_binding_range(
+                source_bindings,
+                namespace,
+                descriptor_set,
+                binding,
+                count,
+                name,
+            )
+            target_binding = self.next_available_resource_binding(
+                used_bindings,
+                namespace,
+                0,
+                count,
+            )
+        else:
+            target_binding = binding
+
+        self.reserve_resource_binding_range(
+            used_bindings,
+            "Metal",
+            namespace,
+            target_binding,
+            count,
+            name,
+        )
+        self.metal_resource_binding_indices_by_id[id(node)] = target_binding
+        return target_binding
+
+    def reserve_source_resource_binding_range(
+        self, source_bindings, namespace, descriptor_set, start, count, name
+    ):
+        count = max(count or 1, 1)
+        end = start + count - 1
+        key = (namespace, descriptor_set)
+        ranges = source_bindings.setdefault(key, [])
+        for used_start, used_end, used_name in ranges:
+            if start <= used_end and used_start <= end:
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting Metal source resource binding for '{name}': "
+                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, start, end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, used_start, used_end)}"
+                )
+        ranges.append((start, end, name))
+
+    def source_resource_binding_range_label(
+        self, namespace, descriptor_set, start, end
+    ):
+        if start == end:
+            return f"set {descriptor_set} {namespace}({start})"
+        return f"set {descriptor_set} {namespace}({start}-{end})"
 
     def reserve_resource_binding_range(
         self, used_bindings, target, namespace, start, count, name

@@ -23707,13 +23707,21 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="DirectX sampler\\(s\\) used for both regular sampling and shadow comparison: sharedSampler",
-    ):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(regular_diagnostic_shader), "fragment"
-        )
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    assert "SamplerState sharedSampler : register(s0);" in regular_code
+    assert (
+        "SamplerComparisonState sharedSampler_cglComparison : register(s0);"
+        in regular_code
+    )
+    assert "cubeMap.Sample(sharedSampler, input.cubeProj.xyz / input.cubeProj.w)" in (
+        regular_code
+    )
+    assert (
+        "shadowMap.SampleCmp(sharedSampler_cglComparison, input.uv, input.depth)"
+        in regular_code
+    )
 
     with pytest.raises(
         ValueError,
@@ -23723,13 +23731,19 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
             crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
         )
 
-    with pytest.raises(
-        ValueError,
-        match="DirectX sampler\\(s\\) used for both regular sampling and shadow comparison: sharedSampler",
-    ):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
-        )
+    comparison_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    )
+    assert "SamplerState sharedSampler : register(s0);" in comparison_code
+    assert (
+        "SamplerComparisonState sharedSampler_cglComparison : register(s0);"
+        in comparison_code
+    )
+    assert (
+        "cubeShadow.SampleCmp(sharedSampler_cglComparison, "
+        "input.cubeProj.xyz / input.cubeProj.w, input.depth)" in comparison_code
+    )
+    assert "colorMap.Sample(sharedSampler, input.uv)" in comparison_code
 
 
 def test_directx_unsupported_projected_cube_array_diagnostic_keeps_sampler_role():
@@ -27415,7 +27429,7 @@ def test_directx_mixed_explicit_and_implicit_texture_sampling_keeps_synthetic_sa
     assert "colorMap.Sample(colorMapSampler, uv)" in generated_code
 
 
-def test_directx_rejects_global_sampler_used_for_regular_and_shadow_compare():
+def test_directx_global_sampler_used_for_regular_and_shadow_compare_emits_alias():
     shader = """
     shader MixedSamplerUse {
         sampler2D colorMap;
@@ -27442,14 +27456,62 @@ def test_directx_rejects_global_sampler_used_for_regular_and_shadow_compare():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "DirectX sampler\\(s\\) used for both regular sampling and "
-            "shadow comparison: sharedSampler"
-        ),
-    ):
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerState sharedSampler : register(s0);" in generated_code
+    assert (
+        "SamplerComparisonState sharedSampler_cglComparison : register(s0);"
+        in generated_code
+    )
+    assert "colorMap.Sample(sharedSampler, input.uv)" in generated_code
+    assert (
+        "shadowMap.SampleCmp(sharedSampler_cglComparison, input.uv, input.depth)"
+        in generated_code
+    )
+
+
+def test_directx_global_sampler_array_mixed_roles_emit_comparison_alias_array():
+    shader = """
+    shader MixedSamplerArrayUse {
+        const int SAMPLER_COUNT = 2;
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSamplers[SAMPLER_COUNT];
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 color = texture(colorMap, sharedSamplers[0], input.uv);
+                float shadow = textureCompare(
+                    shadowMap,
+                    sharedSamplers[1],
+                    input.uv,
+                    input.depth
+                );
+                return color * shadow;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerState sharedSamplers[SAMPLER_COUNT] : register(s0);" in (
+        generated_code
+    )
+    assert (
+        "SamplerComparisonState sharedSamplers_cglComparison[SAMPLER_COUNT] "
+        ": register(s0);" in generated_code
+    )
+    assert "colorMap.Sample(sharedSamplers[0], input.uv)" in generated_code
+    assert (
+        "shadowMap.SampleCmp(sharedSamplers_cglComparison[1], input.uv, input.depth)"
+        in generated_code
+    )
 
 
 def test_directx_rejects_sampler_parameter_used_for_regular_and_shadow_compare():
