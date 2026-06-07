@@ -1399,6 +1399,68 @@ def test_hlsl_structured_buffer_register_t0_and_rw_register_u0():
     assert "outputPositions.Store(index, pos);" in generated_code
 
 
+def test_hlsl_stage_local_pointer_storage_buffer_lowers_to_structured_buffer():
+    # Reduced from CrossGL-Compiler
+    # tests/frontend/fixtures/ComputeInvocationBuiltinHIRShader.cgl.
+    shader = """
+    shader ComputeInvocationBuiltinHIRShader {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+            layout(set = 0, binding = 0) buffer uint* values;
+            layout(set = 0, binding = 1) buffer atomic<uint>* counters;
+
+            void main() {
+                uint globalX = gl_GlobalInvocationID.x;
+                values[globalX] = globalX;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<uint> values : register(u0);" in generated_code
+    assert "RWStructuredBuffer<uint> counters : register(u1);" in generated_code
+    assert "[numthreads(8, 4, 2)]" in generated_code
+    assert "values[globalX] = globalX;" in generated_code
+    assert "PointerType" not in generated_code
+    assert "PrimitiveType" not in generated_code
+
+
+def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
+    # Reduced from CrossGL-Compiler
+    # tests/frontend/fixtures/StorageImageHIRShader.cgl.
+    shader = """
+    shader StorageImageHIRShader {
+        compute {
+            layout(set = 0, binding = 0) uniform iimage2D labelImage;
+            layout(set = 0, binding = 1) uniform uimage2D maskImage;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 1);
+                ivec4 label2D = imageLoad(labelImage, pixel);
+                uvec4 mask2D = imageLoad(maskImage, pixel);
+                imageStore(labelImage, pixel, label2D);
+                imageStore(maskImage, pixel, mask2D);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWTexture2D<int> labelImage : register(u0);" in generated_code
+    assert "RWTexture2D<uint> maskImage : register(u1);" in generated_code
+    assert "int4 label2D = ((int4)(labelImage[pixel]));" in generated_code
+    assert "uint4 mask2D = ((uint4)(maskImage[pixel]));" in generated_code
+    assert "labelImage[pixel] = (label2D).x" in generated_code
+    assert "maskImage[pixel] = (mask2D).x" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_hlsl_cbuffer_mixed_member_types():
     shader = """
     shader MixedCbufferMembers {

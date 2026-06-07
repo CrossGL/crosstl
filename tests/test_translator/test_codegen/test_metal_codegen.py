@@ -2568,6 +2568,35 @@ def test_metal_raw_address_space_stage_buffers_lower_to_bindable_pointers():
     assert "device float values[] [[buffer(0)]]" not in generated_code
 
 
+def test_metal_stage_local_pointer_storage_buffer_lowers_to_device_pointer():
+    # Reduced from CrossGL-Compiler
+    # tests/frontend/fixtures/ComputeInvocationBuiltinHIRShader.cgl.
+    shader = """
+    shader ComputeInvocationBuiltinHIRShader {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+            layout(set = 0, binding = 0) buffer uint* values;
+
+            void main() {
+                uint globalX = gl_GlobalInvocationID.x;
+                values[globalX] = globalX;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "device uint* values [[buffer(0)]]" in generated_code
+    assert "values[globalX] = globalX;" in generated_code
+    assert "device uint*& values" not in generated_code
+    assert "PointerType" not in generated_code
+    assert "PrimitiveType" not in generated_code
+
+
 def test_metal_pointer_typed_member_access_uses_arrow_operator():
     shader = """
     shader MetalPointerMemberAccess {
@@ -17108,6 +17137,47 @@ def test_metal_default_float_image_scalar_and_vector_load_store():
     assert "image.write(vectorOld + value, uint2(pixel));" in generated_code
     assert "float4 vectorOld = image.read(uint2(pixel)).x;" not in generated_code
     assert "image.write(float4(vectorOld + value), uint2(pixel));" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_metal_default_integer_storage_image_vector_load_store_from_compiler_fixture():
+    # Reduced from CrossGL-Compiler
+    # tests/frontend/fixtures/StorageImageHIRShader.cgl.
+    shader = """
+    shader StorageImageHIRShader {
+        compute {
+            layout(set = 0, binding = 0) uniform iimage2D labelImage;
+            layout(set = 0, binding = 1) uniform uimage2D maskImage;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 1);
+                ivec4 label2D = imageLoad(labelImage, pixel);
+                uvec4 mask2D = imageLoad(maskImage, pixel);
+                imageStore(labelImage, pixel, label2D);
+                imageStore(maskImage, pixel, mask2D);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert (
+        "texture2d<int, access::read_write> labelImage [[texture(0)]]" in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> maskImage [[texture(1)]]" in generated_code
+    )
+    assert "int4 label2D = labelImage.read(uint2(pixel));" in generated_code
+    assert "uint4 mask2D = maskImage.read(uint2(pixel));" in generated_code
+    assert "int4 label2D = labelImage.read(uint2(pixel)).x;" not in generated_code
+    assert "uint4 mask2D = maskImage.read(uint2(pixel)).x;" not in generated_code
+    assert "labelImage.write(label2D, uint2(pixel));" in generated_code
+    assert "maskImage.write(mask2D, uint2(pixel));" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
 

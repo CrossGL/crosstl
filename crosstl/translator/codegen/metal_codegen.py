@@ -1568,8 +1568,10 @@ class MetalCodeGen:
             resource_count = 1
             array_size = None
             if hasattr(node, "var_type"):
-                if hasattr(node.var_type, "name") or hasattr(
-                    node.var_type, "element_type"
+                if (
+                    hasattr(node.var_type, "name")
+                    or hasattr(node.var_type, "element_type")
+                    or isinstance(node.var_type, (PointerType, ReferenceType))
                 ):
                     if (
                         hasattr(node.var_type, "element_type")
@@ -14699,6 +14701,11 @@ class MetalCodeGen:
         self, raw_type, name, array_size=None, address_space="device"
     ):
         mapped_type = self.map_resource_type_with_format(raw_type)
+        if str(mapped_type).endswith("*"):
+            if array_size is not None:
+                array_size = array_size or "1"
+                return f"array<{address_space} {mapped_type}, {array_size}> {name}"
+            return f"{address_space} {mapped_type} {name}"
         if array_size is not None:
             return f"{address_space} {mapped_type}* {name}"
         return f"{address_space} {mapped_type}& {name}"
@@ -16844,7 +16851,11 @@ class MetalCodeGen:
     def global_resource_shape(self, node):
         resource_count = 1
         if hasattr(node, "var_type"):
-            if hasattr(node.var_type, "name") or hasattr(node.var_type, "element_type"):
+            if (
+                hasattr(node.var_type, "name")
+                or hasattr(node.var_type, "element_type")
+                or isinstance(node.var_type, (PointerType, ReferenceType))
+            ):
                 if (
                     hasattr(node.var_type, "element_type")
                     and str(type(node.var_type)).find("ArrayType") != -1
@@ -19255,7 +19266,8 @@ class MetalCodeGen:
             ),
             scalar_integer_resource=self.is_scalar_integer_image_resource(
                 image_type, image_format
-            ),
+            )
+            and self.expected_component_count() != 4,
             float_resource=self.is_float_image_resource(image_type),
         )
 

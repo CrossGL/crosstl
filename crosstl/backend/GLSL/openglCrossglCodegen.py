@@ -96,6 +96,7 @@ class GLSLToCrossGLConverter:
         "invariant": "invariant",
         "precise": "precise",
         "nonuniformext": "nonuniformEXT",
+        "spirv_by_reference": "spirv_by_reference",
         **VULKAN_MEMORY_MODEL_QUALIFIER_ATTRIBUTES,
         "lowp": "lowp",
         "mediump": "mediump",

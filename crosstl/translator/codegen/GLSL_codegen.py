@@ -12978,7 +12978,8 @@ class GLSLCodeGen:
             ),
             scalar_integer_resource=self.is_scalar_integer_image_resource(
                 texture_type, image_format
-            ),
+            )
+            and self.expected_component_count() != 4,
             float_resource=self.is_float_image_resource(texture_type),
         )
 

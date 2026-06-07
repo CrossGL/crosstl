@@ -23,6 +23,7 @@ from ..ast import (
     MemberAccessNode,
     MeshOpNode,
     PointerAccessNode,
+    PointerType,
     PreprocessorNode,
     RangeNode,
     RayQueryOpNode,
@@ -129,6 +130,7 @@ from .image_access_contracts import (
     TEXTURE_SAMPLING_INTRINSIC_NAMES,
     collect_function_image_access_requirements,
     collect_function_parameter_names,
+    default_storage_image_channel_count,
     explicit_image_format,
     floating_coordinate_dimension_from_type_name,
     image_access_diagnostic_name,
@@ -1262,8 +1264,10 @@ class HLSLCodeGen:
         for i, node in enumerate(global_vars):
             resource_count = 1
             if hasattr(node, "var_type"):
-                if hasattr(node.var_type, "name") or hasattr(
-                    node.var_type, "element_type"
+                if (
+                    hasattr(node.var_type, "name")
+                    or hasattr(node.var_type, "element_type")
+                    or isinstance(node.var_type, PointerType)
                 ):
                     if (
                         hasattr(node.var_type, "element_type")
@@ -6425,6 +6429,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if vtype is None:
                 vtype = getattr(node, "param_type", None)
 
+        pointee_type = self.hlsl_buffer_pointer_pointee_type(vtype)
+        if pointee_type:
+            resource_name = (
+                "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
+            )
+            return f"{resource_name}<{self.map_type(pointee_type)}>"
+
         type_name = self.type_name_string(vtype)
         if not type_name:
             return None
@@ -6438,6 +6449,25 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
         )
         return f"{resource_name}<{base_type}>"
+
+    def hlsl_buffer_pointer_pointee_type(self, vtype):
+        if isinstance(vtype, PointerType):
+            return self.hlsl_storage_buffer_element_type(
+                self.type_name_string(vtype.pointee_type)
+            )
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        if not type_name.endswith("*"):
+            return None
+        return self.hlsl_storage_buffer_element_type(type_name[:-1])
+
+    def hlsl_storage_buffer_element_type(self, type_name):
+        type_name = str(type_name or "").strip()
+        if type_name.startswith("atomic<") and type_name.endswith(">"):
+            return type_name[len("atomic<") : -1].strip() or None
+        return type_name or None
 
     def variable_type_by_name(self, name):
         if not name:
@@ -14311,11 +14341,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.hlsl_storage_image_component_kind(image_type)
 
     def image_load_channel_count(self, image_type, image_format):
+        component_type = self.hlsl_storage_image_component_type(image_type)
+        component_count = self.value_component_count(component_type)
+        if image_format is None and component_count == 1:
+            default_count = default_storage_image_channel_count(
+                self.hlsl_storage_image_component_kind(image_type)
+            )
+            if default_count is not None:
+                return default_count
         return image_format_or_default_channel_count(
             image_format,
-            self.value_component_count(
-                self.hlsl_storage_image_component_type(image_type)
-            ),
+            component_count,
         )
 
     def expected_component_kind(self):
@@ -14431,11 +14467,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def image_store_channel_count(self, image_type, image_format):
+        component_type = self.hlsl_storage_image_component_type(image_type)
+        component_count = self.value_component_count(component_type)
+        if image_format is None and component_count == 1:
+            default_count = default_storage_image_channel_count(
+                self.hlsl_storage_image_component_kind(image_type)
+            )
+            if default_count is not None:
+                return default_count
         return image_format_or_default_channel_count(
             image_format,
-            self.value_component_count(
-                self.hlsl_storage_image_component_type(image_type)
-            ),
+            component_count,
         )
 
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
@@ -14531,6 +14573,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return ".xyz"
         return ""
+
+    def hlsl_scalar_storage_image_vector_context(self, image_type, image_format):
+        if image_format is not None:
+            return False
+        component_type = self.hlsl_storage_image_component_type(image_type)
+        if self.value_component_count(component_type) != 1:
+            return False
+        if self.expected_component_count() != 4:
+            return False
+        return self.expected_component_kind() == self.hlsl_storage_image_component_kind(
+            image_type
+        )
+
+    def hlsl_scalar_storage_image_vector_value(
+        self, image_type, image_format, value_arg
+    ):
+        if image_format is not None:
+            return False
+        component_type = self.hlsl_storage_image_component_type(image_type)
+        if self.value_component_count(component_type) != 1:
+            return False
+        if self.expression_component_count(value_arg) != 4:
+            return False
+        return self.expression_component_kind(
+            value_arg
+        ) == self.hlsl_storage_image_component_kind(image_type)
 
     def three_component_image_store_constructor(self, texture_type):
         constructor = self.four_component_image_store_constructor(texture_type)
@@ -17315,7 +17383,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             return self.map_type(vtype)
 
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if isinstance(vtype, PointerType):
+            vtype_str = self.convert_type_node_to_string(vtype)
+        elif hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
@@ -18884,6 +18954,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 load_expr = f"{image_name}[{coord}]"
             image_format = self.image_resource_format(args[0])
             self.validate_image_load_result_type(texture_type, image_format)
+            if self.hlsl_scalar_storage_image_vector_context(
+                texture_type, image_format
+            ):
+                return self.hlsl_scalar_splat_cast(
+                    self.current_expression_expected_type, load_expr
+                )
             if self.four_component_image_store_constructor(
                 texture_type
             ) and self.is_scalar_value_type(self.current_expression_expected_type):
@@ -18954,6 +19030,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ):
                 constructor, zero_value = two_component_constructor
                 value = f"{constructor}({value}, {zero_value})"
+            if self.hlsl_scalar_storage_image_vector_value(
+                texture_type, image_format, value_arg
+            ):
+                value = f"({value}).x"
             return f"{store_target} = {value}"
 
         if len(args) < 2:
@@ -19059,6 +19139,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, PointerType):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
         if hasattr(type_node, "value"):
             value = type_node.value
             return str(value).lower() if isinstance(value, bool) else str(value)
@@ -19115,6 +19198,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """Map types to DirectX equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
             return "float"
+
+        if isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}*"
 
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
