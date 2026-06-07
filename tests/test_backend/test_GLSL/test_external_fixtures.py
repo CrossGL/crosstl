@@ -1006,6 +1006,35 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/Vulkan-Samples shaders/base.frag.
+    # Reduced from descriptor-set uniform blocks whose instance accesses should
+    # keep set/binding metadata when imported as CrossGL cbuffers.
+    ExternalFixture(
+        name="vulkan-samples-base-frag-descriptor-set-uniform-block",
+        repo=VULKAN_SAMPLES_REPO,
+        commit=VULKAN_SAMPLES_COMMIT,
+        path="shaders/base.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 450
+
+            layout(set = 0, binding = 1) uniform GlobalUniform
+            {
+                mat4 model;
+                mat4 view_proj;
+                vec3 camera_position;
+            }
+            global_uniform;
+
+            layout(location = 0) out vec4 o_color;
+
+            void main(void)
+            {
+                vec4 clip = global_uniform.view_proj * vec4(1.0);
+                o_color = clip + vec4(global_uniform.camera_position, 0.0);
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="vulkan-samples-buffer-device-address-reference-compute",
         repo=VULKAN_SAMPLES_REPO,
@@ -1706,6 +1735,33 @@ def test_parse_vulkan_samples_base_frag_push_constants_fixture():
     assert lights_info.layout == {"set": "0", "binding": "4"}
     assert spot_count.layout == {"constant_id": "2"}
     assert spot_count.value.value == "0U"
+
+
+def test_codegen_vulkan_samples_descriptor_set_uniform_block_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "vulkan-samples-base-frag-descriptor-set-uniform-block"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    block = next(struct for struct in ast.structs if struct.name == "GlobalUniform")
+    instance = next(var for var in ast.uniforms if var.name == "global_uniform")
+
+    assert block.interface_layout == {"set": "0", "binding": "1"}
+    assert instance.layout == {"set": "0", "binding": "1"}
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "cbuffer GlobalUniform @set(0) @binding(1) {" in crossgl
+    assert "mat4 view_proj;" in crossgl
+    assert "vec3 camera_position;" in crossgl
+    assert "global_uniform.view_proj" not in crossgl
+    assert "global_uniform.camera_position" not in crossgl
+    assert "vec4 clip = (view_proj * vec4(1.0));" in crossgl
+    assert "o_color = (clip + vec4(camera_position, 0.0));" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_parse_vulkan_samples_buffer_device_address_fixture():
