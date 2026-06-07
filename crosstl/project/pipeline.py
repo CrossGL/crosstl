@@ -6076,6 +6076,15 @@ def _inspection_source_map_artifact(
     if isinstance(mappings, list):
         sample["mappingCount"] = len(mappings)
 
+    source_hash = artifact.get("sourceHash")
+    if isinstance(source_hash, Mapping):
+        hash_algorithm = source_hash.get("algorithm")
+        hash_value = source_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["sourceHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["sourceHash"] = hash_value
+
     return {key: value for key, value in sample.items() if value is not None}
 
 
@@ -6098,6 +6107,14 @@ def _inspection_source_remap_artifact(
     }
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
+    source_hash = artifact.get("sourceHash")
+    if isinstance(source_hash, Mapping):
+        hash_algorithm = source_hash.get("algorithm")
+        hash_value = source_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["sourceHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["sourceHash"] = hash_value
     source_remap_hash = source_remap.get("hash")
     if isinstance(source_remap_hash, Mapping):
         hash_algorithm = source_remap_hash.get("algorithm")

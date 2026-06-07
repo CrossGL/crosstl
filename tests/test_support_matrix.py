@@ -1116,7 +1116,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert (
             "bounded source-map and source-remap artifact inspection samples "
-            "with sidecar hash metadata and custom limits"
+            "with source hash and sidecar hash metadata and custom limits"
         ) in backend_support["notes"]
         assert (
             "text inspection derives file-level source-map counts from total "

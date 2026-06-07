@@ -5942,11 +5942,23 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         artifact["variant"]
         for artifact in inspection["sourceMaps"]["sourceMapArtifacts"]
     } == {"debug", "release"}
+    assert all(
+        artifact["sourceHashAlgorithm"] == "sha256"
+        and isinstance(artifact["sourceHash"], str)
+        and artifact["sourceHash"]
+        for artifact in inspection["sourceMaps"]["sourceMapArtifacts"]
+    )
     assert inspection["sourceMaps"]["sourceRemapArtifactCount"] == 2
     assert {
         artifact["variant"]
         for artifact in inspection["sourceMaps"]["sourceRemapArtifacts"]
     } == {"debug", "release"}
+    assert all(
+        artifact["sourceHashAlgorithm"] == "sha256"
+        and isinstance(artifact["sourceHash"], str)
+        and artifact["sourceHash"]
+        for artifact in inspection["sourceMaps"]["sourceRemapArtifacts"]
+    )
     assert result.returncode == 0
     assert "Source maps by variant: debug=1, release=1" in result.stdout
     assert "Source remaps by variant: debug=1, release=1" in result.stdout
@@ -14697,6 +14709,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     report.write_json(report_path)
 
     payload = inspect_project_report(report_path)
+    source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
@@ -14730,6 +14743,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "mappingCount": len(
                     project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
                 ),
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
             }
         ],
         "sourceRemapCount": 1,
@@ -14745,6 +14760,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "file",
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
                 "sourceRemapHash": source_remap_hash["value"],
             }
@@ -15355,6 +15372,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     )
 
     payload = json.loads(output.read_text(encoding="utf-8"))
+    source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
@@ -15389,6 +15407,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "mappingCount": len(
                     project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
                 ),
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
             }
         ],
         "sourceRemapCount": 1,
@@ -15404,6 +15424,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "file",
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
                 "sourceRemapHash": source_remap_hash["value"],
             }
@@ -16187,10 +16209,12 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     line_mapping_count = len(
         project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
     )
+    source_hash = project_pipeline._source_hash(repo / "simple.cgl")
+    source_hash_preview = f"{source_hash['algorithm']}:{source_hash['value'][:12]}..."
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, granularity=line, "
-        f"mappings={line_mapping_count})"
+        f"mappings={line_mapping_count}, sourceHash={source_hash_preview})"
     ) in result.stdout
     assert "Source remap artifacts:" in result.stdout
     source_remap_hash = project_pipeline._source_hash(
@@ -16202,7 +16226,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, granularity=file, "
-        f"hash={source_remap_hash_preview})"
+        f"sourceHash={source_hash_preview}, hash={source_remap_hash_preview})"
     ) in result.stdout
     assert "Artifact provenance by pipeline: single-file-translate=1" in result.stdout
     assert "Artifact provenance by intermediate: none=1" in result.stdout
@@ -16264,15 +16288,19 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
     source_remap_hash_preview = (
         f"{source_remap_hash['algorithm']}:{source_remap_hash['value'][:12]}..."
     )
+    source_hash = project_pipeline._source_hash(repo / "simple.cgl")
+    source_hash_preview = f"{source_hash['algorithm']}:{source_hash['value'][:12]}..."
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, sourceMapTarget=opengl, "
-        f"granularity=line, mappings={line_mapping_count})"
+        f"granularity=line, mappings={line_mapping_count}, "
+        f"sourceHash={source_hash_preview})"
     ) in result.stdout
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, sourceRemapTarget=opengl, "
-        f"granularity=file, hash={source_remap_hash_preview})"
+        f"granularity=file, sourceHash={source_hash_preview}, "
+        f"hash={source_remap_hash_preview})"
     ) in result.stdout
 
 

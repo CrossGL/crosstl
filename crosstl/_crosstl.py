@@ -978,6 +978,12 @@ def _format_source_map_artifact_line(artifact):
         and mapping_count >= 0
     ):
         details.append(f"mappings={mapping_count}")
+    source_hash_preview = _format_hash_preview(
+        artifact.get("sourceHashAlgorithm"),
+        artifact.get("sourceHash"),
+    )
+    if source_hash_preview:
+        details.append(f"sourceHash={source_hash_preview}")
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {generated}{suffix}"
@@ -1047,6 +1053,12 @@ def _format_source_remap_artifact_line(artifact):
     granularity = artifact.get("mappingGranularity")
     if isinstance(granularity, str) and granularity:
         details.append(f"granularity={granularity}")
+    source_hash_preview = _format_hash_preview(
+        artifact.get("sourceHashAlgorithm"),
+        artifact.get("sourceHash"),
+    )
+    if source_hash_preview:
+        details.append(f"sourceHash={source_hash_preview}")
     hash_preview = _format_hash_preview(
         artifact.get("sourceRemapHashAlgorithm"),
         artifact.get("sourceRemapHash"),
