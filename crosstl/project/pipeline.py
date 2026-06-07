@@ -4615,6 +4615,16 @@ def inspect_project_report(
     run_toolchains: bool = False,
     max_diagnostics: int = 20,
     max_failed_artifacts: int = 20,
+    max_source_map_artifacts: int = SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
+    max_artifact_matrix_artifacts: int = ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT,
+    max_artifact_provenance_artifacts: int = (
+        ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT
+    ),
+    max_define_processing_artifacts: int = DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+    max_include_path_processing_artifacts: int = (
+        INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT
+    ),
+    max_include_dependencies: int = INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
     max_validation_artifacts: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_toolchain_runs: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_migration_actions: int = MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
@@ -4625,6 +4635,15 @@ def inspect_project_report(
     validation_report = validate_project_report(path, run_toolchains=run_toolchains)
     diagnostic_limit = max(0, max_diagnostics)
     failed_artifact_limit = max(0, max_failed_artifacts)
+    source_map_artifact_limit = max(0, max_source_map_artifacts)
+    artifact_matrix_artifact_limit = max(0, max_artifact_matrix_artifacts)
+    artifact_provenance_artifact_limit = max(0, max_artifact_provenance_artifacts)
+    define_processing_artifact_limit = max(0, max_define_processing_artifacts)
+    include_path_processing_artifact_limit = max(
+        0,
+        max_include_path_processing_artifacts,
+    )
+    include_dependency_limit = max(0, max_include_dependencies)
     validation_artifact_limit = max(0, max_validation_artifacts)
     toolchain_run_limit = max(0, max_toolchain_runs)
     migration_action_limit = max(0, max_migration_actions)
@@ -4813,28 +4832,34 @@ def inspect_project_report(
     payload["sourceMaps"] = _inspection_source_map_summary(
         summary,
         report.get("artifacts"),
+        sample_limit=source_map_artifact_limit,
     )
     payload["artifactProvenance"] = _inspection_artifact_provenance_summary(
         summary,
         report.get("artifacts"),
+        sample_limit=artifact_provenance_artifact_limit,
     )
     payload["defineProcessing"] = _inspection_define_processing_summary(
         summary,
         report.get("artifacts"),
+        sample_limit=define_processing_artifact_limit,
     )
     payload["includeDependencies"] = _inspection_include_dependency_summary(
         summary,
         report.get("units"),
+        sample_limit=include_dependency_limit,
     )
     payload["includePathProcessing"] = _inspection_include_path_processing_summary(
         summary,
         report.get("artifacts"),
+        sample_limit=include_path_processing_artifact_limit,
     )
     payload["artifactMatrix"] = _inspection_artifact_matrix_summary(
         report.get("artifactMatrix"),
         report.get("artifacts"),
         project=project,
         units=report.get("units"),
+        sample_limit=artifact_matrix_artifact_limit,
     )
 
     artifacts = report.get("artifacts", [])
@@ -4976,7 +5001,9 @@ def _inspection_artifact_matrix_summary(
     *,
     project: Any = None,
     units: Any = None,
+    sample_limit: int = ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
     matrix_source = "report"
     for _attempt in range(2):
         if isinstance(artifact_matrix, Mapping):
@@ -5066,11 +5093,11 @@ def _inspection_artifact_matrix_summary(
     extra_identity_list = sorted(extra_identities or ())
     missing_samples = [
         _artifact_identity_payload(identity)
-        for identity in missing_identity_list[:ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT]
+        for identity in missing_identity_list[:sample_limit]
     ]
     extra_samples = [
         _artifact_identity_payload(identity)
-        for identity in extra_identity_list[:ARTIFACT_MATRIX_INSPECTION_SAMPLE_LIMIT]
+        for identity in extra_identity_list[:sample_limit]
     ]
     return {
         "available": True,
@@ -5295,7 +5322,10 @@ def _inspection_unsupported_define_processing_artifact(
 def _inspection_define_processing_summary(
     summary: Any,
     artifacts: Any = None,
+    *,
+    sample_limit: int = DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -5337,20 +5367,15 @@ def _inspection_define_processing_summary(
         "artifactCount": len(define_processing_artifacts),
         "truncatedArtifactCount": max(
             0,
-            len(define_processing_artifacts)
-            - DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+            len(define_processing_artifacts) - sample_limit,
         ),
-        "artifacts": define_processing_artifacts[
-            :DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT
-        ],
+        "artifacts": define_processing_artifacts[:sample_limit],
         "notSupportedArtifactCount": len(not_supported_artifacts),
         "truncatedNotSupportedArtifactCount": max(
             0,
-            len(not_supported_artifacts) - DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+            len(not_supported_artifacts) - sample_limit,
         ),
-        "notSupportedArtifacts": not_supported_artifacts[
-            :DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT
-        ],
+        "notSupportedArtifacts": not_supported_artifacts[:sample_limit],
     }
 
 
@@ -5401,7 +5426,10 @@ def _inspection_unsupported_include_path_processing_artifact(
 def _inspection_include_path_processing_summary(
     summary: Any,
     artifacts: Any = None,
+    *,
+    sample_limit: int = INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -5443,21 +5471,15 @@ def _inspection_include_path_processing_summary(
         "artifactCount": len(include_path_processing_artifacts),
         "truncatedArtifactCount": max(
             0,
-            len(include_path_processing_artifacts)
-            - INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+            len(include_path_processing_artifacts) - sample_limit,
         ),
-        "artifacts": include_path_processing_artifacts[
-            :INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT
-        ],
+        "artifacts": include_path_processing_artifacts[:sample_limit],
         "notSupportedArtifactCount": len(not_supported_artifacts),
         "truncatedNotSupportedArtifactCount": max(
             0,
-            len(not_supported_artifacts)
-            - INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+            len(not_supported_artifacts) - sample_limit,
         ),
-        "notSupportedArtifacts": not_supported_artifacts[
-            :INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT
-        ],
+        "notSupportedArtifacts": not_supported_artifacts[:sample_limit],
     }
 
 
@@ -5500,7 +5522,10 @@ def _inspection_include_dependency_sample(
 def _inspection_include_dependency_summary(
     summary: Any,
     units: Any,
+    *,
+    sample_limit: int = INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -5579,19 +5604,15 @@ def _inspection_include_dependency_summary(
         "resolvedDependencyCount": len(resolved_dependencies),
         "truncatedResolvedDependencyCount": max(
             0,
-            len(resolved_dependencies) - INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
+            len(resolved_dependencies) - sample_limit,
         ),
-        "resolvedDependencies": resolved_dependencies[
-            :INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT
-        ],
+        "resolvedDependencies": resolved_dependencies[:sample_limit],
         "unresolvedDependencyCount": len(unresolved_dependencies),
         "truncatedUnresolvedDependencyCount": max(
             0,
-            len(unresolved_dependencies) - INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
+            len(unresolved_dependencies) - sample_limit,
         ),
-        "unresolvedDependencies": unresolved_dependencies[
-            :INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT
-        ],
+        "unresolvedDependencies": unresolved_dependencies[:sample_limit],
     }
 
 
@@ -5651,7 +5672,10 @@ def _inspection_source_remap_artifact(
 def _inspection_source_map_summary(
     summary: Any,
     artifacts: Any = None,
+    *,
+    sample_limit: int = SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -5686,17 +5710,15 @@ def _inspection_source_map_summary(
         "sourceMapArtifactCount": len(source_map_artifacts),
         "truncatedSourceMapArtifactCount": max(
             0,
-            len(source_map_artifacts) - SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
+            len(source_map_artifacts) - sample_limit,
         ),
-        "sourceMapArtifacts": source_map_artifacts[:SOURCE_MAP_INSPECTION_SAMPLE_LIMIT],
+        "sourceMapArtifacts": source_map_artifacts[:sample_limit],
         "sourceRemapArtifactCount": len(source_remap_artifacts),
         "truncatedSourceRemapArtifactCount": max(
             0,
-            len(source_remap_artifacts) - SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
+            len(source_remap_artifacts) - sample_limit,
         ),
-        "sourceRemapArtifacts": source_remap_artifacts[
-            :SOURCE_MAP_INSPECTION_SAMPLE_LIMIT
-        ],
+        "sourceRemapArtifacts": source_remap_artifacts[:sample_limit],
     }
     source_remap_count = summary.get("sourceRemapCount")
     if (
@@ -5748,7 +5770,10 @@ def _inspection_artifact_provenance_artifact(
 def _inspection_artifact_provenance_summary(
     summary: Any,
     artifacts: Any = None,
+    *,
+    sample_limit: int = ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
     if not isinstance(summary, Mapping):
         return {"available": False}
 
@@ -5784,9 +5809,9 @@ def _inspection_artifact_provenance_summary(
         "artifactCount": len(provenance_artifacts),
         "truncatedArtifactCount": max(
             0,
-            len(provenance_artifacts) - ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT,
+            len(provenance_artifacts) - sample_limit,
         ),
-        "artifacts": provenance_artifacts[:ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT],
+        "artifacts": provenance_artifacts[:sample_limit],
     }
 
 

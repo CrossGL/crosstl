@@ -13439,11 +13439,30 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
     payload = inspect_project_report(
         report_path,
         run_toolchains=True,
+        max_source_map_artifacts=2,
+        max_artifact_provenance_artifacts=2,
+        max_define_processing_artifacts=2,
+        max_include_path_processing_artifacts=2,
         max_validation_artifacts=2,
         max_toolchain_runs=3,
         max_migration_actions=4,
     )
 
+    assert payload["sourceMaps"]["sourceMapArtifactCount"] == 4
+    assert payload["sourceMaps"]["truncatedSourceMapArtifactCount"] == 2
+    assert len(payload["sourceMaps"]["sourceMapArtifacts"]) == 2
+    assert payload["sourceMaps"]["sourceRemapArtifactCount"] == 4
+    assert payload["sourceMaps"]["truncatedSourceRemapArtifactCount"] == 2
+    assert len(payload["sourceMaps"]["sourceRemapArtifacts"]) == 2
+    assert payload["artifactProvenance"]["artifactCount"] == 4
+    assert payload["artifactProvenance"]["truncatedArtifactCount"] == 2
+    assert len(payload["artifactProvenance"]["artifacts"]) == 2
+    assert payload["defineProcessing"]["artifactCount"] == 4
+    assert payload["defineProcessing"]["truncatedArtifactCount"] == 2
+    assert len(payload["defineProcessing"]["artifacts"]) == 2
+    assert payload["includePathProcessing"]["artifactCount"] == 4
+    assert payload["includePathProcessing"]["truncatedArtifactCount"] == 2
+    assert len(payload["includePathProcessing"]["artifacts"]) == 2
     assert payload["validation"]["artifactCount"] == 4
     assert payload["validation"]["truncatedArtifactCount"] == 2
     assert len(payload["validation"]["artifacts"]) == 2
@@ -13453,6 +13472,41 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
     assert payload["migration"]["actionCount"] == 5
     assert payload["migration"]["truncatedActionCount"] == 1
     assert len(payload["migration"]["actions"]) == 4
+
+
+def test_inspect_project_report_applies_artifact_matrix_sample_limit(tmp_path):
+    report_path = _write_count_balanced_artifact_gap_report(tmp_path / "repo")
+
+    payload = inspect_project_report(report_path, max_artifact_matrix_artifacts=0)
+
+    artifact_matrix = payload["artifactMatrix"]
+    assert artifact_matrix["missingArtifactCount"] == 1
+    assert artifact_matrix["truncatedMissingArtifactCount"] == 1
+    assert artifact_matrix["missingArtifacts"] == []
+    assert artifact_matrix["extraArtifactCount"] == 1
+    assert artifact_matrix["truncatedExtraArtifactCount"] == 1
+    assert artifact_matrix["extraArtifacts"] == []
+
+
+def test_inspect_project_report_applies_include_dependency_sample_limit(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    includes = "\n".join(f'#include "missing-{index}.inc"' for index in range(4))
+    (repo / "main.frag").write_text(
+        f"#version 450\n{includes}\nvoid main() {{}}\n",
+        encoding="utf-8",
+    )
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = inspect_project_report(report_path, max_include_dependencies=2)
+
+    include_dependencies = payload["includeDependencies"]
+    assert include_dependencies["dependencyCount"] == 4
+    assert include_dependencies["unresolvedDependencyCount"] == 4
+    assert include_dependencies["truncatedUnresolvedDependencyCount"] == 2
+    assert len(include_dependencies["unresolvedDependencies"]) == 2
 
 
 def test_project_cli_inspect_report_writes_json_summary(tmp_path):
@@ -14932,6 +14986,12 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
     (
         "--max-diagnostics",
         "--max-failed-artifacts",
+        "--max-source-map-artifacts",
+        "--max-artifact-matrix-artifacts",
+        "--max-artifact-provenance-artifacts",
+        "--max-define-processing-artifacts",
+        "--max-include-path-processing-artifacts",
+        "--max-include-dependencies",
         "--max-validation-artifacts",
         "--max-toolchain-runs",
         "--max-migration-actions",

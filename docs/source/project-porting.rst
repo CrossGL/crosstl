@@ -202,6 +202,12 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --format text \
      --max-diagnostics 20 \
      --max-failed-artifacts 20 \
+     --max-source-map-artifacts 20 \
+     --max-artifact-matrix-artifacts 20 \
+     --max-artifact-provenance-artifacts 20 \
+     --max-define-processing-artifacts 20 \
+     --max-include-path-processing-artifacts 20 \
+     --max-include-dependencies 20 \
      --max-validation-artifacts 20 \
      --max-toolchain-runs 20 \
      --max-migration-actions 20 \
@@ -225,7 +231,7 @@ truncation counts, external corpus rollups, sampled missing and
 present-but-undiscovered external corpus entries with configurable sample
 limits, and migration actions.
 Inspection sample-limit options accept non-negative integer counts and default
-to ``20``.
+to ``20`` for each sampled report section.
 The JSON inspection report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift while optional report sections
 remain data-dependent.

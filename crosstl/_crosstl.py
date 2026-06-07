@@ -2431,6 +2431,14 @@ def _run_inspect_report(args):
         run_toolchains=args.run_toolchains,
         max_diagnostics=args.max_diagnostics,
         max_failed_artifacts=args.max_failed_artifacts,
+        max_source_map_artifacts=args.max_source_map_artifacts,
+        max_artifact_matrix_artifacts=args.max_artifact_matrix_artifacts,
+        max_artifact_provenance_artifacts=args.max_artifact_provenance_artifacts,
+        max_define_processing_artifacts=args.max_define_processing_artifacts,
+        max_include_path_processing_artifacts=(
+            args.max_include_path_processing_artifacts
+        ),
+        max_include_dependencies=args.max_include_dependencies,
         max_validation_artifacts=args.max_validation_artifacts,
         max_toolchain_runs=args.max_toolchain_runs,
         max_migration_actions=args.max_migration_actions,
@@ -2578,6 +2586,42 @@ def _build_parser():
         type=_non_negative_int,
         default=20,
         help="Maximum failed artifacts to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-source-map-artifacts",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum source-map and source-remap artifact samples to include",
+    )
+    inspect_parser.add_argument(
+        "--max-artifact-matrix-artifacts",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum missing or extra artifact-matrix samples to include",
+    )
+    inspect_parser.add_argument(
+        "--max-artifact-provenance-artifacts",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum artifact provenance samples to include",
+    )
+    inspect_parser.add_argument(
+        "--max-define-processing-artifacts",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum define-processing artifact samples to include",
+    )
+    inspect_parser.add_argument(
+        "--max-include-path-processing-artifacts",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum include-path processing artifact samples to include",
+    )
+    inspect_parser.add_argument(
+        "--max-include-dependencies",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum resolved or unresolved include dependency samples to include",
     )
     inspect_parser.add_argument(
         "--max-validation-artifacts",
