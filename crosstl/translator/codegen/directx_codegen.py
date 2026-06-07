@@ -860,6 +860,8 @@ class HLSLCodeGen:
             "VertexID": "VERTEX_ID",
             "gl_Position": "SV_POSITION",
             "gl_FragCoord": "SV_Position",
+            "gl_BaryCoordEXT": "SV_Barycentrics",
+            "gl_BaryCoordNoPerspEXT": "SV_Barycentrics",
             "gl_PointSize": "PSIZE",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
@@ -8259,6 +8261,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 mode = self.HLSL_INTERPOLATION_MODE_MODIFIERS.get(name)
             if sampling is None:
                 sampling = self.HLSL_INTERPOLATION_SAMPLING_MODIFIERS.get(name)
+        if mode is None and self.semantic_from_node(node) == "gl_BaryCoordNoPerspEXT":
+            mode = "noperspective"
 
         modifiers = []
         for modifier in (mode, sampling):

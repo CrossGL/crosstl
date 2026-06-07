@@ -478,6 +478,7 @@ class SlangToCrossGLConverter:
             "SV_IsFrontFace": "gl_FrontFacing",
             "SV_SampleIndex": "gl_SampleID",
             "SV_Coverage": "gl_SampleMask",
+            "SV_Barycentrics": "gl_BaryCoordEXT",
             # Fragment outputs
             "SV_Target": "Out_Color",
             "SV_Target0": "Out_Color0",
@@ -512,9 +513,6 @@ class SlangToCrossGLConverter:
             semantic.lower(): mapped
             for semantic, mapped in self.semantic_map.items()
             if semantic.lower().startswith("sv_")
-        }
-        self.hlsl_passthrough_system_semantic_map = {
-            semantic.lower(): semantic for semantic in ("SV_Barycentrics",)
         }
         self.interpolation_qualifiers = {
             "centroid",
@@ -2735,6 +2733,13 @@ class SlangToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_no_perspective_barycentric_parameter(self, parameter):
+        qualifiers = {
+            str(qualifier).strip().lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return any("noperspective" in qualifier for qualifier in qualifiers)
+
     def map_semantic(self, semantic, function_qualifier=None, parameter=None):
         """Map a Slang semantic to CrossGL semantic annotation syntax."""
         if semantic is None:
@@ -2742,6 +2747,10 @@ class SlangToCrossGLConverter:
         ray_payload_access = self.map_ray_payload_access_semantic(semantic)
         if ray_payload_access:
             return ray_payload_access
+        if str(semantic).lower() == "sv_barycentrics":
+            if self.is_no_perspective_barycentric_parameter(parameter):
+                return "@ gl_BaryCoordNoPerspEXT"
+            return "@ gl_BaryCoordEXT"
         if self.is_fragment_position_input_parameter(
             semantic, function_qualifier, parameter
         ):
@@ -2749,10 +2758,6 @@ class SlangToCrossGLConverter:
         mapped_semantic = self.semantic_map.get(semantic)
         if mapped_semantic is None:
             mapped_semantic = self.hlsl_system_semantic_map.get(str(semantic).lower())
-        if mapped_semantic is None:
-            mapped_semantic = self.hlsl_passthrough_system_semantic_map.get(
-                str(semantic).lower()
-            )
         if mapped_semantic is None:
             texcoord_match = re.fullmatch(r"TEXCOORD(\d+)", str(semantic).upper())
             if texcoord_match:

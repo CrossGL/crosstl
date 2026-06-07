@@ -820,6 +820,28 @@ def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     parse_crossgl(crossgl)
 
 
+def test_codegen_canonicalizes_fragment_barycentric_semantics():
+    crossgl = generate_crossgl("""
+        float4 PSMain(
+            float3 bary : SV_Barycentrics,
+            noperspective float3 affineBary : SV_Barycentrics
+        ) : SV_Target0 {
+            return float4(bary + affineBary, 1.0);
+        }
+    """)
+
+    assert "vec3 bary @ gl_BaryCoordEXT" in crossgl
+    assert "vec3 affineBary @ gl_BaryCoordNoPerspEXT @ noperspective" in crossgl
+    assert "@ SV_Barycentrics" not in crossgl
+    parse_crossgl(crossgl)
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "float3 bary : SV_Barycentrics" in regenerated_hlsl
+    assert "noperspective float3 affineBary : SV_Barycentrics" in regenerated_hlsl
+    assert "gl_BaryCoord" not in regenerated_hlsl
+
+
 def test_codegen_canonicalizes_high_texcoord_interpolation_metadata():
     crossgl = generate_crossgl("""
         struct PSInput {

@@ -600,6 +600,31 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     cgl_translator.parse(generated_code)
 
 
+def test_barycentric_system_semantics_codegen_canonicalizes_fragment_parameters():
+    code = """
+    [shader("fragment")]
+    float4 perspectiveMain(float3 bary : SV_Barycentrics) : SV_Target0
+    {
+        return float4(bary, 1.0);
+    }
+
+    [shader("fragment")]
+    float4 noPerspectiveMain(noperspective float3 bary : SV_Barycentrics) : SV_Target1
+    {
+        return float4(bary, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec3 bary @ gl_BaryCoordEXT" in generated_code
+    assert "noperspective vec3 bary @ gl_BaryCoordNoPerspEXT" in generated_code
+    assert "@ SV_Barycentrics" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_target_and_depth_system_semantics_codegen_canonicalizes_dynamic_variants():
     code = """
     [shader("fragment")]

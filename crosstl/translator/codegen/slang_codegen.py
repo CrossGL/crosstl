@@ -277,6 +277,8 @@ class SlangCodeGen:
             "gl_FragCoord": "SV_Position",
             "gl_PointCoord": "SV_PointCoord",
             "gl_FrontFacing": "SV_IsFrontFace",
+            "gl_BaryCoordEXT": "SV_Barycentrics",
+            "gl_BaryCoordNoPerspEXT": "SV_Barycentrics",
             "gl_FragDepth": "SV_Depth",
             "gl_FragStencilRefEXT": "SV_StencilRef",
             "gl_FragColor": "SV_Target",
@@ -3759,6 +3761,8 @@ class SlangCodeGen:
             "gl_localinvocationid",
             "gl_localinvocationindex",
             "gl_pointcoord",
+            "gl_barycoordext",
+            "gl_barycoordnoperspext",
             "gl_sampleid",
             "gl_samplemaskin",
             "gl_tesscoord",
@@ -3913,6 +3917,7 @@ class SlangCodeGen:
                 "SV_PRIMITIVEID": "uint",
                 "SV_COVERAGE": "uint",
                 "SV_SAMPLEINDEX": "uint",
+                "SV_BARYCENTRICS": "float3",
                 "SV_RENDERTARGETARRAYINDEX": "uint",
                 "SV_VIEWPORTARRAYINDEX": "uint",
             },
@@ -4529,6 +4534,10 @@ class SlangCodeGen:
             if mapped and mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)
+        for mapped in self.slang_semantic_implied_interpolation_qualifiers(node):
+            if mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
 
         if not qualifiers:
             return ""
@@ -4548,6 +4557,10 @@ class SlangCodeGen:
             if mapped and mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)
+        for mapped in self.slang_semantic_implied_interpolation_qualifiers(node):
+            if mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
 
         if not qualifiers:
             return ""
@@ -4555,6 +4568,14 @@ class SlangCodeGen:
 
     def slang_interpolation_qualifier(self, qualifier):
         return self.SLANG_INTERPOLATION_QUALIFIER_MAP.get(str(qualifier).lower())
+
+    def slang_semantic_implied_interpolation_qualifiers(self, node):
+        semantic = self.semantic_from_node(node)
+        if semantic is None:
+            return []
+        if str(semantic).lower() == "gl_barycoordnoperspext":
+            return ["noperspective"]
+        return []
 
     def slang_interpolation_attribute_prefix(self, node):
         qualifiers = []

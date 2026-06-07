@@ -4664,6 +4664,27 @@ def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
     assert "gl_SampleMaskIn" not in generated
 
 
+def test_hlsl_barycentric_builtin_inputs_use_sv_barycentrics():
+    code = """
+    shader BarycentricInputs {
+        fragment {
+            vec4 main(
+                vec3 bary @ gl_BaryCoordEXT,
+                vec3 affineBary @ gl_BaryCoordNoPerspEXT
+            ) @ gl_FragColor {
+                return vec4(bary + affineBary, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float3 bary : SV_Barycentrics" in generated
+    assert "noperspective float3 affineBary : SV_Barycentrics" in generated
+    assert "gl_BaryCoord" not in generated
+
+
 def test_hlsl_point_size_uses_legacy_psize_semantic():
     code = """
     shader PointSizeOutput {

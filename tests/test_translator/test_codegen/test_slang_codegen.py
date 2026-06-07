@@ -5631,6 +5631,44 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_GlobalInvocationID" not in generated_code
 
 
+def test_barycentric_semantics_map_to_slang_system_value():
+    perspective_code = """
+    shader BarycentricPerspectiveShader {
+        fragment {
+            vec4 main(vec3 bary @ gl_BaryCoordEXT) @ gl_FragColor {
+                return vec4(bary, 1.0);
+            }
+        }
+    }
+    """
+    perspective_generated = generate_code(parse_code(tokenize_code(perspective_code)))
+
+    assert (
+        "float4 main(float3 bary : SV_Barycentrics) : SV_Target"
+        in perspective_generated
+    )
+    assert ": gl_BaryCoordEXT" not in perspective_generated
+
+    no_perspective_code = """
+    shader BarycentricNoPerspectiveShader {
+        fragment {
+            vec4 main(vec3 bary @ gl_BaryCoordNoPerspEXT) @ gl_FragColor {
+                return vec4(bary, 1.0);
+            }
+        }
+    }
+    """
+    no_perspective_generated = generate_code(
+        parse_code(tokenize_code(no_perspective_code))
+    )
+
+    assert (
+        "float4 main(noperspective float3 bary : SV_Barycentrics) : SV_Target"
+        in no_perspective_generated
+    )
+    assert ": gl_BaryCoordNoPerspEXT" not in no_perspective_generated
+
+
 def test_struct_semantics_validate_builtin_types_and_stage_context_for_slang():
     valid_code = """
     shader StructSemantics {

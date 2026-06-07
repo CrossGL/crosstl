@@ -1629,7 +1629,7 @@ class HLSLToCrossGLConverter:
 
     def format_semantic_and_interpolation_attributes(self, node, semantic):
         attributes = []
-        mapped_semantic = self.map_semantic(semantic)
+        mapped_semantic = self.map_semantic(semantic, parameter=node)
         if mapped_semantic:
             attributes.append(mapped_semantic)
         interpolation_attributes = self.format_interpolation_attributes(node)
@@ -4292,6 +4292,20 @@ class HLSLToCrossGLConverter:
         }
         return not qualifiers.intersection({"out", "inout"})
 
+    def is_barycentric_semantic(self, semantic):
+        return bool(
+            semantic and re.fullmatch(r"SV_BARYCENTRICS\d*", str(semantic).upper())
+        )
+
+    def is_noperspective_barycentric(self, semantic, node=None):
+        if not self.is_barycentric_semantic(semantic):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        return any("noperspective" in qualifier for qualifier in qualifiers)
+
     def map_semantic(self, semantic, function_qualifier=None, parameter=None):
         """Map an HLSL semantic to CrossGL semantic annotation syntax."""
         if not semantic:
@@ -4311,6 +4325,13 @@ class HLSLToCrossGLConverter:
             semantic, function_qualifier, parameter
         ):
             return "@ gl_FragCoord"
+        if self.is_barycentric_semantic(semantic):
+            mapped = (
+                "gl_BaryCoordNoPerspEXT"
+                if self.is_noperspective_barycentric(semantic, parameter)
+                else "gl_BaryCoordEXT"
+            )
+            return f"@ {mapped}"
         mapped = self.semantic_map.get(semantic)
         if mapped is None and isinstance(semantic, str):
             semantic_upper = semantic.upper()

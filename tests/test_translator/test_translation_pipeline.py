@@ -379,7 +379,7 @@ def test_directx_real_world_extensions_translate_to_crossgl(tmp_path, filename):
     _assert_generated_output_is_usable(generated)
     crosstl.translator.parse(generated)
     assert "fragment {" in generated
-    assert "vec4 main(vec4 pos @ gl_Position) @ gl_FragColor" in generated
+    assert "vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated
 
 
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
