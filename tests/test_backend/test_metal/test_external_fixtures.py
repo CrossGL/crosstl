@@ -275,6 +275,32 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "metal_scoped_member_definition_with_trailing_const",
+        "repo_url": APPLE_MSL_SPEC_URL,
+        "commit": APPLE_MSL_SPEC_VERSION,
+        "source_path": "Metal Shading Language Specification, C++ function syntax",
+        "roundtrip": True,
+        "contains": [
+            "struct ToneMapper {",
+            "float ToneMapper_u3a_u3aapply(float value)",
+            "return value * exposure;",
+        ],
+        "source": (
+            """
+            using namespace metal;
+
+            struct ToneMapper {
+                float exposure;
+                float apply(float value) const;
+            };
+
+            float ToneMapper::apply(float value) const {
+                return value * exposure;
+            }
+        """
+        ),
+    },
+    {
         "name": "apple_imageblock_pixel_format_member_payload_type",
         "repo_url": APPLE_SAMPLE_REPO,
         "commit": APPLE_SAMPLE_COMMIT,

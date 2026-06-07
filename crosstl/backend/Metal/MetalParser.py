@@ -2159,10 +2159,12 @@ class MetalParser:
 
         post_attributes = self.parse_attributes()
         attributes.extend(post_attributes)
+        self.parse_function_method_qualifiers()
         trailing_return_type = self.parse_optional_trailing_return_type(attributes)
         if trailing_return_type is not None:
             return_type = trailing_return_type
             attributes.extend(self.parse_attributes())
+            self.parse_function_method_qualifiers()
         attribute_qualifier, attributes = self.extract_stage_attributes(attributes)
         if qualifier is None:
             qualifier = attribute_qualifier
@@ -2184,6 +2186,28 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+
+    def parse_function_method_qualifiers(self):
+        while self.current_token[0] in {"CONST", "VOLATILE", "BITWISE_AND", "AND"}:
+            self.eat(self.current_token[0])
+
+        if self.current_token == ("IDENTIFIER", "noexcept"):
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "LPAREN":
+                self.parse_balanced_token_text(
+                    "LPAREN",
+                    "RPAREN",
+                    error_message="Unterminated noexcept qualifier",
+                )
+
+        while self.current_token == (
+            "IDENTIFIER",
+            "override",
+        ) or self.current_token == (
+            "IDENTIFIER",
+            "final",
+        ):
+            self.eat("IDENTIFIER")
 
     def parse_function_operator_suffix(self, name):
         if (
