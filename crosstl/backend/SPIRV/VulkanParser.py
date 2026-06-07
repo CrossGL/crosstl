@@ -1363,6 +1363,21 @@ class VulkanParser:
                     expression_type_ids[result_id] = operands[0]
                     continue
 
+            if result_id and opcode == "OpImageSparseRead" and len(operands) >= 3:
+                expressions[result_id] = (
+                    self.spirv_assembly_image_sparse_read_expression(
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
             if result_id and opcode in {"OpImageGather", "OpImageDrefGather"}:
                 if len(operands) >= 4:
                     expressions[result_id] = (
@@ -3107,7 +3122,12 @@ class VulkanParser:
     def spirv_sparse_image_result_extract_expression(self, expression, member_index):
         if not (
             isinstance(expression, FunctionCallNode)
-            and expression.name.startswith("spirvImageSparseSample")
+            and expression.name.startswith(
+                (
+                    "spirvImageSparseSample",
+                    "spirvImageSparseRead",
+                )
+            )
         ):
             return None
 
@@ -3441,6 +3461,37 @@ class VulkanParser:
 
         dref = "Dref" if "Dref" in opcode else ""
         return f"spirvImageSparseSample{dref}{suffix}"
+
+    def spirv_assembly_image_sparse_read_expression(
+        self,
+        image_operand,
+        coordinate_operand,
+        image_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        read = self.spirv_assembly_image_read_expression(
+            image_operand,
+            coordinate_operand,
+            image_operands,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
+        function_name = self.spirv_sparse_image_read_function_name(read.name)
+        return FunctionCallNode(function_name, read.args)
+
+    def spirv_sparse_image_read_function_name(self, read_function_name):
+        if read_function_name == "imageLoad":
+            return "spirvImageSparseRead"
+        if read_function_name.startswith("spirvImageLoad"):
+            suffix = read_function_name[len("spirvImageLoad") :]
+            return f"spirvImageSparseRead{suffix}"
+        suffix = self.spirv_fallback_identifier(read_function_name, "read")
+        return f"spirvImageSparseRead{suffix}"
 
     def spirv_assembly_image_gather_expression(
         self,

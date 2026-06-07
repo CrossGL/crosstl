@@ -5,6 +5,7 @@ from crosstl.backend.HIP.HipAst import (
     HipAsmNode,
     IfNode,
     KernelLaunchNode,
+    KernelNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -66,6 +67,11 @@ EXTERNAL_FIXTURE_SOURCES = {
             "catch/unit/math/integer_intrinsics.cc",
             "catch/unit/deviceLib/popc.cc",
         ],
+    },
+    "llvm_project": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
+        "paths": ["clang/test/SemaCUDA/amdgpu-attrs.cu"],
     },
     "hip_kittens": {
         "url": "https://github.com/HazyResearch/HipKittens",
@@ -639,6 +645,30 @@ def test_external_hpc_training_double2_launch_codegen():
     assert "// HIP launch bounds: (256, 1)" in crossgl
     assert "array<vec2<f64>>" in crossgl
     assert "ptr<vec2<f64>>(d_x)" in crossgl
+
+
+def test_external_llvm_amdgpu_attribute_before_global_codegen_reparse():
+    # Upstream:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff
+    # path: clang/test/SemaCUDA/amdgpu-attrs.cu
+    source = """
+    __attribute__((amdgpu_flat_work_group_size(32, 64)))
+    __global__ void flat_work_group_size_32_64(float* out) {
+        out[threadIdx.x] = 1.0f;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    kernel = ast.statements[0]
+
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "flat_work_group_size_32_64"
+    assert kernel.attributes == ["__attribute__((amdgpu_flat_work_group_size(32,64)))"]
+    assert "// HIP AMDGPU flat work group size: (32, 64)" in crossgl
+    assert "fn flat_work_group_size_32_64(" in crossgl
+    assert "out[gl_LocalInvocationID.x] = 1.0f;" in crossgl
+    assert "__attribute__" not in crossgl
 
 
 def test_external_rocm_dynamic_shared_extern_crossgl_reparse():

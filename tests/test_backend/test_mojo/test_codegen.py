@@ -642,6 +642,30 @@ def test_identifier_tuple_declaration_and_assignment_codegen_from_layout_tensor_
     assert "(row, col) = (0, 0);" in generated_code
 
 
+def test_parenthesized_tuple_var_declaration_codegen_from_modular_sm90_matmul():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
+    # max/kernels/src/linalg/matmul/gpu/sm90/matmul_kernels.mojo lines 895-902.
+    code = """
+    def kernel():
+        var (
+            warp_group_idx,
+            warp_group_thread_idx,
+            rank_m,
+            rank_n,
+            warp_id,
+            lane_predicate,
+        ) = Self.common_kernel_init()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "var (warp_group_idx, warp_group_thread_idx, rank_m, rank_n, warp_id, "
+        "lane_predicate) = Self.common_kernel_init();"
+    ) in generated_code
+
+
 def test_multiline_parenthesized_boolean_condition_codegen_from_layout_tensor_docs():
     code = """
     def kernel(tensor: LayoutTensor):

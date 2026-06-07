@@ -175,6 +175,27 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: https://github.com/KhronosGroup/glslang
+    # Commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Path: Test/spv.maximalReconvergence.vert
+    # Reduced from GL_EXT_maximal_reconvergence coverage for attributes before
+    # function declarations and after function parameter lists.
+    ExternalFixture(
+        name="glslang-spv-maximal-reconvergence-function-attributes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.maximalReconvergence.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 460
+
+            #extension GL_EXT_maximal_reconvergence : enable
+
+            [[random(4)]] void main() [[maximally_reconverges]]
+            {
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.memoryScopeSemantics.comp.
     # Reduced from GL_KHR_memory_scope_semantics storage qualifier coverage.
     ExternalFixture(
@@ -1125,6 +1146,19 @@ def test_parse_glslang_control_flow_statement_attributes_fixture():
     ]
 
 
+def test_parse_glslang_function_attributes_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-maximal-reconvergence-function-attributes"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+
+    assert [function.name for function in ast.functions] == ["main"]
+    assert ast.functions[0].qualifiers == ["vertex"]
+
+
 def test_parse_glslang_memory_scope_semantics_qualifier_fixture():
     fixture = next(
         item
@@ -1759,6 +1793,22 @@ def test_codegen_glslang_control_flow_statement_attributes_fixture_snippet():
     assert "for (int i = 0; (i < 8); (++i))" in crossgl
     assert "if (cond)" in crossgl
     assert "switch (3)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_function_attributes_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-maximal-reconvergence-function-attributes"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "[[" not in crossgl
+    assert "random" not in crossgl
+    assert "maximally_reconverges" not in crossgl
+    assert "VertexOutput main()" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

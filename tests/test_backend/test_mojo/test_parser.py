@@ -2243,6 +2243,38 @@ def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_do
     assert assignment.right.elements == ["0", "0"]
 
 
+def test_parenthesized_tuple_var_declaration_parse_from_modular_sm90_matmul():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
+    # max/kernels/src/linalg/matmul/gpu/sm90/matmul_kernels.mojo lines 895-902.
+    code = """
+    def kernel():
+        var (
+            warp_group_idx,
+            warp_group_thread_idx,
+            rank_m,
+            rank_n,
+            warp_id,
+            lane_predicate,
+        ) = Self.common_kernel_init()
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "kernel").body[0]
+
+    assert isinstance(declaration.name, TupleNode)
+    assert [element.name for element in declaration.name.elements] == [
+        "warp_group_idx",
+        "warp_group_thread_idx",
+        "rank_m",
+        "rank_n",
+        "warp_id",
+        "lane_predicate",
+    ]
+    assert isinstance(declaration.initial_value, MethodCallNode)
+    assert declaration.initial_value.object.name == "Self"
+    assert declaration.initial_value.method == "common_kernel_init"
+
+
 def test_multiline_parenthesized_boolean_condition_parse_from_layout_tensor_docs():
     code = """
     def kernel(tensor: LayoutTensor):

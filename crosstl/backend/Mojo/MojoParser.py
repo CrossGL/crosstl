@@ -1313,15 +1313,33 @@ class MojoParser:
         return node
 
     def parse_identifier_tuple(self):
+        parenthesized = self.current_token[0] == "LPAREN"
+        saw_comma = False
+        if parenthesized:
+            self.eat("LPAREN")
+            self.skip_layout_tokens()
+
         identifiers = [VariableNode("", self.parse_identifier_name())]
+        if parenthesized:
+            self.skip_layout_tokens()
 
         while self.current_token[0] == "COMMA":
+            saw_comma = True
             self.eat("COMMA")
+            if parenthesized:
+                self.skip_layout_tokens()
+                if self.current_token[0] == "RPAREN":
+                    break
             identifiers.append(
                 VariableNode("", self.parse_identifier_name("IDENTIFIER after comma"))
             )
+            if parenthesized:
+                self.skip_layout_tokens()
 
-        if len(identifiers) == 1:
+        if parenthesized:
+            self.eat("RPAREN")
+
+        if len(identifiers) == 1 and not saw_comma:
             return identifiers[0].name
         return TupleNode(identifiers)
 

@@ -100,6 +100,7 @@ class RustToCrossGLConverter:
         "gather",
         "gather_with",
         "query_levels",
+        "query_lod",
         "query_samples",
         "query_size",
         "query_size_lod",
@@ -4403,6 +4404,10 @@ class RustToCrossGLConverter:
         if method_name == "query_levels":
             if mapped_resource_type.startswith("sampler"):
                 return "textureQueryLevels"
+            return None
+        if method_name == "query_lod":
+            if mapped_resource_type.startswith("sampler"):
+                return "textureQueryLod"
             return None
         if method_name == "query_samples":
             if mapped_resource_type.startswith("sampler"):

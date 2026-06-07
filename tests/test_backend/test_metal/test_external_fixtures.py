@@ -41,6 +41,7 @@ MLX_STEEL_GEMM_LOADER_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
 PYTORCH_ACTIVATION_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
+PYTORCH_C10_METAL_CONSTEXPR_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
@@ -1058,6 +1059,25 @@ EXTERNAL_FIXTURES = [
                     return tanh(x);
                 }
             }
+        """
+        ),
+    },
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Commit: fa5cb72912c44b22acd9c26c69f3e933794ac501
+    # Path: aten/src/ATen/native/mps/kernels/ReduceOps.h
+    {
+        "name": "pytorch_c10_metal_constexpr_macro_constant",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_C10_METAL_CONSTEXPR_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/ReduceOps.h",
+        "roundtrip": True,
+        "contains": ["constant uint SUM_NCHAINS = 8;"],
+        "source": (
+            """
+            #include <c10/metal/common.h>
+
+            C10_METAL_CONSTEXPR uint32_t SUM_NCHAINS = 8;
         """
         ),
     },

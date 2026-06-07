@@ -2899,6 +2899,54 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_IMAGE_SPARSE_READ_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/text_to_binary.image_test.cpp
+; Reduced from OpImageSparseRead text-to-binary coverage plus sparse result
+; extraction rules.
+OpCapability Shader
+OpCapability SparseResidency
+OpCapability StorageImageReadWithoutFormat
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_color %storage_image
+OpExecutionMode %main OriginUpperLeft
+OpName %out_color "outColor"
+OpName %storage_image "storageImage"
+OpName %resident "resident"
+OpDecorate %out_color Location 0
+OpDecorate %storage_image DescriptorSet 0
+OpDecorate %storage_image Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%ptr_function_bool = OpTypePointer Function %bool
+%uint = OpTypeInt 32 0
+%v2uint = OpTypeVector %uint 2
+%v4uint = OpTypeVector %uint 4
+%res_type = OpTypeStruct %uint %v4uint
+%image_type = OpTypeImage %uint 2D 0 0 0 2 Unknown
+%ptr_image = OpTypePointer UniformConstant %image_type
+%ptr_output_v4uint = OpTypePointer Output %v4uint
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%coord = OpConstantComposite %v2uint %zero %one
+%storage_image = OpVariable %ptr_image UniformConstant
+%out_color = OpVariable %ptr_output_v4uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%resident = OpVariable %ptr_function_bool Function
+%img = OpLoad %image_type %storage_image
+%sparse = OpImageSparseRead %res_type %img %coord
+%texel = OpCompositeExtract %v4uint %sparse 1
+OpStore %out_color %texel
+%code = OpCompositeExtract %uint %sparse 0
+%is_resident = OpImageSparseTexelsResident %bool %code
+OpStore %resident %is_resident
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -5281,6 +5329,29 @@ def test_spirv_sparse_dref_sample_keeps_dref_helper_name_codegen_reparse():
         in generated_code
     )
     assert "spirvImageSparseSampleDrefCompare" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_sparse_image_read_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_IMAGE_SPARSE_READ_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "RWTexture2D<uint> storageImage @set(0) @binding(0);" in generated_code
+    assert "uint4 outColor @output @location(0);" in generated_code
+    assert (
+        "outColor = spirvSparseTexel("
+        "spirvImageSparseRead(storageImage, uint2(0, 1)));" in generated_code
+    )
+    assert (
+        "resident = spirvSparseTexelsResident("
+        "spirvSparseResidencyCode("
+        "spirvImageSparseRead(storageImage, uint2(0, 1))));" in generated_code
+    )
+    assert "outColor = sparse[1];" not in generated_code
+    assert "resident = is_resident;" not in generated_code
+    assert "OpImageSparseRead" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

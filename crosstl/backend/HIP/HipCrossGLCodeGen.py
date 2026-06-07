@@ -4276,6 +4276,14 @@ class HipToCrossGLConverter:
             if attribute_text.startswith("__launch_bounds__"):
                 bounds = attribute_text[len("__launch_bounds__") :]
                 self.emit(f"// HIP launch bounds: {bounds}")
+                continue
+
+            flat_work_group_size = re.search(
+                r"amdgpu_flat_work_group_size\((.*?)\)", attribute_text
+            )
+            if flat_work_group_size:
+                bounds = re.sub(r"\s*,\s*", ", ", flat_work_group_size.group(1))
+                self.emit(f"// HIP AMDGPU flat work group size: ({bounds})")
 
         self.emit("@compute")
         self.emit("@workgroup_size(1, 1, 1)  // Default workgroup size")

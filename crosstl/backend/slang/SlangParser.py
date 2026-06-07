@@ -2328,6 +2328,8 @@ class SlangParser:
             return []
         if self.current_token[0] == "LBRACE":
             return self.parse_block()
+        if self.is_labeled_statement_start():
+            return self.parse_labeled_statement()
         if self.current_token[0] in {"TYPEDEF", "TYPEALIAS"}:
             return self.parse_typedef()
         if self.current_token == ("IDENTIFIER", "defer"):
@@ -2361,6 +2363,32 @@ class SlangParser:
             return self.parse_discard_statement()
         else:
             return self.parse_expression_statement()
+
+    def is_labeled_statement_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "COLON"
+            and not (
+                self.pos + 2 < len(self.tokens)
+                and self.tokens[self.pos + 2][0] == "COLON"
+            )
+        )
+
+    def parse_labeled_statement(self):
+        label = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
+        statement = self.parse_statement()
+        return self.attach_statement_label(statement, label)
+
+    def attach_statement_label(self, statement, label):
+        if isinstance(statement, list):
+            if statement:
+                setattr(statement[0], "label", label)
+            return statement
+        setattr(statement, "label", label)
+        return statement
 
     def parse_defer_statement(self):
         self.eat("IDENTIFIER")
@@ -2655,13 +2683,21 @@ class SlangParser:
 
     def parse_break_statement(self):
         self.eat("BREAK")
+        target_label = None
+        if self.current_token[0] == "IDENTIFIER":
+            target_label = self.current_token[1]
+            self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
-        return BreakNode()
+        return BreakNode(target_label=target_label)
 
     def parse_continue_statement(self):
         self.eat("CONTINUE")
+        target_label = None
+        if self.current_token[0] == "IDENTIFIER":
+            target_label = self.current_token[1]
+            self.eat("IDENTIFIER")
         self.eat("SEMICOLON")
-        return ContinueNode()
+        return ContinueNode(target_label=target_label)
 
     def parse_discard_statement(self):
         self.eat("DISCARD")
