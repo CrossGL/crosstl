@@ -5356,6 +5356,10 @@ class HipToCrossGLConverter:
             return f"({left} * {right})"
         if function_name == "__umul24" and len(args) == 2:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
+        if function_name == "__mulhi" and len(args) == 2:
+            return self.format_hip_signed_multiply_high(args[0], args[1])
+        if function_name == "__umulhi" and len(args) == 2:
+            return self.format_hip_unsigned_multiply_high(args[0], args[1])
         if function_name == "__byte_perm" and len(args) == 3:
             return self.format_hip_byte_perm(args[0], args[1], args[2])
         if (
@@ -5400,6 +5404,12 @@ class HipToCrossGLConverter:
 
     def format_hip_signed_24_bit_operand(self, arg):
         return f"(({arg} << 8) >> 8)"
+
+    def format_hip_signed_multiply_high(self, left, right):
+        return f"i32((i64({left}) * i64({right})) >> 32)"
+
+    def format_hip_unsigned_multiply_high(self, left, right):
+        return f"u32((u64({left}) * u64({right})) >> 32u)"
 
     def format_hip_unsigned_bit_extract(self, value, offset, width):
         width_value = self.parse_hip_integer_literal(width)

@@ -1161,6 +1161,32 @@ def test_external_rocm_hip_tests_24_bit_multiply_intrinsics_codegen_reparse():
     assert "__umul24" not in crossgl
 
 
+def test_external_rocm_hip_tests_multiply_high_intrinsics_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/math/integer_intrinsics.cc.
+    source = """
+    __global__ void multiply_high_kernel(int* signed_out,
+                                         unsigned int* unsigned_out,
+                                         int x,
+                                         int y,
+                                         unsigned int ux,
+                                         unsigned int uy) {
+        signed_out[0] = __mulhi(x, y);
+        unsigned_out[0] = ::__umulhi(ux, uy);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].right.name == "__mulhi"
+    assert body[1].right.name == "::__umulhi"
+    assert "signed_out[0] = i32((i64(x) * i64(y)) >> 32);" in crossgl
+    assert "unsigned_out[0] = u32((u64(ux) * u64(uy)) >> 32u);" in crossgl
+    assert "__mulhi" not in crossgl
+    assert "__umulhi" not in crossgl
+
+
 def test_external_rocm_hip_complex_math_codegen_reparse():
     # Upstream: ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
     # HIP-Doc/Reference/HIP-Complex-Math-API/complex_math/main.hip.
