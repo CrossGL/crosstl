@@ -4961,6 +4961,31 @@ def test_glsl_direct_vertex_varying_links_to_fragment_input_by_location():
     assert "fragColor = texture(colorMap, uv);" in generated_code
 
 
+def test_glsl_multiple_direct_fragment_entries_reuse_color_output_location():
+    code = """
+    shader MultipleFragmentEntries {
+        fragment {
+            vec4 main() @gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        fragment overlay {
+            vec4 main() @gl_FragColor {
+                return vec4(0.0, 1.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert generated_code.count("layout(location = 0) out vec4 fragColor;") == 1
+    assert "out_fragColor" not in generated_code
+    assert "fragColor = vec4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "fragColor = vec4(0.0, 1.0, 0.0, 1.0);" in generated_code
+
+
 def test_glsl_color_semantic_maps_to_explicit_stage_io_locations():
     code = """
     shader VertexReturnColorSemantic {

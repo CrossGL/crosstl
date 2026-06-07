@@ -889,6 +889,7 @@ class GLSLCodeGen:
         self.fragment_output_struct_names = set()
         self.fragment_output_member_name_maps = {}
         self.fragment_output_member_layout_maps = {}
+        self.fragment_direct_output_name_maps = {}
         self.vertex_input_member_names = set()
         self.current_function_return_type = None
         self.current_stage_return_type = None
@@ -2123,6 +2124,7 @@ class GLSLCodeGen:
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
         self.fragment_output_member_layout_maps = {}
+        self.fragment_direct_output_name_maps = {}
         self.fragment_blend_support_layout_parts = []
         self.current_function_return_type = None
         self.current_stage_return_type = None
@@ -7195,9 +7197,15 @@ class GLSLCodeGen:
         if not layout.startswith("layout("):
             layout = "layout(location = 0)"
 
-        output_name = self.fragment_output_name(
-            semantic, self.function_local_variable_names(func)
+        local_names = self.function_local_variable_names(func)
+        output_key = self.fragment_direct_output_key(
+            mapped_semantic, layout, output_type
         )
+        output_name = self.fragment_direct_output_name_maps.get(output_key)
+        if output_name in local_names:
+            output_name = None
+        if output_name is None:
+            output_name = self.fragment_output_name(semantic, local_names)
         self.reserve_stage_io_layout(
             self.stage_io_used_locations,
             "fragment",
@@ -7212,10 +7220,18 @@ class GLSLCodeGen:
             "fragment", "output", output_name, declaration
         ):
             declaration = ""
+        self.fragment_direct_output_name_maps.setdefault(output_key, output_name)
         return {
             "name": output_name,
             "declaration": declaration,
         }
+
+    def fragment_direct_output_key(self, mapped_semantic, layout, output_type):
+        return (
+            str(mapped_semantic or ""),
+            str(layout or ""),
+            str(output_type or ""),
+        )
 
     def fragment_output_name(self, semantic, additional_reserved_names=None):
         if semantic and semantic.startswith("gl_FragColor"):
