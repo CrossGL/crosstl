@@ -627,6 +627,29 @@ def test_rust_gpu_vec_extend_codegen_from_upstream_examples():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_vector_truncate_codegen_from_upstream_difftest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/difftests/tests/lang/core/ops/vector_ops/vector_ops-rust/src/lib.rs.
+    code = """
+    use spirv_std::glam::{Vec2, Vec3, Vec4};
+
+    fn truncate_vectors(v3a: Vec3, v4a: Vec4) -> Vec3 {
+        let v2_from_v3 = v3a.truncate();
+        let v3_from_v4 = v4a.truncate();
+        v3_from_v4 + v2_from_v3.extend(0.0)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let v2_from_v3 = v3a.xy;" in result
+    assert "let v3_from_v4 = v4a.xyz;" in result
+    assert "return (v3_from_v4 + vec3(v2_from_v3, 0.0));" in result
+    assert ".truncate(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_image_macro_types_drive_resource_parameters():
     code = """
     use spirv_std::{spirv, Image};

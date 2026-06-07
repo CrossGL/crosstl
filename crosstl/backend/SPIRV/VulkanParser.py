@@ -2367,6 +2367,21 @@ class VulkanParser:
                     )
                 continue
 
+            if opcode == "OpCopyMemorySized" and len(operands) >= 3:
+                statements.append(
+                    self.spirv_assembly_copy_memory_sized_statement(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
             if opcode in {
                 "OpKill",
                 "OpTerminateInvocation",
@@ -3402,6 +3417,21 @@ class VulkanParser:
                 )
                 continue
 
+            if opcode == "OpCopyMemorySized" and len(operands) >= 3:
+                statements.append(
+                    self.spirv_assembly_copy_memory_sized_statement(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
             if opcode in {
                 "OpKill",
                 "OpTerminateInvocation",
@@ -4164,6 +4194,36 @@ class VulkanParser:
             args.append(sample)
         args.append(texel)
         return FunctionCallNode("imageStore", args)
+
+    def spirv_assembly_copy_memory_sized_statement(
+        self,
+        target_operand,
+        source_operand,
+        size_operand,
+        memory_operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            "spirvCopyMemorySized",
+            [
+                self.spirv_assembly_operand_expression(
+                    operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                for operand in (
+                    target_operand,
+                    source_operand,
+                    size_operand,
+                    *memory_operands,
+                )
+            ],
+        )
 
     def spirv_assembly_image_sample_operand(self, parsed_operands):
         values = parsed_operands.get("Sample")
@@ -4928,7 +4988,16 @@ class VulkanParser:
                 alias_origins[result_id] = alias_origins[operands[1]]
                 continue
 
-            if opcode in {"OpStore", "OpCopyMemory", "OpAtomicStore"} and operands:
+            if (
+                opcode
+                in {
+                    "OpStore",
+                    "OpCopyMemory",
+                    "OpCopyMemorySized",
+                    "OpAtomicStore",
+                }
+                and operands
+            ):
                 written_parameter_id = alias_origins.get(operands[0])
                 if written_parameter_id:
                     written_parameter_ids.add(written_parameter_id)

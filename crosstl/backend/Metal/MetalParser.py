@@ -171,6 +171,11 @@ TEMPLATE_VARIABLE_SUFFIX_FOLLOW_TOKENS = {
     "DIVIDE",
     "MOD",
 }
+TEMPLATE_IDENTIFIER_SUFFIX_FOLLOW_TOKENS = TEMPLATE_VARIABLE_SUFFIX_FOLLOW_TOKENS | {
+    "LPAREN",
+    "SCOPE",
+    "LBRACE",
+}
 CONSTRUCTOR_TYPE_TOKENS = TYPE_TOKENS - {
     "VOID",
     "IDENTIFIER",
@@ -3240,11 +3245,11 @@ class MetalParser:
         name = node.name if isinstance(node, VariableNode) else node.member
         if name in self.known_function_templates:
             return self.template_argument_list_followed_by_call(
-                follow_token_types={"LPAREN", "SCOPE", "LBRACE"},
+                follow_token_types=TEMPLATE_IDENTIFIER_SUFFIX_FOLLOW_TOKENS,
                 require_type_like_argument=False,
             )
         return self.template_argument_list_followed_by_call(
-            follow_token_types={"LPAREN", "SCOPE", "LBRACE"},
+            follow_token_types=TEMPLATE_IDENTIFIER_SUFFIX_FOLLOW_TOKENS,
             require_type_like_argument=True,
         )
 

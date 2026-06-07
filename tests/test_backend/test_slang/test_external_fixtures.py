@@ -183,6 +183,41 @@ EXTERNAL_FIXTURES = [
     {
         # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/compute/comma-operator.slang
+        "id": "slang_compute_return_comma_operator",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/compute/comma-operator.slang",
+        "source": (
+            """
+            int test(int inVal)
+            {
+                int a = inVal;
+                return a*=2, a+1;
+            }
+
+            RWStructuredBuffer<int> outputBuffer;
+
+            [numthreads(4, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                uint tid = dispatchThreadID.x;
+                int inVal = outputBuffer[tid];
+                int outVal = test(inVal);
+                outputBuffer[tid] = outVal;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "return (a *= 2, a + 1);",
+            "layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;",
+            "outputBuffer[tid] = outVal;",
+        ],
+        "not_contains": ["return a *= 2, a + 1;"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: tests/language-feature/multi-level-break.slang
         "id": "slang_labeled_break_from_multi_level_break_sample",
         "repo": "shader-slang/slang-current-2026-06-07",

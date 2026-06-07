@@ -1443,6 +1443,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_COPY_MEMORY_SIZED_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/val/val_memory_test.cpp
+; Source test: ValidateMemory::CopyMemorySizedNoAccessGood.
+; Reduced from OpCopyMemorySized %var1 %var2 %int_16.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %out_value "outValue"
+OpName %source "source"
+OpName %target "target"
+OpDecorate %input_value Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_function_v4float = OpTypePointer Function %v4float
+%uint_16 = OpConstant %uint 16
+%input_value = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%source = OpVariable %ptr_function_v4float Function
+%target = OpVariable %ptr_function_v4float Function
+%loaded = OpLoad %v4float %input_value
+OpStore %source %loaded
+OpCopyMemorySized %target %source %uint_16
+%copied = OpLoad %v4float %target
+OpStore %out_value %copied
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_MULTILINE_OPSOURCE_ASSEMBLY = """
 ; Source syntax: https://chromium.googlesource.com/external/github.com/KhronosGroup/SPIRV-Tools/+/refs/tags/vulkan-sdk-1.4.304.1/docs/syntax.md
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#OpSource
@@ -2504,6 +2544,30 @@ def test_spirv_tools_gl_pervertex_access_chain_parse():
     assert assignment.left.name == "gl_Position"
     assert isinstance(assignment.right, VariableNode)
     assert assignment.right.name == "_ua_position"
+
+
+def test_spirv_tools_copy_memory_sized_parse():
+    tokens = tokenize_code(SPIRV_TOOLS_COPY_MEMORY_SIZED_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    main = ast.functions[0]
+    assert main.spirv_execution_model == "Fragment"
+    assert isinstance(main.body[0], VariableNode)
+    assert main.body[0].name == "source"
+    assert isinstance(main.body[1], VariableNode)
+    assert main.body[1].name == "target"
+    assert isinstance(main.body[2], AssignmentNode)
+    copy = main.body[3]
+    assert isinstance(copy, FunctionCallNode)
+    assert copy.name == "spirvCopyMemorySized"
+    assert [
+        arg.name if isinstance(arg, VariableNode) else arg for arg in copy.args
+    ] == [
+        "target",
+        "source",
+        "16",
+    ]
+    assert isinstance(main.body[4], AssignmentNode)
 
 
 def test_spirv_assembly_multiline_opsource_literal_parse_from_spirv_tools_syntax():

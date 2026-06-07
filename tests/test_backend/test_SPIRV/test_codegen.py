@@ -2706,6 +2706,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_COPY_MEMORY_SIZED_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/val/val_memory_test.cpp
+; Source test: ValidateMemory::CopyMemorySizedNoAccessGood.
+; Reduced from OpCopyMemorySized %var1 %var2 %int_16.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %out_value "outValue"
+OpName %source "source"
+OpName %target "target"
+OpDecorate %input_value Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%ptr_function_v4float = OpTypePointer Function %v4float
+%uint_16 = OpConstant %uint 16
+%input_value = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%source = OpVariable %ptr_function_v4float Function
+%target = OpVariable %ptr_function_v4float Function
+%loaded = OpLoad %v4float %input_value
+OpStore %source %loaded
+OpCopyMemorySized %target %source %uint_16
+%copied = OpLoad %v4float %target
+OpStore %out_value %copied
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_IMAGE_QUERY_SIZE_LOD_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -5454,6 +5494,22 @@ def test_spirv_cross_copy_memory_interface_codegen_reparse():
     assert "float4 o1 @output @location(1);" in generated_code
     assert "gl_Position = v0;" in generated_code
     assert "o1 = v1;" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_copy_memory_sized_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_COPY_MEMORY_SIZED_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inputValue @input @location(0);" in generated_code
+    assert "float4 outValue @output @location(0);" in generated_code
+    assert "float4 source;" in generated_code
+    assert "float4 target;" in generated_code
+    assert "source = inputValue;" in generated_code
+    assert "spirvCopyMemorySized(target, source, 16);" in generated_code
+    assert "outValue = target;" in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

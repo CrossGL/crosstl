@@ -1476,6 +1476,30 @@ def test_codegen_template_style_vector_matrix_types_and_constructors():
     parse_crossgl(output)
 
 
+def test_codegen_template_vector_constant_expression_dimensions_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/SemaHLSL/vector-syntax.hlsl
+    hlsl = textwrap.dedent("""
+        vector<float, 1+1> literalSize;
+        static const int i = 1;
+        vector<float, i+i> constSize;
+
+        float4 main() : SV_Target0 {
+            return vector<float, 1+1>(1, 2).xyxy;
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "vec2 literalSize;" in output
+    assert "static const int i = 1;" in output
+    assert "vec2 constSize;" in output
+    assert "return vec2(1, 2).xyxy;" in output
+    assert "vector<float" not in output
+
+    parse_crossgl(output)
+
+
 def test_codegen_template_style_64_bit_integer_vectors_preserve_width():
     hlsl = textwrap.dedent("""
         vector<uint64_t, 4> MakeOffsets(vector<int64_t, 2> delta) {
