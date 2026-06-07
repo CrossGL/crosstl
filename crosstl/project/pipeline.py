@@ -160,6 +160,48 @@ REPORT_ARTIFACT_MATRIX_FIELDS = frozenset(
         "statusByVariant",
     )
 )
+REPORT_EXTERNAL_CORPUS_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "manifest",
+        "status",
+        "entries",
+        "summary",
+        "name",
+        "description",
+    )
+)
+REPORT_EXTERNAL_CORPUS_ENTRY_FIELDS = frozenset(
+    (
+        "id",
+        "path",
+        "sourceBackend",
+        "targets",
+        "present",
+        "discovered",
+        "artifactCount",
+        "translatedCount",
+        "failedCount",
+        "repository",
+        "commit",
+        "sourceUrl",
+    )
+)
+REPORT_EXTERNAL_CORPUS_SUMMARY_FIELDS = frozenset(
+    (
+        "manifestEntryCount",
+        "validEntryCount",
+        "invalidEntryCount",
+        "entryCount",
+        "presentCount",
+        "missingCount",
+        "discoveredUnitCount",
+        "undiscoveredPresentCount",
+        "entriesBySourceBackend",
+        "entriesByTarget",
+        "artifactsByTarget",
+    )
+)
 REPORT_DIAGNOSTIC_FIELDS = frozenset(
     ("severity", "code", "message", "location", "target", "missingCapabilities")
 )
@@ -8289,12 +8331,19 @@ def _external_corpus_entry_contract_reasons(
     artifacts: Sequence[Mapping[str, Any]] | None = None,
     root_path: Path | None = None,
     declared_units_by_path: Mapping[str, UnitDeclaration] | None = None,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"externalCorpus.entries[{index}]"
     if not isinstance(entry, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, entry, REPORT_EXTERNAL_CORPUS_ENTRY_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     for field_name in ("id", "path", "sourceBackend"):
         if not _is_non_empty_string(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
@@ -8368,13 +8417,25 @@ def _external_corpus_entry_contract_reasons(
 
 
 def _external_corpus_summary_contract_reasons(
-    summary: Any, entries: Sequence[Any], artifacts: Any
+    summary: Any,
+    entries: Sequence[Any],
+    artifacts: Any,
+    *,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if not isinstance(summary, Mapping):
         return ["externalCorpus.summary must be an object"]
 
     entry_records = [entry for entry in entries if isinstance(entry, Mapping)]
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            "externalCorpus.summary",
+            summary,
+            REPORT_EXTERNAL_CORPUS_SUMMARY_FIELDS,
+        )
+        if require_closed_fields
+        else []
+    )
     accounting_fields = (
         "manifestEntryCount",
         "validEntryCount",
@@ -8460,6 +8521,7 @@ def _external_corpus_contract_reasons(
     artifacts: Any,
     *,
     require_external_corpus: bool,
+    require_closed_fields: bool = False,
     root_path: Path | None = None,
     declared_units_by_path: Mapping[str, UnitDeclaration] | None = None,
 ) -> list[str]:
@@ -8470,7 +8532,13 @@ def _external_corpus_contract_reasons(
     if not isinstance(external_corpus, Mapping):
         return ["externalCorpus must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            "externalCorpus", external_corpus, REPORT_EXTERNAL_CORPUS_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     if external_corpus.get("schemaVersion") != EXTERNAL_CORPUS_SCHEMA_VERSION:
         reasons.append(
             f"externalCorpus.schemaVersion must be {EXTERNAL_CORPUS_SCHEMA_VERSION}"
@@ -8525,6 +8593,7 @@ def _external_corpus_contract_reasons(
                     artifacts=artifact_records,
                     root_path=root_path,
                     declared_units_by_path=declared_units_by_path,
+                    require_closed_fields=require_closed_fields,
                 )
             )
         reasons.extend(
@@ -8535,7 +8604,10 @@ def _external_corpus_contract_reasons(
         )
     reasons.extend(
         _external_corpus_summary_contract_reasons(
-            external_corpus.get("summary"), entries, artifacts
+            external_corpus.get("summary"),
+            entries,
+            artifacts,
+            require_closed_fields=require_closed_fields,
         )
     )
     return reasons
@@ -9690,6 +9762,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             report,
             artifacts,
             require_external_corpus=require_external_corpus,
+            require_closed_fields=has_summary,
             root_path=external_corpus_root_path,
             declared_units_by_path=external_corpus_units_by_path,
         )
