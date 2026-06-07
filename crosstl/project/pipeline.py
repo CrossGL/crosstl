@@ -157,6 +157,12 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "sourceRemap",
     )
 )
+REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS = frozenset(
+    ("status", "frontend", "supportsDefines", "defineCount")
+)
+REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS = frozenset(
+    ("status", "frontend", "supportsIncludePaths", "includePathCount")
+)
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -7021,6 +7027,12 @@ def _artifact_define_processing_contract_reasons(
         return [f"{prefix} must be an object"]
 
     reasons = []
+    if required:
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix, define_processing, REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS
+            )
+        )
     status = define_processing.get("status")
     if not isinstance(status, str) or status not in DEFINE_PROCESSING_STATUSES:
         reasons.append(
@@ -7094,6 +7106,14 @@ def _artifact_include_path_processing_contract_reasons(
         return [f"{prefix} must be an object"]
 
     reasons = []
+    if required:
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix,
+                include_path_processing,
+                REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS,
+            )
+        )
     status = include_path_processing.get("status")
     if not isinstance(status, str) or status not in INCLUDE_PATH_PROCESSING_STATUSES:
         reasons.append(

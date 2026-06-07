@@ -2834,6 +2834,50 @@ def test_validate_project_report_rejects_artifact_define_processing_mismatches(
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_unexpected_generated_processing_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+            include_dirs = ["includes"]
+
+            [project.defines]
+            MODE = "base"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    payload["artifacts"][0]["defineProcessing"]["unexpected"] = "metadata"
+    payload["artifacts"][0]["includePathProcessing"]["unexpected"] = "metadata"
+    report_path = repo / "out" / "portability-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].defineProcessing.unexpected is not allowed"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].includePathProcessing.unexpected is not allowed"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_define_processing_summary_mismatches(
     tmp_path,
 ):
