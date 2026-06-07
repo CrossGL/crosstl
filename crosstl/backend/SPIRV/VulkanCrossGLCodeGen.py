@@ -178,6 +178,7 @@ class VulkanToCrossGLConverter:
     def generate(self, ast):
         self.flattened_uniform_block_instances = {}
         code = "shader main {\n"
+        stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
             node
             for node in getattr(ast, "global_variables", [])
@@ -195,6 +196,8 @@ class VulkanToCrossGLConverter:
 
         for node in top_level_nodes:
             if isinstance(node, LayoutNode):
+                if self.is_spirv_stage_interface_layout(node):
+                    continue
                 if self.is_compute_layout(node) or self.is_fragment_execution_layout(
                     node
                 ):
@@ -224,11 +227,17 @@ class VulkanToCrossGLConverter:
                         )
                         for layout in stage_compute_layouts:
                             code += self.generate_compute_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "vertex":
                         code += "    // Vertex Shader\n"
                         code += "    vertex {\n"
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "fragment":
@@ -239,6 +248,9 @@ class VulkanToCrossGLConverter:
                             + self.spirv_fragment_execution_layouts(node)
                         ):
                             code += self.generate_fragment_execution_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "geometry":
@@ -246,6 +258,9 @@ class VulkanToCrossGLConverter:
                         code += "    geometry {\n"
                         for layout in self.spirv_geometry_execution_layouts(node):
                             code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "tessellation_control":
@@ -255,6 +270,9 @@ class VulkanToCrossGLConverter:
                             node
                         ):
                             code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "tessellation_evaluation":
@@ -264,6 +282,9 @@ class VulkanToCrossGLConverter:
                             layout
                         ) in self.spirv_tessellation_evaluation_execution_layouts(node):
                             code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     else:
@@ -273,6 +294,65 @@ class VulkanToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def spirv_stage_interface_layouts(self, ast):
+        layouts = [
+            node
+            for node in getattr(ast, "global_variables", []) or []
+            if self.is_spirv_stage_interface_layout(node)
+        ]
+        if not layouts:
+            return {}
+
+        by_interface_id = {}
+        for layout in layouts:
+            by_interface_id.setdefault(
+                self.spirv_interface_layout_id(layout), []
+            ).append(layout)
+
+        stage_layouts = {}
+        for function in getattr(ast, "functions", []) or []:
+            interface_ids = []
+            for entry_point in getattr(function, "spirv_entry_points", []) or []:
+                interface_ids.extend(entry_point.get("interface_ids", []) or [])
+            if not interface_ids:
+                entry_point = getattr(function, "spirv_entry_point", None)
+                interface_ids.extend((entry_point or {}).get("interface_ids", []) or [])
+            if not interface_ids:
+                continue
+
+            seen = set()
+            for interface_id in interface_ids:
+                for layout in by_interface_id.get(interface_id, []):
+                    layout_key = id(layout)
+                    if layout_key in seen:
+                        continue
+                    seen.add(layout_key)
+                    stage_layouts.setdefault(id(function), []).append(layout)
+
+        return stage_layouts
+
+    def is_spirv_stage_interface_layout(self, node):
+        if not isinstance(node, LayoutNode):
+            return False
+        if (node.layout_type or "").lower() not in {"in", "out"}:
+            return False
+        return getattr(node, "spirv_id", None) is not None
+
+    def spirv_interface_layout_id(self, node):
+        return str(getattr(node, "spirv_id", "")).split(".", 1)[0]
+
+    def generate_stage_interface_layouts(self, function, stage_interface_layouts):
+        code = ""
+        for layout in stage_interface_layouts.get(id(function), []):
+            code += self.indent_generated_layout(self.generate_layout(layout))
+        return code
+
+    def indent_generated_layout(self, layout_code):
+        return "".join(
+            f"    {line}" if line.strip() else line
+            for line in layout_code.splitlines(keepends=True)
+        )
 
     def is_compute_layout(self, node):
         if not isinstance(node, LayoutNode):

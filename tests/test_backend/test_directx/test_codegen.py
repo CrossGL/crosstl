@@ -2165,6 +2165,27 @@ def test_codegen_texture_sample_mapping():
     assert "texture_sample" not in output
 
 
+def test_codegen_unity_urp_texture_macros_default_to_native_sampling():
+    output = generate_crossgl("""
+        TEXTURE2D(_BaseMap);
+        SAMPLER(sampler_BaseMap);
+        struct Varyings { float2 uv : TEXCOORD0; };
+        half4 frag(Varyings IN) : SV_Target
+        {
+            half4 color = SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, IN.uv);
+            return color;
+        }
+    """)
+
+    assert "sampler2D _BaseMap;" in output
+    assert "sampler sampler_BaseMap;" in output
+    assert "texture(_BaseMap, sampler_BaseMap, IN.uv)" in output
+    assert "TEXTURE2D" not in output
+    assert "SAMPLER(" not in output
+    assert "SAMPLE_TEXTURE2D" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_texture2dms_operator_index_from_microsoft_docs():
     # Source: Microsoft Texture2DMS::Operator docs.
     output = generate_crossgl("""

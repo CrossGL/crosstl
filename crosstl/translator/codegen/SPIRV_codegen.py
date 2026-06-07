@@ -21309,10 +21309,20 @@ class VulkanSPIRVCodeGen:
         entry_points = []
 
         if getattr(ast, "stages", None):
-            for stage in ast.stages.values():
-                for var in getattr(stage, "local_variables", []):
-                    if var.name not in self.global_variables:
-                        self.process_global_variable_declaration(var)
+            for stage_type, stage in ast.stages.items():
+                previous_execution_model = self.current_execution_model
+                previous_stage = self.current_stage
+                self.current_stage = stage
+                self.current_execution_model = self.spirv_execution_model(
+                    self.stage_key(stage_type)
+                )
+                try:
+                    for var in getattr(stage, "local_variables", []):
+                        if var.name not in self.global_variables:
+                            self.process_global_variable_declaration(var)
+                finally:
+                    self.current_execution_model = previous_execution_model
+                    self.current_stage = previous_stage
 
             processed_local_functions = set()
             for stage in ast.stages.values():

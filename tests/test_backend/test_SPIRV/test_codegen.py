@@ -129,6 +129,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_MULTI_ENTRYPOINT_REUSED_LOCATION_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "vs_main" %vertex_in %varying_out %position
+OpEntryPoint Fragment %fs "fs_main" %varying_in %frag_out
+OpExecutionMode %fs OriginUpperLeft
+OpName %vertex_in "vertexIn"
+OpName %varying_out "vColor"
+OpName %varying_in "fColor"
+OpName %frag_out "fragOut"
+OpDecorate %vertex_in Location 0
+OpDecorate %varying_out Location 0
+OpDecorate %varying_in Location 0
+OpDecorate %frag_out Location 0
+OpDecorate %position BuiltIn Position
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%vertex_in = OpVariable %ptr_input_v4float Input
+%varying_out = OpVariable %ptr_output_v4float Output
+%position = OpVariable %ptr_output_v4float Output
+%varying_in = OpVariable %ptr_input_v4float Input
+%frag_out = OpVariable %ptr_output_v4float Output
+%vs = OpFunction %void None %fn
+%vs_label = OpLabel
+%loaded_vertex = OpLoad %v4float %vertex_in
+OpStore %position %loaded_vertex
+OpStore %varying_out %loaded_vertex
+OpReturn
+OpFunctionEnd
+%fs = OpFunction %void None %fn
+%fs_label = OpLabel
+%loaded_frag = OpLoad %v4float %varying_in
+OpStore %frag_out %loaded_frag
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_MATRIX_INTERFACE_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -4839,6 +4880,30 @@ def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
     assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
     assert downstream_code.count("OpFunction ") == 1
     assert "OpStore" in downstream_code
+
+
+def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():
+    tokens = tokenize_code(SPIRV_MULTI_ENTRYPOINT_REUSED_LOCATION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 vertexIn @input @location(0);" in generated_code
+    assert "float4 vColor @output @location(0);" in generated_code
+    assert "float4 fColor @input @location(0);" in generated_code
+    assert "float4 fragOut @output @location(0);" in generated_code
+    assert generated_code.index("float4 vertexIn") < generated_code.index(
+        "void vs_main() @stage_entry"
+    )
+    assert generated_code.index("float4 fColor") < generated_code.index(
+        "void fs_main() @stage_entry"
+    )
+
+    reparsed = parse_crossgl(generated_code)
+    downstream_code = VulkanSPIRVCodeGen().generate(reparsed)
+
+    assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
+    assert re.search(r'OpEntryPoint Fragment %\d+ "fs_main"', downstream_code)
+    assert downstream_code.count("OpFunction ") == 2
 
 
 def test_spirv_assembly_matrix_interface_codegen():
