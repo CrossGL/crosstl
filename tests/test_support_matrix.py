@@ -471,6 +471,7 @@ def test_project_include_resolution_documents_status_reporting():
         assert "per-include directory status records and status counts" in (
             backend_support["notes"]
         )
+        assert "current include-directory resolved paths" in (backend_support["notes"])
         assert "non-directory paths" in backend_support["notes"]
         assert "only active existing repository-contained resolved paths" in (
             backend_support["notes"]
@@ -580,6 +581,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_filters_invalid_include_dirs_before_frontend"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_include_dir_resolved_path"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

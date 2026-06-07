@@ -7501,6 +7501,41 @@ def test_validate_project_report_rejects_stale_include_dir_status(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_stale_include_dir_resolved_path(tmp_path):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    other_include_dir = repo / "other-includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    other_include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["includeDirStatus"][0]["resolvedPath"] = str(
+        other_include_dir.resolve()
+    )
+    report_path = repo / "out" / "stale-include-dir-resolved-path-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "project.includeDirStatus[0].resolvedPath must match the resolved "
+        "include directory"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_stale_source_root_status(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
