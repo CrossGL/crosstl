@@ -1804,6 +1804,13 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
         ),
         (
             """
+            [project]
+            external_corpus_manifest = ""
+            """,
+            "crosstl.toml project.external_corpus_manifest must be a non-empty string",
+        ),
+        (
+            """
             [project.sources]
             "gpu/*.shader" = 1
             """,
@@ -8548,6 +8555,39 @@ def test_validate_project_report_rejects_mismatched_external_corpus_manifest(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "externalCorpus.manifest must match project.externalCorpusManifest"
+        in diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_empty_external_corpus_manifest(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "empty-external-corpus-manifest-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "externalCorpusManifest": "",
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "project.externalCorpusManifest must be a non-empty string or null"
         in diagnostic["message"]
     )
 

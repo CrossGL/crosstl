@@ -365,17 +365,18 @@ are rejected before scan or translation so reports do not silently stringify
 invalid project metadata.
 
 ``external_corpus_manifest`` points at an optional repository-relative JSON
-manifest of pinned upstream shader or GPU-source reductions. Project reports use
-the manifest for coverage accounting only: they record declared paths, present
-and missing entries, discovered translation units, source-backend and target
-rollups, valid and invalid manifest-entry counts, and artifact outcomes for
-entries included in the project run. CrossTL does not clone upstream
-repositories, run native build systems, or claim whole corpus semantic parity
-from this manifest. Malformed manifest entries are reported as configuration
-diagnostics and skipped from retained corpus entries. Duplicate manifest paths
-or explicit entry ids are also reported and skipped so generated reports do not
-inflate corpus coverage. The summary still records how many manifest entries
-were skipped.
+manifest of pinned upstream shader or GPU-source reductions. When configured,
+the manifest path must be a non-empty string. Project reports use the manifest
+for coverage accounting only: they record declared paths, present and missing
+entries, discovered translation units, source-backend and target rollups, valid
+and invalid manifest-entry counts, and artifact outcomes for entries included
+in the project run. CrossTL does not clone upstream repositories, run native
+build systems, or claim whole corpus semantic parity from this manifest.
+Malformed manifest entries are reported as configuration diagnostics and
+skipped from retained corpus entries. Duplicate manifest paths or explicit
+entry ids are also reported and skipped so generated reports do not inflate
+corpus coverage. The summary still records how many manifest entries were
+skipped.
 
 Project reports include configured define and variant names and values, and
 artifact records include the applied define map used for that translation

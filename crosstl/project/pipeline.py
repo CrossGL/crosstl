@@ -2858,7 +2858,7 @@ def load_project_config(
         project.get("output_dir"),
         field_name="crosstl.toml project.output_dir",
     )
-    external_corpus_manifest = _as_optional_str(
+    external_corpus_manifest = _as_optional_non_empty_str(
         project.get("external_corpus_manifest"),
         field_name="crosstl.toml project.external_corpus_manifest",
     )
@@ -7995,6 +7995,13 @@ def _project_metadata_contract_reasons(
             external_corpus_manifest, str
         ):
             reasons.append("project.externalCorpusManifest must be a string or null")
+        elif (
+            external_corpus_manifest is not None
+            and not external_corpus_manifest.strip()
+        ):
+            reasons.append(
+                "project.externalCorpusManifest must be a non-empty string or null"
+            )
 
     return reasons
 
