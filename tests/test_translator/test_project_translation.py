@@ -6865,6 +6865,26 @@ def test_validate_project_report_rejects_malformed_artifact_records(tmp_path):
     assert "artifacts[0].status must be translated or failed" in (diagnostic["message"])
 
 
+def test_validate_project_report_rejects_unexpected_generated_artifact_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifacts"][0]["unexpected"] = "metadata"
+    report_path = repo / "out" / "unexpected-generated-artifact-fields-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].unexpected is not allowed" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_failed_artifacts_without_error(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

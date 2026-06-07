@@ -138,6 +138,25 @@ REPORT_MIGRATION_ACTION_FIELDS = frozenset(("kind", "severity", "message", "targ
 REPORT_DIAGNOSTIC_FIELDS = frozenset(
     ("severity", "code", "message", "location", "target", "missingCapabilities")
 )
+REPORT_ARTIFACT_FIELDS = frozenset(
+    (
+        "source",
+        "sourceBackend",
+        "target",
+        "path",
+        "status",
+        "defines",
+        "defineProcessing",
+        "includePathProcessing",
+        "sourceHash",
+        "provenance",
+        "variant",
+        "error",
+        "generatedHash",
+        "sourceMap",
+        "sourceRemap",
+    )
+)
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -9180,6 +9199,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             if not isinstance(artifact, Mapping):
                 reasons.append(f"artifacts[{index}] must be an object")
                 continue
+            if has_summary:
+                reasons.extend(
+                    _unsupported_mapping_field_reasons(
+                        f"artifacts[{index}]", artifact, REPORT_ARTIFACT_FIELDS
+                    )
+                )
             for field_name in ("source", "target", "path", "status"):
                 if not _is_non_empty_string(artifact.get(field_name)):
                     reasons.append(f"artifacts[{index}].{field_name} must be a string")
