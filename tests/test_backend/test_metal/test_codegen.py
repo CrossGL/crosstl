@@ -2980,6 +2980,23 @@ def test_codegen_raytracing_qualifiers_output():
     assert "callable_main" in result
 
 
+def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    namespace rt = raytracing;
+
+    intersection void isect(rt::ray r, intersector inter) { }
+    """
+
+    result = convert(code)
+
+    assert "raytracing;" not in result
+    assert "rt::ray" not in result
+    assert "void isect(ray r, intersector inter)" in result
+    parse_crossgl(result)
+
+
 def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec():
     # Apple Metal Shading Language Specification, section 4 Address Spaces:
     # ray_data and object_data are address-space attributes for payload references.

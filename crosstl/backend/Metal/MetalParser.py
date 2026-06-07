@@ -297,6 +297,7 @@ class MetalParser:
         self.pending_block_scope_names = []
         self.known_variable_templates = set()
         self.known_function_templates = set()
+        self.namespace_aliases = {}
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -531,8 +532,17 @@ class MetalParser:
 
     def parse_namespace_start(self):
         self.eat("NAMESPACE")
+        namespace_name = None
         if self.current_token[0] in {"IDENTIFIER", "METAL"}:
-            self.parse_scoped_identifier()
+            namespace_name = self.parse_scoped_identifier()
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            target_name = self.parse_scoped_identifier()
+            if namespace_name:
+                self.namespace_aliases[namespace_name] = target_name
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+            return
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
         elif self.current_token[0] == "SEMICOLON":
@@ -3594,6 +3604,8 @@ class MetalParser:
             else:
                 parts.append(self.current_token[1])
                 self.eat(self.current_token[0])
+        if parts and parts[0] in self.namespace_aliases:
+            parts = self.namespace_aliases[parts[0]].split("::") + parts[1:]
         return "::".join(parts)
 
     def parse_vector_constructor(self, type_name):
