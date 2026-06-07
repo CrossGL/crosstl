@@ -720,6 +720,48 @@ class TestHipCodeGen:
         assert "allPassed &= f.operator()<float, float>(TensorLayout::NCHW);" in result
         assert ".template" not in result
 
+    def test_public_rocprim_future_value_conversion_operator_conversion_reparse(self):
+        # Upstream: ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+        # rocprim/include/rocprim/types/future_value.hpp.
+        code = """
+        template <typename T, typename Iter = T*>
+        class future_value
+        {
+        public:
+            using value_type = T;
+            using iterator_type = Iter;
+
+            explicit ROCPRIM_HOST_DEVICE future_value(const Iter iter)
+                : iter_ {iter}
+            {
+            }
+
+            ROCPRIM_HOST_DEVICE operator T()
+            {
+                return *iter_;
+            }
+
+            ROCPRIM_HOST_DEVICE operator T() const
+            {
+                return *iter_;
+            }
+        private:
+            Iter iter_;
+        };
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "struct future_value {" in result
+        assert "Iter iter_;" in result
+        assert "operator T" not in result
+        assert "ROCPRIM_HOST_DEVICE" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_public_rocm_hiptensor_variable_template_condition_conversion(self):
         """Covers rocm-examples hiptensor_utils.hpp std::is_same_v<...> conditions."""
         code = """

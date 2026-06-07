@@ -1024,6 +1024,8 @@ class GLSLCodeGen:
             "packed_half2": "vec2",
             "packed_half3": "vec3",
             "packed_half4": "vec4",
+            "atomic<int>": "int",
+            "atomic<uint>": "uint",
             "float16": "float",
             "f16vec2": "vec2",
             "f16vec3": "vec3",

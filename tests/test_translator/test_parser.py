@@ -3285,6 +3285,46 @@ def test_address_space_alias_qualifiers_are_allowed():
     assert scratch.qualifiers == ["shared", "threadgroup"]
 
 
+def test_var_workgroup_stage_declarations_are_preserved():
+    code = """
+    shader NativeWorkgroupVar {
+        const int GROUP_SIZE = 4;
+
+        compute {
+            layout(local_size_x = GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+            var<workgroup> tile: atomic<int>[GROUP_SIZE];
+            var<shared> scratch: array<float, GROUP_SIZE>;
+
+            void main() {
+                atomicAdd(tile[0], 1);
+                scratch[0] = 1.0;
+                return;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    compute_stage = ast.stages[ShaderStage.COMPUTE]
+    tile, scratch = compute_stage.local_variables
+
+    assert tile.name == "tile"
+    assert tile.qualifiers == ["workgroup"]
+    assert tile.is_var_address_space is True
+    assert tile.address_space_qualifiers == ["workgroup"]
+    assert isinstance(tile.var_type, ArrayType)
+    assert isinstance(tile.var_type.element_type, NamedType)
+    assert tile.var_type.element_type.name == "atomic"
+    assert tile.var_type.element_type.generic_args[0].name == "int"
+    assert tile.var_type.size.name == "GROUP_SIZE"
+
+    assert scratch.name == "scratch"
+    assert scratch.qualifiers == ["shared"]
+    assert isinstance(scratch.var_type, ArrayType)
+    assert scratch.var_type.element_type.name == "float"
+    assert scratch.var_type.size == "GROUP_SIZE"
+
+
 @pytest.mark.parametrize(
     ("declaration", "message"),
     [

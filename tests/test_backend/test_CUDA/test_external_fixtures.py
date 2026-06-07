@@ -72,6 +72,11 @@ EXTERNAL_SAMPLES = [
         ],
     },
     {
+        "repo": "https://github.com/NVIDIA/cutlass",
+        "commit": "d80a4e53b52b42550659a8696dab32705265e324",
+        "paths": ["include/cute/stride.hpp"],
+    },
+    {
         "repo": "https://github.com/NVlabs/tiny-cuda-nn",
         "commit": "749dd70c5afc5a9dadb85e5652ed65d55e0ba187",
         "paths": ["src/fully_fused_mlp.cu"],
@@ -710,6 +715,36 @@ def test_cutlass_cute_template_array_bound_in_shared_memory_codegen_reparse():
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "TA[cosize_v<ASmemLayout>]"
     assert "array<TA, cosize_v<ASmemLayout>>" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cutlass_cute_dependent_template_type_alias_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: d80a4e53b52b42550659a8696dab32705265e324
+    # path: include/cute/stride.hpp
+    # line: 299
+    source = """
+    template <class Shape>
+    __device__ void compact_like() {
+        using Lambda = CompactLambda<Major>;
+        using Seq = typename Lambda::template seq<Shape>;
+        Seq order;
+    }
+    """
+
+    ast = parse_cuda(source)
+    aliases = ast.functions[0].body[:2]
+    order = ast.functions[0].body[2]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert all(isinstance(alias, TypeAliasNode) for alias in aliases)
+    assert aliases[1].alias_type == "typename Lambda::seq<Shape>"
+    assert isinstance(order, VariableNode)
+    assert order.vtype == "Seq"
+    assert "typedef Lambda::seq<Shape> Seq;" in crossgl
+    assert "::template" not in crossgl
+    assert "typename Lambda::seq" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

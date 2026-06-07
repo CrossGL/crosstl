@@ -792,6 +792,56 @@ class TestHipParser:
         assert return_value.target_type == "B"
         assert return_value.expression == "a"
 
+    def test_public_rocprim_future_value_conversion_operators_parse(self):
+        # Upstream: ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+        # rocprim/include/rocprim/types/future_value.hpp.
+        code = """
+        template <typename T, typename Iter = T*>
+        class future_value
+        {
+        public:
+            using value_type = T;
+            using iterator_type = Iter;
+
+            explicit ROCPRIM_HOST_DEVICE future_value(const Iter iter)
+                : iter_ {iter}
+            {
+            }
+
+            ROCPRIM_HOST_DEVICE operator T()
+            {
+                return *iter_;
+            }
+
+            ROCPRIM_HOST_DEVICE operator T() const
+            {
+                return *iter_;
+            }
+        private:
+            Iter iter_;
+        };
+        """
+        ast = self.parse_code(code)
+
+        future_value = ast.statements[0]
+        constructor = next(
+            member
+            for member in future_value.members
+            if isinstance(member, FunctionNode) and member.name == "future_value"
+        )
+        data_member = future_value.members[-1]
+        member_names = [getattr(member, "name", "") for member in future_value.members]
+
+        assert isinstance(future_value, StructNode)
+        assert future_value.name == "future_value"
+        assert constructor.qualifiers == ["explicit", "ROCPRIM_HOST_DEVICE"]
+        assert constructor.params == [{"type": "const Iter", "name": "iter"}]
+        assert isinstance(data_member, VariableNode)
+        assert data_member.vtype == "Iter"
+        assert data_member.name == "iter_"
+        assert "operator" not in member_names
+        assert "T" not in member_names
+
     def test_public_rocm_hiprtc_string_literal_suffix_arguments_parse(self):
         # Upstream: ROCm/hip docs/tools/example_codes/lowered_names.cpp.
         code = """
