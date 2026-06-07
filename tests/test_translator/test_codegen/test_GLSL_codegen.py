@@ -1943,89 +1943,122 @@ def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
     assert "PointerType" not in generated
 
 
-@pytest.mark.parametrize(
-    ("code", "message"),
-    [
-        (
-            """
-            shader TextureUsesDescriptorSet {
-                sampler2D tex @set(1) @binding(2);
+def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
+    # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
+    code = """
+    shader DescriptorSetFlatteningGLSL {
+        struct Params {
+            vec4 color;
+        };
 
-                fragment {
-                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                        return texture(tex, uv);
-                    }
-                }
-            }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'tex': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader SamplerUsesDescriptorSet {
-                sampler samp @set(1) @sampler(2);
-                sampler2D tex;
+        layout(set = 0, binding = 0) uniform Params frameParams;
+        layout(set = 1, binding = 0) uniform Params materialParams;
+        layout(set = 0, binding = 1) buffer float* values;
+        layout(set = 2, binding = 1) buffer float* history;
+        layout(set = 0, binding = 4) uniform sampler2D baseMap;
+        layout(set = 1, binding = 4) uniform sampler2D detailMap;
 
-                fragment {
-                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                        return texture(tex, samp, uv);
-                    }
-                }
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                values[0] = history[0];
+                return texture(baseMap, uv) + texture(detailMap, uv)
+                    + frameParams.color + materialParams.color;
             }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'samp': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader ImageUsesRegisterSpace {
-                image2D img @space(2) @binding(3);
+        }
+    }
+    """
 
-                fragment {
-                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                        return imageLoad(img, ivec2(0, 0));
-                    }
-                }
-            }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'img': "
-            "space 2 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader StageResourceUsesDescriptorSet {
-                fragment {
-                    vec4 main(sampler2D tex @set(1) @binding(2)) @gl_FragColor {
-                        return texture(tex, vec2(0.0));
-                    }
-                }
-            }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'tex': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader StageSamplerUsesDescriptorSet {
-                sampler2D tex;
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-                fragment {
-                    vec4 main(sampler samp @set(1) @sampler(2), vec2 uv @TEXCOORD0)
-                        @gl_FragColor {
-                        return texture(tex, samp, uv);
-                    }
-                }
+    assert "layout(std140, binding = 0) uniform Params {" in generated
+    assert "} frameParams;" in generated
+    assert "layout(std140, binding = 1024) uniform Params {" in generated
+    assert "} materialParams;" in generated
+    assert (
+        "layout(std430, binding = 1) buffer valuesBuffer { float values[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 2049) buffer historyBuffer { float history[]; };"
+        in generated
+    )
+    assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
+    assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
+
+
+def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
+    code = """
+    shader DescriptorSetOrderIndependentGLSL {
+        sampler2D tex @binding(2) @set(1);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(tex, uv);
             }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'samp': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-    ],
-)
-def test_glsl_resource_binding_rejects_descriptor_set_space_metadata(code, message):
-    with pytest.raises(ValueError, match=message):
-        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+
+
+def test_glsl_register_space_flattens_to_opengl_binding():
+    code = """
+    shader RegisterSpaceFlatteningGLSL {
+        image2D img @space(2) @binding(3);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return imageLoad(img, ivec2(0, 0));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(rgba32f, binding = 2051) uniform image2D img;" in generated
+
+
+def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
+    code = """
+    shader DescriptorSetRegisterAliasGLSL {
+        struct Params {
+            vec4 scale;
+        };
+
+        layout(set = 1, register = 2) uniform Params materialParams;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return materialParams.scale;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(std140, binding = 1026) uniform Params {" in generated
+    assert "} materialParams;" in generated
+
+
+def test_glsl_stage_resource_descriptor_set_flattens_to_opengl_binding():
+    code = """
+    shader StageResourceUsesDescriptorSet {
+        fragment {
+            vec4 main(sampler2D tex @set(1) @binding(2)) @gl_FragColor {
+                return texture(tex, vec2(0.0));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
 
 
 @pytest.mark.parametrize(
@@ -2262,6 +2295,21 @@ def test_glsl_resource_binding_aliases_reject_conflicting_metadata(code, message
             """,
             "Invalid OpenGL resource binding metadata for 'tex': "
             "texture slot must resolve to a concrete integer binding",
+        ),
+        (
+            """
+            shader InvalidDescriptorSetOperand {
+                sampler2D tex @set(space) @binding(2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "set space must resolve to a concrete integer binding",
         ),
     ],
 )

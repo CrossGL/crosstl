@@ -537,6 +537,11 @@ class HLSLCodeGen:
         "asuint": "uint",
         "asfloat": "float",
     }
+    HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES = {
+        "NonUniformResourceIndex",
+        "nonuniform",
+        "nonuniformEXT",
+    }
 
     def __init__(self):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -577,6 +582,7 @@ class HLSLCodeGen:
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
+        self.directx_resource_register_overrides = {}
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
         self.current_identifier_aliases = {}
@@ -4249,7 +4255,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.hlsl_wave_intrinsic_return_type(func_name, args)
-            if func_name == "NonUniformResourceIndex":
+            if func_name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
                 return self.hlsl_nonuniform_resource_index_return_type(args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
@@ -9348,7 +9354,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for node in self.walk_ast(getattr(func, "body", [])):
             if not isinstance(node, FunctionCallNode):
                 continue
-            if self.function_call_name(node) != "NonUniformResourceIndex":
+            if (
+                self.hlsl_function_call_name(self.function_call_name(node))
+                != "NonUniformResourceIndex"
+            ):
                 continue
             calls.append(getattr(node, "arguments", getattr(node, "args", [])))
 
@@ -12699,6 +12708,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.hlsl_function_name_aliases.get(name, name)
 
     def hlsl_function_call_name(self, name):
+        if name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
+            return "NonUniformResourceIndex"
         return self.hlsl_function_name_aliases.get(name, name)
 
     def collect_function_parameters(self, functions):
@@ -13343,7 +13354,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def global_resource_shape(self, node):
         resource_count = 1
         if hasattr(node, "var_type"):
-            if hasattr(node.var_type, "name") or hasattr(node.var_type, "element_type"):
+            if (
+                hasattr(node.var_type, "name")
+                or hasattr(node.var_type, "element_type")
+                or isinstance(node.var_type, PointerType)
+            ):
                 if (
                     hasattr(node.var_type, "element_type")
                     and str(type(node.var_type)).find("ArrayType") != -1
@@ -13430,9 +13445,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return prefix, binding, space, resource_count, var_name
 
     def reserve_explicit_global_resource_registers(self, global_vars, used_registers):
+        self.directx_resource_register_overrides = {}
+        relocatable_metadata = []
         for node in global_vars:
             metadata = self.global_resource_register_metadata(node)
             if metadata is None:
+                continue
+            if self.directx_binding_allows_register_relocation(node):
+                relocatable_metadata.append((node, metadata))
                 continue
             prefix, binding, space, resource_count, var_name = metadata
             self.reserve_resource_register_range(
@@ -13443,6 +13463,55 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 var_name,
                 space,
             )
+
+        for node, metadata in relocatable_metadata:
+            prefix, binding, space, resource_count, var_name = metadata
+            resolved_binding = self.reserve_relocatable_resource_register_range(
+                used_registers,
+                prefix,
+                binding,
+                resource_count,
+                var_name,
+                space,
+            )
+            if resolved_binding != binding:
+                self.record_directx_resource_register_override(
+                    node, prefix, resolved_binding
+                )
+
+    def directx_binding_allows_register_relocation(self, node):
+        attr_names = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        return (
+            "binding" in attr_names
+            and "set" in attr_names
+            and "register" not in attr_names
+        )
+
+    def reserve_relocatable_resource_register_range(
+        self, used_registers, register_prefix, preferred, count, name, space=None
+    ):
+        try:
+            self.reserve_resource_register_range(
+                used_registers, register_prefix, preferred, count, name, space
+            )
+            return preferred
+        except ValueError:
+            cursor = {space: preferred}
+            binding = self.next_available_resource_register(
+                used_registers, register_prefix, cursor, space, count
+            )
+            self.reserve_resource_register_range(
+                used_registers, register_prefix, binding, count, name, space
+            )
+            return binding
+
+    def record_directx_resource_register_override(self, node, register_prefix, binding):
+        self.directx_resource_register_overrides.setdefault(id(node), {})[
+            register_prefix
+        ] = binding
 
     def next_resource_register(self, register_cursors, space):
         return register_cursors.get(space, 0)
@@ -17175,6 +17244,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def explicit_resource_binding_index(
         self, node, attribute_names=(), register_prefixes=()
     ):
+        override = self.directx_resource_register_override(node, register_prefixes)
+        if override is not None:
+            return override
         if not hasattr(node, "attributes"):
             return None
         for attr in node.attributes:
@@ -17191,6 +17263,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 binding = None
             if binding is not None:
                 return binding
+        return None
+
+    def directx_resource_register_override(self, node, register_prefixes=()):
+        overrides = self.directx_resource_register_overrides.get(id(node), {})
+        if not overrides:
+            return None
+        for prefix in register_prefixes:
+            if prefix in overrides:
+                return overrides[prefix]
+        if not register_prefixes and len(overrides) == 1:
+            return next(iter(overrides.values()))
         return None
 
     def explicit_resource_register_space(self, node):

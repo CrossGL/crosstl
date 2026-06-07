@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1010
+        "test_count": 1012
       },
       "translator_codegen": {
         "exists": true,
@@ -141,7 +141,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 176,
+        "unsupported_marker_count": 175,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1109
+        "test_count": 1113
       },
       "translator_codegen": {
         "exists": true,

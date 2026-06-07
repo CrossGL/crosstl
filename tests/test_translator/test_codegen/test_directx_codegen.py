@@ -3935,6 +3935,91 @@ def test_hlsl_generic_binding_overlap_raises_within_uav_namespace():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_directx_layout_descriptor_array_binding_overlap_relocates_registers():
+    code = """
+    shader VulkanDynamicDescriptorArrayIndexShader {
+        struct Particle {
+            vec3 position;
+            float mass;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer Particle* particles[2];
+            layout(set = 0, binding = 1) buffer int* descriptors;
+            layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+            layout(set = 0, binding = 5) sampler linearSamplers[2];
+
+            void main() {
+                int descriptor = descriptors[0];
+                vec2 uv = particles[descriptor][0].position.xy;
+                vec4 color = textureLod(
+                    colorMaps[descriptor],
+                    linearSamplers[descriptor],
+                    uv,
+                    0.25
+                );
+                float mass = particles[descriptor][0].mass;
+                particles[descriptor][1].mass = mass + color.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWStructuredBuffer<Particle> particles[2] : register(u0);" in generated_code
+    assert "RWStructuredBuffer<int> descriptors : register(u2);" in generated_code
+    assert "Texture2D colorMaps[2] : register(t2);" in generated_code
+    assert "SamplerState linearSamplers[2] : register(s5);" in generated_code
+    assert "int descriptor = descriptors[0];" in generated_code
+    assert "float2 uv = particles[descriptor][0].position.xy;" in generated_code
+    assert "particles[descriptor][1].mass = (mass + color.x);" in generated_code
+
+
+def test_directx_layout_nonuniform_descriptor_array_overlap_relocates_registers():
+    code = """
+    shader VulkanNonUniformDescriptorArrayIndexShader {
+        struct Particle {
+            vec3 position;
+            float mass;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer Particle* particles[2];
+            layout(set = 0, binding = 1) buffer int* descriptors;
+            layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+            layout(set = 0, binding = 5) sampler linearSamplers[2];
+
+            void main() {
+                int descriptor = descriptors[0];
+                vec2 uv = particles[nonuniform(descriptor)][0].position.xy;
+                vec4 color = textureLod(
+                    colorMaps[nonuniform(descriptor)],
+                    linearSamplers[nonuniform(descriptor)],
+                    uv,
+                    0.25
+                );
+                float mass = particles[nonuniform(descriptor)][0].mass;
+                particles[nonuniform(descriptor)][1].mass = mass + color.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWStructuredBuffer<Particle> particles[2] : register(u0);" in generated_code
+    assert "RWStructuredBuffer<int> descriptors : register(u2);" in generated_code
+    assert "Texture2D colorMaps[2] : register(t2);" in generated_code
+    assert "SamplerState linearSamplers[2] : register(s5);" in generated_code
+    assert "NonUniformResourceIndex(descriptor)" in generated_code
+    assert "nonuniform(descriptor)" not in generated_code
+
+
 def test_hlsl_auto_registers_skip_later_explicit_global_bindings():
     code = """
     shader LateExplicitBindings {

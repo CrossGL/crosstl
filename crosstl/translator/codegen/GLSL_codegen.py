@@ -290,6 +290,7 @@ from .stage_utils import (
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
+    OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
     GLSL_STAGE_GUARD_MACROS = {
         "vertex": "GL_VERTEX_SHADER",
@@ -2772,6 +2773,39 @@ class GLSLCodeGen:
                 memory_qualifiers = self.resource_memory_qualifiers(node)
                 qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
                 code += f"{layout} {qualifier_prefix}uniform {declaration};\n"
+                self.advance_resource_binding(
+                    resource_binding_cursors,
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
+                )
+            elif self.is_layout_bound_struct_uniform(node, vtype):
+                explicit_binding = self.explicit_resource_binding_index(node)
+                binding_namespace = "uniform buffer binding"
+                resource_binding = (
+                    explicit_binding
+                    if explicit_binding is not None
+                    else self.next_available_resource_binding(
+                        used_resource_bindings,
+                        resource_binding_cursors,
+                        binding_namespace,
+                        resource_count,
+                    )
+                )
+                self.reserve_resource_binding_range(
+                    used_resource_bindings,
+                    "OpenGL",
+                    binding_namespace,
+                    resource_binding,
+                    resource_count,
+                    var_name,
+                )
+                code += self.glsl_struct_uniform_block_declaration(
+                    vtype,
+                    var_name,
+                    resource_binding,
+                    array_suffix,
+                )
                 self.advance_resource_binding(
                     resource_binding_cursors,
                     binding_namespace,
@@ -14397,6 +14431,30 @@ class GLSLCodeGen:
     def resource_node_name(self, node, default=None):
         return getattr(node, "name", getattr(node, "variable_name", default))
 
+    def is_layout_bound_struct_uniform(self, node, vtype):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "uniform" not in qualifiers:
+            return False
+        return (
+            str(self.resource_base_type(vtype)) in self.structs_by_name
+            and self.explicit_resource_binding_index(node) is not None
+        )
+
+    def glsl_struct_uniform_block_declaration(
+        self, vtype, var_name, binding, array_suffix=""
+    ):
+        block_name = str(self.resource_base_type(vtype))
+        struct = self.structs_by_name[block_name]
+        code = f"layout(std140, binding = {binding}) uniform {block_name} {{\n"
+        for member in getattr(struct, "members", []) or []:
+            code += self.generate_struct_member_declaration(
+                member,
+                struct_name=block_name,
+                preserve_unsized_arrays=True,
+            )
+        code += f"}} {var_name}{array_suffix};\n"
+        return code
+
     def pointer_buffer_structured_type(self, node, node_type):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if "buffer" not in qualifiers or not hasattr(node_type, "pointee_type"):
@@ -14520,6 +14578,8 @@ class GLSLCodeGen:
             namespace = "buffer binding"
         elif self.is_structured_buffer_type(vtype):
             namespace = "buffer binding"
+        elif self.is_layout_bound_struct_uniform(node, vtype):
+            namespace = "uniform buffer binding"
         else:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
@@ -15292,26 +15352,49 @@ class GLSLCodeGen:
         choices = []
         if not hasattr(node, "attributes"):
             return choices
+        descriptor_set = 0
+        descriptor_set_description = None
+        node_name = self.resource_node_name(node, "<unnamed>")
         for attr in node.attributes:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
                 continue
             attr_name = str(attr_name).lower()
+            if attr_name not in {"set", "space"}:
+                continue
             arguments = getattr(attr, "arguments", []) or []
             source = self.attribute_value_to_string(arguments[0]) if arguments else None
-            if attr_name in {"set", "space"}:
-                resource_space = (
-                    self.binding_index_value(arguments[0]) if arguments else None
+            resource_space = (
+                self.binding_index_value(arguments[0]) if arguments else None
+            )
+            if resource_space is None:
+                raise ValueError(
+                    self.invalid_resource_binding_message(node, attr_name, source)
                 )
-                if resource_space is None:
+            description = f"{attr_name} {source if source is not None else '<missing>'}"
+            if descriptor_set_description is not None:
+                if resource_space == descriptor_set:
                     raise ValueError(
-                        self.invalid_resource_binding_message(node, attr_name, source)
+                        "Duplicate OpenGL resource binding metadata for "
+                        f"'{node_name}': {description}"
                     )
-                if resource_space != 0:
-                    raise ValueError(
-                        self.unsupported_resource_space_message(node, attr_name, source)
-                    )
+                raise ValueError(
+                    "Conflicting OpenGL resource binding metadata for "
+                    f"'{node_name}': {descriptor_set_description} differs from "
+                    f"{description}"
+                )
+            descriptor_set = resource_space
+            descriptor_set_description = description
+
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
                 continue
+            attr_name = str(attr_name).lower()
+            if attr_name in {"set", "space"}:
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            source = self.attribute_value_to_string(arguments[0]) if arguments else None
             if not arguments:
                 continue
             if attr_name in {"binding", "buffer", "sampler", "texture"}:
@@ -15325,6 +15408,8 @@ class GLSLCodeGen:
                 raise ValueError(
                     self.invalid_resource_binding_message(node, attr_name, source)
                 )
+            if descriptor_set:
+                binding += descriptor_set * self.OPENGL_DESCRIPTOR_SET_BINDING_STRIDE
             choices.append((attr_name, source, binding))
         return choices
 
