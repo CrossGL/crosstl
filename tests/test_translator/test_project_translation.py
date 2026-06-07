@@ -5292,7 +5292,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     ) in result.stdout
 
 
-def test_translate_project_records_exact_copy_line_source_maps(tmp_path):
+def test_translate_project_records_line_preserving_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -5443,7 +5443,7 @@ def test_line_source_map_spans_use_utf8_byte_offsets(tmp_path):
     repo.mkdir()
     first_line = "// unicode marker: \u2603\n"
     source_path = repo / "simple.cgl"
-    source_path.write_text(first_line + SIMPLE_CROSSL, encoding="utf-8")
+    source_path.write_bytes((first_line + SIMPLE_CROSSL).encode("utf-8"))
 
     spans = [
         span.to_json()
@@ -10368,7 +10368,7 @@ def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_pa
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
 
-    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
     payload = report.to_json()
     source_map = payload["artifacts"][0]["sourceMap"]
     source_map["mappingGranularity"] = "line"
@@ -10394,7 +10394,7 @@ def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_pa
         _source_map_status_counts(ok=1)
     )
     assert validation["validation"]["summary"]["sourceRemapStatusCounts"] == (
-        _source_remap_status_counts(ok=1)
+        _source_remap_status_counts(**{"not-recorded": 1})
     )
 
 
@@ -10705,6 +10705,44 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
     )
     assert "sourceMap.generated.length must match generated artifact length" in (
         diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_stale_line_preserving_source_map_mappings(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    assert source_map["mappingGranularity"] == "line"
+    assert len(source_map["mappings"]) > 1
+    source_map["mappings"].pop()
+    report_path = repo / "out" / "stale-line-source-map-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["sourceMapStatus"] == "mismatch"
+    assert validation["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-map-line-span-mismatch": 1,
+    }
+    assert validation["missingCapabilityCounts"] == {"source.provenance": 1}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+    assert (
+        "sourceMap.mappings count must match current line-preserving line count"
+        in diagnostic["message"]
     )
 
 

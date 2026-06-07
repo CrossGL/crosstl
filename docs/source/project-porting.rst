@@ -491,17 +491,17 @@ Project reports are JSON documents with:
   must contain one mapping that exactly matches the artifact-level source and
   generated anchors. Finer-grained source maps keep those artifact-level
   anchors as file spans and may include one or more positive-length mappings
-  whose source and generated files match the anchors. Byte-identical source and
+  whose source and generated files match the anchors. Line-preserving source and
   generated artifacts include line-granularity mappings with UTF-8 byte offsets.
   The report records the sidecar path, hash, generated-file identity, summary
   rollups by target and source backend, and bounded inspection samples for
   source-map and source-remap artifacts. Validation checks that artifact-level
-  source-map spans still cover the current source and generated files, and that
-  compiler source-remap sidecars use the closed schema-1 field set. The project
-  pipeline emits line-granularity source maps only when the generated artifact is
-  an exact byte copy of the source; translated artifacts keep file-granularity
-  source maps until backend pipelines expose generated line, statement, or token
-  provenance.
+  source-map spans still cover the current source and generated files, recomputes
+  line-preserving mappings, and checks that compiler source-remap sidecars use
+  the closed schema-1 field set. The project pipeline emits line-granularity
+  source maps only when the generated artifact is line-preserving after newline
+  normalization; translated artifacts keep file-granularity source maps until
+  backend pipelines expose generated line, statement, or token provenance.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL

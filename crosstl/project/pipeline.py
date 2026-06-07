@@ -856,6 +856,11 @@ def _line_spans(path: Path, report_path: str) -> list[SourceLocation]:
     return spans
 
 
+def _normalized_line_text(source_bytes: bytes) -> str:
+    text = source_bytes.decode("utf-8", errors="replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
     return (
         _relpath(path, config.root) if _is_relative_to(path, config.root) else str(path)
@@ -3476,7 +3481,7 @@ def _artifact_source_map(
     source_bytes = unit.path.read_bytes()
     generated_bytes = output_path.read_bytes()
     line_mappings = []
-    if source_bytes == generated_bytes:
+    if _normalized_line_text(source_bytes) == _normalized_line_text(generated_bytes):
         source_line_spans = _line_spans(unit.path, unit.relative_path)
         generated_line_spans = _line_spans(output_path, artifact_path)
         if source_line_spans and len(source_line_spans) == len(generated_line_spans):
@@ -4124,6 +4129,50 @@ def _source_map_file_span_mismatch_reasons(
     return reasons
 
 
+def _source_map_line_preserving_mapping_reasons(
+    prefix: str,
+    source_map: Mapping[str, Any],
+    source_path: Path,
+    source_report_path: str,
+    artifact_path: Path,
+    artifact_report_path: str,
+) -> list[str]:
+    if source_map.get("mappingGranularity") != "line":
+        return []
+    mappings = source_map.get("mappings")
+    if not isinstance(mappings, list):
+        return []
+    if _normalized_line_text(source_path.read_bytes()) != _normalized_line_text(
+        artifact_path.read_bytes()
+    ):
+        return []
+
+    expected_mappings = [
+        {
+            "source": source_span.to_json(),
+            "generated": generated_span.to_json(),
+        }
+        for source_span, generated_span in zip(
+            _line_spans(source_path, source_report_path),
+            _line_spans(artifact_path, artifact_report_path),
+        )
+    ]
+    if mappings == expected_mappings:
+        return []
+    if len(mappings) != len(expected_mappings):
+        return [
+            f"{prefix}.mappings count must match current line-preserving line count"
+        ]
+    for mapping_index, expected_mapping in enumerate(expected_mappings):
+        mapping = mappings[mapping_index]
+        if not isinstance(mapping, Mapping) or dict(mapping) != expected_mapping:
+            return [
+                f"{prefix}.mappings[{mapping_index}] must match current "
+                "line-preserving line span"
+            ]
+    return [f"{prefix}.mappings must match current line-preserving line spans"]
+
+
 def _source_map_file_span_validation_diagnostics(
     artifact: Mapping[str, Any],
     config: ProjectConfig,
@@ -4140,6 +4189,8 @@ def _source_map_file_span_validation_diagnostics(
         return []
 
     reasons = []
+    source_path: Path | None = None
+    artifact_report_path = artifact.get("path")
     source = artifact.get("source")
     if source_hash_status in {"ok", "not-recorded"} and _is_non_empty_string(source):
         source_path = _resolve_report_path(config, source)
@@ -4157,7 +4208,6 @@ def _source_map_file_span_validation_diagnostics(
                 )
             )
 
-    artifact_report_path = artifact.get("path")
     if (
         generated_hash_status in {"ok", "not-recorded"}
         and _is_non_empty_string(artifact_report_path)
@@ -4174,14 +4224,42 @@ def _source_map_file_span_validation_diagnostics(
             )
         )
 
+    if (
+        source_path is not None
+        and _is_non_empty_string(source)
+        and _is_non_empty_string(artifact_report_path)
+        and source_hash_status in {"ok", "not-recorded"}
+        and generated_hash_status in {"ok", "not-recorded"}
+        and _is_relative_to(source_path, config.root)
+        and _is_relative_to(artifact_path, config.root)
+        and source_path.exists()
+        and source_path.is_file()
+        and artifact_path.exists()
+        and artifact_path.is_file()
+    ):
+        reasons.extend(
+            _source_map_line_preserving_mapping_reasons(
+                "sourceMap",
+                source_map,
+                source_path,
+                source,
+                artifact_path,
+                artifact_report_path,
+            )
+        )
+
     if not reasons:
         return []
     return [
         ProjectDiagnostic(
             severity="error",
-            code="project.validate.source-map-file-span-mismatch",
+            code=(
+                "project.validate.source-map-line-span-mismatch"
+                if any("line-preserving line" in reason for reason in reasons)
+                else "project.validate.source-map-file-span-mismatch"
+            ),
             message=(
-                "Source map file spans do not match current files: "
+                "Source map spans do not match current files: "
                 f"{artifact.get('path')}: {'; '.join(reasons)}"
             ),
             location=SourceLocation(file=str(artifact.get("source", ""))),
