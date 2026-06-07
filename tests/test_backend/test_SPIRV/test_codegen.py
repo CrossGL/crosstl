@@ -2638,6 +2638,62 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_SPARSE_TEXTURE_RESIDENT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders-no-opt/asm/frag/sparse-texture-feedback-uint-code.asm.desktop.frag
+; Reduced from OpImageSparseSampleImplicitLod, result extracts, and
+; OpImageSparseTexelsResident.
+OpCapability Shader
+OpCapability SparseResidency
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %vUV %FragColor
+OpExecutionMode %main OriginUpperLeft
+OpName %ret "ret"
+OpName %uSamp "uSamp"
+OpName %vUV "vUV"
+OpName %texel "texel"
+OpName %ResType "ResType"
+OpName %FragColor "FragColor"
+OpDecorate %uSamp DescriptorSet 0
+OpDecorate %uSamp Binding 0
+OpDecorate %vUV Location 0
+OpDecorate %FragColor Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%ptr_function_bool = OpTypePointer Function %bool
+%float = OpTypeFloat 32
+%image = OpTypeImage %float 2D 0 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%uSamp = OpVariable %ptr_sampled UniformConstant
+%v2float = OpTypeVector %float 2
+%ptr_input_v2float = OpTypePointer Input %v2float
+%vUV = OpVariable %ptr_input_v2float Input
+%v4float = OpTypeVector %float 4
+%ptr_function_v4float = OpTypePointer Function %v4float
+%uint = OpTypeInt 32 0
+%ResType = OpTypeStruct %uint %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%FragColor = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%ret = OpVariable %ptr_function_bool Function
+%texel = OpVariable %ptr_function_v4float Function
+%loaded_tex = OpLoad %sampled %uSamp
+%loaded_uv = OpLoad %v2float %vUV
+%sparse = OpImageSparseSampleImplicitLod %ResType %loaded_tex %loaded_uv
+%texel_value = OpCompositeExtract %v4float %sparse 1
+OpStore %texel %texel_value
+%resident_code = OpCompositeExtract %uint %sparse 0
+%resident = OpImageSparseTexelsResident %bool %resident_code
+OpStore %ret %resident
+OpStore %FragColor %texel_value
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -4946,6 +5002,34 @@ def test_spirv_tools_image_read_sample_operand_codegen_reparse():
     assert "float4 color @output @location(0);" in generated_code
     assert "color = imageLoad(var_image, uint2(1, 2), 2);" in generated_code
     assert "imageLoad(var_image, uint2(1, 2));" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_sparse_texture_resident_codegen_reparse():
+    tokens = tokenize_code(SPIRV_CROSS_SPARSE_TEXTURE_RESIDENT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2D uSamp @set(0) @binding(0);" in generated_code
+    assert "float2 vUV @input @location(0);" in generated_code
+    assert "float4 FragColor @output @location(0);" in generated_code
+    assert (
+        "texel = spirvSparseTexel(spirvImageSparseSample(uSamp, vUV));"
+        in generated_code
+    )
+    assert (
+        "ret = spirvSparseTexelsResident("
+        "spirvSparseResidencyCode(spirvImageSparseSample(uSamp, vUV)));"
+        in generated_code
+    )
+    assert (
+        "FragColor = spirvSparseTexel(spirvImageSparseSample(uSamp, vUV));"
+        in generated_code
+    )
+    assert "texel = sparse[1];" not in generated_code
+    assert "ret = resident;" not in generated_code
+    assert "OpImageSparse" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

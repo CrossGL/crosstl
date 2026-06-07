@@ -5873,7 +5873,81 @@ class HipToCrossGLConverter:
         if marker in text and text.endswith(")"):
             return text.split(marker, 1)[0].strip()
 
+        value_size = self.hip_surface_value_type_size(value_type)
+        if value_size is not None:
+            normalized = self.strip_surface_constant_byte_stride(text, value_size)
+            if normalized is not None:
+                return normalized
+
         return expression
+
+    def hip_surface_value_type_size(self, value_type):
+        if not value_type:
+            return None
+
+        text = str(value_type).strip()
+        if text.startswith("const "):
+            text = text[6:].strip()
+
+        vector_match = re.fullmatch(
+            r"(?:make_)?(char|uchar|short|ushort|int|uint|long|ulong|"
+            r"longlong|ulonglong|float|double)([1-4])",
+            text,
+        )
+        if vector_match:
+            scalar_type, count = vector_match.groups()
+            scalar_size = {
+                "char": 1,
+                "uchar": 1,
+                "short": 2,
+                "ushort": 2,
+                "int": 4,
+                "uint": 4,
+                "long": 8,
+                "ulong": 8,
+                "longlong": 8,
+                "ulonglong": 8,
+                "float": 4,
+                "double": 8,
+            }.get(scalar_type)
+            return scalar_size * int(count) if scalar_size is not None else None
+
+        return {
+            "char": 1,
+            "signed char": 1,
+            "unsigned char": 1,
+            "int8_t": 1,
+            "uint8_t": 1,
+            "short": 2,
+            "unsigned short": 2,
+            "int16_t": 2,
+            "uint16_t": 2,
+            "int": 4,
+            "unsigned int": 4,
+            "float": 4,
+            "int32_t": 4,
+            "uint32_t": 4,
+            "long": 8,
+            "unsigned long": 8,
+            "long long": 8,
+            "unsigned long long": 8,
+            "double": 8,
+            "int64_t": 8,
+            "uint64_t": 8,
+        }.get(text)
+
+    def strip_surface_constant_byte_stride(self, text, value_size):
+        patterns = (
+            (rf"^(.+?)\s*\*\s*{value_size}$", 1),
+            (rf"^{value_size}\s*\*\s*(.+)$", 1),
+        )
+        for pattern, group in patterns:
+            match = re.fullmatch(pattern, text)
+            if match:
+                coordinate = match.group(group).strip()
+                if coordinate:
+                    return self.strip_wrapping_parentheses(coordinate)
+        return None
 
     def format_vector_constructor(self, vector_name, args, element_type="f32"):
         if vector_name == "vec1":

@@ -1268,7 +1268,26 @@ class MojoToCrossGLConverter:
         if self.is_user_defined_function(func_name, arg_count):
             return mapped_name
         resolved_name = self.resolve_imported_function_name(func_name)
-        return self.function_map.get(resolved_name, mapped_name)
+        mapped_function = self.function_map.get(resolved_name)
+        if mapped_function:
+            return mapped_function
+
+        constructor_type = self.map_constructor_function(func_name)
+        if constructor_type:
+            return constructor_type
+
+        return mapped_name
+
+    def map_constructor_function(self, func_name):
+        if not isinstance(func_name, str):
+            return None
+        if "." in func_name:
+            return None
+
+        mapped_type = self.map_type(func_name)
+        if mapped_type == func_name:
+            return None
+        return mapped_type
 
     def map_operator(self, op):
         if op == "is":

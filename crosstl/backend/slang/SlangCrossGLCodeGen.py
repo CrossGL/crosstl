@@ -111,7 +111,7 @@ class SlangToCrossGLConverter:
         "GatherBlue": "2",
         "GatherAlpha": "3",
     }
-    GATHER_COMPARE_METHODS = {"GatherCmp"}
+    GATHER_COMPARE_METHODS = {"GatherCmp", "GatherCmpRed"}
     LOD_QUERY_METHOD_COMPONENTS = {
         "CalculateLevelOfDetail": "x",
         "CalculateLevelOfDetailUnclamped": "y",
@@ -2323,13 +2323,20 @@ class SlangToCrossGLConverter:
 
     def crossgl_texture_gather_compare_call_parts(self, expr, is_main=False):
         prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)
-        if coord is None or len(extra_args) not in {1, 2}:
+        if coord is None or len(extra_args) not in {1, 2, 5}:
             return None
 
         compare = extra_args[0]
         if len(extra_args) == 2:
             offset = extra_args[1]
             return "textureGatherCompareOffset", prefix + [coord, compare, offset]
+
+        if len(extra_args) == 5:
+            return "textureGatherCompareOffsets", prefix + [
+                coord,
+                compare,
+                *extra_args[1:],
+            ]
 
         return "textureGatherCompare", prefix + [coord, compare]
 

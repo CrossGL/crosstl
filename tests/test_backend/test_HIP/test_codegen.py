@@ -2070,6 +2070,50 @@ class TestHipCodeGen:
         assert "surf2D" not in result
         assert "surf1D" not in result
 
+    def test_rocm_docs_surface_constant_byte_stride_coordinates_convert(self):
+        # Source: ROCm HIP Runtime API Reference, Surface object.
+        # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.2/
+        #      reference/hip_runtime_api/modules/memory_management/surface_object.html
+        code = """
+        void surfaceByteStrideOps(
+            hipSurfaceObject_t surf,
+            surface<void, hipSurfaceType1D> lineSurf,
+            int x,
+            int y,
+            float value,
+            float4 vectorValue,
+            unsigned int flags
+        ) {
+            float loaded = surf2Dread<float>(surf, x * 4, y);
+            float pointerLoaded;
+            surf2Dread<float>(&pointerLoaded, surf, 4 * x, y);
+            surf2Dwrite<float>(value, surf, x * 4, y);
+            surf1Dwrite<unsigned int>(flags, lineSurf, 4 * x);
+            surf2Dwrite<float4>(vectorValue, surf, x * 16, y);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "image2D surf" in result
+        assert "image1D lineSurf" in result
+        assert "var loaded: f32 = imageLoad(surf, vec2<i32>(x, y));" in result
+        assert "pointerLoaded = imageLoad(surf, vec2<i32>(x, y));" in result
+        assert "imageStore(surf, vec2<i32>(x, y), value);" in result
+        assert "imageStore(lineSurf, x, flags);" in result
+        assert "imageStore(surf, vec2<i32>(x, y), vectorValue);" in result
+        assert "x * 4" not in result
+        assert "4 * x" not in result
+        assert "x * 16" not in result
+        assert "surf2Dread" not in result
+        assert "surf2Dwrite" not in result
+        assert "surf1Dwrite" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_hip_texture_gather_helpers_convert(self):
         code = """
         void gatherOps(

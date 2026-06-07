@@ -357,6 +357,7 @@ class GLSLToCrossGLConverter:
             "textureGrad": "sample_grad",
             "textureGradOffset": "sample_grad",
             "textureProj": "sample_projected",
+            "textureProjOffset": "sample_projected",
             "textureProjLod": "sample_projected",
             "textureProjLodOffset": "sample_projected",
             "textureProjGrad": "sample_projected",
