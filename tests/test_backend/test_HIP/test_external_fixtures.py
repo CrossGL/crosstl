@@ -1249,6 +1249,55 @@ def test_hipify_half2_high_lane_and_two_float_constructor_codegen_reparse():
     assert "__high2float" not in crossgl
 
 
+def test_rocm_hip_math_half2_lane_pack_codegen_reparse():
+    # Source: ROCm HIP Math API half precision conversion/data movement.
+    # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-6.0.2/reference/math_api.html
+    source = """
+    __device__ half2 repack_half2_lanes(half2 a, half2 b) {
+        __half lo = __low2half(a);
+        __half hi = __high2half(a);
+        half2 packed = __halves2half2(lo, hi);
+        half2 lows = __lows2half2(a, b);
+        half2 highs = __highs2half2(a, b);
+        half2 duplicatedLow = __low2half2(a);
+        half2 duplicatedHigh = __high2half2(b);
+        half2 swapped = __lowhigh2highlow(a);
+        return packed + lows + highs + duplicatedLow + duplicatedHigh + swapped;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[0].value.name == "__low2half"
+    assert body[1].value.name == "__high2half"
+    assert body[2].value.name == "__halves2half2"
+    assert body[3].value.name == "__lows2half2"
+    assert body[4].value.name == "__highs2half2"
+    assert body[5].value.name == "__low2half2"
+    assert body[6].value.name == "__high2half2"
+    assert body[7].value.name == "__lowhigh2highlow"
+    assert "var lo: f16 = a.x;" in crossgl
+    assert "var hi: f16 = a.y;" in crossgl
+    assert "var packed: vec2<f16> = vec2<f16>(lo, hi);" in crossgl
+    assert "var lows: vec2<f16> = vec2<f16>(a.x, b.x);" in crossgl
+    assert "var highs: vec2<f16> = vec2<f16>(a.y, b.y);" in crossgl
+    assert "var duplicatedLow: vec2<f16> = vec2<f16>(a.x, a.x);" in crossgl
+    assert "var duplicatedHigh: vec2<f16> = vec2<f16>(b.y, b.y);" in crossgl
+    assert "var swapped: vec2<f16> = vec2<f16>(a.y, a.x);" in crossgl
+    for raw_name in (
+        "__low2half",
+        "__high2half",
+        "__halves2half2",
+        "__lows2half2",
+        "__highs2half2",
+        "__low2half2",
+        "__high2half2",
+        "__lowhigh2highlow",
+    ):
+        assert raw_name not in crossgl
+
+
 def test_external_rocm_warp_size_reduction_popcount_codegen_reparse():
     source = """
     inline auto popcount(unsigned int x) -> int {

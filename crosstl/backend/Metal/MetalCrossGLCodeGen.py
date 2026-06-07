@@ -2668,6 +2668,12 @@ class MetalToCrossGLConverter:
             return None
 
         texture = self.generate_expression(texture_expr, is_main)
+        cube_read = self.unsupported_sampled_cube_texture_read_expression(
+            texture, mapped_type
+        )
+        if cube_read is not None:
+            return cube_read
+
         rendered_args = [self.generate_expression(arg, is_main) for arg in args]
         coord, tail = self.sampled_texture_read_coordinate_and_tail(
             mapped_type, rendered_args
@@ -2685,6 +2691,27 @@ class MetalToCrossGLConverter:
 
         lod = tail[0] if tail else "0"
         return f"texelFetch({texture}, {coord}, {lod})"
+
+    def unsupported_sampled_cube_texture_read_expression(self, texture, mapped_type):
+        if not self.is_sampled_cube_texture_type(mapped_type):
+            return None
+        fallback = self.sampled_texture_read_zero_value(mapped_type)
+        return (
+            f"{fallback} /* unsupported Metal sampled cube texture read: "
+            f"read on {texture} requires face-aware texel fetch */"
+        )
+
+    def is_sampled_cube_texture_type(self, mapped_type):
+        mapped_type = self.resource_classification_type(mapped_type)
+        return bool(mapped_type and "Cube" in str(mapped_type))
+
+    def sampled_texture_read_zero_value(self, mapped_type):
+        mapped_type = str(self.resource_classification_type(mapped_type) or "")
+        if mapped_type.startswith("usampler"):
+            return "uvec4(0u)"
+        if mapped_type.startswith("isampler"):
+            return "ivec4(0)"
+        return "vec4(0.0)"
 
     def is_sampled_buffer_texture_type(self, mapped_type):
         mapped_type = self.resource_classification_type(mapped_type)

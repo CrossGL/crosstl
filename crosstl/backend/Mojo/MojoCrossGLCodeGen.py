@@ -1041,11 +1041,16 @@ class MojoToCrossGLConverter:
             func_name = self.map_function(expr.name, len(args))
             return f"{func_name}({args_str})"
         elif isinstance(expr, MethodCallNode):
-            obj = self.generate_expression(expr.object)
             args = []
             if hasattr(expr, "args") and expr.args:
                 args = [self.generate_expression(arg) for arg in expr.args]
             args_str = ", ".join(args)
+            if expr.method == "splat":
+                simd_type = self.map_simd_type_expression(expr.object)
+                if simd_type and len(args) == 1:
+                    return f"{simd_type}({args_str})"
+
+            obj = self.generate_expression(expr.object)
             method_name = self.map_member_name(expr.method)
             full_name = f"{obj}.{method_name}"
             if self.is_scoped_value_name(obj):
@@ -1092,6 +1097,27 @@ class MojoToCrossGLConverter:
                 self.generate_expression(element) for element in index.elements
             )
         return self.generate_expression(index)
+
+    def map_simd_type_expression(self, node):
+        if not isinstance(node, ArrayAccessNode):
+            return None
+        if not isinstance(node.array, VariableNode) or node.array.name != "SIMD":
+            return None
+
+        if isinstance(node.index, TupleNode):
+            elements = node.index.elements
+        else:
+            elements = [node.index]
+        if len(elements) != 2:
+            return None
+
+        dtype = self.generate_expression(elements[0])
+        width = self.generate_expression(elements[1])
+        simd_type = f"SIMD[{dtype}, {width}]"
+        mapped_type = self.map_type(simd_type)
+        if mapped_type == simd_type:
+            return None
+        return mapped_type
 
     def generate_list_comprehension(self, expr):
         pieces = [self.generate_expression(expr.expression)]

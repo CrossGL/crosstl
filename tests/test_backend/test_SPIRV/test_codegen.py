@@ -2176,6 +2176,49 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_TEXEL_FETCH_MS_SAMPLE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#_a_id_image_operands_a_image_operands
+; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/main/include/spirv/unified1/spirv.core.grammar.json
+; Reduced from GLSL texelFetch(sampler2DMS, pixel, sample), where SPIR-V
+; carries the multisample index as an OpImageFetch Sample image operand.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %pixel %out_color
+OpExecutionMode %main OriginUpperLeft
+OpName %color_tex "colorTex"
+OpName %pixel "pixel"
+OpName %out_color "outColor"
+OpDecorate %color_tex DescriptorSet 0
+OpDecorate %color_tex Binding 0
+OpDecorate %pixel Flat
+OpDecorate %pixel Location 0
+OpDecorate %out_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2int = OpTypeVector %int 2
+%v4float = OpTypeVector %float 4
+%image = OpTypeImage %float 2D 0 0 1 1 Unknown
+%sampled = OpTypeSampledImage %image
+%ptr_sampled = OpTypePointer UniformConstant %sampled
+%ptr_input_v2int = OpTypePointer Input %v2int
+%ptr_output_v4float = OpTypePointer Output %v4float
+%sample_id = OpConstant %int 2
+%color_tex = OpVariable %ptr_sampled UniformConstant
+%pixel = OpVariable %ptr_input_v2int Input
+%out_color = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_tex = OpLoad %sampled %color_tex
+%image_only = OpImage %image %loaded_tex
+%loaded_pixel = OpLoad %v2int %pixel
+%fetch = OpImageFetch %v4float %image_only %loaded_pixel Sample %sample_id
+OpStore %out_color %fetch
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_TEXTURE_GATHER_OFFSET_ASSEMBLY = """
 ; Reduced from glslangValidator-style output for textureGatherOffset(colorTex, uv, ivec2(1, 2), 2).
 ; SPIR-V lowers this to OpImageGather with Component and ConstOffset operands.
@@ -5134,6 +5177,20 @@ def test_glslang_texel_fetch_offset_preserves_const_offset_codegen_reparse():
         "outColor = texelFetchOffset(colorTex, pixel, 2, int2(1, 2));" in generated_code
     )
     assert "outColor = texelFetch(colorTex, pixel, 2);" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_texel_fetch_ms_preserves_sample_operand_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_TEXEL_FETCH_MS_SAMPLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "Texture2DMS colorTex @set(0) @binding(0);" in generated_code
+    assert "int2 pixel @input @location(0) @flat;" in generated_code
+    assert "float4 outColor @output @location(0);" in generated_code
+    assert "outColor = texelFetch(colorTex, pixel, 2);" in generated_code
+    assert "outColor = texelFetch(colorTex, pixel);" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

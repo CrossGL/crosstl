@@ -2597,6 +2597,26 @@ def test_generic_simd_constructor_codegen():
     assert "let color = vec4(1.0, 2.0, 3.0, 4.0);" in generated_code
 
 
+def test_simd_splat_static_factory_from_modular_docs_reparses_crossgl():
+    # Reduced from https://mojolang.org/docs/manual/parameters/
+    # Mojo's SIMD type documents splat as a static factory on the parameterized
+    # SIMD type; CrossGL should receive the equivalent vector constructor.
+    code = """
+    fn main():
+        let color = SIMD[DType.float32, 4].splat(1.0)
+        let offsets = SIMD[DType.int32, 2].splat(1)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let color = vec4(1.0);" in generated_code
+    assert "let offsets = ivec2(1);" in generated_code
+    assert "SIMD[DType.float32, 4].splat" not in generated_code
+    assert "SIMD[DType.int32, 2].splat" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_float64_simd_constructor_from_modular_docs_reparses_crossgl():
     code = """
     fn reduce_example() -> SIMD[DType.float64, 4]:

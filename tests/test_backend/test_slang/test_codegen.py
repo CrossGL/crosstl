@@ -2378,6 +2378,63 @@ def test_texture_compare_offset_method_call_codegen():
     assert "shadowMap.SampleCmp" not in generated_code
 
 
+def test_gradient_texture_status_overloads_drop_unsupported_extras_codegen():
+    # Sources:
+    # https://shader-slang.org/stdlib-reference/types/0texture-01/samplegrad-06
+    # https://shader-slang.org/stdlib-reference/types/0texture-01/samplecmpgrad-069
+    code = """
+    Texture2D<float4> colorMap;
+    Texture2D<float> shadowMap;
+    SamplerState linearSampler;
+    SamplerComparisonState cmpSampler;
+
+    float4 main(float2 uv, float depth, float2 dx, float2 dy,
+                int2 offset, float lodClamp) {
+        uint colorStatus;
+        uint shadowStatus;
+        float4 color = colorMap.SampleGrad(
+            linearSampler, uv, dx, dy, offset, lodClamp, colorStatus);
+        float shadow = shadowMap.SampleCmpGrad(
+            cmpSampler, uv, depth, dx, dy, offset, shadowStatus);
+        return color + float4(shadow);
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "unsupported Slang texture overload extras for SampleGrad: "
+        "dropped LOD clamp, status output"
+    ) in generated_code
+    assert (
+        "unsupported Slang texture overload extras for SampleCmpGrad: "
+        "dropped status output"
+    ) in generated_code
+    assert (
+        "vec4 color = /* unsupported Slang texture overload extras for SampleGrad: "
+        "dropped LOD clamp, status output */ textureGradOffset("
+        "colorMap, linearSampler, uv, dx, dy, offset);" in generated_code
+    )
+    assert (
+        "float shadow = /* unsupported Slang texture overload extras for "
+        "SampleCmpGrad: dropped status output */ textureCompareGradOffset("
+        "shadowMap, cmpSampler, uv, depth, dx, dy, offset);" in generated_code
+    )
+    assert (
+        "textureGradOffset(colorMap, linearSampler, uv, dx, dy, offset, lodClamp"
+        not in generated_code
+    )
+    assert (
+        "textureCompareGradOffset("
+        "shadowMap, cmpSampler, uv, depth, dx, dy, offset, shadowStatus"
+        not in generated_code
+    )
+    assert ".SampleGrad(" not in generated_code
+    assert ".SampleCmpGrad(" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_texture_compare_bias_method_call_codegen_from_hlsl_overloads():
     code = """
     Texture2D<float> shadowMap;

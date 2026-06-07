@@ -2206,7 +2206,14 @@ class SlangToCrossGLConverter:
         if expr.method == "SampleGrad":
             if len(extra_args) > 2:
                 ddx, ddy, offset, *rest = extra_args
-                return "textureGradOffset", prefix + [coord, ddx, ddy, offset, *rest]
+                texture_func = "textureGradOffset"
+                if rest:
+                    diagnostic = self.texture_overload_extras_diagnostic(
+                        "SampleGrad",
+                        self.texture_gradient_extra_parameters(rest),
+                    )
+                    texture_func = f"{diagnostic} {texture_func}"
+                return texture_func, prefix + [coord, ddx, ddy, offset]
             return "textureGrad", prefix + [coord, *extra_args]
 
         if expr.method == "SampleCmp":
@@ -2241,9 +2248,18 @@ class SlangToCrossGLConverter:
         if expr.method == "SampleCmpGrad":
             if len(extra_args) > 3:
                 compare, ddx, ddy, offset, *rest = extra_args
+                texture_func = "textureCompareGradOffset"
+                if rest:
+                    diagnostic = self.texture_overload_extras_diagnostic(
+                        "SampleCmpGrad",
+                        self.texture_gradient_extra_parameters(
+                            rest, includes_lod_clamp=False
+                        ),
+                    )
+                    texture_func = f"{diagnostic} {texture_func}"
                 return (
-                    "textureCompareGradOffset",
-                    prefix + [coord, compare, ddx, ddy, offset, *rest],
+                    texture_func,
+                    prefix + [coord, compare, ddx, ddy, offset],
                 )
             return "textureCompareGrad", prefix + [coord, *extra_args]
 
@@ -2300,6 +2316,17 @@ class SlangToCrossGLConverter:
             f"/* unsupported Slang texture overload extras for {member}: "
             f"dropped {parameters} */"
         )
+
+    def texture_gradient_extra_parameters(self, trailing_args, includes_lod_clamp=True):
+        dropped_parameters = []
+        extra_start_index = 2 if includes_lod_clamp else 1
+        if includes_lod_clamp and trailing_args:
+            dropped_parameters.append("LOD clamp")
+        if len(trailing_args) > int(includes_lod_clamp):
+            dropped_parameters.append("status output")
+        if len(trailing_args) > extra_start_index:
+            dropped_parameters.append("extra arguments")
+        return dropped_parameters
 
     def crossgl_texture_gather_call_parts(self, expr, is_main=False):
         prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)

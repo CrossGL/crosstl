@@ -244,6 +244,22 @@ class GLSLToCrossGLConverter:
         "shadow2D": "textureCompare",
         "shadow2DLod": "textureCompareLod",
     }
+    SHADOW_PROJECTED_TEXTURE_COMPARE_FUNCTIONS = {
+        "textureProj": "textureCompareProj",
+        "textureProjOffset": "textureCompareProjOffset",
+        "textureProjLod": "textureCompareProjLod",
+        "textureProjLodOffset": "textureCompareProjLodOffset",
+        "textureProjGrad": "textureCompareProjGrad",
+        "textureProjGradOffset": "textureCompareProjGradOffset",
+    }
+    SHADOW_PROJECTED_TEXTURE_NATIVE_ARG_COUNTS = {
+        "textureProj": 2,
+        "textureProjOffset": 3,
+        "textureProjLod": 3,
+        "textureProjLodOffset": 4,
+        "textureProjGrad": 4,
+        "textureProjGradOffset": 5,
+    }
     SHADOW_SAMPLER_PACKED_COORD_SWIZZLES = {
         "sampler1DArrayShadow": ("xy", "z"),
         "sampler2DShadow": ("xy", "z"),
@@ -743,6 +759,32 @@ class GLSLToCrossGLConverter:
         if name.endswith("Lod"):
             call_args.append(self.generate_expression(args[2]))
         return compare_name, call_args
+
+    def shadow_projected_texture_compare_call(self, name, args):
+        compare_name = self.SHADOW_PROJECTED_TEXTURE_COMPARE_FUNCTIONS.get(name)
+        if compare_name is None or not args:
+            return None
+
+        if self.expression_shadow_sampler_type(args[0]) != "sampler2DShadow":
+            return None
+        if len(args) != self.SHADOW_PROJECTED_TEXTURE_NATIVE_ARG_COUNTS[name]:
+            return None
+
+        projected_coord, compare_ref = self.shadow_projected_texture_coord_ref(args[1])
+        call_args = [
+            self.generate_expression(args[0]),
+            projected_coord,
+            compare_ref,
+        ]
+        call_args.extend(self.generate_expression(arg) for arg in args[2:])
+        return compare_name, call_args
+
+    def shadow_projected_texture_coord_ref(self, coord_ref):
+        coord_expr = self.generate_expression(coord_ref)
+        return (
+            self.swizzle_expression(coord_expr, "xyw"),
+            self.swizzle_expression(coord_expr, "z"),
+        )
 
     def shadow_texture_compare_coord_ref(self, coord_ref, sampler_type):
         coord_swizzle, compare_swizzle = self.SHADOW_SAMPLER_PACKED_COORD_SWIZZLES[
@@ -2605,6 +2647,13 @@ class GLSLToCrossGLConverter:
         shadow_texture_call = self.shadow_texture_compare_call(name, node.args)
         if shadow_texture_call is not None:
             compare_name, compare_args = shadow_texture_call
+            return f"{compare_name}({', '.join(compare_args)})"
+
+        shadow_projected_texture_call = self.shadow_projected_texture_compare_call(
+            name, node.args
+        )
+        if shadow_projected_texture_call is not None:
+            compare_name, compare_args = shadow_projected_texture_call
             return f"{compare_name}({', '.join(compare_args)})"
 
         name = self.shadow_gather_import_name(name, node.args)
