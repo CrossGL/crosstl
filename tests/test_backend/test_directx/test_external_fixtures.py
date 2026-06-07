@@ -36,6 +36,9 @@ DIRECTX_SHADER_COMPILER_BUFFER_ACCESS_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
 )
 DIRECTX_SHADER_COMPILER_REWRITER_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
+DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT = (
+    "8ed708842c1ccb24bd914eff03125c837a01be71"
+)
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -457,6 +460,34 @@ EXTERNAL_FIXTURES = [
             "@ numthreads(1, 1, 1)",
             "static Number e = Fourth;",
             "d = Number::Third;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_const_external_enum_alias",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/binary-op-sugar.hlsl",
+        code=textwrap.dedent("""
+            enum LuminairePlanesSymmetry : uint
+            {
+                ISOTROPIC = 0u,
+                NO_LATERAL_SYMMET
+            };
+
+            using symmetry_t = LuminairePlanesSymmetry;
+            const symmetry_t symmetry;
+
+            [numthreads(1,1,1)]
+            [shader("compute")]
+            void main(uint3 id : SV_DispatchThreadID)
+            {
+              const uint i0 = (symmetry == symmetry_t::ISOTROPIC) ? 0u : 1u;
+            }
+        """).strip(),
+        contains=(
+            "type symmetry_t = LuminairePlanesSymmetry;",
+            "symmetry_t symmetry;",
+            "const uint i0 = symmetry == symmetry_t::ISOTROPIC ? 0 : 1;",
         ),
     ),
     ExternalFixture(

@@ -3396,6 +3396,30 @@ def test_binary_integer_literals_codegen_from_generated_conformance_sample():
     cgl_translator.parse(generated_code)
 
 
+def test_integer_literal_underscores_codegen_from_generated_conformance_sample():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # lexical-structure/integer-literal-underscore-ignored.slang at d25453d.
+    code = """
+    void main() {
+        int a = 1_000_000;
+        int b = 1000000;
+        int c = 0x_FF_FF;
+        bool eq = (a == b) && (c == 0xFFFF);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int a = 1000000;" in generated_code
+    assert "int b = 1000000;" in generated_code
+    assert "int c = 0xFFFF;" in generated_code
+    assert "bool eq = a == b && c == 0xFFFF;" in generated_code
+    assert "_" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_generic_struct_member_and_uniform_parameter_codegen_from_official_sample():
     code = """
     struct ImageProcessingOptions

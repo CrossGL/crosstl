@@ -1147,7 +1147,9 @@ class VulkanParser:
                 )
                 params.append(param)
             node = FunctionNode(
-                self.spirv_type_name(return_type_id, types) or return_type_id or "void",
+                self.spirv_assembly_function_return_type_name(
+                    return_type_id, types, constants
+                ),
                 names.get(
                     function_id,
                     self.spirv_function_name_fallback(function_id, entry_points_by_id),
@@ -1774,18 +1776,16 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpCompositeConstruct" and operands:
-                expressions[result_id] = FunctionCallNode(
-                    self.spirv_type_name(operands[0], types) or operands[0],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[1:]
-                    ],
+                expressions[result_id] = (
+                    self.spirv_assembly_composite_construct_expression(
+                        operands[0],
+                        operands[1:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                        types,
+                    )
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -3559,6 +3559,30 @@ class VulkanParser:
 
         return expression
 
+    def spirv_assembly_composite_construct_expression(
+        self,
+        type_id,
+        constituent_ids,
+        expressions,
+        names,
+        decorations,
+        constants,
+        types,
+    ):
+        args = [
+            self.spirv_assembly_operand_expression(
+                operand,
+                expressions,
+                names,
+                decorations,
+                constants,
+            )
+            for operand in constituent_ids
+        ]
+        if types.get(type_id, {}).get("kind") in {"array", "runtime_array"}:
+            return InitializerListNode(args)
+        return FunctionCallNode(self.spirv_type_name(type_id, types) or type_id, args)
+
     def spirv_sparse_image_result_extract_expression(self, expression, member_index):
         if not (
             isinstance(expression, FunctionCallNode)
@@ -4938,6 +4962,17 @@ class VulkanParser:
         if function_id:
             return self.spirv_fallback_identifier(function_id, "function")
         return ""
+
+    def spirv_assembly_function_return_type_name(self, type_id, types, constants):
+        if type_id is None:
+            return "void"
+        if types.get(type_id, {}).get("kind") in {"array", "runtime_array"}:
+            base_type, array_suffix = self.spirv_type_name_and_suffix(
+                type_id, types, constants
+            )
+            if base_type is not None:
+                return f"{base_type}{array_suffix}"
+        return self.spirv_type_name(type_id, types) or type_id or "void"
 
     def spirv_function_parameter_type_name(self, type_id, types, constants):
         type_info = types.get(type_id, {})

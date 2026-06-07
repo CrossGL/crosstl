@@ -613,6 +613,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_ARRAY_RETURN_COMPOSITE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/binary_to_text_test.cpp IndentTest.ReorderedNested
+; Reduced from helper function returning OpTypeArray via OpCompositeConstruct.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %make_array "ff(vf2;f1;"
+OpName %out_value "outValue"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn_void = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%uint = OpTypeInt 32 0
+%two = OpConstant %uint 2
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%array_v4 = OpTypeArray %v4float %two
+%fn_array = OpTypeFunction %array_v4
+%ptr_output_float = OpTypePointer Output %float
+%out_value = OpVariable %ptr_output_float Output
+%make_array = OpFunction %array_v4 None %fn_array
+%helper_label = OpLabel
+%first = OpCompositeConstruct %v4float %zero %zero %zero %zero
+%second = OpCompositeConstruct %v4float %one %one %one %one
+%array_value = OpCompositeConstruct %array_v4 %first %second
+OpReturnValue %array_value
+OpFunctionEnd
+%main = OpFunction %void None %fn_void
+%main_label = OpLabel
+%call = OpFunctionCall %array_v4 %make_array
+%component = OpCompositeExtract %float %call 1 2
+OpStore %out_value %component
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_VECTOR_INSERT_DYNAMIC_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -4818,6 +4858,23 @@ def test_spirv_spec_struct_composite_extract_codegen_reparse():
     assert "outValue = pair.weight;" in generated_code
     assert "outValue = pair[0];" not in generated_code
     assert "OpCompositeExtract" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_array_return_composite_construct_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_ARRAY_RETURN_COMPOSITE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4[2] ff()" in generated_code
+    assert (
+        "return {float4(0.0, 0.0, 0.0, 0.0), "
+        "float4(1.0, 1.0, 1.0, 1.0)};" in generated_code
+    )
+    assert "outValue = ff()[1][2];" in generated_code
+    assert "%array_v4" not in generated_code
+    assert "OpCompositeConstruct" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

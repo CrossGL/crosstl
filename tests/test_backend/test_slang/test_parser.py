@@ -3270,6 +3270,30 @@ def test_binary_integer_literals_from_generated_conformance_sample_parse():
     assert [stmt.right for stmt in body] == ["0b1010", "0B1111"]
 
 
+def test_integer_literal_underscores_from_generated_conformance_sample_parse():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # lexical-structure/integer-literal-underscore-ignored.slang at d25453d.
+    code = """
+    void main() {
+        int a = 1_000_000;
+        int b = 1000000;
+        int c = 0x_FF_FF;
+        bool eq = (a == b) && (c == 0xFFFF);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    body = find_function(ast, "main").body
+
+    assert [stmt.right for stmt in body[:3]] == [
+        "1000000",
+        "1000000",
+        "0xFFFF",
+    ]
+    assert isinstance(body[3].right, BinaryOpNode)
+
+
 def test_generic_struct_member_and_uniform_parameters_from_official_sample():
     code = """
     static const uint THREADGROUP_SIZE_X = 8;

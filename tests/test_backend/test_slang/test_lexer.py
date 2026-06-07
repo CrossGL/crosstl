@@ -218,5 +218,19 @@ def test_numeric_literal_tokenization():
     ]
 
 
+def test_numeric_literal_underscore_tokenization_from_generated_conformance_sample():
+    # Source: shader-slang/slang docs/generated/tests/conformance/
+    # lexical-structure/integer-literal-underscore-ignored.slang at d25453d.
+    tokens = tokenize_code("1_000_000 0x_FF_FF 0b_1010_0101 1_2.3_4e+5_6f")
+
+    assert tokens == [
+        ("NUMBER", "1000000"),
+        ("NUMBER", "0xFFFF"),
+        ("NUMBER", "0b10100101"),
+        ("NUMBER", "12.34e+56f"),
+        ("EOF", ""),
+    ]
+
+
 if __name__ == "__main__":
     pytest.main()

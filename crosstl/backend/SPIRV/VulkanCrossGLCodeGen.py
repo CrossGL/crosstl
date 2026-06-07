@@ -1,5 +1,6 @@
 """Reverse code generator that emits CrossGL from Vulkan SPIR-V AST nodes."""
 
+from ..common_ast import InitializerListNode
 from .VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -892,6 +893,9 @@ class VulkanToCrossGLConverter:
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, FunctionCallNode):
             return self.generate_function_call(expr)
+        elif isinstance(expr, InitializerListNode):
+            args = ", ".join(self.generate_expression(arg) for arg in expr.elements)
+            return f"{{{args}}}"
         elif isinstance(expr, MethodCallNode):
             args = ", ".join(self.generate_expression(arg) for arg in expr.args)
             return f"{self.generate_expression(expr.object)}.{expr.method}({args})"
@@ -1089,6 +1093,12 @@ class VulkanToCrossGLConverter:
 
     def map_type(self, vulkan_type):
         """Map a Vulkan/SPIR-V type name to the closest CrossGL type name."""
+        bracket_index = vulkan_type.find("[")
+        if bracket_index > 0:
+            base_type = vulkan_type[:bracket_index]
+            array_suffix = vulkan_type[bracket_index:]
+            return f"{self.map_type(base_type)}{array_suffix}"
+
         if vulkan_type in self.type_map:
             return self.type_map[vulkan_type]
 

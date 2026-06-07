@@ -97,6 +97,7 @@ class RustToCrossGLConverter:
     RESOURCE_METHOD_NAMES = {
         "fetch",
         "fetch_with",
+        "fetch_with_lod",
         "gather",
         "gather_with",
         "query_levels",
@@ -4520,6 +4521,10 @@ class RustToCrossGLConverter:
             if mapped_resource_type.startswith("sampler"):
                 return "texelFetch"
             return "imageLoad"
+        if method_name == "fetch_with_lod":
+            if mapped_resource_type.startswith("sampler"):
+                return "texelFetch"
+            return None
         mapped_sample = self.RUST_GPU_SAMPLE_METHOD_MAP.get(method_name)
         if mapped_sample is not None and mapped_resource_type.startswith("sampler"):
             return mapped_sample

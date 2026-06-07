@@ -49,9 +49,11 @@ TOKENS = tuple(
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "NUMBER",
-            r"0[xX][0-9a-fA-F]+[uUlL]*|"
-            r"0[bB][01]+[uUlL]*|"
-            r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFhHuUlL]*",
+            r"0[xX]_?[0-9a-fA-F](?:_?[0-9a-fA-F])*[uUlL]*|"
+            r"0[bB]_?[01](?:_?[01])*[uUlL]*|"
+            r"(?:(?:\d(?:_?\d)*)\.(?:\d(?:_?\d)*)?|"
+            r"\.(?:\d(?:_?\d)*)|"
+            r"(?:\d(?:_?\d)*))(?:[eE][+-]?\d(?:_?\d)*)?[fFhHuUlL]*",
         ),
         ("LBRACE", r"\{"),
         ("RBRACE", r"\}"),
@@ -203,6 +205,8 @@ class SlangLexer:
 
             if token_type == "IDENTIFIER" and text in KEYWORDS:
                 token_type = KEYWORDS[text]
+            elif token_type == "NUMBER":
+                text = text.replace("_", "")
 
             if token_type not in SKIP_TOKENS:
                 yield (token_type, text)
