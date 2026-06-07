@@ -15550,6 +15550,7 @@ class GLSLCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_hlsl_metadata_attribute(attr)
                 or (
                     getattr(attr, "name", None)
                     and str(getattr(attr, "name")).lower() == "glsl_buffer_block"
@@ -15625,6 +15626,7 @@ class GLSLCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_hlsl_metadata_attribute(attr)
                 or (
                     getattr(attr, "name", None)
                     and str(getattr(attr, "name")).lower() == "glsl_buffer_block"
@@ -15634,6 +15636,12 @@ class GLSLCodeGen:
             if hasattr(attr, "name"):
                 return attr.name
         return None
+
+    def is_hlsl_metadata_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        if not attr_name:
+            return False
+        return str(attr_name).lower() in {"rootsignature", "hlsl_rootsignature"}
 
     def image_format_qualifier(self, vtype, node=None):
         explicit_format = self.explicit_glsl_image_format(node)

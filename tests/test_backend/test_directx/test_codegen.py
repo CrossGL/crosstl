@@ -508,6 +508,26 @@ def test_hlsl_psize_roundtrips_to_gl_point_size():
     assert "@ PointSize" not in crossgl
 
 
+def test_root_signature_metadata_does_not_become_glsl_return_semantic():
+    hlsl = textwrap.dedent("""
+            [RootSignature("DescriptorTable(UAV(u0))")]
+            [numthreads(8, 8, 1)]
+            void CSMain(uint3 tid : SV_DispatchThreadID) {
+                uint x = tid.x;
+            }
+        """).strip()
+    crossgl = generate_crossgl(hlsl)
+
+    assert '@ RootSignature("DescriptorTable(UAV(u0))")' in crossgl
+    generated = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;" in generated
+    )
+    assert "uint x = gl_GlobalInvocationID.x;" in generated
+    assert "RootSignature" not in generated
+
+
 def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     shaderlab = textwrap.dedent("""
         Shader "Custom/LegacyTex2D"
