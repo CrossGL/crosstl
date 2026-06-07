@@ -4171,6 +4171,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_FRAGMENT_SAMPLE_MASK_BODY_ASSEMBLY = """
+; Reduced from a fragment shader that copies gl_SampleMaskIn[0] to gl_SampleMask[0].
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %sample_mask_in %sample_mask_out
+OpExecutionMode %main OriginUpperLeft
+OpDecorate %sample_mask_in BuiltIn SampleMask
+OpDecorate %sample_mask_out BuiltIn SampleMask
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%zero = OpConstant %int 0
+%one = OpConstant %int 1
+%sample_mask_array = OpTypeArray %int %one
+%ptr_input_mask = OpTypePointer Input %sample_mask_array
+%ptr_output_mask = OpTypePointer Output %sample_mask_array
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_int = OpTypePointer Output %int
+%sample_mask_in = OpVariable %ptr_input_mask Input
+%sample_mask_out = OpVariable %ptr_output_mask Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%in_mask0 = OpAccessChain %ptr_input_int %sample_mask_in %zero
+%mask0 = OpLoad %int %in_mask0
+%out_mask0 = OpAccessChain %ptr_output_int %sample_mask_out %zero
+OpStore %out_mask0 %mask0
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_FRAGMENT_HELPER_INVOCATION_BUILTIN_ASSEMBLY = """
 ; Reduced from a fragment shader interface that reads gl_HelperInvocation.
 OpCapability Shader
@@ -6482,6 +6512,17 @@ def test_spirv_assembly_fragment_sample_and_view_builtins_codegen():
     assert "@builtin(sampleid)" not in generated_code
     assert "@builtin(samplemask)" not in generated_code
     assert "@builtin(layer)" not in generated_code
+
+
+def test_spirv_assembly_sample_mask_body_uses_storage_aware_names():
+    tokens = tokenize_code(SPIRV_FRAGMENT_SAMPLE_MASK_BODY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int gl_SampleMaskIn[1] @input @gl_SampleMaskIn;" in generated_code
+    assert "int gl_SampleMask[1] @output @gl_SampleMask;" in generated_code
+    assert "gl_SampleMask[0] = gl_SampleMaskIn[0];" in generated_code
+    assert "SampleMask[0] = SampleMask[0];" not in generated_code
 
 
 def test_spirv_assembly_fragment_helper_invocation_builtin_codegen_reparse():

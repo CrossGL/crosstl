@@ -1295,6 +1295,8 @@ class VulkanParser:
                     names,
                     decorations,
                     constants,
+                    variables_by_id=variables_by_id,
+                    types=types,
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
@@ -2356,6 +2358,8 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
+                            variables_by_id=variables_by_id,
+                            types=types,
                         ),
                         self.spirv_assembly_operand_expression(
                             operands[1],
@@ -2363,6 +2367,8 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
+                            variables_by_id=variables_by_id,
+                            types=types,
                         ),
                     )
                 )
@@ -3516,6 +3522,8 @@ class VulkanParser:
             names,
             decorations,
             constants,
+            variables_by_id=variables_by_id,
+            types=types,
         )
         for index_operand in index_operands:
             access = ArrayAccessNode(
@@ -3526,6 +3534,8 @@ class VulkanParser:
                     names,
                     decorations,
                     constants,
+                    variables_by_id=variables_by_id,
+                    types=types,
                 ),
             )
         return access
@@ -4968,6 +4978,8 @@ class VulkanParser:
         names,
         decorations,
         constants,
+        variables_by_id=None,
+        types=None,
     ):
         if operand in expressions:
             return self.spirv_maybe_non_uniform_expression(
@@ -4985,7 +4997,14 @@ class VulkanParser:
         if isinstance(operand, str) and operand.startswith("%"):
             expression = VariableNode(
                 "",
-                self.spirv_assembly_value_name(operand, names, decorations),
+                self.spirv_assembly_value_name(
+                    operand,
+                    names,
+                    decorations,
+                    storage_class=self.spirv_assembly_variable_storage_class(
+                        operand, variables_by_id, types
+                    ),
+                ),
             )
             return self.spirv_maybe_non_uniform_expression(
                 operand, expression, decorations
@@ -5011,14 +5030,26 @@ class VulkanParser:
         names,
         decorations,
         prefix="value",
+        storage_class=None,
     ):
         qualifiers = self.spirv_layout_qualifiers(decorations.get(value_id, []))
-        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(qualifiers)
+        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(
+            qualifiers, storage_class=storage_class
+        )
         if builtin_name:
             return builtin_name
         if value_id in names and names[value_id]:
             return names[value_id]
         return self.spirv_fallback_identifier(value_id, prefix)
+
+    def spirv_assembly_variable_storage_class(self, value_id, variables_by_id, types):
+        if not variables_by_id or not types:
+            return None
+        variable = variables_by_id.get(value_id)
+        if variable is None:
+            return None
+        pointer_type = types.get(variable.get("pointer_type_id"), {})
+        return variable.get("storage_class") or pointer_type.get("storage_class")
 
     def spirv_is_flattened_resource_block_access(
         self, storage_class, struct_type_id, decorations
