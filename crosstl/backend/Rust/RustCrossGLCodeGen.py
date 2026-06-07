@@ -1231,6 +1231,11 @@ class RustToCrossGLConverter:
         typed_buffer_type = self.map_typed_buffer_parameter_type(type_name)
         if typed_buffer_type is not None:
             return typed_buffer_type
+        byte_addressable_type = self.map_byte_addressable_buffer_parameter_type(
+            type_name
+        )
+        if byte_addressable_type is not None:
+            return byte_addressable_type
         return self.normalize_receiver_type(type_name, struct_name)
 
     def infer_value_type(self, expression):
@@ -3972,6 +3977,15 @@ class RustToCrossGLConverter:
         if impl_call is not None:
             return impl_call
 
+        byte_addressable_call = self.format_rust_gpu_byte_addressable_buffer_call(
+            method_name,
+            obj,
+            args,
+            receiver_type,
+        )
+        if byte_addressable_call is not None:
+            return byte_addressable_call
+
         resource_call = self.format_resource_method_call(
             method_name,
             obj,
@@ -4130,6 +4144,56 @@ class RustToCrossGLConverter:
             return f"{obj}.{method_name}"
 
         return None
+
+    def format_rust_gpu_byte_addressable_buffer_call(
+        self,
+        method_name,
+        obj,
+        args,
+        receiver_type=None,
+    ):
+        method_name, type_args = self.split_function_type_arguments(method_name)
+        if method_name in {"load", "load_unchecked"} and len(args) == 1:
+            if not self.is_byte_address_buffer_receiver(obj, receiver_type):
+                return None
+            intrinsic = self.byte_address_buffer_intrinsic("buffer_load", type_args)
+            return f"{intrinsic}({obj}, {args[0]})"
+
+        if method_name in {"store", "store_unchecked"} and len(args) == 2:
+            if not self.is_byte_address_buffer_receiver(
+                obj,
+                receiver_type,
+                writable=True,
+            ):
+                return None
+            intrinsic = self.byte_address_buffer_intrinsic("buffer_store", type_args)
+            return f"{intrinsic}({obj}, {args[0]}, {args[1]})"
+
+        return None
+
+    def is_byte_address_buffer_receiver(
+        self,
+        obj,
+        receiver_type=None,
+        writable=False,
+    ):
+        mapped_type = self.map_resource_method_receiver_type(obj, receiver_type)
+        if mapped_type is None and receiver_type is not None:
+            mapped_type = self.map_type(receiver_type)
+
+        if writable:
+            return mapped_type == "RWByteAddressBuffer"
+        return mapped_type in {"ByteAddressBuffer", "RWByteAddressBuffer"}
+
+    def byte_address_buffer_intrinsic(self, base_intrinsic, type_args):
+        if not type_args:
+            return base_intrinsic
+
+        mapped_type = self.map_type(type_args[0])
+        component_count = self.VECTOR_COMPONENT_COUNTS.get(mapped_type)
+        if component_count in {2, 3, 4}:
+            return f"{base_intrinsic}{component_count}"
+        return base_intrinsic
 
     def extended_vector_constructor(self, receiver_type):
         if not receiver_type:
@@ -9462,6 +9526,10 @@ class RustToCrossGLConverter:
         if expanded_type != rust_type:
             return self.map_type(expanded_type)
 
+        byte_addressable_type = self.map_byte_addressable_buffer_type(rust_type)
+        if byte_addressable_type is not None:
+            return byte_addressable_type
+
         array_parts = self.split_array_type(rust_type)
         if array_parts:
             base_type, array_suffix = array_parts
@@ -9553,6 +9621,10 @@ class RustToCrossGLConverter:
         if image_macro_type is not None:
             return image_macro_type
 
+        byte_addressable_type = self.map_byte_addressable_buffer_type(rust_type)
+        if byte_addressable_type is not None:
+            return byte_addressable_type
+
         for type_name in self.type_lookup_names(rust_type):
             mapped = self.type_map.get(type_name)
             if mapped is not None:
@@ -9590,6 +9662,9 @@ class RustToCrossGLConverter:
 
         if base_name == "TypedBuffer":
             return self.format_typed_buffer_resource_type(args[0])
+
+        if "ByteAddressableBuffer" in self.type_lookup_names(base_name):
+            return self.map_byte_addressable_buffer_generic_argument(args[0])
 
         if base_name in {"Input", "Output"}:
             return self.map_type(args[0])
@@ -9657,6 +9732,56 @@ class RustToCrossGLConverter:
         if rust_type.startswith("&"):
             return self.map_typed_buffer_reference_type(rust_type[1:].strip(), False)
         return None
+
+    def map_byte_addressable_buffer_parameter_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+
+        rust_type = self.strip_lifetime_type_syntax(rust_type.strip())
+        if rust_type.startswith("&mut "):
+            return self.map_byte_addressable_buffer_type(
+                rust_type[5:].strip(),
+                writable=True,
+            )
+        if rust_type.startswith("&"):
+            return self.map_byte_addressable_buffer_type(
+                rust_type[1:].strip(),
+                writable=False,
+            )
+        return None
+
+    def map_byte_addressable_buffer_type(self, rust_type, writable=False):
+        if not isinstance(rust_type, str):
+            return None
+
+        rust_type = self.strip_lifetime_type_syntax(rust_type.strip())
+        generic = self.parse_generic_type(rust_type)
+        if generic is not None:
+            base_name, args = generic
+            if "ByteAddressableBuffer" not in self.type_lookup_names(base_name):
+                return None
+            return self.map_byte_addressable_buffer_generic_argument(
+                args[0],
+                writable,
+            )
+
+        if "ByteAddressableBuffer" not in self.type_lookup_names(rust_type):
+            return None
+        return "RWByteAddressBuffer" if writable else "ByteAddressBuffer"
+
+    def map_byte_addressable_buffer_generic_argument(
+        self,
+        argument_type,
+        writable=False,
+    ):
+        argument_type = self.strip_lifetime_type_syntax(argument_type.strip())
+        compact_argument = re.sub(r"\s+", "", argument_type)
+
+        if compact_argument.startswith("&mut"):
+            return "RWByteAddressBuffer"
+        if compact_argument.startswith("&"):
+            return "ByteAddressBuffer"
+        return "RWByteAddressBuffer" if writable else "ByteAddressBuffer"
 
     def map_typed_buffer_reference_type(self, rust_type, writable):
         mapped_type = self.map_typed_buffer_type(rust_type, writable=writable)

@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 899
+        "test_count": 900
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 680
+        "test_count": 681
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 853
+        "test_count": 854
       },
       "translator_codegen": {
         "exists": true,

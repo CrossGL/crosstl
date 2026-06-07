@@ -2676,6 +2676,8 @@ class MetalParser:
     def parse_optional_if_constexpr(self):
         if self.current_token[0] == "CONSTEXPR":
             self.eat("CONSTEXPR")
+        elif self.current_token == ("IDENTIFIER", "IF_CONSTEXPR"):
+            self.eat("IDENTIFIER")
 
     def parse_control_statement_attributes(self):
         self.parse_attributes()

@@ -44,6 +44,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
             "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
+            "cpp/5_Domain_Specific/dxtc/dxtc.cu",
             "cpp/6_Performance/transpose/transpose.cu",
             "cpp/9_CUDA_Tile/Benchmark_Common/matmul_benchmark.h",
         ],
@@ -1994,4 +1995,57 @@ def test_cuda_programming_guide_nanosleep_mutex_codegen_reparse():
         in crossgl
     )
     assert "__nanosleep(ns);" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_dxtc_bitfield_struct_members_parse_and_codegen():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/5_Domain_Specific/dxtc/dxtc.cu
+    source = """
+    union Color16
+    {
+        struct
+        {
+            unsigned short b : 5;
+            unsigned short g : 6;
+            unsigned short r : 5;
+        };
+        unsigned short u;
+    };
+
+    struct BlockDXT1
+    {
+        Color16 col0;
+        Color16 col1;
+        union
+        {
+            unsigned char row[4];
+            unsigned int  indices;
+        };
+    };
+    """
+
+    ast = parse_cuda(source)
+    color16, block = ast.structs
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert [(member.vtype, member.name) for member in color16.members] == [
+        ("unsigned short", "b"),
+        ("unsigned short", "g"),
+        ("unsigned short", "r"),
+        ("unsigned short", "u"),
+    ]
+    assert [(member.vtype, member.name) for member in block.members] == [
+        ("Color16", "col0"),
+        ("Color16", "col1"),
+        ("unsigned char[4]", "row"),
+        ("unsigned int", "indices"),
+    ]
+    assert "u16 b;" in crossgl
+    assert "u16 g;" in crossgl
+    assert "u16 r;" in crossgl
+    assert "u16 u;" in crossgl
+    assert " : 5" not in crossgl
     assert_crossgl_reparse(crossgl)

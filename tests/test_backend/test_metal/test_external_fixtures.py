@@ -40,6 +40,7 @@ MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13e
 MLX_STEEL_GEMM_LOADER_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_BUCKETIZATION_COMMIT = "5ee1f788c7098ae5e50e49543ee7822f73cd8990"
+PYTORCH_ACTIVATION_COMMIT = "fa5cb72912c44b22acd9c26c69f3e933794ac501"
 CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
@@ -1033,6 +1034,28 @@ EXTERNAL_FIXTURES = [
                 for (int64_t tid = tgid.x * tptg.x + tid2.x; tid < numel_in;
                      tid += tptg.x * tgpg.x) {
                     data_out[tid] = output_t(data_in[tid]);
+                }
+            }
+        """
+        ),
+    },
+    {
+        "name": "pytorch_activation_if_constexpr_macro",
+        "repo_url": PYTORCH_REPO,
+        "commit": PYTORCH_ACTIVATION_COMMIT,
+        "source_path": "aten/src/ATen/native/mps/kernels/ActivationKernel.metal",
+        "roundtrip": False,
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            static inline float gelu_dispatch_tanh(float x) {
+                if IF_CONSTEXPR (::metal::is_same_v<T, float>) {
+                    return ::metal::tanh(x);
+                } else {
+                    return tanh(x);
                 }
             }
         """
