@@ -103,6 +103,26 @@ def test_qualified_module_declaration_from_core_module_metadata_codegen():
     cgl_translator.parse(generated_code)
 
 
+def test_target_intrinsic_struct_modifier_from_interop_docs_codegen():
+    # Source: Slang User Guide, Interoperation with Target-Specific Code,
+    # "Defining Intrinsic Types" documents __target_intrinsic before a struct.
+    code = """
+    __target_intrinsic(cpp, "std::string")
+    struct CppString
+    {
+        uint length;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct CppString" in generated_code
+    assert "__target_intrinsic" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_identifier_include_path_codegen_uses_slang_file_lookup_semantics():
     # Slang modules docs: __include dir.file_name resolves like "dir/file-name".
     code = """

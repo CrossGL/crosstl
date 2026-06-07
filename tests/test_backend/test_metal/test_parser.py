@@ -1781,6 +1781,21 @@ def test_parse_cxx14_digit_separator_numeric_literals_from_msl_spec():
     assert body[3].right == "1.602'176e-19f"
 
 
+def test_parse_bfloat_literal_suffixes_from_msl_spec():
+    # Apple MSL Specification, section 2.2, documents 0.5bf and 0.5BF.
+    code = """
+    void main() {
+        bfloat lo = 0.5bf;
+        bfloat hi = 0.5BF;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[0].right == "0.5bf"
+    assert body[1].right == "0.5BF"
+
+
 def test_parse_as_type_template_call():
     code = """
     static inline float fp32_from_bits(uint32_t bits) {

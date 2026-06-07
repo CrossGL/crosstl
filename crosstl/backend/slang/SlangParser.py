@@ -55,6 +55,7 @@ class SlangParser:
         "__intrinsic_op",
         "__magic_type",
         "__readNone",
+        "__target_intrinsic",
         "__unsafeForceInlineEarly",
     }
     OPERATOR_SYMBOL_TOKENS = {
@@ -614,11 +615,15 @@ class SlangParser:
 
     def parse_qualifiers(self):
         qualifiers = []
-        while self.is_layout_qualifier_at(self.pos) or self.is_qualifier_token_at(
-            self.pos
+        while (
+            self.is_layout_qualifier_at(self.pos)
+            or self.is_declaration_annotation_at(self.pos)
+            or self.is_qualifier_token_at(self.pos)
         ):
             if self.is_layout_qualifier_at(self.pos):
                 qualifiers.append(self.parse_layout_qualifier())
+            elif self.is_declaration_annotation_at(self.pos):
+                self.parse_declaration_annotation()
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
