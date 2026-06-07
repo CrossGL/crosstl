@@ -4493,6 +4493,11 @@
       "category": "project",
       "name": "Project include resolution",
       "description": "Carry project include-directory intent into repo-scale translation planning.",
+      "support_plan": {
+        "current_gap": "Include directories and discovered include dependencies are reported and forwarded only when the source frontend exposes include-path support; semantic preprocessing is still backend-dependent.",
+        "next_scope": "Add backend and source-frontend include-capability coverage for nested and system includes, with validator checks proving forwarded paths or explicit not-supported diagnostics for every artifact.",
+        "completion_criteria": "Mark supported when project translation can resolve, report, validate, and either forward or explicitly reject configured include paths and discovered include dependencies for every supported source backend without backend-specific hidden state."
+      },
       "support": {
         "directx": {
           "status": "partial",
@@ -4789,6 +4794,11 @@
       "category": "project",
       "name": "Macro and define variants",
       "description": "Represent define sets and expand named variants for project translation units.",
+      "support_plan": {
+        "current_gap": "Define maps and named variants are planned, reported, validated, and forwarded where frontend support exists, but native preprocessor semantics are still not normalized across source backends.",
+        "next_scope": "Expand backend and source-frontend define-forwarding coverage and document which macro forms are translated, preserved, or rejected with diagnostics for each source backend.",
+        "completion_criteria": "Mark supported when project translation can plan variant artifacts, apply or forward configured defines, validate artifact define provenance, and emit structured diagnostics for unsupported macro forms across every supported source backend."
+      },
       "support": {
         "directx": {
           "status": "partial",
@@ -7285,6 +7295,11 @@
       "category": "project",
       "name": "Source provenance and source-map bridge",
       "description": "Record source provenance and source-map metadata for project reports.",
+      "support_plan": {
+        "current_gap": "Project artifacts carry file-level source maps and compiler-compatible source-remap sidecars, but fine-grained statement or token mappings are not implemented.",
+        "next_scope": "Define the fine-grained mapping contract that can interoperate with compiler source-map consumers, then add generated mappings and validation checks for translated artifacts.",
+        "completion_criteria": "Mark supported when generated reports validate file-level and fine-grained source maps or source-remap records for all translated artifacts, and inspection output surfaces actionable provenance without stale hashes."
+      },
       "support": {
         "directx": {
           "status": "partial",

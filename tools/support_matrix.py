@@ -62,7 +62,9 @@ UNSUPPORTED_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*$")
-SUPPORT_ENTRY_KEYS = {"status", "notes", "evidence"}
+SUPPORT_PLAN_KEY = "support_plan"
+SUPPORT_PLAN_KEYS = ("current_gap", "next_scope", "completion_criteria")
+SUPPORT_ENTRY_KEYS = {"status", "notes", "evidence", *SUPPORT_PLAN_KEYS}
 
 
 class SupportMatrixError(Exception):
@@ -334,6 +336,21 @@ def validate_evidence(feature_id, backend_id, evidence):
                 )
 
 
+def validate_support_plan(plan, description):
+    if not isinstance(plan, dict):
+        raise SupportMatrixError(f"{description} must be an object")
+    unknown_keys = set(plan) - set(SUPPORT_PLAN_KEYS)
+    if unknown_keys:
+        raise SupportMatrixError(
+            "{} has unsupported support plan key(s): {}".format(
+                description, ", ".join(sorted(unknown_keys))
+            )
+        )
+    for key in SUPPORT_PLAN_KEYS:
+        if key in plan and not isinstance(plan[key], str):
+            raise SupportMatrixError(f"{description} '{key}' must be a string")
+
+
 def validate_feature_catalog(features_data, backend_ids):
     statuses = features_data.get("statuses")
     if not isinstance(statuses, dict) or not statuses:
@@ -380,6 +397,11 @@ def validate_feature_catalog(features_data, backend_ids):
                     )
                 )
 
+        if SUPPORT_PLAN_KEY in feature:
+            validate_support_plan(
+                feature[SUPPORT_PLAN_KEY], f"Feature '{feature_id}' support_plan"
+            )
+
         support = feature.get("support", {})
         if not isinstance(support, dict):
             raise SupportMatrixError(
@@ -414,12 +436,13 @@ def validate_feature_catalog(features_data, backend_ids):
                         feature_id, backend_id, status
                     )
                 )
-            if "notes" in entry and not isinstance(entry["notes"], str):
-                raise SupportMatrixError(
-                    "Feature '{}' backend '{}' notes must be a string".format(
-                        feature_id, backend_id
+            for key in ("notes", *SUPPORT_PLAN_KEYS):
+                if key in entry and not isinstance(entry[key], str):
+                    raise SupportMatrixError(
+                        "Feature '{}' backend '{}' {} must be a string".format(
+                            feature_id, backend_id, key
+                        )
                     )
-                )
             if "evidence" in entry:
                 validate_evidence(feature_id, backend_id, entry["evidence"])
 
@@ -465,11 +488,34 @@ def normalized_support_entry(feature, backend_id):
             "notes": "No support status has been audited for this backend.",
             "evidence": [],
         }
-    return {
+    entry = {
         "status": support["status"],
         "notes": support.get("notes", ""),
         "evidence": support.get("evidence", []),
     }
+    if entry["status"] in BACKLOG_STATUSES:
+        support_plan = feature.get(SUPPORT_PLAN_KEY, {})
+        for key in SUPPORT_PLAN_KEYS:
+            value = support.get(key) or support_plan.get(key)
+            if value:
+                entry[key] = value
+    return entry
+
+
+def backlog_row_for_feature(feature, backend_id, backend_name, entry):
+    row = {
+        "feature_id": feature["id"],
+        "feature": feature["name"],
+        "category": feature["category"],
+        "backend_id": backend_id,
+        "backend": backend_name,
+        "status": entry["status"],
+        "notes": entry.get("notes", ""),
+    }
+    for key in SUPPORT_PLAN_KEYS:
+        if entry.get(key):
+            row[key] = entry[key]
+    return row
 
 
 def build_matrix(backends_data, features_data):
@@ -491,15 +537,9 @@ def build_matrix(backends_data, features_data):
             counts[backend_id][entry["status"]] += 1
             if entry["status"] in BACKLOG_STATUSES:
                 backlog.append(
-                    {
-                        "feature_id": source_feature["id"],
-                        "feature": source_feature["name"],
-                        "category": source_feature["category"],
-                        "backend_id": backend_id,
-                        "backend": backend_names[backend_id],
-                        "status": entry["status"],
-                        "notes": entry.get("notes", ""),
-                    }
+                    backlog_row_for_feature(
+                        source_feature, backend_id, backend_names[backend_id], entry
+                    )
                 )
 
         features.append(
@@ -587,19 +627,16 @@ def validate_matrix(matrix):
             counts[backend_id][status] += 1
             if status in BACKLOG_STATUSES:
                 expected_backlog.append(
-                    {
-                        "feature_id": feature_id,
-                        "feature": feature["name"],
-                        "category": feature["category"],
-                        "backend_id": backend_id,
-                        "backend": next(
+                    backlog_row_for_feature(
+                        feature,
+                        backend_id,
+                        next(
                             backend["name"]
                             for backend in backends
                             if backend["id"] == backend_id
                         ),
-                        "status": status,
-                        "notes": entry.get("notes", ""),
-                    }
+                        entry,
+                    )
                 )
 
     summary_counts = matrix.get("summary", {}).get("status_counts")
@@ -979,6 +1016,8 @@ def render_docs(matrix):
                 item["category"],
                 item["feature"],
                 item["status"],
+                item.get("current_gap") or item.get("notes", ""),
+                item.get("next_scope", ""),
                 item.get("notes", ""),
             ]
         )
@@ -995,7 +1034,15 @@ def render_docs(matrix):
     lines.extend(
         render_csv_table(
             "Non-supported or unaudited feature rows",
-            ["Backend", "Category", "Feature", "Status", "Notes"],
+            [
+                "Backend",
+                "Category",
+                "Feature",
+                "Status",
+                "Current gap",
+                "Next scope",
+                "Notes",
+            ],
             backlog_rows,
         )
     )

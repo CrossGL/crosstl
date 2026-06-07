@@ -70,6 +70,13 @@ def _minimal_catalogs(module):
                 "category": "target",
                 "name": "Code generation",
                 "description": "Emit target code.",
+                "support_plan": {
+                    "current_gap": "OpenGL code generation still needs coverage.",
+                    "next_scope": "Add parser and codegen fixtures for OpenGL.",
+                    "completion_criteria": (
+                        "Mark supported when OpenGL has matching evidence."
+                    ),
+                },
                 "support": {
                     "directx": {"status": "supported"},
                     "opengl": {"status": "partial", "notes": "Needs audit."},
@@ -1347,6 +1354,67 @@ def test_validate_feature_catalog_rejects_typoed_support_keys():
         match="unsupported support key",
     ):
         module.validate_feature_catalog(features, {"directx"})
+
+
+def test_validate_feature_catalog_rejects_typoed_support_plan_keys():
+    module = load_support_matrix_module()
+    features = {
+        "statuses": _status_descriptions(module),
+        "features": [
+            {
+                "id": "target.codegen",
+                "category": "target",
+                "name": "Code generation",
+                "description": "Emit target code.",
+                "support_plan": {
+                    "completion_rule": "Wrong key name.",
+                },
+                "support": {
+                    "directx": {
+                        "status": "partial",
+                    }
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(
+        module.SupportMatrixError,
+        match="unsupported support plan key",
+    ):
+        module.validate_feature_catalog(features, {"directx"})
+
+
+def test_support_plan_fields_flow_to_generated_backlog_rows():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+
+    matrix = module.build_matrix(backends, features)
+
+    support = matrix["features"][0]["support"]
+    assert "current_gap" not in support["directx"]
+    assert support["opengl"]["current_gap"] == (
+        "OpenGL code generation still needs coverage."
+    )
+    assert support["opengl"]["next_scope"] == (
+        "Add parser and codegen fixtures for OpenGL."
+    )
+    assert support["opengl"]["completion_criteria"] == (
+        "Mark supported when OpenGL has matching evidence."
+    )
+    row = next(item for item in matrix["backlog"] if item["backend_id"] == "opengl")
+    assert row == {
+        "feature_id": "target.codegen",
+        "feature": "Code generation",
+        "category": "target",
+        "backend_id": "opengl",
+        "backend": "opengl",
+        "status": "partial",
+        "notes": "Needs audit.",
+        "current_gap": "OpenGL code generation still needs coverage.",
+        "next_scope": "Add parser and codegen fixtures for OpenGL.",
+        "completion_criteria": "Mark supported when OpenGL has matching evidence.",
+    }
 
 
 def test_validate_matrix_catches_inconsistent_generated_counts():

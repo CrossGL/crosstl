@@ -885,6 +885,50 @@ def markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines)
 
 
+def support_plan_value(
+    row: Mapping[str, Any], support: Mapping[str, Any], key: str
+) -> str:
+    value = row.get(key) or support.get(key) or ""
+    return str(value).strip()
+
+
+def current_gap_text(row: Mapping[str, Any], support: Mapping[str, Any]) -> str:
+    return (
+        support_plan_value(row, support, "current_gap")
+        or str(row.get("notes") or support.get("notes") or "").strip()
+        or "No current gap is recorded."
+    )
+
+
+def default_completion_rule(shared: bool = False) -> str:
+    if shared:
+        return "When this shared matrix row becomes `supported` for every affected backend, the next sync will close this managed sub-issue as completed."
+    return "When this matrix row becomes `supported`, the next sync will close this managed sub-issue as completed."
+
+
+def completion_rule_text(
+    rows: list[Mapping[str, Any]],
+    lookup: dict[tuple[str, str], dict[str, Any]],
+    *,
+    shared: bool = False,
+) -> str:
+    rules: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        support = lookup.get((row["backend_id"], row["feature_id"]), {}).get(
+            "support", {}
+        )
+        rule = support_plan_value(row, support, "completion_criteria")
+        if rule and rule not in seen:
+            rules.append(rule)
+            seen.add(rule)
+    if len(rules) == 1:
+        return rules[0]
+    if rules:
+        return "\n".join(f"- {rule}" for rule in rules)
+    return default_completion_rule(shared=shared)
+
+
 def feature_lookup(matrix: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     lookup = {}
     for feature in matrix.get("features", []):
@@ -1027,36 +1071,43 @@ def child_body(
     evidence_text = "\n".join(f"- `{value}`" for value in evidence)
     if not evidence_text:
         evidence_text = "- No evidence is recorded for this non-supported row."
-    notes = item.get("notes") or support.get("notes") or "No notes recorded."
+    current_gap = current_gap_text(item, support)
+    next_scope = support_plan_value(item, support, "next_scope")
+    completion_rule = completion_rule_text([item], lookup)
     signal_text = format_signal_section(
         signals_lookup.get((item["backend_id"], item["feature_id"]))
         if signals_lookup
         else None
     )
 
-    return "\n\n".join(
+    sections = [
+        marker_for("backlog:{}:{}".format(item["backend_id"], item["feature_id"])),
+        "# {}: {}".format(item["backend"], item["feature"]),
+        "This sub-issue is managed from `support/generated/support-matrix.json` by `tools/sync_support_issues.py`.",
+        markdown_table(
+            ["Field", "Value"],
+            [
+                ["Backend", item["backend"]],
+                ["Feature ID", item["feature_id"]],
+                ["Category", item["category"]],
+                ["Status", item["status"]],
+            ],
+        ),
+        "## Feature Description\n\n{}".format(
+            feature.get("description", "No feature description recorded.")
+        ),
+        f"## Current Gap\n\n{current_gap}",
+    ]
+    if next_scope:
+        sections.append(f"## Next Scope\n\n{next_scope}")
+    sections.extend(
         [
-            marker_for("backlog:{}:{}".format(item["backend_id"], item["feature_id"])),
-            "# {}: {}".format(item["backend"], item["feature"]),
-            "This sub-issue is managed from `support/generated/support-matrix.json` by `tools/sync_support_issues.py`.",
-            markdown_table(
-                ["Field", "Value"],
-                [
-                    ["Backend", item["backend"]],
-                    ["Feature ID", item["feature_id"]],
-                    ["Category", item["category"]],
-                    ["Status", item["status"]],
-                ],
-            ),
-            "## Feature Description\n\n{}".format(
-                feature.get("description", "No feature description recorded.")
-            ),
-            f"## Current Gap\n\n{notes}",
             f"## Recorded Evidence\n\n{evidence_text}",
             f"## Extracted Signals\n\n{signal_text}",
-            "## Completion Rule\n\nWhen this matrix row becomes `supported`, the next sync will close this managed sub-issue as completed.",
+            f"## Completion Rule\n\n{completion_rule}",
         ]
     )
+    return "\n\n".join(sections)
 
 
 def shared_project_child_body(
@@ -1078,8 +1129,14 @@ def shared_project_child_body(
             if value not in seen_evidence:
                 evidence.append(value)
                 seen_evidence.add(value)
-        notes = row.get("notes") or support.get("notes") or "No notes recorded."
-        affected_rows.append([row["backend"], row["status"], notes])
+        affected_rows.append(
+            [
+                row["backend"],
+                row["status"],
+                current_gap_text(row, support),
+                support_plan_value(row, support, "next_scope"),
+            ]
+        )
 
     evidence_text = "\n".join(f"- `{value}`" for value in evidence)
     if not evidence_text:
@@ -1111,11 +1168,15 @@ def shared_project_child_body(
                 feature.get("description", "No feature description recorded.")
             ),
             "## Affected Backends\n\n{}".format(
-                markdown_table(["Backend", "Status", "Current Gap"], affected_rows)
+                markdown_table(
+                    ["Backend", "Status", "Current Gap", "Next Scope"], affected_rows
+                )
             ),
             f"## Recorded Evidence\n\n{evidence_text}",
             f"## Extracted Signals\n\n{signal_text}",
-            "## Completion Rule\n\nWhen this shared matrix row becomes `supported` for every affected backend, the next sync will close this managed sub-issue as completed.",
+            "## Completion Rule\n\n{}".format(
+                completion_rule_text(rows, lookup, shared=True)
+            ),
         ]
     )
 

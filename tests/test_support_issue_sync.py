@@ -67,6 +67,11 @@ def sample_matrix():
                     "directx": {
                         "status": "partial",
                         "notes": "Cube gather is not audited.",
+                        "current_gap": "Cube-array gather remains unaudited.",
+                        "next_scope": "Add cube-array gather fixtures.",
+                        "completion_criteria": (
+                            "Mark supported after cube-array gather evidence is recorded."
+                        ),
                         "evidence": ["tests/example.py::def test_gather"],
                     }
                 },
@@ -317,7 +322,12 @@ def test_build_desired_issues_creates_parent_and_backlog_entries():
     child = desired["backlog:directx:textures.gather"]
     assert child.parent_key == "parent:directx"
     assert module.LABEL_BACKLOG in child.labels
-    assert "Cube gather is not audited." in child.body
+    assert "Cube-array gather remains unaudited." in child.body
+    assert "## Next Scope\n\nAdd cube-array gather fixtures." in child.body
+    assert (
+        "## Completion Rule\n\nMark supported after cube-array gather evidence is recorded."
+        in child.body
+    )
     assert "`tests/example.py::def test_gather`" in child.body
 
 
@@ -343,11 +353,21 @@ def test_build_desired_issues_routes_project_backlog_to_frontend_parent():
                 "directx": {
                     "status": "partial",
                     "notes": "DirectX provenance is incomplete.",
+                    "current_gap": "Project provenance lacks fine-grained mappings.",
+                    "next_scope": "Define fine-grained source-map validation.",
+                    "completion_criteria": (
+                        "Mark supported after fine-grained provenance validation passes."
+                    ),
                     "evidence": ["tests/project.py::def test_directx_provenance"],
                 },
                 "opengl": {
                     "status": "partial",
                     "notes": "OpenGL provenance is incomplete.",
+                    "current_gap": "Project provenance lacks fine-grained mappings.",
+                    "next_scope": "Define fine-grained source-map validation.",
+                    "completion_criteria": (
+                        "Mark supported after fine-grained provenance validation passes."
+                    ),
                     "evidence": ["tests/project.py::def test_opengl_provenance"],
                 },
             },
@@ -386,6 +406,13 @@ def test_build_desired_issues_routes_project_backlog_to_frontend_parent():
     assert module.LABEL_PREFIX_BACKEND + module.FRONTEND_ID in child.labels
     assert "DirectX / HLSL" in child.body
     assert "OpenGL / GLSL" in child.body
+    assert "| Backend | Status | Current Gap | Next Scope |" in child.body
+    assert "Project provenance lacks fine-grained mappings." in child.body
+    assert "Define fine-grained source-map validation." in child.body
+    assert (
+        "## Completion Rule\n\nMark supported after fine-grained provenance validation passes."
+        in child.body
+    )
     assert "`tests/project.py::def test_directx_provenance`" in child.body
     assert "`tests/project.py::def test_opengl_provenance`" in child.body
     assert "backlog:directx:project.source_provenance" not in desired
