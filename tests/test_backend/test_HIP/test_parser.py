@@ -3353,6 +3353,49 @@ class TestHipParser:
         assert isinstance(function.body[0], ReturnNode)
         assert function.body[0].value == "x"
 
+    def test_template_prefixed_leading_requires_clause_parsing(self):
+        code = """
+        template <class T>
+        requires (sizeof(T) > 0)
+        __device__ T id(T x) {
+            return x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "T"
+        assert function.name == "id"
+        assert "__device__" in function.qualifiers
+        assert function.params == [{"type": "T", "name": "x"}]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
+
+    def test_cxx20_trailing_requires_clause_after_template_function_parameters(self):
+        code = """
+        template <class T>
+        __device__ T id(T x) requires (sizeof(T) > 0) {
+            return x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "T"
+        assert function.name == "id"
+        assert "__device__" in function.qualifiers
+        assert function.params == [{"type": "T", "name": "x"}]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
+
     def test_template_prefixed_using_alias_with_dependent_type_parsing(self):
         code = """
         template <std::uint32_t WarpSize>

@@ -915,6 +915,8 @@ class HipParser:
 
         self.parse_template_suffix()
         self.skip_newlines()
+        self.skip_requires_clause()
+        self.skip_newlines()
         self.skip_cpp_attributes()
 
         if self.is_leading_type_attribute_qualified_function():
@@ -1590,7 +1592,18 @@ class HipParser:
                 if self.match("LPAREN"):
                     self.skip_balanced_parentheses()
                 continue
+            if self.match("IDENTIFIER") and self.current_token.value == "requires":
+                self.skip_requires_clause()
+                continue
             break
+
+    def skip_requires_clause(self):
+        if not (self.match("IDENTIFIER") and self.current_token.value == "requires"):
+            return
+        self.advance()
+        self.skip_newlines()
+        if self.match("LPAREN"):
+            self.skip_balanced_parentheses()
 
     def skip_balanced_parentheses(self):
         if not self.match("LPAREN"):

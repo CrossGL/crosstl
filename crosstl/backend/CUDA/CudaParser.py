@@ -2197,7 +2197,15 @@ class CudaParser:
                 if token_value == "noexcept" and self.current_token[0] == "LPAREN":
                     self.skip_balanced_parentheses()
                 continue
+            if token_type == "IDENTIFIER" and token_value == "requires":
+                self.skip_requires_clause()
+                continue
             break
+
+    def skip_requires_clause(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
 
     def parse_function_attribute(self):
         attribute_name = self.current_token[1]

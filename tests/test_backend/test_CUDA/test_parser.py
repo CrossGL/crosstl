@@ -3016,6 +3016,26 @@ class TestCudaParser:
         assert isinstance(kernel.body[0], SharedMemoryNode)
         assert kernel.body[0].is_extern_shared_memory is True
 
+    def test_cxx20_trailing_requires_clause_after_template_function_parameters(self):
+        code = """
+        template <class T>
+        __device__ T id(T x) requires (sizeof(T) > 0) {
+            return x;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        function = ast.functions[0]
+        assert function.name == "id"
+        assert function.return_type == "T"
+        assert function.qualifiers == ["__device__"]
+        assert [(param.vtype, param.name) for param in function.params] == [("T", "x")]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
+
     def test_constexpr_local_declaration_in_switch_case_parsing(self):
         code = """
         void launch(int mode) {
