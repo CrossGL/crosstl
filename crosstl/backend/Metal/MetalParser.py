@@ -2143,6 +2143,7 @@ class MetalParser:
                 )
             name += f"::{self.current_token[1]}"
             self.eat(self.current_token[0])
+        name = self.parse_function_operator_suffix(name)
         if self.template_argument_list_followed_by_call(follow_token_types={"LPAREN"}):
             template_args = self.parse_template_argument_suffix()
             name += f"<{self.format_generic_type_tokens(template_args)}>"
@@ -2178,6 +2179,17 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+
+    def parse_function_operator_suffix(self, name):
+        if (
+            name.split("::")[-1] != "operator"
+            or self.current_token[0] != "LPAREN"
+            or self.peek(1)[0] != "RPAREN"
+        ):
+            return name
+        self.eat("LPAREN")
+        self.eat("RPAREN")
+        return f"{name}()"
 
     def parse_optional_trailing_return_type(self, attributes):
         if self.current_token[0] != "ARROW":

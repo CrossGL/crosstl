@@ -241,6 +241,7 @@ class CudaToCrossGLConverter:
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.global_resource_binding_count = 0
 
@@ -263,6 +264,7 @@ class CudaToCrossGLConverter:
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.visit(ast_node)
@@ -3826,6 +3828,7 @@ class CudaToCrossGLConverter:
             self.push_cooperative_group_scope()
             self.push_cuda_async_sync_scope()
             self.push_variable_type_scope()
+            self.push_warp_mask_value_scope()
             for param in node.params:
                 self.register_variable_type(param.name, param.vtype)
                 self.register_unique_ptr_name(param.name, param.vtype)
@@ -3835,6 +3838,7 @@ class CudaToCrossGLConverter:
                 for stmt in node.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
                 self.pop_cooperative_group_scope()
@@ -3919,6 +3923,7 @@ class CudaToCrossGLConverter:
             self.push_cooperative_group_scope()
             self.push_cuda_async_sync_scope()
             self.push_variable_type_scope()
+            self.push_warp_mask_value_scope()
             for param in kernel.params:
                 self.register_variable_type(param.name, param.vtype)
                 self.register_unique_ptr_name(param.name, param.vtype)
@@ -3928,6 +3933,7 @@ class CudaToCrossGLConverter:
                 for stmt in kernel.body:
                     self.emit_statement(stmt)
             finally:
+                self.pop_warp_mask_value_scope()
                 self.pop_variable_type_scope()
                 self.pop_cuda_async_sync_scope()
                 self.pop_cooperative_group_scope()
@@ -4007,12 +4013,15 @@ class CudaToCrossGLConverter:
                 comments, value = runtime_expression
                 for comment in comments:
                     self.emit(comment)
+                self.register_warp_mask_value(node.name, output_name, value)
                 self.emit(f"var {output_name}: {var_type} = {value};")
                 return
 
             value = self.visit(node.value)
+            self.register_warp_mask_value(node.name, output_name, value)
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
+            self.register_warp_mask_value(node.name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
 
     def push_packed_argument_scope(self):
@@ -4049,6 +4058,47 @@ class CudaToCrossGLConverter:
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+
+    def push_warp_mask_value_scope(self):
+        self.warp_mask_value_scopes.append({})
+
+    def pop_warp_mask_value_scope(self):
+        if len(self.warp_mask_value_scopes) > 1:
+            self.warp_mask_value_scopes.pop()
+
+    def register_warp_mask_value(self, raw_name, output_name, value):
+        if not self.warp_mask_value_scopes:
+            self.warp_mask_value_scopes.append({})
+
+        names = {name for name in (raw_name, output_name) if name}
+        if not names:
+            return
+
+        if self.is_full_or_active_warp_mask(value):
+            resolved_value = self.resolve_warp_mask_expression(value)
+            for name in names:
+                self.warp_mask_value_scopes[-1][name] = resolved_value
+            return
+
+        for name in names:
+            self.warp_mask_value_scopes[-1].pop(name, None)
+
+    def resolve_warp_mask_expression(self, mask):
+        text = str(mask).strip()
+        seen = set()
+
+        while text and text not in seen:
+            seen.add(text)
+            replacement = None
+            for scope in reversed(self.warp_mask_value_scopes):
+                if text in scope:
+                    replacement = scope[text]
+                    break
+            if replacement is None:
+                return text
+            text = str(replacement).strip()
+
+        return text
 
     def register_variable_type(self, name, type_name):
         if name:
@@ -4268,11 +4318,21 @@ class CudaToCrossGLConverter:
             comments, value = runtime_expression
             for comment in comments:
                 self.emit(comment)
+            self.register_warp_mask_assignment(node.left, left, operator, value)
             self.emit(f"{left} = {value};")
             return None
 
         right = self.visit(node.right)
+        self.register_warp_mask_assignment(node.left, left, operator, right)
         return f"{left} {operator} {right}"
+
+    def register_warp_mask_assignment(self, raw_left, output_left, operator, value):
+        raw_name = raw_left if isinstance(raw_left, str) else None
+        if raw_name is None:
+            return
+
+        assigned_value = value if operator == "=" else None
+        self.register_warp_mask_value(raw_name, output_left, assigned_value)
 
     def visit_BinaryOpNode(self, node):
         left = self.visit(node.left)
@@ -4538,7 +4598,9 @@ class CudaToCrossGLConverter:
         return self.is_full_warp_width(width_args[0])
 
     def is_full_or_active_warp_mask(self, mask):
-        normalized = self.normalize_warp_mask_expression(mask)
+        normalized = self.normalize_warp_mask_expression(
+            self.resolve_warp_mask_expression(mask)
+        )
         return normalized in {
             "0xffffffff",
             "0xffffffffu",

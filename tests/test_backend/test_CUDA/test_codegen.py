@@ -1008,6 +1008,29 @@ class TestCudaCodeGen:
         assert "__shfl_sync(0xffffffff, value, lane)" not in result
         assert "__shfl_down_sync(0xffffffff, value, 1)" not in result
 
+    def test_cuda_full_warp_mask_variable_reassignment_clears_vote_lowering(self):
+        code = """
+        __global__ void warp(unsigned int* input, unsigned int* result) {
+            int tx = threadIdx.x;
+            int mask = 0xffffffff;
+            result[tx] = __any_sync(mask, input[tx]);
+            mask = tx;
+            result[tx + 1] = __any_sync(mask, input[tx]);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in result
+        assert (
+            "/* cuda warp intrinsic __any_sync(mask, input[tx]) "
+            "not directly supported in CrossGL */ 0"
+        ) in result
+
     def test_cuda_docs_full_warp_shuffle_sync_variants_convert(self):
         # Source: NVIDIA CUDA C++ Programming Guide, warp shuffle functions.
         code = """

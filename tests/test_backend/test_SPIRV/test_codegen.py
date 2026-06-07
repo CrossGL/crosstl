@@ -1476,6 +1476,36 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_NAMED_BARRIER_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: f3f1169512c713d979a7aa1bc0c6c0fd89f0a85f
+; Source path: test/val/val_barriers_test.cpp
+; Reduced from OpNamedBarrierInitializeSuccess and OpMemoryNamedBarrierSuccess.
+OpCapability Shader
+OpCapability NamedBarrier
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %out_value
+OpExecutionMode %main LocalSize 1 1 1
+OpName %out_value "outValue"
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%named_barrier = OpTypeNamedBarrier
+%ptr_output_uint = OpTypePointer Output %uint
+%u32_4 = OpConstant %uint 4
+%workgroup = OpConstant %uint 2
+%acquire_release_workgroup = OpConstant %uint 264
+%out_value = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%barrier = OpNamedBarrierInitialize %named_barrier %u32_4
+OpMemoryNamedBarrier %barrier %workgroup %acquire_release_workgroup
+OpStore %out_value %u32_4
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SUBGROUP_BROADCAST_REDUCE_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source pattern: reduced from Vulkan subgroupBroadcastFirst/subgroupAdd style
@@ -5119,6 +5149,24 @@ def test_glslang_web_comp_barrier_instructions_codegen_reparse():
     assert "spirvControlBarrier(2, 2, 264);" in generated_code
     assert "spirvMemoryBarrier(1, 3400);" in generated_code
     assert "spirvMemoryBarrier(2, 3400);" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_named_barrier_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_NAMED_BARRIER_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "compute {" in generated_code
+    assert "uint outValue @output @location(0);" in generated_code
+    assert (
+        "spirvMemoryNamedBarrier(spirvNamedBarrierInitialize(4), 2, 264);"
+        in generated_code
+    )
+    assert "outValue = 4;" in generated_code
+    assert "OpMemoryNamedBarrier" not in generated_code
+    assert "OpNamedBarrierInitialize" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

@@ -7532,6 +7532,43 @@ def test_const_static_conversion():
         pytest.fail(f"Const/static conversion failed: {e}")
 
 
+def test_rust_gpu_associated_const_codegen_from_spirv_std_scalar_traits():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/spirv-std/src/scalar.rs Integer associated consts.
+    code = """
+    pub unsafe trait Integer: Number {
+        const WIDTH: usize;
+        const SIGNED: bool;
+    }
+
+    unsafe impl Integer for u32 {
+        const WIDTH: usize = 32;
+        const SIGNED: bool = false;
+    }
+
+    fn integer_width() -> usize {
+        u32::WIDTH
+    }
+
+    fn integer_signed() -> bool {
+        u32::SIGNED
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "const uint u32_WIDTH = 32;" in result
+    assert "const bool u32_SIGNED = false;" in result
+    assert "return u32_WIDTH;" in result
+    assert "return u32_SIGNED;" in result
+    assert "u32::WIDTH" not in result
+    assert "u32::SIGNED" not in result
+    assert result.index("const uint u32_WIDTH = 32;") < result.index(
+        "uint integer_width()"
+    )
+
+
 def test_fixed_array_conversion():
     code = """
     const KERNEL: [f32; 3] = [1.0; 3];

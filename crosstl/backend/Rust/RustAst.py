@@ -196,6 +196,8 @@ class ImplNode(ASTNode):
         where_clauses=None,
         type_aliases=None,
         is_negative=False,
+        associated_consts=None,
+        is_unsafe=False,
     ):
         self.struct_name = struct_name
         self.methods = methods
@@ -205,6 +207,8 @@ class ImplNode(ASTNode):
         self.where_clauses = where_clauses or []
         self.type_aliases = type_aliases or []
         self.is_negative = is_negative
+        self.associated_consts = associated_consts or []
+        self.is_unsafe = is_unsafe
 
     def __repr__(self):
         if self.trait_name:
@@ -271,6 +275,8 @@ class TraitNode(ASTNode):
         where_clauses=None,
         associated_types=None,
         supertraits=None,
+        associated_consts=None,
+        is_unsafe=False,
         *args,
         **kwargs,
     ):
@@ -281,6 +287,8 @@ class TraitNode(ASTNode):
         self.where_clauses = where_clauses or []
         self.associated_types = associated_types or []
         self.supertraits = supertraits or []
+        self.associated_consts = associated_consts or []
+        self.is_unsafe = is_unsafe
 
         for key, value in kwargs.items():
             if not hasattr(self, key):

@@ -898,6 +898,11 @@ class VulkanParser:
                 }
             elif result_id and opcode == "OpTypeSampler":
                 types[result_id] = {"kind": "sampler", "name": "sampler"}
+            elif result_id and opcode == "OpTypeNamedBarrier":
+                types[result_id] = {
+                    "kind": "named_barrier",
+                    "name": "spirvNamedBarrier",
+                }
             elif result_id and opcode in {
                 "OpTypeAccelerationStructureKHR",
                 "OpTypeAccelerationStructureNV",
@@ -1611,6 +1616,26 @@ class VulkanParser:
 
             if (
                 result_id
+                and opcode == "OpNamedBarrierInitialize"
+                and len(operands) >= 2
+            ):
+                expressions[result_id] = FunctionCallNode(
+                    "spirvNamedBarrierInitialize",
+                    [
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        )
+                    ],
+                )
+                expression_type_ids[result_id] = operands[0]
+                continue
+
+            if (
+                result_id
                 and (
                     opcode.startswith("OpConvert")
                     or opcode in {"OpFConvert", "OpSConvert", "OpUConvert"}
@@ -2276,6 +2301,24 @@ class VulkanParser:
                                 constants,
                             )
                             for operand in operands[:2]
+                        ],
+                    )
+                )
+                continue
+
+            if opcode == "OpMemoryNamedBarrier" and len(operands) >= 3:
+                statements.append(
+                    FunctionCallNode(
+                        "spirvMemoryNamedBarrier",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[:3]
                         ],
                     )
                 )
@@ -3292,6 +3335,24 @@ class VulkanParser:
                                 constants,
                             )
                             for operand in operands[:2]
+                        ],
+                    )
+                )
+                continue
+
+            if opcode == "OpMemoryNamedBarrier" and len(operands) >= 3:
+                statements.append(
+                    FunctionCallNode(
+                        "spirvMemoryNamedBarrier",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[:3]
                         ],
                     )
                 )

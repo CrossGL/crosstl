@@ -1305,6 +1305,39 @@ def test_multi_index_subscript_expressions_codegen_from_official_operator_sample
     assert "value[(x, y)]" not in generated_code
 
 
+def test_attributed_subscript_set_accessor_from_upstream_bug_sample_codegen():
+    # Source: shader-slang/slang@5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+    # tests/bugs/gh-4971.slang
+    code = """
+    struct Test {
+        RWStructuredBuffer<int> val;
+        __subscript(int x, int y)->int
+        {
+            get { return val[x * 3 + y]; }
+            [nonmutating] set { val[x * 3 + y] = newValue; }
+        }
+    }
+    Test test;
+
+    [numthreads(1, 1, 1)]
+    void computeMain()
+    {
+        test[0,0] = 1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Test" in generated_code
+    assert "RWStructuredBuffer<int> val;" in generated_code
+    assert "Test test;" in generated_code
+    assert "test[0, 0] = 1;" in generated_code
+    assert "nonmutating" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_logical_not_codegen():
     code = """
     bool negate(bool disabled) {

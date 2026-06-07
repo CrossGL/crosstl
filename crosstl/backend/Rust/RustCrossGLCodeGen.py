@@ -694,6 +694,7 @@ class RustToCrossGLConverter:
         self.type_aliases = {}
         self.imported_type_aliases = {}
         self.imported_module_aliases = {}
+        self.associated_consts = {}
         self.struct_member_types = {}
         self.struct_generics = {}
         self.return_result_target = object()
@@ -765,6 +766,7 @@ class RustToCrossGLConverter:
         self.type_aliases = {}
         self.imported_type_aliases = {}
         self.imported_module_aliases = {}
+        self.associated_consts = {}
         self.struct_member_types = self.collect_struct_member_types(ast)
         self.struct_generics = self.collect_struct_generics(ast)
         self.labeled_control_counter = 0
@@ -810,6 +812,8 @@ class RustToCrossGLConverter:
         for alias in getattr(ast, "type_aliases", []):
             self.register_type_alias(alias)
 
+        self.register_associated_consts(ast)
+
         for alias in getattr(ast, "type_aliases", []):
             alias_code = self.generate_type_alias(alias)
             if alias_code:
@@ -838,6 +842,21 @@ class RustToCrossGLConverter:
                     declarator = self.format_typed_declarator(member.vtype, member.name)
                     code += f"        {declarator}{semantic};\n"
                 code += "    }\n\n"
+
+        for impl_block in ast.impl_blocks:
+            if getattr(impl_block, "is_negative", False):
+                continue
+
+            consts_code = ""
+            for const in getattr(impl_block, "associated_consts", []):
+                consts_code += self.generate_impl_associated_const(
+                    impl_block.struct_name,
+                    const,
+                    indent=1,
+                )
+            if consts_code:
+                code += f"    // Associated constants for {impl_block.struct_name}\n"
+                code += consts_code
 
         for func in ast.functions:
             shader_type = self.get_shader_type_from_attributes(func.attributes)
@@ -2074,6 +2093,44 @@ class RustToCrossGLConverter:
     def register_type_alias(self, alias):
         if getattr(alias, "name", None):
             self.type_aliases[alias.name] = alias
+
+    def register_associated_consts(self, ast):
+        for impl_block in getattr(ast, "impl_blocks", []):
+            if getattr(impl_block, "is_negative", False):
+                continue
+
+            struct_name = getattr(impl_block, "struct_name", None)
+            if not struct_name:
+                continue
+
+            for const in getattr(impl_block, "associated_consts", []) or []:
+                const_name = getattr(const, "name", None)
+                if not const_name or getattr(const, "value", None) is None:
+                    continue
+                generated_name = self.format_associated_const_identifier(
+                    struct_name,
+                    const_name,
+                )
+                for type_name in self.type_lookup_names(struct_name):
+                    self.associated_consts[f"{type_name}::{const_name}"] = (
+                        generated_name
+                    )
+
+    def format_associated_const_identifier(self, type_name, const_name):
+        prefix = self.impl_function_prefix(type_name)
+        return self.crossgl_identifier(f"{prefix}_{const_name}")
+
+    def generate_impl_associated_const(self, type_name, const, indent=1):
+        if getattr(const, "value", None) is None:
+            return ""
+
+        indent_str = "    " * indent
+        declarator = self.format_typed_declarator(
+            const.vtype,
+            self.format_associated_const_identifier(type_name, const.name),
+        )
+        value = self.generate_expression(const.value)
+        return f"{indent_str}const {declarator} = {value};\n"
 
     def register_use_alias(self, use_stmt):
         path = getattr(use_stmt, "path", None)
@@ -4877,6 +4934,22 @@ class RustToCrossGLConverter:
         if not isinstance(value, str):
             return None
         return self.SCALAR_ASSOCIATED_CONSTANTS.get(value)
+
+    def format_impl_associated_const(self, value):
+        if not isinstance(value, str) or "::" not in value:
+            return None
+
+        value = self.normalize_associated_type_path(value)
+        direct = self.associated_consts.get(value)
+        if direct is not None:
+            return direct
+
+        type_name, const_name = value.rsplit("::", 1)
+        for type_candidate in self.type_lookup_names(type_name):
+            resolved = self.associated_consts.get(f"{type_candidate}::{const_name}")
+            if resolved is not None:
+                return resolved
+        return None
 
     def vector_zero_one_literals(self, mapped_type):
         if mapped_type.startswith("bvec"):
@@ -8502,6 +8575,9 @@ class RustToCrossGLConverter:
         """Render a Rust backend expression node as CrossGL syntax."""
         if isinstance(expr, str):
             value = self.resolve_imported_module_path(self.normalize_rust_literal(expr))
+            associated_const = self.format_impl_associated_const(value)
+            if associated_const is not None:
+                return associated_const
             scalar_constant = self.format_scalar_associated_constant(value)
             if scalar_constant is not None:
                 return scalar_constant

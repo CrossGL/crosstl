@@ -1145,6 +1145,39 @@ def test_parse_class_helper_with_access_labels_from_public_metal_shader():
     assert ast.functions[0].body[0].vtype == "FpMersenne31"
 
 
+def test_parse_scoped_call_operator_definition_from_mlx_unary_ops():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 8f0e8b14e0fc028df8618684583af9bef44647b8
+    # Path: mlx/backend/metal/kernels/unary_ops.h
+    code = """
+    struct ArcCos {
+        complex64_t operator()(complex64_t x);
+    };
+
+    struct Log {
+        complex64_t operator()(complex64_t x);
+    };
+
+    struct Sqrt {
+        complex64_t operator()(complex64_t x);
+    };
+
+    complex64_t ArcCos::operator()(complex64_t x) {
+        auto i = complex64_t{0.0, 1.0};
+        auto y = Log{}(x + i * Sqrt{}(1.0 - x * x));
+        return {y.imag, -y.real};
+    };
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.name == "ArcCos::operator()"
+    assert function.return_type == "complex64_t"
+    assert function.params[0].vtype == "complex64_t"
+    assert function.params[0].name == "x"
+
+
 def test_skip_struct_builtin_conversion_operators_from_mlx_fp4_header():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx

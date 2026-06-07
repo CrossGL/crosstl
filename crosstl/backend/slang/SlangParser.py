@@ -1685,6 +1685,10 @@ class SlangParser:
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
                 continue
+            while self.current_token[0] == "LBRACKET":
+                self.parse_attribute_list()
+            if self.current_token[0] == "RBRACE":
+                break
             accessor_name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "LPAREN":
