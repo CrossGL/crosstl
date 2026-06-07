@@ -6123,6 +6123,10 @@ class CudaToCrossGLConverter:
         if unique_ptr_type is not None:
             return unique_ptr_type
 
+        span_type = self.convert_cuda_span_type(cuda_type)
+        if span_type is not None:
+            return span_type
+
         if self.has_array_suffix(cuda_type):
             return self.convert_cuda_array_type(cuda_type, type_mapping)
 
@@ -6167,6 +6171,28 @@ class CudaToCrossGLConverter:
 
         target_type, _ = self.unwrap_array_template_type(template_args[0])
         return f"ptr<{self.convert_cuda_type_to_crossgl(target_type)}>"
+
+    def convert_cuda_span_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if base_name not in {"cuda::std::span", "std::span"} or not template_args:
+            return None
+
+        element_type = self.convert_cuda_type_to_crossgl(template_args[0])
+        if len(template_args) >= 2 and not self.is_dynamic_span_extent(
+            template_args[1]
+        ):
+            return f"array<{element_type}, {template_args[1]}>"
+        return f"array<{element_type}>"
+
+    def is_dynamic_span_extent(self, extent):
+        extent = self.resolve_namespace_alias_name(str(extent).strip())
+        if extent.startswith("::"):
+            extent = extent[2:]
+        return extent in {
+            "dynamic_extent",
+            "std::dynamic_extent",
+            "cuda::std::dynamic_extent",
+        }
 
     def is_unique_ptr_type_name(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)

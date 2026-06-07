@@ -304,7 +304,57 @@ class MojoLexer:
 
     def _join_line_continuations(self, code: str) -> str:
         """Join explicit Mojo line continuations before indentation analysis."""
-        return re.sub(r"\\[ \t]*(?:\r?\n)[ \t]*", " ", code)
+        joined_lines = []
+        pending = ""
+
+        for line in code.splitlines(keepends=True):
+            content, newline = self._split_line_ending(line)
+            if pending:
+                content = content.lstrip(" \t")
+
+            stripped = content.rstrip(" \t")
+            continuation_pos = len(stripped) - 1
+            if stripped.endswith("\\") and not self._has_comment_before(
+                content, continuation_pos
+            ):
+                pending += stripped[:-1] + " "
+                continue
+
+            joined_lines.append(pending + content + newline)
+            pending = ""
+
+        if pending:
+            joined_lines.append(pending)
+
+        return "".join(joined_lines)
+
+    def _split_line_ending(self, line: str) -> Tuple[str, str]:
+        if line.endswith("\r\n"):
+            return line[:-2], "\r\n"
+        if line.endswith(("\n", "\r")):
+            return line[:-1], line[-1]
+        return line, ""
+
+    def _has_comment_before(self, line: str, pos: int) -> bool:
+        quote = None
+        escaped = False
+
+        for char in line[:pos]:
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                continue
+
+            if char in {'"', "'"}:
+                quote = char
+            elif char == "#":
+                return True
+
+        return False
 
     def _next_token(self, source: str, pos: int) -> Tuple[int, str, str]:
         """Match the next token in ``source`` at ``pos`` and return its end offset."""

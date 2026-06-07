@@ -2142,7 +2142,11 @@ class MojoParser:
                     self.skip_layout_tokens()
                     if self.current_token[0] == "RPAREN":
                         break
-                    elements.append(self.parse_expression())
+                    self.expression_layout_depth += 1
+                    try:
+                        elements.append(self.parse_expression())
+                    finally:
+                        self.expression_layout_depth -= 1
                     self.skip_layout_tokens()
                 self.eat("RPAREN")
                 return self.parse_postfix_suffixes(TupleNode(elements))

@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1103
+        "test_count": 1104
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 686
+        "test_count": 687
       },
       "translator_codegen": {
         "exists": true,
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 743
+        "test_count": 744
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 803
+        "test_count": 805
       },
       "translator_codegen": {
         "exists": true,
