@@ -1559,6 +1559,33 @@ def test_parse_explicit_typecast_from_glslang_nv_extension():
     assert call.args[1].name.name == "vec2"
 
 
+def test_parse_block_preprocessor_injection_directive_from_godot_tex_blit():
+    # Reduced from godotengine/godot@070dc9897ea1b84ab2a7ec04b9bc1b94f38a0eaf
+    # servers/rendering/renderer_rd/shaders/tex_blit.glsl, which has a
+    # Godot code-injection directive inside main().
+    code = textwrap.dedent("""
+        #version 450
+
+        void main()
+        {
+            vec4 color0 = vec4(0.0);
+
+        #CODE : BLIT
+
+            color0 = vec4(1.0);
+            gl_Position = color0;
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert len(main.body) == 3
+    assert main.body[0].name == "color0"
+    assert main.body[1].left.name == "color0"
+    assert main.body[2].left.name == "gl_Position"
+
+
 @pytest.mark.parametrize(
     "code",
     [

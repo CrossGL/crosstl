@@ -104,7 +104,7 @@ def test_struct_method_codegen_preserves_method_body():
 
 def test_function_parameter_convention_codegen_drops_mojo_conventions():
     code = """
-    def incr(a: Int, out b: Int):
+    def incr(var a: Int, mut b: Int):
         pass
 
     def __init__(out self, value: Int):
@@ -115,8 +115,27 @@ def test_function_parameter_convention_codegen_drops_mojo_conventions():
 
     assert "void incr(int a, int b)" in generated_code
     assert "void __init__(int value)" in generated_code
-    assert "out b" not in generated_code
+    assert "var a" not in generated_code
+    assert "mut b" not in generated_code
     assert "self" not in generated_code
+
+
+def test_named_result_codegen_from_official_functions_docs():
+    # Reduced from https://mojolang.org/docs/manual/functions/#named-results
+    # where `out name_tag: NameTag` is documented as the caller-visible result.
+    code = """
+    def get_name_tag(var name: String, out name_tag: NameTag):
+        name_tag = NameTag(name^)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "NameTag get_name_tag(String name)" in generated_code
+    assert "NameTag name_tag;" in generated_code
+    assert "name_tag = NameTag(name);" in generated_code
+    assert "return name_tag;" in generated_code
+    assert "void get_name_tag" not in generated_code
+    assert "NameTag name_tag)" not in generated_code
 
 
 def test_bracketed_ref_parameter_convention_codegen_from_modular_amd_helpers():

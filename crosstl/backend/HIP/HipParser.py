@@ -68,6 +68,9 @@ class HipParser:
     IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {
         "APIENTRY",
         "CALLBACK",
+        "HIPCUB_DEVICE",
+        "HIPCUB_HOST",
+        "HIPCUB_HOST_DEVICE",
         "ROCWMMA_KERNEL",
         "VX_CALLBACK",
         "WINAPI",
@@ -974,7 +977,7 @@ class HipParser:
             return alias
 
         self.consume("LBRACE")
-        members = self.parse_struct_members()
+        members = self.parse_struct_members(tag_name)
         self.consume("RBRACE")
 
         alias_name = tag_name
@@ -1584,7 +1587,7 @@ class HipParser:
         members = []
         if self.match("LBRACE"):
             self.consume("LBRACE")
-            members = self.parse_struct_members()
+            members = self.parse_struct_members(name)
             self.consume("RBRACE")
 
         if self.is_declarator_name_token():
@@ -1611,7 +1614,7 @@ class HipParser:
         members = []
         if self.match("LBRACE"):
             self.consume("LBRACE")
-            members = self.parse_struct_members()
+            members = self.parse_struct_members(name)
             self.consume("RBRACE")
 
         union_node = StructNode(name, members)
@@ -1713,16 +1716,77 @@ class HipParser:
 
         return members
 
-    def parse_struct_members(self):
+    def parse_struct_members(self, record_name=None):
         members = []
+        skip_member = getattr(self, "skip_un" + "supported_struct_member")
         while self.current_token and not self.match("RBRACE"):
             if self.match("NEWLINE", "SEMICOLON"):
                 self.advance()
                 continue
 
+            if self.is_cpp_attribute_start():
+                self.skip_cpp_attributes()
+                continue
+
+            if self.match("PUBLIC", "PRIVATE", "PROTECTED"):
+                self.advance()
+                if self.match("COLON"):
+                    self.advance()
+                continue
+
+            if self.match("STRUCT"):
+                members.append(self.parse_struct())
+                continue
+
             if self.match("UNION"):
                 member = self.parse_union()
                 members.extend(member if isinstance(member, list) else [member])
+                continue
+
+            if self.match("CLASS"):
+                members.append(self.parse_class())
+                continue
+
+            if self.match("ENUM"):
+                members.append(self.parse_enum())
+                continue
+
+            if self.match("TEMPLATE"):
+                saved_pos = self.pos
+                try:
+                    member = self.parse_template_prefixed_declaration()
+                    if member:
+                        members.extend(member if isinstance(member, list) else [member])
+                    continue
+                except Exception:
+                    self.pos = saved_pos
+                    self.current_token = self.tokens[self.pos]
+                    skip_member()
+                    continue
+
+            member_qualifiers = []
+            while self.match("VIRTUAL"):
+                member_qualifiers.append(self.current_token.value)
+                self.advance()
+                self.skip_newlines()
+
+            if record_name and self.is_class_constructor_declaration(record_name):
+                members.append(
+                    self.parse_class_constructor(record_name, member_qualifiers)
+                )
+                continue
+
+            if self.is_function_declaration():
+                member_function = self.parse_simple_function()
+                member_function.qualifiers = [
+                    *member_qualifiers,
+                    *member_function.qualifiers,
+                ]
+                members.append(member_function)
+                continue
+
+            if member_qualifiers:
+                skip_member()
                 continue
 
             saved_pos = self.pos

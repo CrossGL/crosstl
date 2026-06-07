@@ -760,6 +760,38 @@ class TestHipParser:
         assert "test_header1.h" in initializer.elements[0]
         assert 'extern "C" __global__ void saxpy_kernel' in initializer.elements[0]
 
+    def test_external_hipcub_struct_functor_operator_member_parse(self):
+        # Upstream: ROCm/hipCUB@9534491be370165cd48e6d38c9f79720c8973e53,
+        # hipcub/include/hipcub/backend/rocprim/thread/thread_operators.hpp,
+        # struct CastOp.
+        code = """
+        template <typename B>
+        struct CastOp
+        {
+            template<typename A>
+            HIPCUB_HOST_DEVICE inline B operator()(A&& a) const
+            {
+                return (B)a;
+            }
+        };
+        """
+        ast = self.parse_code(code)
+
+        functor = ast.statements[0]
+        operator_call = functor.members[0]
+        return_value = operator_call.body[0].value
+
+        assert isinstance(functor, StructNode)
+        assert functor.name == "CastOp"
+        assert isinstance(operator_call, FunctionNode)
+        assert operator_call.name == "operator()"
+        assert operator_call.return_type == "B"
+        assert operator_call.params == [{"type": "A &&", "name": "a"}]
+        assert operator_call.qualifiers == ["HIPCUB_HOST_DEVICE", "inline"]
+        assert isinstance(return_value, CastNode)
+        assert return_value.target_type == "B"
+        assert return_value.expression == "a"
+
     def test_public_rocm_hiprtc_string_literal_suffix_arguments_parse(self):
         # Upstream: ROCm/hip docs/tools/example_codes/lowered_names.cpp.
         code = """
@@ -843,7 +875,7 @@ class TestHipParser:
         assert isinstance(expression, BinaryOpNode)
         assert expression.op == "*"
 
-    def test_public_rocm_opengl_interop_struct_constructor_body_skips_balanced(self):
+    def test_public_rocm_opengl_interop_struct_constructor_body_parses_balanced(self):
         code = """
         struct renderer
         {
@@ -868,8 +900,17 @@ class TestHipParser:
 
         assert isinstance(struct, StructNode)
         assert struct.name == "renderer"
-        assert len(struct.members) == 1
+        assert len(struct.members) == 3
         assert struct.members[0].name == "vao"
+        assert isinstance(struct.members[1], FunctionNode)
+        assert struct.members[1].name == "renderer"
+        assert struct.members[1].params == []
+        assert isinstance(struct.members[1].body[0], FunctionCallNode)
+        assert struct.members[1].body[0].name == "glGenVertexArrays"
+        assert isinstance(struct.members[2], FunctionNode)
+        assert struct.members[2].name == "renderer"
+        assert struct.members[2].params == [{"type": "const renderer &", "name": ""}]
+        assert struct.members[2].body is None
         assert isinstance(function, FunctionNode)
         assert function.name == "main"
 

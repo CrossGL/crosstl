@@ -1916,6 +1916,33 @@ def test_glsl_resource_register_metadata_rejects_wrong_register_class(code, mess
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
+def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
+    # Reduced from CrossGL-Compiler tests/fixtures/StorageBufferComputeShader.cgl.
+    code = """
+    shader StorageBufferComputeShader {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer float* values;
+
+            void main() {
+                float x = 1.0 + 2.0;
+                values[0] = x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "layout(std430, binding = 0) buffer valuesBuffer { float values[]; };"
+        in generated
+    )
+    assert "values[0] = x;" in generated
+    assert "PointerType" not in generated
+
+
 @pytest.mark.parametrize(
     ("code", "message"),
     [
