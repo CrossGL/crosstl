@@ -30,6 +30,7 @@ DIRECTX_GRAPHICS_SAMPLES_REPO = "https://github.com/microsoft/DirectX-Graphics-S
 DIRECTX_GRAPHICS_SAMPLES_COMMIT = "31ae3c91160d8634264004cdaf4e41a99c41243e"
 DIRECTX_SHADER_COMPILER_REPO = "https://github.com/microsoft/DirectXShaderCompiler"
 DIRECTX_SHADER_COMPILER_COMMIT = "517dd5eb5d8cbb46c15fc1230acac1d2f4779092"
+DIRECTX_SHADER_COMPILER_NESTED_ENUM_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -430,6 +431,36 @@ EXTERNAL_FIXTURES = [
             "@ numthreads(1, 1, 1)",
             "static Number e = Fourth;",
             "d = Number::Third;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_struct_nested_enum",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_NESTED_ENUM_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/class.enum.hlsl",
+        code=textwrap.dedent("""
+            struct TestStruct {
+                enum EnumInTestStruct {
+                    A = 1,
+                };
+            };
+
+            TestStruct::EnumInTestStruct testFunc() {
+                return TestStruct::A;
+            }
+
+            uint PSMain() : SV_TARGET
+            {
+                TestStruct::EnumInTestStruct i = testFunc();
+                return i;
+            }
+        """).strip(),
+        contains=(
+            "struct TestStruct {",
+            "enum EnumInTestStruct {",
+            "TestStruct_EnumInTestStruct testFunc()",
+            "return TestStruct::A;",
+            "TestStruct_EnumInTestStruct i = testFunc();",
         ),
     ),
     ExternalFixture(

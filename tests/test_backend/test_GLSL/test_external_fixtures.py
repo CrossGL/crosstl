@@ -651,6 +651,32 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.ext.ShaderTileImage.overlap.frag.
+    # Reduced from GL_EXT_shader_tile_image attachment variable coverage.
+    ExternalFixture(
+        name="glslang-spv-ext-shader-tile-image-attachment",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.ext.ShaderTileImage.overlap.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 460
+            #extension GL_EXT_shader_tile_image : require
+
+            precision mediump int;
+            precision highp float;
+
+            layout(location=0) tileImageEXT highp attachmentEXT in_color[2];
+            layout(location=1) tileImageEXT highp attachmentEXT in_color_1;
+            layout(location=1) out highp vec4 out_color;
+
+            void main(void)
+            {
+                 out_color = colorAttachmentReadEXT(in_color[0]);
+                 out_color += colorAttachmentReadEXT(in_color_1);
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="saschawillems-compute-particles-ssbo",
         repo="https://github.com/SaschaWillems/Vulkan",
@@ -1398,6 +1424,42 @@ def test_codegen_glslang_fragcoord_origin_layout_fixture():
 
     assert "vec4 gl_FragCoord @origin_upper_left @pixel_center_integer;" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_parse_glslang_shader_tile_image_attachment_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-ext-shader-tile-image-attachment"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    in_color = next(var for var in ast.global_variables if var.name == "in_color")
+    in_color_1 = next(var for var in ast.global_variables if var.name == "in_color_1")
+    out_color = next(var for var in ast.io_variables if var.name == "out_color")
+
+    assert in_color.vtype == "attachmentEXT"
+    assert in_color.qualifiers == ["tileImageEXT", "highp"]
+    assert in_color.layout == {"location": "0"}
+    assert in_color.is_array is True
+    assert in_color.array_size.value == "2"
+    assert in_color_1.qualifiers == ["tileImageEXT", "highp"]
+    assert out_color.qualifiers == ["out", "highp"]
+
+
+def test_codegen_glslang_shader_tile_image_attachment_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-ext-shader-tile-image-attachment"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "attachmentEXT in_color @location(0) @tileImageEXT @highp[2];" in crossgl
+    assert "attachmentEXT in_color_1 @location(1) @tileImageEXT @highp;" in crossgl
+    assert "colorAttachmentReadEXT(in_color[0])" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_parse_godot_particles_precision_ubo_hash_fixture():

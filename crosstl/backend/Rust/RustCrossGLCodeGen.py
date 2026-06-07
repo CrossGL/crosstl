@@ -9591,6 +9591,9 @@ class RustToCrossGLConverter:
         if base_name == "TypedBuffer":
             return self.format_typed_buffer_resource_type(args[0])
 
+        if base_name in {"Input", "Output"}:
+            return self.map_type(args[0])
+
         sampled_texture_map = {
             "Texture1D": "sampler1D",
             "Texture1DArray": "sampler1DArray",
