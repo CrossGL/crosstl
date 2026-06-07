@@ -7821,6 +7821,28 @@ def test_wgpu_shader_loading_host_types_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_wgpu_spawn_impl_future_static_bound_codegen_from_upstream():
+    # Reduced from gfx-rs/wgpu commit
+    # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
+    # examples/features/src/hello_triangle/mod.rs spawn.
+    code = """
+    use std::future::Future;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn(f: impl Future<Output = ()> + 'static) {
+        pollster::block_on(f);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void spawn(Future f)" in result
+    assert "impl Future" not in result
+    assert "'static" not in result
+    assert "pollster::block_on(f);" in result
+    crosstl.translator.parse(result)
+
+
 def test_use_statement_conversion():
     code = """
     use std::collections::HashMap;

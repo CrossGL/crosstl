@@ -1359,11 +1359,11 @@ class RustParser:
     def parse_type(self):
         if self.current_token[1] == "dyn":
             self.eat(self.current_token[0])
-            return f"dyn {self.parse_type()}"
+            return self.parse_type_bound_suffix(f"dyn {self.parse_type()}")
 
         if self.current_token[0] == "IMPL":
             self.eat("IMPL")
-            return f"impl {self.parse_type()}"
+            return self.parse_type_bound_suffix(f"impl {self.parse_type()}")
 
         if self.current_token[0] == "FN":
             return self.parse_function_pointer_type()
@@ -1429,6 +1429,28 @@ class RustParser:
             self.eat("RBRACKET")
 
         return "".join(type_parts)
+
+    def parse_type_bound_suffix(self, type_name):
+        bounds = []
+        while self.current_token[0] == "PLUS":
+            self.eat("PLUS")
+            bounds.append(self.parse_type_bound())
+
+        if not bounds:
+            return type_name
+        return f"{type_name} + {' + '.join(bounds)}"
+
+    def parse_type_bound(self):
+        if self.current_token[0] == "LIFETIME":
+            lifetime = self.current_token[1]
+            self.eat("LIFETIME")
+            return lifetime
+
+        if self.current_token[0] == "QUESTION":
+            self.eat("QUESTION")
+            return f"?{self.parse_type()}"
+
+        return self.parse_type()
 
     def is_callable_trait_type(self, type_parts):
         return type_parts[-1] in {"Fn", "FnMut", "FnOnce"}

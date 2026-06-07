@@ -50,7 +50,11 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
-from .array_utils import get_array_size_from_node
+from .array_utils import (
+    collect_literal_int_constants,
+    evaluate_literal_int_expression,
+    get_array_size_from_node,
+)
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -1148,6 +1152,7 @@ class MojoCodeGen:
         self.resource_access_qualifier_aliases = {}
         self.resource_access_path_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
+        self.literal_int_constants = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
@@ -1399,6 +1404,9 @@ class MojoCodeGen:
         self.resource_access_qualifier_aliases = {}
         self.resource_access_path_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
+        self.literal_int_constants = collect_literal_int_constants(
+            getattr(ast, "constants", [])
+        )
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
@@ -4026,8 +4034,23 @@ class MojoCodeGen:
         type_name = self.type_name(type_name)
         if self.is_array_type_name(type_name):
             base_type, size = self.parse_array_type_name(type_name)
-            return base_type, size or 1
+            return base_type, self.resource_binding_count(size)
         return type_name, 1
+
+    def resource_binding_count(self, size):
+        if size in (None, ""):
+            return 1
+        count = self.literal_int_value(size)
+        if count is None:
+            raise ValueError(
+                "Mojo resource array binding count must resolve to a "
+                f"compile-time integer, got {size!r}"
+            )
+        if count < 1:
+            raise ValueError(
+                "Mojo resource array binding count must be positive, " f"got {count}"
+            )
+        return count
 
     def user_defined_type_base(self, type_name):
         base_type, _ = self.resource_base_type_and_count(type_name)
@@ -13799,17 +13822,9 @@ class MojoCodeGen:
         return index
 
     def literal_int_value(self, expr):
-        if hasattr(expr, "value"):
-            try:
-                return int(expr.value)
-            except (TypeError, ValueError):
-                return None
-        if isinstance(expr, str):
-            try:
-                return int(expr)
-            except ValueError:
-                return None
-        return None
+        return evaluate_literal_int_expression(
+            expr, getattr(self, "literal_int_constants", {})
+        )
 
     def expression_result_type(self, expr):
         if isinstance(expr, str):

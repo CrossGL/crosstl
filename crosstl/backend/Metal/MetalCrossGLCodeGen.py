@@ -1787,7 +1787,14 @@ class MetalToCrossGLConverter:
             return f"{field_name}: {value}"
 
         designators = []
-        for kind, target in node.designators:
+        for designator in node.designators:
+            kind = designator[0]
+            if kind == "range":
+                start = self.generate_expression(designator[1], is_main)
+                end = self.generate_expression(designator[2], is_main)
+                designators.append(f"[{start} ... {end}]")
+                continue
+            target = designator[1]
             if kind == "index":
                 designators.append(f"[{self.generate_expression(target, is_main)}]")
             else:

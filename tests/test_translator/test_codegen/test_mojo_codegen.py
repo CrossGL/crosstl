@@ -3092,6 +3092,30 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_mojo_resource_array_binding_count_resolves_symbolic_constant():
+    # Reduced from CrossGL-Compiler/tests/directx/fixtures/DirectXFunctionParameterArrayUnsupportedShader.cgl.
+    code = """
+    shader SymbolicResourceArrayCount {
+      const int COUNT = 2;
+
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 2) uniform sampler2D colorMaps[COUNT];
+
+        void main() {
+          return;
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorMaps kind=texture set=0 "
+        "binding=2 binding_source=explicit count=2" in generated_code
+    )
+
+
 def test_hlsl_rw_texture_aliases_emit_mojo_image_helpers():
     code = """
     RWTexture2D<float4> outColor : register(u0, space2);

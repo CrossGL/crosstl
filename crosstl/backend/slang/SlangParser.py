@@ -3016,7 +3016,10 @@ class SlangParser:
             is_builtin_identifier_type = token_value in self.BUILTIN_IDENTIFIER_TYPES
             is_generic_identifier_type = self.tokens[type_pos + 1][0] == "LESS_THAN"
             if not is_builtin_identifier_type and not is_generic_identifier_type:
-                close_pos = self.skip_qualified_type_suffix_tokens(type_pos + 1)
+                try:
+                    close_pos = self.skip_qualified_type_suffix_tokens(type_pos + 1)
+                except SyntaxError:
+                    return False
                 close_pos = self.skip_pointer_declarator_tokens(close_pos)
                 if (
                     close_pos >= len(self.tokens)
