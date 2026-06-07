@@ -269,7 +269,9 @@ configuration contract is intentionally small:
 
 An explicit ``--config`` path may be absolute or repository-relative. Relative
 config paths are resolved against the repository root passed to the command, not
-against the shell's current working directory.
+against the shell's current working directory. When ``--config`` is provided,
+the referenced file must exist; otherwise the command exits with an error
+instead of silently falling back to default scan settings.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project

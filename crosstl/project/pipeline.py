@@ -2908,8 +2908,12 @@ def load_project_config(
 ) -> ProjectConfig:
     """Load ``crosstl.toml`` if present, otherwise return default scan settings."""
     root_path = Path(root).resolve()
-    if config:
-        requested_config_path = Path(config)
+    explicit_config = config is not None
+    if explicit_config:
+        config_value = os.fspath(config)
+        if not config_value.strip():
+            raise ValueError("Project config path must be non-empty")
+        requested_config_path = Path(config_value)
         config_path = (
             requested_config_path
             if requested_config_path.is_absolute()
@@ -2918,6 +2922,8 @@ def load_project_config(
     else:
         config_path = root_path / DEFAULT_CONFIG_NAME
     if not config_path.exists():
+        if explicit_config:
+            raise ValueError(f"Project config not found: {config_path}")
         return ProjectConfig(root=root_path, config_path=None)
 
     raw = _load_toml(config_path)

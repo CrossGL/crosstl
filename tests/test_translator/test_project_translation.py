@@ -824,6 +824,16 @@ def test_project_config_resolves_relative_config_path_from_root(tmp_path):
     assert config.output_dir == "generated"
 
 
+def test_project_config_rejects_missing_explicit_config_path(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError) as excinfo:
+        load_project_config(repo, "missing.toml")
+
+    assert str(repo.resolve() / "missing.toml") in str(excinfo.value)
+
+
 def test_scan_project_reports_missing_include_dirs_without_hiding_units(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -12070,6 +12080,33 @@ def test_project_cli_scan_resolves_relative_config_path_from_root(tmp_path):
     assert payload["project"]["config"] == str(repo / "custom.toml")
     assert payload["project"]["targets"] == ["opengl"]
     assert payload["project"]["outputDir"] == str(repo / "generated")
+
+
+def test_project_cli_scan_rejects_missing_explicit_config_path(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--config",
+            "missing.toml",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert "Project config not found:" in result.stdout
+    assert str(repo.resolve() / "missing.toml") in result.stdout
 
 
 def test_project_cli_scan_applies_source_backend_overrides(tmp_path):
