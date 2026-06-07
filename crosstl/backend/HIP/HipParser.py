@@ -3501,9 +3501,7 @@ class HipParser:
             return value
 
         elif self.match("CHAR_LIT"):
-            value = self.current_token.value
-            self.advance()
-            return value
+            return self.parse_character_literal()
 
         elif self.match("SYNCTHREADS", "SYNCWARP"):
             value = self.current_token.value
@@ -3936,11 +3934,15 @@ class HipParser:
         return self.parse_expression()
 
     def parse_string_literal_sequence(self):
-        value = self.consume("STRING").value
+        token = self.consume("STRING")
+        value = token.value + self.parse_user_defined_literal_suffix(token)
         self.skip_newlines()
 
         while self.match("STRING"):
-            next_value = self.consume("STRING").value
+            next_token = self.consume("STRING")
+            next_value = next_token.value + self.parse_user_defined_literal_suffix(
+                next_token
+            )
             if value.endswith('"') and next_value.startswith('"'):
                 value = value[:-1] + next_value[1:]
             else:
@@ -3948,6 +3950,31 @@ class HipParser:
             self.skip_newlines()
 
         return value
+
+    def parse_character_literal(self):
+        token = self.consume("CHAR_LIT")
+        return token.value + self.parse_user_defined_literal_suffix(token)
+
+    def parse_user_defined_literal_suffix(self, literal_token):
+        if not self.match("IDENTIFIER"):
+            return ""
+        if not self.is_adjacent_to_literal_token(literal_token, self.current_token):
+            return ""
+
+        suffix = self.current_token.value
+        self.advance()
+        return suffix
+
+    def is_adjacent_to_literal_token(self, literal_token, next_token):
+        newline_count = literal_token.value.count("\n")
+        if newline_count:
+            end_line = literal_token.line + newline_count
+            end_column = len(literal_token.value.rsplit("\n", 1)[1]) + 1
+        else:
+            end_line = literal_token.line
+            end_column = literal_token.column + len(literal_token.value)
+
+        return next_token.line == end_line and next_token.column == end_column
 
     def parse_designated_initializer(self):
         designators = []

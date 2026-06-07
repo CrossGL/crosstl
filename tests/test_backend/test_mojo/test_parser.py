@@ -3088,6 +3088,23 @@ def test_string_literals_parsing():
         pytest.fail("String literals parsing not implemented.")
 
 
+def test_triple_quoted_string_literal_parsing_from_mojo_reference():
+    # Reduced from https://mojolang.org/docs/reference/literals/
+    code = '''
+    fn main():
+        let message = """Multi-line
+string"""
+        print(message)
+    '''
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert declaration.name == "message"
+    assert declaration.initial_value == '"Multi-line\\nstring"'
+
+
 def test_numeric_literals_parsing():
     code = """
     fn main():

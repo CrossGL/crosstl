@@ -259,6 +259,8 @@ def test_tokenizes_numeric_literals_and_suffixes():
         float j = 53.f;
         float k = 1.e-3f;
         half l = .25h;
+        bfloat m = 0.5bf;
+        bfloat n = 0.5BF;
     }
     """
     values = token_values(tokenize_code(code))
@@ -275,6 +277,8 @@ def test_tokenizes_numeric_literals_and_suffixes():
     assert_literal_present(values, "53.f")
     assert_literal_present(values, "1.e-3f")
     assert_literal_present(values, ".25h")
+    assert_literal_present(values, "0.5bf")
+    assert_literal_present(values, "0.5BF")
 
 
 def test_tokenizes_cxx14_digit_separator_numeric_literals_from_msl_spec():

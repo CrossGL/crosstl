@@ -760,6 +760,31 @@ class TestHipParser:
         assert "test_header1.h" in initializer.elements[0]
         assert 'extern "C" __global__ void saxpy_kernel' in initializer.elements[0]
 
+    def test_public_rocm_hiprtc_string_literal_suffix_arguments_parse(self):
+        # Upstream: ROCm/hip docs/tools/example_codes/lowered_names.cpp.
+        code = """
+        int main()
+        {
+            using namespace std::string_literals;
+            kernel_names.emplace_back("&f1"s);
+            kernel_names.emplace_back("N1::N2::f2"s);
+            variable_names.emplace_back("&N1::N2::V2");
+        }
+        """
+        ast = self.parse_code(code)
+
+        first_call = ast.statements[0].body[0]
+        second_call = ast.statements[0].body[1]
+        third_call = ast.statements[0].body[2]
+
+        assert isinstance(first_call, FunctionCallNode)
+        assert isinstance(first_call.name, MemberAccessNode)
+        assert first_call.name.object == "kernel_names"
+        assert first_call.name.member == "emplace_back"
+        assert first_call.args == ['"&f1"s']
+        assert second_call.args == ['"N1::N2::f2"s']
+        assert third_call.args == ['"&N1::N2::V2"']
+
     def test_public_rocm_opengl_interop_raw_shader_string_parsing(self):
         code = """
         constexpr const char* vertex_shader = R"(

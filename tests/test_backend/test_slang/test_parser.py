@@ -2779,6 +2779,29 @@ def test_intrinsic_asm_string_statement_from_link_time_options():
     assert call.args == ['"(DOWNSTREAM_VALUE)"']
 
 
+def test_target_intrinsic_struct_modifier_from_interop_docs():
+    # Source: Slang User Guide, Interoperation with Target-Specific Code,
+    # "Defining Intrinsic Types" documents __target_intrinsic before a struct.
+    code = """
+    __target_intrinsic(cpp, "std::string")
+    struct CppString
+    {
+        uint size()
+        {
+            __intrinsic_asm "static_cast<uint32_t>(($0).size())";
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "CppString"
+    assert struct.qualifiers == []
+    assert [method.name for method in struct.methods] == ["size"]
+    assert struct.methods[0].body[0].name == "__intrinsic_asm"
+
+
 def test_scalar_and_matrix_top_level_declarations_parsing():
     code = """
     uint addOne(uint x) { return x + 1; }

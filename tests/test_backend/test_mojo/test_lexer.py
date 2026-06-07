@@ -422,6 +422,18 @@ def test_string_literals_tokenization():
         pytest.fail("String literals tokenization not implemented.")
 
 
+def test_triple_quoted_string_literal_tokenization_from_mojo_reference():
+    # Reduced from https://mojolang.org/docs/reference/literals/
+    code = '''
+    fn main():
+        let message = """Multi-line
+string"""
+    '''
+    tokens = tokenize_code(code)
+
+    assert ("STRING_LITERAL", '"Multi-line\\nstring"') in tokens
+
+
 def test_backtick_metadata_identifiers_tokenization_from_modular_kernels():
     code = """
     @__llvm_metadata(`nvvm.cluster_dim`=cluster_shape)

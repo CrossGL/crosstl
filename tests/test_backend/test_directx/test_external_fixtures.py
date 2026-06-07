@@ -72,6 +72,43 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_graphics_samples_hello_texture_sample",
+        repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
+        commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,
+        path="Samples/Desktop/D3D12HelloWorld/src/HelloTexture/shaders.hlsl",
+        code=textwrap.dedent("""
+            struct PSInput
+            {
+                float4 position : SV_POSITION;
+                float2 uv : TEXCOORD;
+            };
+
+            Texture2D g_texture : register(t0);
+            SamplerState g_sampler : register(s0);
+
+            PSInput VSMain(float4 position : POSITION, float2 uv : TEXCOORD)
+            {
+                PSInput result;
+
+                result.position = position;
+                result.uv = uv;
+
+                return result;
+            }
+
+            float4 PSMain(PSInput input) : SV_TARGET
+            {
+                return g_texture.Sample(g_sampler, input.uv);
+            }
+        """).strip(),
+        contains=(
+            "sampler2D g_texture;",
+            "sampler g_sampler;",
+            "vec2 uv @ TexCoord;",
+            "return texture(g_texture, g_sampler, input.uv);",
+        ),
+    ),
+    ExternalFixture(
         name="directx_graphics_samples_miniengine_present_sdr",
         repo=DIRECTX_GRAPHICS_SAMPLES_REPO,
         commit=DIRECTX_GRAPHICS_SAMPLES_COMMIT,

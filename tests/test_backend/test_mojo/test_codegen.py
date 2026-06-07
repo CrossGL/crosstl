@@ -367,6 +367,23 @@ def test_single_quoted_string_literal_codegen():
     assert "return status;" in generated_code
 
 
+def test_triple_quoted_string_literal_codegen_from_mojo_reference():
+    # Reduced from https://mojolang.org/docs/reference/literals/
+    code = '''
+    fn message() -> String:
+        let status = """Multi-line
+string"""
+        return status
+    '''
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert 'let status = "Multi-line\\nstring";' in generated_code
+    assert "return status;" in generated_code
+    assert '"""' not in generated_code
+    assert "Unhandled expression" not in generated_code
+
+
 def test_documented_numeric_literal_forms_codegen_from_mojo_reference():
     # Reduced from https://mojolang.org/docs/reference/literals/
     code = """

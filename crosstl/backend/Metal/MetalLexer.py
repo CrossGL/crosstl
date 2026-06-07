@@ -11,13 +11,14 @@ SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 _DECIMAL_DIGITS = r"\d(?:'?\d)*"
 _HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
 _BINARY_DIGITS = r"[01](?:'?[01])*"
+_FLOAT_SUFFIX = r"(?:[fFhH]|[bB][fF])?"
 _NUMBER_PATTERN = (
     rf"0[xX]{_HEX_DIGITS}[uUlL]*|"
     rf"0[bB]{_BINARY_DIGITS}[uUlL]*|"
     rf"(?:{_DECIMAL_DIGITS}\.(?:{_DECIMAL_DIGITS})?|\.{_DECIMAL_DIGITS})"
-    rf"(?:[eE][+-]?{_DECIMAL_DIGITS})?[fFhH]?|"
-    rf"{_DECIMAL_DIGITS}[eE][+-]?{_DECIMAL_DIGITS}[fFhH]?|"
-    rf"{_DECIMAL_DIGITS}[fFhHuUlL]*"
+    rf"(?:[eE][+-]?{_DECIMAL_DIGITS})?{_FLOAT_SUFFIX}|"
+    rf"{_DECIMAL_DIGITS}[eE][+-]?{_DECIMAL_DIGITS}{_FLOAT_SUFFIX}|"
+    rf"{_DECIMAL_DIGITS}(?:[bB][fF]|[fFhHuUlL])*"
 )
 
 # Token definitions - order matters! More specific patterns should come first

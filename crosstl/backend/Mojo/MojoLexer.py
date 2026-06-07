@@ -1,15 +1,29 @@
 """Lexer for importing Mojo source into CrossGL Translator."""
 
 import re
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
+TRIPLE_STRING_PREFIXES = {
+    "",
+    "r",
+    "R",
+    "t",
+    "T",
+    "rt",
+    "rT",
+    "Rt",
+    "RT",
+    "tr",
+    "tR",
+    "Tr",
+    "TR",
+}
 
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"#.*"),
-        ("COMMENT_MULTI", r'"""[\s\S]*?"""'),
         ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
         ("LET", r"\blet\b"),
@@ -162,8 +176,8 @@ class MojoLexer:
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         indent_stack = [0]
-        layout_code = self._remove_multiline_comments(
-            self._join_line_continuations(self.code)
+        layout_code = self._join_line_continuations(
+            self._normalize_triple_string_literals(self.code)
         )
 
         for line in layout_code.splitlines():
@@ -221,13 +235,72 @@ class MojoLexer:
 
         yield ("EOF", "")
 
-    def _remove_multiline_comments(self, code: str) -> str:
-        """Remove triple-quoted comments while preserving line layout."""
+    def _normalize_triple_string_literals(self, code: str) -> str:
+        """Collapse Mojo triple-quoted string literals for line-oriented lexing."""
+        pieces = []
+        pos = 0
 
-        def preserve_layout(match):
-            return "".join("\n" if char == "\n" else " " for char in match.group(0))
+        while pos < len(code):
+            prefix, quote = self._match_triple_string_start(code, pos)
+            if quote is None:
+                pieces.append(code[pos])
+                pos += 1
+                continue
 
-        return re.sub(r'"""[\s\S]*?"""', preserve_layout, code)
+            body_start = pos + len(prefix) + len(quote)
+            body_end = code.find(quote, body_start)
+            if body_end == -1:
+                raise SyntaxError("Unterminated Mojo triple-quoted string literal")
+
+            literal_source = code[pos : body_end + len(quote)]
+            if self._is_standalone_triple_string(code, pos, prefix):
+                pieces.append(self._preserve_layout(literal_source))
+                pos = body_end + len(quote)
+                continue
+
+            body = code[body_start:body_end]
+            pieces.append(f'{prefix}"{self._escape_triple_string_body(body)}"')
+            pos = body_end + len(quote)
+
+        return "".join(pieces)
+
+    def _match_triple_string_start(
+        self, code: str, pos: int
+    ) -> Tuple[str, Optional[str]]:
+        """Return an optional Mojo string prefix and triple quote delimiter."""
+        for prefix_len in (2, 1, 0):
+            prefix = code[pos : pos + prefix_len]
+            if prefix not in TRIPLE_STRING_PREFIXES:
+                continue
+            if prefix and pos > 0 and re.match(r"[A-Za-z0-9_]", code[pos - 1]):
+                continue
+
+            quote_pos = pos + prefix_len
+            quote = code[quote_pos : quote_pos + 3]
+            if quote in {'"""', "'''"}:
+                return prefix, quote
+
+        return "", None
+
+    def _is_standalone_triple_string(self, code: str, pos: int, prefix: str) -> bool:
+        """Detect unprefixed doc/comment-style triple-quoted blocks."""
+        if prefix:
+            return False
+        line_start = code.rfind("\n", 0, pos) + 1
+        return not code[line_start:pos].strip()
+
+    def _preserve_layout(self, text: str) -> str:
+        return "".join("\n" if char == "\n" else " " for char in text)
+
+    def _escape_triple_string_body(self, body: str) -> str:
+        """Escape a triple-quoted body as a normal double-quoted literal."""
+        return (
+            body.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace("\n", "\\n")
+        )
 
     def _join_line_continuations(self, code: str) -> str:
         """Join explicit Mojo line continuations before indentation analysis."""
