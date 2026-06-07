@@ -2106,6 +2106,37 @@ def test_codegen_atomic_counter_memory_barrier_imports_as_crossgl_barrier():
     assert "memoryBarrierAtomicCounter(" not in hlsl
 
 
+def test_codegen_block_preprocessor_injection_directive_from_godot_tex_blit():
+    # Reduced from godotengine/godot@070dc9897ea1b84ab2a7ec04b9bc1b94f38a0eaf
+    # servers/rendering/renderer_rd/shaders/tex_blit.glsl, which has a
+    # Godot code-injection directive inside main().
+    code = textwrap.dedent("""
+        #version 450
+        layout(location = 0) out vec4 out_color0;
+
+        void main()
+        {
+            vec4 color0 = vec4(0.0);
+
+        #CODE : BLIT
+
+            color0 = vec4(1.0);
+            out_color0 = color0;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "#CODE" not in crossgl
+    assert "vec4 color0 = vec4(0.0);" in crossgl
+    assert "color0 = vec4(1.0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "#CODE" not in glsl
+    assert "vec4 color0 = vec4(0.0);" in glsl
+    assert "color0 = vec4(1.0);" in glsl
+
+
 def test_codegen_inserts_default_version_when_missing():
     code = textwrap.dedent("""
         layout(location = 0) in vec3 position;

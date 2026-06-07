@@ -14370,12 +14370,23 @@ class GLSLCodeGen:
     def resource_node_name(self, node, default=None):
         return getattr(node, "name", getattr(node, "variable_name", default))
 
+    def pointer_buffer_structured_type(self, node, node_type):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "buffer" not in qualifiers or not hasattr(node_type, "pointee_type"):
+            return None
+        element_type = self.convert_type_node_to_string(node_type.pointee_type)
+        return f"RWStructuredBuffer<{element_type}>"
+
     def resource_declaration_shape(self, node):
         node_type = self.resource_node_type(node)
         node_name = self.resource_node_name(node, "")
         resource_count = 1
         array_size = None
         array_suffix = ""
+
+        pointer_buffer_type = self.pointer_buffer_structured_type(node, node_type)
+        if pointer_buffer_type is not None:
+            return pointer_buffer_type, None, "", resource_count
 
         if (
             hasattr(node_type, "element_type")
@@ -15262,9 +15273,18 @@ class GLSLCodeGen:
             arguments = getattr(attr, "arguments", []) or []
             source = self.attribute_value_to_string(arguments[0]) if arguments else None
             if attr_name in {"set", "space"}:
-                raise ValueError(
-                    self.unsupported_resource_space_message(node, attr_name, source)
+                resource_space = (
+                    self.binding_index_value(arguments[0]) if arguments else None
                 )
+                if resource_space is None:
+                    raise ValueError(
+                        self.invalid_resource_binding_message(node, attr_name, source)
+                    )
+                if resource_space != 0:
+                    raise ValueError(
+                        self.unsupported_resource_space_message(node, attr_name, source)
+                    )
+                continue
             if not arguments:
                 continue
             if attr_name in {"binding", "buffer", "sampler", "texture"}:

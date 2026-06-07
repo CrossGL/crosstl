@@ -124,6 +124,7 @@ class MojoToCrossGLConverter:
         self.imported_function_aliases = {}
         self.scoped_value_names = []
         self.function_body_depth = 0
+        self.named_result_stack = []
         self.loop_else_guard_counter = 0
         self.loop_else_guard_stack = []
         self.type_map = {
@@ -561,11 +562,17 @@ class MojoToCrossGLConverter:
         """Render one Mojo function node as a CrossGL function."""
         code = ""
         indent_str = "    " * indent
+        named_result = self.get_named_result_parameter(func)
+        named_result_name = (
+            self.map_identifier_name(named_result.name) if named_result else None
+        )
 
         params = []
         param_names = []
         if hasattr(func, "params") and func.params:
             for p in func.params:
+                if p is named_result:
+                    continue
                 if not p.vtype:
                     continue
                 param_name = self.map_identifier_name(p.name)
@@ -581,7 +588,12 @@ class MojoToCrossGLConverter:
                 param_names.append(param_name)
 
         params_str = ", ".join(params) if params else ""
-        return_type = self.map_type(func.return_type) if func.return_type else "void"
+        if func.return_type:
+            return_type = self.map_type(func.return_type)
+        elif named_result:
+            return_type = self.map_type(named_result.vtype)
+        else:
+            return_type = "void"
 
         func_attributes = self.map_function_attributes(func)
         func_name = self.map_identifier_name(func.name)
@@ -589,22 +601,57 @@ class MojoToCrossGLConverter:
         code += (
             f"{indent_str}{return_type} {func_name}({params_str}){func_attributes} {{\n"
         )
+        if named_result:
+            result_type = self.map_type(named_result.vtype)
+            code += f"{indent_str}    {result_type} {named_result_name};\n"
 
         saved_body_depth = self.function_body_depth
         self.function_body_depth = 0
         saved_loop_else_guard_stack = self.loop_else_guard_stack
         self.loop_else_guard_stack = []
-        self.push_value_scope(param_names)
+        scope_names = list(param_names)
+        if named_result:
+            scope_names.append(named_result.name)
+        self.push_value_scope(scope_names)
+        self.named_result_stack.append(named_result_name)
         try:
             if hasattr(func, "body") and func.body:
                 code += self.generate_function_body(func.body, indent + 1)
+            if named_result and self.needs_named_result_fallthrough_return(func.body):
+                code += f"{indent_str}    return {named_result_name};\n"
         finally:
+            self.named_result_stack.pop()
             self.pop_value_scope()
             self.loop_else_guard_stack = saved_loop_else_guard_stack
             self.function_body_depth = saved_body_depth
 
         code += f"{indent_str}}}\n\n"
         return code
+
+    def get_named_result_parameter(self, func):
+        if getattr(func, "return_type", None):
+            return None
+
+        candidates = [
+            param
+            for param in getattr(func, "params", []) or []
+            if getattr(param, "parameter_convention", None) == "out"
+            and getattr(param, "name", None) != "self"
+            and getattr(param, "vtype", None)
+        ]
+        if len(candidates) != 1:
+            return None
+        return candidates[0]
+
+    def current_named_result(self):
+        if not self.named_result_stack:
+            return None
+        return self.named_result_stack[-1]
+
+    def needs_named_result_fallthrough_return(self, body):
+        if not body:
+            return True
+        return not isinstance(body[-1], ReturnNode)
 
     def generate_function_body(self, body, indent=0):
         code = ""
@@ -646,7 +693,11 @@ class MojoToCrossGLConverter:
                         code += self.generate_assignment(stmt) + ";\n"
                 elif isinstance(stmt, ReturnNode):
                     if stmt.value is None or self.is_none_literal(stmt.value):
-                        code += "return;\n"
+                        named_result = self.current_named_result()
+                        if named_result:
+                            code += f"return {named_result};\n"
+                        else:
+                            code += "return;\n"
                     else:
                         code += f"return {self.generate_expression(stmt.value)};\n"
                 elif isinstance(stmt, BreakNode):

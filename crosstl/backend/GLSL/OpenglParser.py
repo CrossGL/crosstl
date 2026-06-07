@@ -1824,6 +1824,9 @@ class GLSLParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        if self.current_token[0] == "HASH":
+            self.parse_preprocessor()
+            return None
         if self.current_token[0] == "PRECISION":
             self.parse_precision_statement()
             return None
