@@ -5683,6 +5683,10 @@ class GLSLCodeGen:
             self.current_compile_time_int_constants.pop(name, None)
             self.current_compile_time_int_vector_constants.pop(name, None)
             self.current_compile_time_int_vector_array_constants.pop(name, None)
+        for declaration in self.stage_builtin_parameter_local_alias_declarations(
+            func, shader_type
+        ):
+            code += f"    {declaration}\n"
         body = getattr(func, "body", [])
         if unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
@@ -6102,6 +6106,10 @@ class GLSLCodeGen:
             mapped_type = self.map_type(self.resource_node_type(parameter))
             base_type, array_suffix = split_array_type_suffix(str(mapped_type))
             if array_suffix or base_type != expected_type:
+                if self.stage_builtin_parameter_local_alias_declaration(
+                    parameter, stage_name
+                ):
+                    continue
                 raise ValueError(
                     f"OpenGL {stage_name} stage {semantic} "
                     f"parameter '{parameter.name}' "
@@ -7031,10 +7039,74 @@ class GLSLCodeGen:
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
             semantic = self.semantic_from_node(param)
             if self.is_stage_builtin_semantic(semantic):
+                if self.stage_builtin_parameter_local_alias_declaration(
+                    param, shader_type
+                ):
+                    continue
                 aliases[param.name] = self.stage_input_builtin_alias(
                     semantic, shader_type
                 )
         return aliases
+
+    def stage_builtin_parameter_local_alias_declarations(self, func, shader_type):
+        if shader_type is None:
+            return []
+
+        declarations = []
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            declaration = self.stage_builtin_parameter_local_alias_declaration(
+                param, shader_type
+            )
+            if declaration is not None:
+                declarations.append(declaration)
+        return declarations
+
+    def stage_builtin_parameter_local_alias_declaration(self, param, shader_type):
+        semantic = self.semantic_from_node(param)
+        if semantic is None:
+            return None
+
+        builtin = self.map_stage_input_semantic(semantic, shader_type)
+        mapped_type = self.map_type(self.resource_node_type(param))
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        if array_suffix:
+            return None
+
+        expression = self.stage_builtin_parameter_local_alias_expression(
+            builtin, base_type
+        )
+        if expression is None:
+            return None
+        return f"{base_type} {param.name} = {expression};"
+
+    def stage_builtin_parameter_local_alias_expression(self, builtin, mapped_type):
+        vector3_builtins = {"gl_GlobalInvocationID"}
+        if builtin in vector3_builtins:
+            if mapped_type == "uvec3":
+                return None
+            if mapped_type == "ivec3":
+                return f"ivec3({builtin})"
+            if mapped_type in {"uvec2", "ivec2"}:
+                return f"{mapped_type}({builtin}.xy)"
+            if mapped_type in {"uint", "int"}:
+                return f"{mapped_type}({builtin}.x)"
+            return None
+
+        scalar_int_builtins = {
+            "gl_VertexID",
+            "gl_InstanceID",
+            "gl_PrimitiveID",
+            "gl_SampleID",
+            "gl_SampleMaskIn",
+        }
+        if builtin in scalar_int_builtins:
+            if mapped_type == "int":
+                return None
+            if mapped_type == "uint":
+                return f"uint({builtin})"
+            return None
+
+        return None
 
     def stage_output_member_map(self, func, shader_type):
         if shader_type not in {"vertex", "fragment"}:

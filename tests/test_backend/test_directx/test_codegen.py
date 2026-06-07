@@ -528,6 +528,33 @@ def test_root_signature_metadata_does_not_become_glsl_return_semantic():
     assert "RootSignature" not in generated
 
 
+def test_uint_vertex_id_import_uses_glsl_builtin_cast_alias():
+    hlsl = textwrap.dedent("""
+            void VSMain(in uint VertID : SV_VertexID, out float4 Pos : SV_Position) {
+                Pos = float4(float(VertID), 0.0, 0.0, 1.0);
+            }
+        """).strip()
+
+    generated = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+
+    assert "uint VertID = uint(gl_VertexID);" in generated
+    assert "gl_Position = vec4(float(VertID), 0.0, 0.0, 1.0);" in generated
+
+
+def test_int2_dispatch_thread_id_import_uses_glsl_builtin_cast_alias():
+    hlsl = textwrap.dedent("""
+            [numthreads(8, 8, 1)]
+            void CSMain(int2 tid : SV_DispatchThreadID) {
+                int x = tid.x;
+            }
+        """).strip()
+
+    generated = GLSLCodeGen().generate(parse_crossgl(generate_crossgl(hlsl)))
+
+    assert "ivec2 tid = ivec2(gl_GlobalInvocationID.xy);" in generated
+    assert "int x = tid.x;" in generated
+
+
 def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     shaderlab = textwrap.dedent("""
         Shader "Custom/LegacyTex2D"
