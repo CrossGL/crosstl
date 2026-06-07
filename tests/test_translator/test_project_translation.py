@@ -9024,6 +9024,71 @@ def test_validate_project_report_rejects_artifacts_with_drive_relative_paths(tmp
     assert "artifacts[0].path must be repository-relative" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_backslash_report_identity_paths(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "backslash-report-identity-paths.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "units": [
+                    {
+                        "id": "src\\simple.cgl",
+                        "path": "src\\simple.cgl",
+                        "sourceBackend": "cgl",
+                        "extension": ".cgl",
+                    }
+                ],
+                "skipped": [
+                    {
+                        "path": "ignored\\shader.bin",
+                        "reason": "unsupported-extension",
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "source": "src\\simple.cgl",
+                        "target": "opengl",
+                        "path": "out\\opengl\\src\\simple.glsl",
+                        "status": "translated",
+                    }
+                ],
+                "diagnostics": [
+                    {
+                        "severity": "warning",
+                        "code": "project.test",
+                        "message": "diagnostic with non-canonical location",
+                        "location": _diagnostic_location("src\\simple.cgl"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].path must be repository-relative" in diagnostic["message"]
+    assert "skipped[0].path must be repository-relative" in diagnostic["message"]
+    assert "artifacts[0].source must be repository-relative" in diagnostic["message"]
+    assert "artifacts[0].path must be repository-relative" in diagnostic["message"]
+    assert (
+        "diagnostics[0].location.file must be repository-relative"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_duplicate_artifact_identities(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -9721,6 +9786,29 @@ def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_pat
         "artifacts[0].sourceRemap.hash.value must be a lowercase "
         "64-character hex digest"
     ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_backslash_source_remap_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifacts"][0]["sourceRemap"][
+        "path"
+    ] = "out\\cgl\\simple.source-remap.json"
+    report_path = repo / "out" / "backslash-source-remap-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceRemap.path must be repository-relative"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_stale_source_remap_sidecar(tmp_path):

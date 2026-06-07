@@ -746,6 +746,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         )
         assert "translated artifacts with error metadata" in backend_support["notes"]
         assert "source-relative target/variant layout" in backend_support["notes"]
+        assert "stable repository-relative POSIX paths" in backend_support["notes"]
         assert "unit-target-variant artifact matrix entries" in (
             backend_support["notes"]
         )
@@ -814,6 +815,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_backslash_report_identity_paths"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_artifact_defines"
         ) in backend_support["evidence"]
         assert (
@@ -858,6 +863,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "sanitized variant output segments in source-map and source-remap paths"
             in (backend_support["notes"])
+        )
+        assert "stable repository-relative POSIX report identity paths" in (
+            backend_support["notes"]
         )
         assert "missing source-map and source-remap variant rollups" in (
             backend_support["notes"]
@@ -927,6 +935,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_sanitizes_variant_source_map_and_remap_paths"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_backslash_source_remap_metadata"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

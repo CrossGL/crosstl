@@ -407,7 +407,8 @@ Project reports are JSON documents with:
   dependency source-backend status, include dependency resolution source,
   include dependency variant, diagnostic code (``diagnosticsByCode``), and
   missing capability (``missingCapabilityCounts``).
-- ``units``: discovered translation units with repository-relative paths,
+- ``units``: discovered translation units with stable repository-relative POSIX
+  paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides. Units that contain ``#include`` directives also include
   ``includeDependencies`` records for project-level include triage. Resolved
@@ -417,15 +418,17 @@ Project reports are JSON documents with:
   emit ``project.scan.include-cycle`` diagnostics with ``include.resolution``
   missing-capability rollups while preserving the dependency that closes the
   cycle for triage.
-- ``skipped``: repository-relative files intentionally left untranslated with
+- ``skipped``: stable repository-relative POSIX paths for files intentionally
+  left untranslated with
   reason codes and source override metadata when an override selected an
   unsupported source backend. Known unsupported source or binary artifact
   extensions are recorded with ``unsupported-extension`` and a matching scan
   diagnostic so broad repository scans remain auditable. Full reports require
   skipped source override metadata to match the configured source override map.
-- ``artifacts``: attempted outputs with source path, source backend, target,
-  applied define map, optional variant name, target/variant-scoped output path
-  with the target backend suffix, status, source hash, generated artifact hash,
+- ``artifacts``: attempted outputs with stable repository-relative POSIX source
+  and output paths, source backend, target, applied define map, optional variant
+  name, target/variant-scoped output path with the target backend suffix,
+  status, source hash, generated artifact hash,
   pipeline provenance, and file-granularity source-map anchors for successful
   translations. Full reports require every artifact to carry a source hash,
   artifact source hashes to match their declared translation-unit source

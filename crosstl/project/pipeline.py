@@ -583,6 +583,14 @@ def _is_stable_relative_posix_path(path: str) -> bool:
     )
 
 
+def _is_report_identity_path(path: str) -> bool:
+    return _is_stable_relative_posix_path(path)
+
+
+def _is_diagnostic_location_path(path: str) -> bool:
+    return path == "." or _is_report_identity_path(path)
+
+
 def _repository_relative_globs(patterns: Sequence[str]) -> list[str]:
     return [pattern for pattern in patterns if _is_repository_relative_glob(pattern)]
 
@@ -3290,7 +3298,7 @@ def _artifact_matrix_unit_source_backends(units: Sequence[Any]) -> dict[str, str
             continue
         if (
             _is_non_empty_string(source)
-            and _is_repository_relative_report_path(source)
+            and _is_report_identity_path(source)
             and _is_non_empty_string(source_backend)
         ):
             source_backends.setdefault(source, source_backend)
@@ -5093,9 +5101,7 @@ def _inspection_artifact_matrix_identity_sets(
         if not isinstance(unit, Mapping):
             continue
         source = unit.get("path")
-        if not (
-            _is_non_empty_string(source) and _is_repository_relative_report_path(source)
-        ):
+        if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
             continue
         for target in _normalized_targets(targets):
             for variant in variant_names:
@@ -6303,7 +6309,7 @@ def _record_path(record: Any) -> str | None:
     path = record.get("path")
     if not _is_non_empty_string(path):
         return None
-    if not _is_repository_relative_report_path(path):
+    if not _is_report_identity_path(path):
         return None
     return path
 
@@ -6376,9 +6382,7 @@ def _declared_units_by_path(
         if not isinstance(unit, Mapping):
             return None
         path = unit.get("path")
-        if not _is_non_empty_string(path) or not _is_repository_relative_report_path(
-            path
-        ):
+        if not _is_non_empty_string(path) or not _is_report_identity_path(path):
             return None
         declarations.setdefault(path, (index, unit))
     return declarations
@@ -6473,9 +6477,7 @@ def _artifact_matrix_contract_reasons(
         if not isinstance(unit, Mapping):
             continue
         source = unit.get("path")
-        if not (
-            _is_non_empty_string(source) and _is_repository_relative_report_path(source)
-        ):
+        if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
             continue
         for target in normalized_targets:
             for variant in variant_names:
@@ -6769,7 +6771,7 @@ def _diagnostic_location_contract_reasons(
     file = value.get("file")
     if not _is_non_empty_string(file):
         reasons.append(f"{prefix}.file must be a string")
-    elif not _is_repository_relative_report_path(file):
+    elif not _is_diagnostic_location_path(file):
         reasons.append(f"{prefix}.file must be repository-relative")
     for field_name in SOURCE_MAP_SPAN_FIELDS[1:]:
         if not _is_non_negative_int(value.get(field_name)):
@@ -6807,7 +6809,7 @@ def _span_consistency_contract_reasons(
 def _repository_path_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not _is_non_empty_string(value):
         return [f"{prefix} must be a string"]
-    if not _is_repository_relative_report_path(value):
+    if not _is_report_identity_path(value):
         return [f"{prefix} must be repository-relative"]
     return []
 
@@ -6859,7 +6861,7 @@ def _unit_source_hash_contract_reasons(
         not check_current_file
         or root_path is None
         or not _is_non_empty_string(source_path)
-        or not _is_repository_relative_report_path(source_path)
+        or not _is_report_identity_path(source_path)
     ):
         return reasons
 
@@ -6895,7 +6897,7 @@ def _unit_source_override_contract_reasons(
     source_overrides = project.get("sourceOverrides")
     if (
         not _is_non_empty_string(source_path)
-        or not _is_repository_relative_report_path(source_path)
+        or not _is_report_identity_path(source_path)
         or not _is_non_empty_string(source_backend)
         or not _valid_string_mapping(source_overrides)
     ):
@@ -7090,7 +7092,7 @@ def _current_include_dependency_contract_reasons(
         and kind in INCLUDE_DEPENDENCY_KINDS
         and status in INCLUDE_DEPENDENCY_STATUSES
         and _is_non_empty_string(source_path)
-        and _is_repository_relative_report_path(source_path)
+        and _is_report_identity_path(source_path)
     ):
         return []
     if kind == "dynamic":
@@ -7229,7 +7231,7 @@ def _unit_contract_reasons(
     extension = unit.get("extension")
     if not isinstance(extension, str):
         reasons.append(f"{prefix}.extension must be a string")
-    elif _is_non_empty_string(path) and _is_repository_relative_report_path(path):
+    elif _is_non_empty_string(path) and _is_report_identity_path(path):
         expected_extension = Path(path).suffix.lower()
         if extension != expected_extension:
             reasons.append(f"{prefix}.extension must match {prefix}.path suffix")
@@ -7289,7 +7291,7 @@ def _skipped_source_override_contract_reasons(
     source_overrides = project.get("sourceOverrides")
     if (
         not _is_non_empty_string(skipped_path)
-        or not _is_repository_relative_report_path(skipped_path)
+        or not _is_report_identity_path(skipped_path)
         or not _valid_string_mapping(source_overrides)
     ):
         return []
@@ -8135,10 +8137,10 @@ def _validation_artifact_contract_reasons(
         if not _is_non_empty_string(artifact.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
     source = artifact.get("source")
-    if _is_non_empty_string(source) and not _is_repository_relative_report_path(source):
+    if _is_non_empty_string(source) and not _is_report_identity_path(source):
         reasons.append(f"{prefix}.source must be repository-relative")
     path = artifact.get("path")
-    if _is_non_empty_string(path) and not _is_repository_relative_report_path(path):
+    if _is_non_empty_string(path) and not _is_report_identity_path(path):
         reasons.append(f"{prefix}.path must be repository-relative")
     target = artifact.get("target")
     if _is_non_empty_string(target) and declared_targets is not None:
@@ -8354,10 +8356,10 @@ def _toolchain_run_contract_reasons(
         if not _is_non_empty_string(run.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
     source = run.get("source")
-    if _is_non_empty_string(source) and not _is_repository_relative_report_path(source):
+    if _is_non_empty_string(source) and not _is_report_identity_path(source):
         reasons.append(f"{prefix}.source must be repository-relative")
     path = run.get("path")
-    if _is_non_empty_string(path) and not _is_repository_relative_report_path(path):
+    if _is_non_empty_string(path) and not _is_report_identity_path(path):
         reasons.append(f"{prefix}.path must be repository-relative")
     target = run.get("target")
     if _is_non_empty_string(target) and declared_targets is not None:
@@ -8600,7 +8602,7 @@ def _external_corpus_entry_contract_reasons(
     path = entry.get("path")
     path_is_valid = False
     if _is_non_empty_string(path):
-        if not _is_repository_relative_report_path(path):
+        if not _is_report_identity_path(path):
             reasons.append(f"{prefix}.path must be repository-relative")
         else:
             path_is_valid = True
@@ -9566,7 +9568,7 @@ def _source_remap_contract_reasons(
     path = source_remap.get("path")
     if not _is_non_empty_string(path):
         reasons.append(f"{prefix}.path must be a string")
-    elif not _is_repository_relative_report_path(path):
+    elif not _is_report_identity_path(path):
         reasons.append(f"{prefix}.path must be repository-relative")
 
     artifact_path = artifact.get("path")
@@ -9755,9 +9757,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 if not _is_non_empty_string(artifact.get(field_name)):
                     reasons.append(f"artifacts[{index}].{field_name} must be a string")
             source = artifact.get("source")
-            if _is_non_empty_string(source) and not _is_repository_relative_report_path(
-                source
-            ):
+            if _is_non_empty_string(source) and not _is_report_identity_path(source):
                 reasons.append(f"artifacts[{index}].source must be repository-relative")
             elif (
                 declared_units_by_path is not None
@@ -9768,9 +9768,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             path = artifact.get("path")
             target = artifact.get("target")
             variant = artifact.get("variant")
-            if _is_non_empty_string(path) and not _is_repository_relative_report_path(
-                path
-            ):
+            if _is_non_empty_string(path) and not _is_report_identity_path(path):
                 reasons.append(f"artifacts[{index}].path must be repository-relative")
             elif (
                 root_path is not None
@@ -9804,9 +9802,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].path suffix must match "
                         f"artifacts[{index}].target"
                     )
-                elif _is_non_empty_string(
-                    source
-                ) and _is_repository_relative_report_path(source):
+                elif _is_non_empty_string(source) and _is_report_identity_path(source):
                     expected_relative = Path(source.replace("\\", "/")).with_suffix(
                         _artifact_target_extension(target)
                     )
