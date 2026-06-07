@@ -1409,6 +1409,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_translate_project_validate_records_artifact_checks"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_translate_project_run_toolchains_records_validation"
         ) in backend_support["evidence"]
         assert (

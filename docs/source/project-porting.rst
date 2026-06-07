@@ -144,6 +144,9 @@ Translate every discovered unit to one or more targets:
 
 Project translation exits nonzero when the report contains failed artifacts or
 error diagnostics.
+``--validate`` records artifact existence, source and generated hash checks,
+source-map and source-remap status, and configured toolchain availability
+without invoking external compiler tools.
 ``--run-toolchains`` implies artifact validation and records any available
 bounded toolchain smoke-check results in the generated portability report.
 

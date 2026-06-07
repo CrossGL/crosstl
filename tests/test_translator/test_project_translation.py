@@ -12772,6 +12772,49 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
 
 
+def test_project_cli_translate_project_validate_records_artifact_checks(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output-dir",
+            "out",
+            "--validate",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "cgl",
+            "status": "not-configured",
+            "tools": [],
+            "message": "No validation toolchain hook is configured for this target.",
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["artifacts"][0]["sourceMapStatus"] == "ok"
+    assert payload["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
+    assert payload["validation"]["summary"]["artifactCount"] == 1
+    assert payload["validation"]["summary"]["okCount"] == 1
+    assert "toolchainRuns" not in payload["validation"]
+
+
 def test_project_cli_translate_project_run_toolchains_records_validation(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -5690,6 +5690,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -5829,6 +5830,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -5968,6 +5970,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -6107,6 +6110,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -6246,6 +6250,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -6385,6 +6390,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -6524,6 +6530,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -6663,6 +6670,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         },
@@ -6802,6 +6810,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
             "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation"
           ]
         }
