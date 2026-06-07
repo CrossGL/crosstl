@@ -4508,6 +4508,84 @@ def test_validate_project_report_rejects_noncanonical_project_targets(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_noncanonical_full_report_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        validate=True,
+    )
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    artifact["target"] = "OpenGL"
+    artifact["sourceMap"]["target"] = "OpenGL"
+    validation_artifact = payload["validation"]["artifacts"][0]
+    validation_artifact["target"] = "OpenGL"
+    payload["validation"]["toolchains"][0]["target"] = "OpenGL"
+    payload["validation"]["toolchainRuns"] = [
+        {
+            "source": validation_artifact["source"],
+            "sourceBackend": validation_artifact["sourceBackend"],
+            "target": "OpenGL",
+            "path": validation_artifact["path"],
+            "command": ["glslangValidator", "--stdin"],
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+        }
+    ]
+    report_path = repo / "out" / "noncanonical-record-targets-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].target must use normalized backend name opengl"
+        in diagnostic["message"]
+    )
+    assert (
+        "validation.toolchains[0].target must use normalized backend name opengl"
+        in diagnostic["message"]
+    )
+    assert (
+        "validation.artifacts[0].target must use normalized backend name opengl"
+        in diagnostic["message"]
+    )
+    assert (
+        "validation.toolchainRuns[0].target must use normalized backend name opengl"
+        in diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_noncanonical_diagnostic_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = scan_project(repo).to_report(targets=["not-a-backend"]).to_json()
+    payload["diagnostics"][0]["target"] = "Not-A-Backend"
+    report_path = repo / "noncanonical-diagnostic-target-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "diagnostics[0].target must use normalized backend name not-a-backend"
+        in diagnostic["message"]
+    )
+
+
 def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders" / "graphics"

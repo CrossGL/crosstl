@@ -6758,6 +6758,25 @@ def _target_list_contract_reasons(
     return []
 
 
+def _target_name_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    declared_targets: set[str] | None = None,
+    require_canonical: bool = False,
+) -> list[str]:
+    if not _is_non_empty_string(value):
+        return [f"{prefix} must be a string"]
+
+    normalized_target = _normalized_targets([value])[0]
+    reasons = []
+    if require_canonical and normalized_target != value:
+        reasons.append(f"{prefix} must use normalized backend name {normalized_target}")
+    if declared_targets is not None and normalized_target not in declared_targets:
+        reasons.append(f"{prefix} must be listed in project.targets")
+    return reasons
+
+
 def _diagnostic_location_contract_reasons(
     prefix: str, value: Any, *, require_closed_fields: bool = False
 ) -> list[str]:
@@ -8027,13 +8046,14 @@ def _tool_status_contract_reasons(
     )
     status = toolchain.get("status")
     status_is_valid = status in {"available", "unavailable", "not-configured"}
-    target = toolchain.get("target")
-    if not _is_non_empty_string(target):
-        reasons.append(f"{prefix}.target must be a string")
-    elif declared_targets is not None:
-        normalized_target = _normalized_targets([target])[0]
-        if normalized_target not in declared_targets:
-            reasons.append(f"{prefix}.target must be listed in project.targets")
+    reasons.extend(
+        _target_name_contract_reasons(
+            f"{prefix}.target",
+            toolchain.get("target"),
+            declared_targets=declared_targets,
+            require_canonical=require_closed_fields,
+        )
+    )
     if not status_is_valid:
         reasons.append(
             f"{prefix}.status must be available, unavailable, or not-configured"
@@ -8134,7 +8154,7 @@ def _validation_artifact_contract_reasons(
         if require_closed_fields
         else []
     )
-    for field_name in ("source", "target", "path"):
+    for field_name in ("source", "path"):
         if not _is_non_empty_string(artifact.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
     source = artifact.get("source")
@@ -8143,11 +8163,14 @@ def _validation_artifact_contract_reasons(
     path = artifact.get("path")
     if _is_non_empty_string(path) and not _is_report_identity_path(path):
         reasons.append(f"{prefix}.path must be repository-relative")
-    target = artifact.get("target")
-    if _is_non_empty_string(target) and declared_targets is not None:
-        normalized_target = _normalized_targets([target])[0]
-        if normalized_target not in declared_targets:
-            reasons.append(f"{prefix}.target must be listed in project.targets")
+    reasons.extend(
+        _target_name_contract_reasons(
+            f"{prefix}.target",
+            artifact.get("target"),
+            declared_targets=declared_targets,
+            require_canonical=require_closed_fields,
+        )
+    )
     if not isinstance(artifact.get("exists"), bool):
         reasons.append(f"{prefix}.exists must be a boolean")
     status = artifact.get("status")
@@ -8353,7 +8376,7 @@ def _toolchain_run_contract_reasons(
         if require_closed_fields
         else []
     )
-    for field_name in ("source", "target", "path"):
+    for field_name in ("source", "path"):
         if not _is_non_empty_string(run.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
     source = run.get("source")
@@ -8362,11 +8385,14 @@ def _toolchain_run_contract_reasons(
     path = run.get("path")
     if _is_non_empty_string(path) and not _is_report_identity_path(path):
         reasons.append(f"{prefix}.path must be repository-relative")
-    target = run.get("target")
-    if _is_non_empty_string(target) and declared_targets is not None:
-        normalized_target = _normalized_targets([target])[0]
-        if normalized_target not in declared_targets:
-            reasons.append(f"{prefix}.target must be listed in project.targets")
+    reasons.extend(
+        _target_name_contract_reasons(
+            f"{prefix}.target",
+            run.get("target"),
+            declared_targets=declared_targets,
+            require_canonical=require_closed_fields,
+        )
+    )
     variant = run.get("variant")
     if "variant" in run:
         if not _is_non_empty_string(variant):
@@ -9777,7 +9803,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}]", artifact, REPORT_ARTIFACT_FIELDS
                     )
                 )
-            for field_name in ("source", "target", "path", "status"):
+            for field_name in ("source", "path", "status"):
                 if not _is_non_empty_string(artifact.get(field_name)):
                     reasons.append(f"artifacts[{index}].{field_name} must be a string")
             source = artifact.get("source")
@@ -9792,6 +9818,16 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             path = artifact.get("path")
             target = artifact.get("target")
             variant = artifact.get("variant")
+            reasons.extend(
+                _target_name_contract_reasons(
+                    f"artifacts[{index}].target",
+                    target,
+                    declared_targets=(
+                        declared_targets if project_targets_valid else None
+                    ),
+                    require_canonical=has_summary,
+                )
+            )
             if _is_non_empty_string(path) and not _is_report_identity_path(path):
                 reasons.append(f"artifacts[{index}].path must be repository-relative")
             elif (
@@ -9857,12 +9893,6 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                             f"artifacts[{index}].sourceBackend must match "
                             f"units[{unit_index}].sourceBackend"
                         )
-            if _is_non_empty_string(target) and project_targets_valid:
-                normalized_target = _normalized_targets([target])[0]
-                if normalized_target not in declared_targets:
-                    reasons.append(
-                        f"artifacts[{index}].target must be listed in project.targets"
-                    )
             status = artifact.get("status")
             if isinstance(status, str) and status not in {"translated", "failed"}:
                 reasons.append(
@@ -10044,19 +10074,18 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     require_closed_fields=has_summary,
                 )
             )
-            if "target" in diagnostic and not _is_non_empty_string(
-                diagnostic.get("target")
-            ):
-                reasons.append(f"diagnostics[{index}].target must be a string")
-            elif (
-                has_summary
-                and "target" in diagnostic
-                and project_targets_valid
-                and _normalized_targets([diagnostic["target"]])[0]
-                not in declared_targets
-            ):
-                reasons.append(
-                    f"diagnostics[{index}].target must be listed in project.targets"
+            if "target" in diagnostic:
+                reasons.extend(
+                    _target_name_contract_reasons(
+                        f"diagnostics[{index}].target",
+                        diagnostic.get("target"),
+                        declared_targets=(
+                            declared_targets
+                            if has_summary and project_targets_valid
+                            else None
+                        ),
+                        require_canonical=has_summary,
+                    )
                 )
             missing_capabilities = diagnostic.get("missingCapabilities", [])
             if not isinstance(missing_capabilities, list) or any(

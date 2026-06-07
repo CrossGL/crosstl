@@ -691,6 +691,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert "validation rejects missing diagnostic summary rollups" in (
             backend_support["notes"]
         )
+        assert "diagnostics whose targets are not declared by the report" in (
+            backend_support["notes"]
+        )
+        assert "or noncanonical in full reports" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_filters_invalid_include_dirs_before_frontend"
@@ -707,6 +711,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_diagnostic_locations_outside_project"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_noncanonical_diagnostic_targets"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -786,6 +794,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             backend_support["notes"]
         )
         assert "artifactMatrix metadata" in backend_support["notes"]
+        assert "artifact records whose targets are not declared by the report" in (
+            backend_support["notes"]
+        )
+        assert "or noncanonical in full reports" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_current_translated_artifacts_"
@@ -829,6 +841,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_matrix_variant_"
             "mode_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_noncanonical_full_report_targets"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1051,6 +1067,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         )
         assert "source-relative layout" in backend_support["notes"]
         assert "artifact target suffix consistency" in backend_support["notes"]
+        assert "canonical artifact target records" in backend_support["notes"]
+        assert "canonical validation target records" in backend_support["notes"]
+        assert "noncanonical in full reports" in backend_support["notes"]
         assert "required full-report artifact source hashes" in (
             backend_support["notes"]
         )
@@ -1090,6 +1109,14 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_groups_artifact_status_by_source_"
             "backend"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_noncanonical_full_report_targets"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_noncanonical_diagnostic_targets"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
