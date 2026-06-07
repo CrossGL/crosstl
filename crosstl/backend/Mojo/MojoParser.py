@@ -30,6 +30,25 @@ class MojoParser:
     }
     REFERENCE_TYPE_PREFIXES = {"ref"}
     FUNCTION_EFFECT_IDENTIFIERS = {"abi", "capturing", "raises", "thin", "unified"}
+    BASE_CLASS_SPACED_TOKENS = {
+        "AND",
+        "OR",
+        "BITWISE_AND",
+        "BITWISE_OR",
+        "BITWISE_XOR",
+        "EQUAL",
+        "NOT_EQUAL",
+        "LESS_THAN",
+        "GREATER_THAN",
+        "LESS_EQUAL",
+        "GREATER_EQUAL",
+        "PLUS",
+        "MINUS",
+        "MULTIPLY",
+        "DIVIDE",
+        "FLOOR_DIVIDE",
+        "MOD",
+    }
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -348,7 +367,7 @@ class MojoParser:
         while self.current_token[0] != "RPAREN":
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated base class list")
-            base_classes.append(self.parse_type())
+            base_classes.append(self.parse_base_class_entry())
             self.skip_layout_tokens()
 
             if self.current_token[0] == "COMMA":
@@ -362,6 +381,94 @@ class MojoParser:
 
         self.eat("RPAREN")
         return base_classes
+
+    def parse_base_class_entry(self):
+        if not self.is_base_class_entry_start():
+            raise SyntaxError(f"Expected base class, got {self.current_token[0]}")
+
+        tokens = []
+        depth = 0
+
+        while True:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated base class list")
+
+            token_type, token_value = self.current_token
+            if depth == 0 and token_type in {"COMMA", "RPAREN"}:
+                break
+
+            if token_type in {"NEWLINE", "INDENT", "DEDENT"}:
+                self.eat(token_type)
+                continue
+
+            if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+                depth += 1
+            elif token_type in {"RPAREN", "RBRACKET", "RBRACE"}:
+                if depth == 0:
+                    break
+                depth -= 1
+
+            tokens.append((token_type, token_value))
+            self.eat(token_type)
+
+        if not tokens:
+            raise SyntaxError("Expected base class or trait conformance")
+        return self.format_base_class_entry(tokens)
+
+    def is_base_class_entry_start(self):
+        return self.current_token[0] in self.FUNCTION_TYPE_TOKENS or (
+            self.is_base_class_word_token(self.current_token[0])
+        )
+
+    def format_base_class_entry(self, tokens):
+        expression = ""
+        previous_type = None
+        previous_value = None
+
+        for token_type, token_value in tokens:
+            value = str(token_value)
+            if self.needs_base_class_token_space(
+                previous_type, previous_value, token_type, value
+            ):
+                expression += " "
+            expression += value
+            previous_type = token_type
+            previous_value = value
+
+        return expression
+
+    def needs_base_class_token_space(
+        self, previous_type, previous_value, token_type, token_value
+    ):
+        if previous_type is None:
+            return False
+        if token_type in {"COMMA", "RPAREN", "RBRACKET", "RBRACE", "DOT", "COLON"}:
+            return False
+        if previous_type in {"LPAREN", "LBRACKET", "LBRACE", "DOT"}:
+            return False
+        if previous_type == "COMMA":
+            return True
+        if token_type in {"LPAREN", "LBRACKET", "LBRACE"}:
+            return False
+        if previous_value == "where" or token_value == "where":
+            return True
+        if token_type in self.BASE_CLASS_SPACED_TOKENS:
+            return True
+        if previous_type in self.BASE_CLASS_SPACED_TOKENS:
+            return True
+        return self.is_base_class_word_token(
+            previous_type
+        ) and self.is_base_class_word_token(token_type)
+
+    def is_base_class_word_token(self, token_type):
+        return token_type in self.TYPE_START_TOKENS | {
+            "IDENTIFIER",
+            "DEFAULT",
+            "BACKTICK_IDENTIFIER",
+            "BOOL_LITERAL",
+            "NUMBER",
+            "STRING_LITERAL",
+        }
 
     def parse_struct_member(self):
         self.skip_newlines()

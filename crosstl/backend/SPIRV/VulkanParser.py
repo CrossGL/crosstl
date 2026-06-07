@@ -274,6 +274,10 @@ class VulkanParser:
         "OpAtomicXor": "atomicXor",
         "OpAtomicExchange": "atomicExchange",
     }
+    SPIRV_GEOMETRY_EMIT_FUNCTIONS = {
+        "OpEmitVertex": "EmitVertex",
+        "OpEndPrimitive": "EndPrimitive",
+    }
     SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS = {
         "OpGroupNonUniformBitwiseAnd": "And",
         "OpGroupNonUniformBitwiseOr": "Or",
@@ -2204,6 +2208,19 @@ class VulkanParser:
                 )
                 continue
 
+            if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:
+                statements.append(
+                    self.spirv_assembly_geometry_emit_statement(
+                        opcode,
+                        operands,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
             if opcode == "OpControlBarrier" and len(operands) >= 3:
                 statements.append(
                     FunctionCallNode(
@@ -2940,6 +2957,19 @@ class VulkanParser:
                         operands[1],
                         operands[2],
                         operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    )
+                )
+                continue
+
+            if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:
+                statements.append(
+                    self.spirv_assembly_geometry_emit_statement(
+                        opcode,
+                        operands,
                         expressions,
                         names,
                         decorations,
@@ -4212,6 +4242,29 @@ class VulkanParser:
                     decorations,
                     constants,
                 ),
+            ],
+        )
+
+    def spirv_assembly_geometry_emit_statement(
+        self,
+        opcode,
+        operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            self.SPIRV_GEOMETRY_EMIT_FUNCTIONS[opcode],
+            [
+                self.spirv_assembly_operand_expression(
+                    operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                for operand in operands
             ],
         )
 

@@ -59,6 +59,10 @@ BLENDER_STRING_COMMIT = "e5fc656cdab0e682296f8dd024b942b548e788f4"
 BLENDER_TEXTURE_READ_COMMIT = "38657e6c5ccb9968bfcc55b4fd384ca528c71d10"
 METAL_RIPPLE_REPO = "https://github.com/swiftandcurious/MetalRipple"
 METAL_RIPPLE_COMMIT = "125274960b1bf0184b6570afa97f097ee3d2c6b1"
+TIMDECODE_SIMD_PARTITION_GIST = (
+    "https://gist.github.com/timdecode/2aa10535b65dab08df78655d560983fb"
+)
+TIMDECODE_SIMD_PARTITION_VERSION = "808e31f98b1b72fd4cd322a7399dde40170240d0"
 UNIXZII_GPU_PARTICLE_GIST = (
     "https://gist.github.com/unixzii/aeefe8edbd6a685cb3e230b5b30841db"
 )
@@ -1584,6 +1588,46 @@ EXTERNAL_FIXTURES = [
                 half4 color = layer.sample(newPosition);
                 color.rgb += 0.3 * (rippleAmount / amplitude) * color.a;
                 return color;
+            }
+            """
+        ),
+    },
+    {
+        "name": "timdecode_simd_partition_conversion_operator_call",
+        "repo_url": TIMDECODE_SIMD_PARTITION_GIST,
+        "commit": TIMDECODE_SIMD_PARTITION_VERSION,
+        "source_path": "simd_partition.metal",
+        "roundtrip": True,
+        "contains": [
+            "uint unvisited = uint((uint64)simd_active_threads_mask());",
+            "const uint v = uint((uint64)vote);",
+        ],
+        "not_contains": [
+            "simd_active_threads_mask().operator",
+            "vote.operator",
+            "operator, unsigned",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template<typename T>
+            static inline uint simd_partitionTD(T value) {
+                uint unvisited =
+                    uint(simd_active_threads_mask().operator unsigned long());
+                uint result = value;
+                while (unvisited != 0) {
+                    const int activeLane = ctz(unvisited);
+                    const T activeValue = simd_shuffle(value, activeLane);
+                    const auto vote = simd_ballot(activeValue == value);
+                    const uint v = uint(vote.operator unsigned long());
+                    if (activeValue == value) {
+                        result = v;
+                    }
+                    unvisited &= ~v;
+                }
+                return result;
             }
         """
         ),

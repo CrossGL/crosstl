@@ -3090,6 +3090,35 @@ def test_let_else_pattern_parsing():
         pytest.fail(f"Let else pattern parsing failed: {e}")
 
 
+def test_wgpu_let_else_semicolonless_return_parsing():
+    # Reduced from gfx-rs/wgpu commit 6877690dbefa1144c05932dde2d10c52facfee60,
+    # examples/bug-repro/01_texture_atomic_bug/src/main.rs App::window_event.
+    code = """
+    impl App {
+        fn window_event(&mut self) {
+            let Some(state) = &mut self.state else { return };
+            state.render_frame();
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    method = ast.impl_blocks[0].methods[0]
+    let_else = method.body[0]
+
+    assert isinstance(let_else, LetNode)
+    assert let_else.name.name == "Some"
+    assert let_else.name.args == ["state"]
+    assert isinstance(let_else.value, ReferenceNode)
+    assert let_else.value.is_mutable is True
+    assert isinstance(let_else.value.expression, MemberAccessNode)
+    assert let_else.value.expression.object == "self"
+    assert let_else.value.expression.member == "state"
+    assert len(let_else.else_body) == 1
+    assert isinstance(let_else.else_body[0], ReturnNode)
+    assert let_else.else_body[0].value is None
+
+
 def test_matches_macro_pattern_parsing():
     code = """
     fn test_matches(value: Option<Result<i32, i32>>, mode: i32, point: Point) {

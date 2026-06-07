@@ -591,14 +591,15 @@ class RustParser:
         label = None
         value = None
 
-        if self.current_token[0] != "SEMICOLON":
+        if self.current_token[0] not in {"SEMICOLON", "RBRACE"}:
             if self.current_token[0] == "LIFETIME":
                 label = self.parse_control_label()
 
-            if self.current_token[0] != "SEMICOLON":
+            if self.current_token[0] not in {"SEMICOLON", "RBRACE"}:
                 value = self.parse_result_expression()
 
-        self.eat("SEMICOLON")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
         return BreakNode(label, value)
 
     def parse_result_expression(self):
@@ -656,15 +657,17 @@ class RustParser:
     def parse_return_statement(self):
         self.eat("RETURN")
         value = None
-        if self.current_token[0] != "SEMICOLON":
+        if self.current_token[0] not in {"SEMICOLON", "RBRACE"}:
             value = self.parse_result_expression()
-        self.eat("SEMICOLON")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
         return ReturnNode(value)
 
     def parse_continue_statement(self):
         self.eat("CONTINUE")
         label = self.parse_optional_control_label()
-        self.eat("SEMICOLON")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
         return ContinueNode(label)
 
     def parse_labeled_statement(self):

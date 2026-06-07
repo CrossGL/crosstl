@@ -1131,6 +1131,31 @@ EXTERNAL_FIXTURES = [
     {
         # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/bugs/gh-3802.slang
+        "id": "slang_cpp_style_namespace_path",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/bugs/gh-3802.slang",
+        "source": (
+            """
+            namespace foo::bar::baz {}
+            namespace foo::bar {}
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {}
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;",
+            "void computeMain()",
+        ],
+        "not_contains": ["namespace foo", "foo::bar"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: docs/generated/tests/design/ast-reference/statements/
         # targetswitch-static-dispatch.slang
         "id": "slang_target_switch_default_arm",

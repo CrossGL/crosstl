@@ -5063,6 +5063,16 @@ class HipToCrossGLConverter:
             ):
                 return f"(gl_LocalInvocationIndex % {tile_size})"
 
+        if group_kind == "thread_block_tile" and member_name in {
+            "shfl",
+            "shfl_down",
+            "shfl_up",
+            "shfl_xor",
+        }:
+            return self.format_cooperative_group_tile_shuffle(
+                group_metadata, member_name, args
+            )
+
         if member_name in {"thread_rank", "size", "num_threads"}:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name
@@ -5074,6 +5084,45 @@ class HipToCrossGLConverter:
         return (
             f"// cooperative_groups {group_kind}.{member_name} "
             "not directly supported in CrossGL"
+        )
+
+    def format_cooperative_group_tile_shuffle(
+        self, group_metadata, member_name, raw_args
+    ):
+        args = [self.visit(arg) for arg in raw_args]
+        if len(args) != 2:
+            return self.format_unsupported_cooperative_group_expression(
+                group_metadata["kind"], member_name
+            )
+
+        value, lane_arg = args
+        tile_size = group_metadata.get("tile_size")
+        if not tile_size:
+            return self.format_unsupported_cooperative_group_expression(
+                group_metadata["kind"], member_name
+            )
+
+        lane = "WaveGetLaneIndex()"
+        local_lane = f"({lane} % {tile_size})"
+        if member_name == "shfl":
+            source_lane = f"(({lane} - {local_lane}) + {lane_arg})"
+            return f"WaveReadLaneAt({value}, {source_lane})"
+        if member_name == "shfl_down":
+            return (
+                f"((({local_lane} + ({lane_arg})) < {tile_size}) ? "
+                f"WaveReadLaneAt({value}, ({lane} + ({lane_arg}))) : {value})"
+            )
+        if member_name == "shfl_up":
+            return (
+                f"(({local_lane} >= ({lane_arg})) ? "
+                f"WaveReadLaneAt({value}, ({lane} - ({lane_arg}))) : {value})"
+            )
+
+        source_local_lane = f"({local_lane} ^ ({lane_arg}))"
+        source_lane = f"(({lane} - {local_lane}) + {source_local_lane})"
+        return (
+            f"(({source_local_lane} < {tile_size}) ? "
+            f"WaveReadLaneAt({value}, {source_lane}) : {value})"
         )
 
     def format_thread_block_size_expression(self):
@@ -5093,6 +5142,7 @@ class HipToCrossGLConverter:
         return factory_metadata or declared_metadata
 
     def cooperative_group_metadata_from_type(self, type_name):
+        type_name = self.normalize_cooperative_group_type_name(type_name)
         base_type, template_args = self.parse_cpp_template(type_name)
         base_name = self.cooperative_group_base_name(type_name)
         if base_name in {
@@ -5110,6 +5160,14 @@ class HipToCrossGLConverter:
                 metadata["tile_size"] = template_args[0]
             return metadata
         return None
+
+    def normalize_cooperative_group_type_name(self, type_name):
+        text = str(type_name).strip()
+        text = re.sub(
+            r"\b(?:const|volatile|__restrict__|__restrict|restrict)\b", "", text
+        )
+        text = text.replace("&", " ").replace("*", " ")
+        return " ".join(text.split())
 
     def cooperative_group_factory_metadata(self, value):
         if not isinstance(value, FunctionCallNode):

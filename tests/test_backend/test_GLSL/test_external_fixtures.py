@@ -196,6 +196,32 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.intrinsicsSpirvInstruction.vert.
+    # Reduced from GL_EXT_spirv_intrinsics function prototypes decorated with
+    # spirv_instruction(...) metadata.
+    ExternalFixture(
+        name="glslang-spv-intrinsics-spirv-instruction-prefix",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.intrinsicsSpirvInstruction.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 450 core
+
+            #extension GL_EXT_spirv_intrinsics: enable
+            #extension GL_ARB_gpu_shader_int64: enable
+
+            spirv_instruction (extensions = ["SPV_KHR_shader_clock"], capabilities = [5055], id = 5056)
+            uvec2 clockRealtime2x32EXT(int);
+
+            layout(location = 0) out uvec2 uvec2Out;
+
+            void main()
+            {
+                uvec2Out = clockRealtime2x32EXT(1);
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.memoryScopeSemantics.comp.
     # Reduced from GL_KHR_memory_scope_semantics storage qualifier coverage.
     ExternalFixture(
@@ -1159,6 +1185,28 @@ def test_parse_glslang_function_attributes_fixture():
     assert ast.functions[0].qualifiers == ["vertex"]
 
 
+def test_parse_glslang_spirv_instruction_prefix_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-intrinsics-spirv-instruction-prefix"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    intrinsic = next(
+        function
+        for function in ast.functions
+        if function.name == "clockRealtime2x32EXT"
+    )
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert intrinsic.return_type == "uvec2"
+    assert intrinsic.params[0].vtype == "int"
+    assert intrinsic.params[0].name == "_param0"
+    assert intrinsic.body == []
+    assert main.body[0].left.name == "uvec2Out"
+
+
 def test_parse_glslang_memory_scope_semantics_qualifier_fixture():
     fixture = next(
         item
@@ -1809,6 +1857,21 @@ def test_codegen_glslang_function_attributes_fixture_snippet():
     assert "random" not in crossgl
     assert "maximally_reconverges" not in crossgl
     assert "VertexOutput main()" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_spirv_instruction_prefix_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-intrinsics-spirv-instruction-prefix"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "spirv_instruction" not in crossgl
+    assert "uvec2 clockRealtime2x32EXT(int _param0)" in crossgl
+    assert "clockRealtime2x32EXT(1)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

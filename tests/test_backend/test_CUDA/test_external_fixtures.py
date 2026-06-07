@@ -2095,3 +2095,31 @@ def test_cuda_samples_dxtc_bitfield_struct_members_parse_and_codegen():
     assert "u16 u;" in crossgl
     assert " : 5" not in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_dxtc_rintf_color_quantization_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/5_Domain_Specific/dxtc/dxtc.cu
+    source = """
+    __device__ unsigned int packRgb565(float4 v) {
+        v.x = rintf(__saturatef(v.x) * 31.0f);
+        v.y = rintf(__saturatef(v.y) * 63.0f);
+        v.z = rintf(__saturatef(v.z) * 31.0f);
+        return ((unsigned int)v.x << 11) |
+               ((unsigned int)v.y << 5) |
+               (unsigned int)v.z;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].right.name == "rintf"
+    assert_crossgl_reparse(crossgl)
+    assert "v.x = round((clamp(v.x, 0.0f, 1.0f) * 31.0f));" in crossgl
+    assert "v.y = round((clamp(v.y, 0.0f, 1.0f) * 63.0f));" in crossgl
+    assert "v.z = round((clamp(v.z, 0.0f, 1.0f) * 31.0f));" in crossgl
+    assert "rintf" not in crossgl
