@@ -16031,6 +16031,14 @@ class GLSLCodeGen:
             for argument in self.glsl_attribute_arguments(node, "glsl_interface_block")
         ]
 
+    def glsl_interface_block_name(self, node):
+        block_name_args = self.glsl_attribute_arguments(
+            node, "glsl_interface_block_name"
+        )
+        if block_name_args:
+            return self.attribute_value_to_string(block_name_args[0])
+        return node.name
+
     def glsl_interface_block_instance_suffix(self, node):
         instance_args = self.glsl_attribute_arguments(node, "glsl_interface_instance")
         if not instance_args:
@@ -16127,7 +16135,8 @@ class GLSLCodeGen:
         if qualifier_prefix:
             qualifier_prefix += " "
 
-        code = f"{layout}{qualifier_prefix}{node.name} {{\n"
+        block_name = self.glsl_interface_block_name(node)
+        code = f"{layout}{qualifier_prefix}{block_name} {{\n"
         for member in getattr(node, "members", []) or []:
             code += self.generate_glsl_interface_block_member_declaration(
                 member, struct_name=node.name

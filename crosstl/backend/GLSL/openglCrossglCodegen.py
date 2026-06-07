@@ -1036,7 +1036,6 @@ class GLSLToCrossGLConverter:
         self.converted_ssbo_struct_names = set()
         self.variable_type_scopes = [{}]
         self.flattened_uniform_block_instances = {}
-
         for var in getattr(node, "uniforms", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
@@ -1584,6 +1583,11 @@ class GLSLToCrossGLConverter:
             return ""
 
         attributes = []
+        original_name = getattr(node, "glsl_interface_block_name", None)
+        emitted_name = self.crossgl_struct_name(node)
+        if original_name and original_name != emitted_name:
+            attributes.append(f"@glsl_interface_block_name({original_name})")
+
         qualifiers = [
             str(qualifier)
             for qualifier in getattr(node, "interface_qualifiers", []) or []
@@ -1626,7 +1630,7 @@ class GLSLToCrossGLConverter:
             name for name, count in builtin_counts.items() if count > 1
         }
         if not duplicate_builtin_names:
-            return structs
+            return self.assign_duplicate_interface_block_names(structs)
 
         selected = {}
         selected_index = {}
@@ -1651,7 +1655,72 @@ class GLSLToCrossGLConverter:
 
             output.append(struct)
 
-        return output
+        return self.assign_duplicate_interface_block_names(output)
+
+    def assign_duplicate_interface_block_names(self, structs):
+        interface_counts = {}
+        for struct in structs:
+            if self.is_builtin_interface_block_struct(struct):
+                continue
+            if self.is_graphics_interface_block_struct(struct):
+                interface_counts[struct.name] = interface_counts.get(struct.name, 0) + 1
+
+        duplicate_names = {
+            name for name, count in interface_counts.items() if count > 1
+        }
+        if not duplicate_names:
+            return structs
+
+        used_names = {getattr(struct, "name", "") for struct in structs}
+        seen = {}
+        for struct in structs:
+            if (
+                not self.is_graphics_interface_block_struct(struct)
+                or struct.name not in duplicate_names
+            ):
+                continue
+
+            index = seen.get(struct.name, 0)
+            seen[struct.name] = index + 1
+            if index == 0:
+                continue
+
+            original_name = struct.name
+            emitted_name = self.unique_interface_block_crossgl_name(
+                original_name, struct, used_names
+            )
+            used_names.add(emitted_name)
+            struct.glsl_interface_block_name = original_name
+            struct.crossgl_struct_name = emitted_name
+
+        return structs
+
+    def unique_interface_block_crossgl_name(self, original_name, struct, used_names):
+        suffix = self.interface_block_crossgl_name_suffix(struct)
+        base = f"{original_name}_{suffix}" if suffix else f"{original_name}_block"
+        candidate = base
+        index = 1
+        while candidate in used_names:
+            index += 1
+            candidate = f"{base}_{index}"
+        return candidate
+
+    def interface_block_crossgl_name_suffix(self, struct):
+        qualifiers = [
+            str(qualifier).lower()
+            for qualifier in getattr(struct, "interface_qualifiers", []) or []
+        ]
+        for qualifier in ("out", "in", "inout"):
+            if qualifier in qualifiers:
+                return qualifier
+
+        instance_name = getattr(struct, "interface_instance_name", None)
+        if instance_name:
+            return self.sanitize_identifier(instance_name)
+        return "block"
+
+    def crossgl_struct_name(self, node):
+        return getattr(node, "crossgl_struct_name", getattr(node, "name", ""))
 
     def is_builtin_interface_block_struct(self, node):
         if getattr(node, "name", None) not in self.BUILTIN_INTERFACE_BLOCK_NAMES:
@@ -2158,7 +2227,10 @@ class GLSLToCrossGLConverter:
         return statements
 
     def generate_struct(self, node):
-        result = f"{self.interface_block_attribute_prefix(node)}struct {node.name} {{\n"
+        result = (
+            f"{self.interface_block_attribute_prefix(node)}"
+            f"struct {self.crossgl_struct_name(node)} {{\n"
+        )
 
         self.increase_indent()
         members = getattr(node, "members", None) or getattr(node, "fields", [])
