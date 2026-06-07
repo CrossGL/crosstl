@@ -345,10 +345,14 @@ name is recorded on validation records. ``translate-project --variant NAME``
 can be repeated to scope a run to declared variants; scoped reports declare
 only the selected variants, de-duplicate repeated selections before artifact
 planning, and do not claim omitted variants as attempted.
-CrossGL source translation applies
-object-like define expansion and conditional branch selection for
-``#if``/``#ifdef``/``#ifndef``/``#elif``/``#else``/``#endif`` when defines are
-provided. Native preprocessor behavior remains backend-dependent.
+CrossGL source translation applies object-like define expansion and conditional
+branch selection for ``#if``/``#ifdef``/``#ifndef``/``#elif``/``#else``/``#endif``
+when defines are provided. Project translation also passes selected variant
+define maps into native source frontends that expose define options; current
+project coverage includes OpenGL/GLSL conditional branches, CUDA/HIP runtime
+system include preservation, CUDA/HIP local header expansion, and project
+include directories through that path. Other native preprocessor behavior
+remains backend-dependent.
 
 Configuration scalar values and define/source-override maps are type checked
 when ``crosstl.toml`` is loaded. Define names, source override patterns, named
