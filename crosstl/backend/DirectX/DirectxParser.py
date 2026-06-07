@@ -337,6 +337,8 @@ class HLSLParser:
                 continue
 
             qualifiers = self.parse_qualifiers()
+            attributes.extend(self.parse_function_modifier_attributes())
+            qualifiers.extend(self.parse_qualifiers())
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
             attributes.extend(self.parse_attribute_list())
@@ -734,6 +736,17 @@ class HLSLParser:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
         return qualifiers
+
+    def parse_function_modifier_attributes(self):
+        attributes = []
+        while self.is_clipplanes_modifier_at(self.current_index):
+            attributes.append(self.parse_clipplanes_modifier())
+        return attributes
+
+    def parse_clipplanes_modifier(self):
+        self.eat("IDENTIFIER")
+        args = self.parse_call_arguments()
+        return AttributeNode("clipplanes", args)
 
     def parse_post_type_qualifiers(self):
         qualifiers = []
@@ -2029,6 +2042,11 @@ class HLSLParser:
         idx = self.current_index
         while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
             idx += 1
+        idx = self.skip_function_modifier_attributes_at(idx)
+        if idx is None:
+            return False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            idx += 1
 
         idx = self.skip_type_name_at(idx)
         if idx is None:
@@ -2063,6 +2081,39 @@ class HLSLParser:
                 return True
 
         return False
+
+    def skip_function_modifier_attributes_at(self, idx):
+        while self.is_clipplanes_modifier_at(idx):
+            idx = self.skip_parenthesized_list_at(idx + 1)
+            if idx is None:
+                return None
+        return idx
+
+    def is_clipplanes_modifier_at(self, idx):
+        return (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx][0] == "IDENTIFIER"
+            and str(self.tokens[idx][1]).lower() == "clipplanes"
+            and self.tokens[idx + 1][0] == "LPAREN"
+        )
+
+    def skip_parenthesized_list_at(self, idx):
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "LPAREN":
+            return None
+
+        depth = 0
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return idx + 1
+            elif token_type == "EOF":
+                return None
+            idx += 1
+        return None
 
     def skip_attribute_lists_at(self, idx):
         while (

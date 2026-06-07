@@ -2067,6 +2067,44 @@ def test_lifetime_receiver_parsing_from_rust_gpu_wgpu_runner():
         pytest.fail(f"Lifetime receiver parsing failed: {e}")
 
 
+def test_explicit_self_receiver_types_from_rust_reference():
+    # The Rust Reference documents typed method receivers such as
+    # self: Box<Self> and mutable receiver bindings.
+    code = """
+    use std::sync::Arc;
+
+    trait ShaderReceivers: Sized {
+        fn by_box(self: Box<Self>);
+        fn modify(mut self: Box<Self>);
+    }
+
+    struct ShaderHandle;
+
+    impl ShaderHandle {
+        fn by_arc(self: Arc<Self>) -> Arc<Self> {
+            self
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    by_box, modify = ast.traits[0].methods
+    by_arc = ast.impl_blocks[0].functions[0]
+
+    assert [(param.name, param.vtype) for param in by_box.params] == [
+        ("self", "Box<Self>")
+    ]
+    assert [(param.name, param.vtype) for param in modify.params] == [
+        ("self", "Box<Self>")
+    ]
+    assert modify.params[0].is_mutable is True
+    assert [(param.name, param.vtype) for param in by_arc.params] == [
+        ("self", "Arc<Self>")
+    ]
+    assert by_arc.return_type == "Arc<Self>"
+    assert by_arc.body == ["self"]
+
+
 def test_function_call_parsing():
     code = """
     fn test_call() {

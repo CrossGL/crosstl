@@ -3839,7 +3839,9 @@ class CudaParser:
 
     def unwrap_cuda_kernel_function_arg(self, function_arg):
         if isinstance(function_arg, CastNode):
-            return function_arg.expression
+            return self.unwrap_cuda_kernel_function_arg(function_arg.expression)
+        if isinstance(function_arg, UnaryOpNode) and function_arg.op == "&":
+            return function_arg.operand
         return function_arg
 
     def is_sizeof_type_operand(self):

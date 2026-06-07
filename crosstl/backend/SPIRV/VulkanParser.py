@@ -1,7 +1,6 @@
 """Parser for Vulkan SPIR-V source AST construction."""
 
 import re
-import shlex
 
 from ..common_ast import InitializerListNode
 from .VulkanAst import *
@@ -4345,36 +4344,24 @@ class VulkanParser:
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []
-        pending_lines = []
-        pending_line_number = None
-        pending_error = None
-        for line_number, line in enumerate(code.splitlines(), start=1):
-            if pending_line_number is None:
-                pending_line_number = line_number
-            pending_lines.append(line)
-            instruction_text = "\n".join(pending_lines)
+        tokens = self.spirv_assembly_tokens(code)
+        index = 0
 
-            lexer = shlex.shlex(instruction_text, posix=True)
-            lexer.whitespace_split = True
-            lexer.commenters = ";"
-            try:
-                parts = list(lexer)
-            except ValueError as exc:
-                if "No closing quotation" in str(exc):
-                    pending_error = exc
-                    continue
-                raise SyntaxError(
-                    "Invalid SPIR-V assembly syntax on line "
-                    f"{pending_line_number}: {exc}"
-                ) from exc
-
-            instruction_line_number = pending_line_number
-            pending_lines = []
-            pending_line_number = None
-            pending_error = None
-
-            if not parts:
-                continue
+        while index < len(tokens):
+            instruction_start = index
+            operand_start = (
+                instruction_start + 3
+                if self.is_spirv_assembly_result_instruction_start(
+                    tokens, instruction_start
+                )
+                else instruction_start + 1
+            )
+            next_index = self.next_spirv_assembly_instruction_index(
+                tokens, operand_start
+            )
+            instruction_tokens = tokens[instruction_start:next_index]
+            parts = [text for text, _quoted, _line_number in instruction_tokens]
+            instruction_line_number = instruction_tokens[0][2]
 
             result_id = None
             if len(parts) >= 3 and parts[1] == "=":
@@ -4391,14 +4378,98 @@ class VulkanParser:
                     f"{instruction_line_number}, got {opcode}"
                 )
             instructions.append((result_id, opcode, operands, instruction_line_number))
-
-        if pending_lines:
-            raise SyntaxError(
-                "Invalid SPIR-V assembly syntax on line "
-                f"{pending_line_number}: {pending_error or 'No closing quotation'}"
-            )
+            index = next_index
 
         return instructions
+
+    def spirv_assembly_tokens(self, code):
+        tokens = []
+        index = 0
+        line_number = 1
+        length = len(code)
+
+        while index < length:
+            char = code[index]
+            if char.isspace():
+                if char == "\n":
+                    line_number += 1
+                index += 1
+                continue
+            if char == ";":
+                while index < length and code[index] != "\n":
+                    index += 1
+                continue
+            if char == '"':
+                token, index, line_number = self.spirv_assembly_string_token(
+                    code, index, line_number
+                )
+                tokens.append(token)
+                continue
+
+            start = index
+            token_line_number = line_number
+            while index < length and not code[index].isspace() and code[index] != ";":
+                index += 1
+            tokens.append((code[start:index], False, token_line_number))
+
+        return tokens
+
+    def spirv_assembly_string_token(self, code, index, line_number):
+        token_line_number = line_number
+        value = []
+        index += 1
+        length = len(code)
+
+        while index < length:
+            char = code[index]
+            if char == '"':
+                token = ("".join(value), True, token_line_number)
+                return token, index + 1, line_number
+            if char == "\\":
+                index += 1
+                if index >= length:
+                    break
+                char = code[index]
+            value.append(char)
+            if char == "\n":
+                line_number += 1
+            index += 1
+
+        raise SyntaxError(
+            "Invalid SPIR-V assembly syntax on line "
+            f"{token_line_number}: No closing quotation"
+        )
+
+    def next_spirv_assembly_instruction_index(self, tokens, index):
+        while index < len(tokens):
+            if self.is_spirv_assembly_instruction_start(tokens, index):
+                return index
+            index += 1
+        return len(tokens)
+
+    def is_spirv_assembly_instruction_start(self, tokens, index):
+        if self.is_spirv_assembly_result_instruction_start(tokens, index):
+            return True
+        text, quoted, _line_number = tokens[index]
+        if quoted:
+            return False
+        return text.startswith("Op")
+
+    def is_spirv_assembly_result_instruction_start(self, tokens, index):
+        if index + 2 >= len(tokens):
+            return False
+        text, quoted, _line_number = tokens[index]
+        if quoted:
+            return False
+        equals, equals_quoted, _equals_line = tokens[index + 1]
+        opcode, opcode_quoted, _opcode_line = tokens[index + 2]
+        return (
+            text.startswith("%")
+            and equals == "="
+            and not equals_quoted
+            and opcode.startswith("Op")
+            and not opcode_quoted
+        )
 
     def spirv_assembly_interface_variables(
         self,

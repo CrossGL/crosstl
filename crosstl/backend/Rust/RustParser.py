@@ -1846,21 +1846,8 @@ class RustParser:
 
         params = []
         if self.current_token[0] != "RPAREN":
-            if self.current_token[0] == "SELF":
-                params.append(VariableNode("Self", "self"))
-                self.eat("SELF")
-                if self.current_token[0] == "COMMA":
-                    self.eat("COMMA")
-            elif self.current_token[0] == "AMPERSAND":
-                self.eat("AMPERSAND")
-                if self.current_token[0] == "LIFETIME":
-                    self.eat("LIFETIME")
-                if self.current_token[0] == "MUT":
-                    self.eat("MUT")
-                    params.append(VariableNode("&mut Self", "self"))
-                else:
-                    params.append(VariableNode("&Self", "self"))
-                self.eat("SELF")
+            if self.current_starts_receiver_parameter():
+                params.append(self.parse_receiver_parameter())
                 if self.current_token[0] == "COMMA":
                     self.eat("COMMA")
 
@@ -1909,6 +1896,40 @@ class RustParser:
 
         self.eat("RPAREN")
         return params
+
+    def current_starts_receiver_parameter(self):
+        if self.current_token[0] in {"SELF", "AMPERSAND"}:
+            return True
+        return self.current_token[0] == "MUT" and self.peek_token_type() == "SELF"
+
+    def parse_receiver_parameter(self):
+        receiver_type = "Self"
+        is_mutable_binding = False
+
+        if self.current_token[0] == "AMPERSAND":
+            self.eat("AMPERSAND")
+            if self.current_token[0] == "LIFETIME":
+                self.eat("LIFETIME")
+            if self.current_token[0] == "MUT":
+                self.eat("MUT")
+                receiver_type = "&mut Self"
+            else:
+                receiver_type = "&Self"
+            self.eat("SELF")
+        else:
+            if self.current_token[0] == "MUT":
+                is_mutable_binding = True
+                self.eat("MUT")
+            self.eat("SELF")
+
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            receiver_type = self.parse_type()
+
+        receiver = VariableNode(receiver_type, "self")
+        if is_mutable_binding:
+            receiver.is_mutable = True
+        return receiver
 
     def parse_const(self, visibility=None):
         self.eat("CONST")

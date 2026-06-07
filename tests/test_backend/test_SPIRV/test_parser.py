@@ -2626,6 +2626,39 @@ def test_spirv_tools_nonsemantic_debug_printf_opstring_extinst_parse():
     assert isinstance(main.body[3], ReturnNode)
 
 
+def test_spirv_tools_whitespace_separated_instruction_stream_parse():
+    code = """
+    ; Source syntax: https://android.googlesource.com/platform/external/shaderc/spirv-tools/+/8c414eb5798768f09d20f98df53bb15428ef2083/syntax.md
+    ; SPIRV-Tools assembly instructions are whitespace-separated; one instruction
+    ; per physical line is conventional but not required.
+    OpCapability Shader OpMemoryModel Logical GLSL450 OpEntryPoint Vertex %main "main"
+    %source = OpString "OpReturn" %void = OpTypeVoid %fn = OpTypeFunction %void
+    %main = OpFunction %void None %fn %label = OpLabel OpReturn OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.spirv_assembly is True
+    assert ast.spirv_constants["%source"] == '"OpReturn"'
+    assert ast.spirv_types["%void"] == {"kind": "scalar", "name": "void"}
+    assert ast.spirv_types["%fn"] == {
+        "kind": "function",
+        "return_type": "%void",
+        "parameter_types": [],
+    }
+    assert ast.functions[0].name == "main"
+    assert [
+        opcode for _rid, opcode, _ops, _line in ast.functions[0].spirv_instructions
+    ] == [
+        "OpFunction",
+        "OpLabel",
+        "OpReturn",
+        "OpFunctionEnd",
+    ]
+    assert isinstance(ast.functions[0].body[0], ReturnNode)
+
+
 def test_spirv_assembly_function_only_module_is_preserved():
     code = """
     OpCapability Shader

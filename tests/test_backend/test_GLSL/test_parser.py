@@ -424,6 +424,31 @@ def test_parse_default_function_argument_from_glslang_default_args():
     assert foo.params[1].default_value.value == "2"
 
 
+def test_parse_local_function_prototype_with_custom_return_type_from_glsl_460_grammar():
+    # Reduced from Khronos GLSL 4.60.8 grammar: declaration_statement can
+    # contain function_prototype, whose fully_specified_type can be TYPE_NAME.
+    code = textwrap.dedent("""
+        #version 460
+
+        struct Hit {
+            vec3 normal;
+        };
+
+        void main()
+        {
+            Hit loadHit();
+            vec3 normal = loadHit().normal;
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert [stmt.name for stmt in main.body if isinstance(stmt, VariableNode)] == [
+        "normal"
+    ]
+
+
 def test_parse_control_flow_with_brace_on_next_line():
     code = textwrap.dedent("""
         #version 450
