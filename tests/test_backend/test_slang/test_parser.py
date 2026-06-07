@@ -3495,6 +3495,32 @@ def test_parenthesized_comma_expression_from_slang_shaders():
     assert "(0.75, 1.0)" in generated
 
 
+def test_return_comma_operator_from_slang_compute_test():
+    # Source: shader-slang/slang tests/compute/comma-operator.slang at
+    # 5230a81f2fe68afe5cb8d04a1b09d56476f6b960.
+    code = """
+    int test(int inVal)
+    {
+        int a = inVal;
+        return a*=2, a+1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    test = find_function(ast, "test")
+    returned = test.body[1].value
+
+    assert isinstance(returned, ParenthesizedCommaNode)
+    assert len(returned.expressions) == 2
+    assert isinstance(returned.expressions[0], AssignmentNode)
+    assert returned.expressions[0].operator == "*="
+    assert isinstance(returned.expressions[1], BinaryOpNode)
+
+    generated = SlangCrossGLCodeGen.SlangToCrossGLConverter().generate(ast)
+    assert "return (a *= 2, a + 1);" in generated
+
+
 def test_for_update_list_from_slang_shaders():
     code = """
     void scan(float factorX)

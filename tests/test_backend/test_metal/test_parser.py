@@ -2597,6 +2597,37 @@ def test_parse_lambda_argument_from_mlx_fp_quantized_nax():
     assert barrier_calls
 
 
+def test_parse_template_id_value_expression_with_member_args_from_mlx_gemm_gather_nax():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 8f0e8b14e0fc028df8618684583af9bef44647b8
+    # Path: mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_gather_nax.h
+    code = """
+    void run(bool is_unaligned_sm) {
+      dispatch_bool(!is_unaligned_sm, [&](auto kAlignedM) {
+        auto do_gemm = gemm_loop<
+            T,
+            SM,
+            kAlignedM.value,
+            AccumType>;
+        if constexpr (kAlignedM.value) {
+          do_gemm();
+        }
+      });
+    }
+    """
+    ast = parse_ok(code)
+    lambda_arg = ast.functions[0].body[0].args[1]
+    assignment = lambda_arg.body[0]
+    if_node = lambda_arg.body[1]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.left.name == "do_gemm"
+    assert assignment.right.name == "gemm_loop<T,SM,kAlignedM.value,AccumType>"
+    assert isinstance(if_node, IfNode)
+    assert if_node.condition.member == "value"
+
+
 def test_parse_preprocessor_define():
     code = """
     #define FOO 1

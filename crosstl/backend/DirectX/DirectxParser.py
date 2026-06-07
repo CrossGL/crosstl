@@ -888,34 +888,110 @@ class HLSLParser:
     def parse_generic_arguments(self):
         args = []
         self.eat("LESS_THAN")
-        while (
-            self.current_token[0] != "GREATER_THAN" and self.current_token[0] != "EOF"
-        ):
-            if (
-                self.current_token[0] == "IDENTIFIER"
-                and str(self.current_token[1]).lower() in {"snorm", "unorm"}
-                and self.is_type_token(self.peek()[0])
-            ):
-                qualifier = self.current_token[1]
-                self.eat("IDENTIFIER")
-                arg_type = f"{qualifier} {self.parse_type()}"
-                arg_type += self.format_array_suffixes_for_type(
-                    self.parse_array_suffixes()
-                )
-                args.append(arg_type)
-            elif self.is_type_start_at(self.current_index):
-                arg_type = self.parse_type()
-                arg_type += self.format_array_suffixes_for_type(
-                    self.parse_array_suffixes()
-                )
-                args.append(arg_type)
-            else:
-                args.append(self.current_token[1])
-                self.eat(self.current_token[0])
-            if self.current_token[0] == "COMMA":
+        current = []
+        depth = 0
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "GREATER_THAN" and depth == 0:
+                if current:
+                    args.append(self.format_generic_argument_tokens(current))
+                self.eat("GREATER_THAN")
+                return args
+            if token_type == "COMMA" and depth == 0:
+                args.append(self.format_generic_argument_tokens(current))
+                current = []
                 self.eat("COMMA")
-        self.eat("GREATER_THAN")
-        return args
+                continue
+
+            current.append(self.current_token)
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+            self.eat(token_type)
+
+        raise SyntaxError("Unterminated generic argument list")
+
+    def format_generic_argument_tokens(self, tokens):
+        result = []
+        previous_kind = None
+        previous_text = None
+        index = 0
+        while index < len(tokens):
+            token_type, token_value = tokens[index]
+            if (
+                token_type == "COLON"
+                and index + 1 < len(tokens)
+                and tokens[index + 1][0] == "COLON"
+            ):
+                text = "::"
+                current_kind = "scope"
+                index += 2
+            else:
+                text = str(token_value)
+                current_kind = self.generic_argument_token_kind(
+                    token_type, previous_kind, previous_text
+                )
+                index += 1
+
+            if result and self.generic_argument_needs_space(
+                previous_kind, current_kind, previous_text, text
+            ):
+                result.append(" ")
+            result.append(text)
+            previous_kind = current_kind
+            previous_text = text
+
+        return "".join(result).strip()
+
+    def generic_argument_token_kind(self, token_type, previous_kind, previous_text):
+        if token_type in {"PLUS", "MINUS"} and (
+            previous_kind is None
+            or previous_kind in {"binary_operator", "unary_operator"}
+            or previous_text in {"(", "[", "<", ","}
+        ):
+            return "unary_operator"
+        if token_type in {
+            "PLUS",
+            "MINUS",
+            "MULTIPLY",
+            "DIVIDE",
+            "MOD",
+            "BITWISE_AND",
+            "BITWISE_OR",
+            "BITWISE_XOR",
+            "SHIFT_LEFT",
+            "SHIFT_RIGHT",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "EQUAL",
+            "NOT_EQUAL",
+            "LOGICAL_AND",
+            "LOGICAL_OR",
+        }:
+            return "binary_operator"
+        return token_type
+
+    def generic_argument_needs_space(
+        self, previous_kind, current_kind, previous_text, current_text
+    ):
+        if previous_kind is None:
+            return False
+        if current_text in {",", ">", ")", "]", ".", "::"}:
+            return False
+        if previous_text in {"<", "(", "[", ".", "::"}:
+            return False
+        if current_text in {"<", "(", "["}:
+            return False
+        if previous_text == ",":
+            return True
+        if previous_kind == "unary_operator" or current_kind == "unary_operator":
+            return False
+        if previous_kind == "binary_operator" or current_kind == "binary_operator":
+            return True
+        return bool(re.match(r"[A-Za-z0-9_]", str(previous_text)[-1:])) and bool(
+            re.match(r"[A-Za-z0-9_]", str(current_text)[:1])
+        )
 
     def parse_array_suffixes(self):
         sizes = []

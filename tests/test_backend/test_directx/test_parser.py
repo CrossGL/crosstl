@@ -1421,6 +1421,22 @@ def test_parse_template_style_vector_matrix_types_and_constructors():
     assert func.body[-1].value.type_name == "vector<double, 4>"
 
 
+def test_parse_template_vector_constant_expression_dimensions_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/SemaHLSL/vector-syntax.hlsl
+    ast = parse_code("""
+    vector<float, 1+1> literalSize;
+    static const int i = 1;
+    vector<float, i+i> constSize;
+    """)
+
+    assert [variable.vtype for variable in ast.global_variables] == [
+        "vector<float, 1 + 1>",
+        "int",
+        "vector<float, i + i>",
+    ]
+
+
 def test_parse_default_template_style_vector_matrix_constructors_from_hlsl_docs():
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-vector
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-matrix

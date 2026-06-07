@@ -2791,9 +2791,18 @@ class SlangParser:
         self.eat("RETURN")
         value = None
         if self.current_token[0] != "SEMICOLON":
-            value = self.parse_expression()
+            value = self.parse_comma_expression()
         self.eat("SEMICOLON")
         return ReturnNode(value)
+
+    def parse_comma_expression(self):
+        expressions = [self.parse_expression()]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_expression())
+        if len(expressions) == 1:
+            return expressions[0]
+        return ParenthesizedCommaNode(expressions)
 
     def parse_break_statement(self):
         self.eat("BREAK")

@@ -3258,6 +3258,35 @@ def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
     assert "Unhandled expression" not in compact
 
 
+def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 8f0e8b14e0fc028df8618684583af9bef44647b8
+    # Path: mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_gather_nax.h
+    code = """
+    void run(bool is_unaligned_sm) {
+      dispatch_bool(!is_unaligned_sm, [&](auto kAlignedM) {
+        auto do_gemm = gemm_loop<
+            T,
+            SM,
+            kAlignedM.value,
+            AccumType>;
+        if constexpr (kAlignedM.value) {
+          do_gemm();
+        }
+      });
+    }
+    """
+    result = convert(code)
+    compact = normalize(result)
+
+    assert "gemm_loop_u3cT_u2cSM_u2ckAlignedM_u2evalue_u2cAccumType_u3e" in compact
+    assert "gemm_loop<" not in compact
+    assert "if (kAlignedM.value)" in compact
+    assert "Unhandled expression" not in compact
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_preserves_native_address_space_qualifiers():
     code = """
     #include <metal_stdlib>

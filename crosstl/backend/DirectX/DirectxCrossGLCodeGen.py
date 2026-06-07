@@ -1,5 +1,6 @@
 """Reverse code generator that emits CrossGL from HLSL AST nodes."""
 
+import ast as python_ast
 import re
 
 from crosstl.translator.lexer import KEYWORDS as CROSSGL_KEYWORDS
@@ -434,6 +435,7 @@ class HLSLToCrossGLConverter:
         self.current_identifier_renames = {}
         self.struct_member_types = {}
         self.struct_member_array_dims = {}
+        self.integer_constant_values = {}
         self.suppress_storage_image_index_lowering = False
         self.function_identifier_renames = {}
 
@@ -2741,6 +2743,7 @@ class HLSLToCrossGLConverter:
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
+        self.integer_constant_values = self.collect_integer_constant_values(ast)
         self.function_identifier_renames = self.collect_function_identifier_renames(
             ast.functions
         )
@@ -2841,6 +2844,78 @@ class HLSLToCrossGLConverter:
         for struct in structs or []:
             declarations.extend(getattr(struct, "variable_declarations", []) or [])
         return declarations
+
+    def collect_integer_constant_values(self, ast):
+        constants = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            if not self.is_scalar_integer_constant_declaration(node):
+                continue
+            value = self.evaluate_integer_constant_node(
+                getattr(node, "value", None), constants
+            )
+            if value is not None:
+                constants[getattr(node, "name", "")] = value
+        return constants
+
+    def is_scalar_integer_constant_declaration(self, node):
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(node, "qualifiers", [])
+        }
+        if "const" not in qualifiers:
+            return False
+        type_name = self.canonical_composite_type(
+            str(getattr(node, "vtype", "")).strip()
+        )
+        return type_name in {"int", "uint", "dword"}
+
+    def evaluate_integer_constant_node(self, node, constants):
+        if isinstance(node, bool):
+            return None
+        if isinstance(node, int):
+            return node
+        if isinstance(node, str):
+            return constants.get(node)
+        if isinstance(node, UnaryOpNode):
+            value = self.evaluate_integer_constant_node(node.operand, constants)
+            if value is None:
+                return None
+            if node.op == "+":
+                return value
+            if node.op == "-":
+                return -value
+            if node.op == "~":
+                return ~value
+            return None
+        if isinstance(node, BinaryOpNode):
+            left = self.evaluate_integer_constant_node(node.left, constants)
+            right = self.evaluate_integer_constant_node(node.right, constants)
+            if left is None or right is None:
+                return None
+            return self.apply_integer_constant_operator(left, node.op, right)
+        return None
+
+    def apply_integer_constant_operator(self, left, operator, right):
+        if operator == "+":
+            return left + right
+        if operator == "-":
+            return left - right
+        if operator == "*":
+            return left * right
+        if operator == "/" and right != 0:
+            return left // right
+        if operator == "%" and right != 0:
+            return left % right
+        if operator == "<<":
+            return left << right
+        if operator == ">>":
+            return left >> right
+        if operator == "&":
+            return left & right
+        if operator == "|":
+            return left | right
+        if operator == "^":
+            return left ^ right
+        return None
 
     def generate_global_variable_declaration(self, node):
         self.record_variable_type(
@@ -3948,7 +4023,67 @@ class HLSLToCrossGLConverter:
         try:
             return int(str(value).strip())
         except (TypeError, ValueError):
+            return self.evaluate_integer_constant_expression_text(value)
+
+    def evaluate_integer_constant_expression_text(self, value):
+        text = str(value).strip()
+        if not text:
             return None
+        text = re.sub(r"(?i)(?<=\d)(ull|llu|ul|lu|ll|u|l)\b", "", text)
+        try:
+            expression = python_ast.parse(text, mode="eval").body
+        except (SyntaxError, ValueError):
+            return None
+        return self.evaluate_integer_python_ast(expression)
+
+    def evaluate_integer_python_ast(self, node):
+        if isinstance(node, python_ast.Constant):
+            if isinstance(node.value, bool) or not isinstance(node.value, int):
+                return None
+            return node.value
+        if isinstance(node, python_ast.Name):
+            return self.integer_constant_values.get(node.id)
+        if isinstance(node, python_ast.UnaryOp):
+            value = self.evaluate_integer_python_ast(node.operand)
+            if value is None:
+                return None
+            if isinstance(node.op, python_ast.UAdd):
+                return value
+            if isinstance(node.op, python_ast.USub):
+                return -value
+            if isinstance(node.op, python_ast.Invert):
+                return ~value
+            return None
+        if isinstance(node, python_ast.BinOp):
+            left = self.evaluate_integer_python_ast(node.left)
+            right = self.evaluate_integer_python_ast(node.right)
+            if left is None or right is None:
+                return None
+            return self.apply_integer_python_operator(left, node.op, right)
+        return None
+
+    def apply_integer_python_operator(self, left, operator, right):
+        if isinstance(operator, python_ast.Add):
+            return left + right
+        if isinstance(operator, python_ast.Sub):
+            return left - right
+        if isinstance(operator, python_ast.Mult):
+            return left * right
+        if isinstance(operator, (python_ast.Div, python_ast.FloorDiv)) and right != 0:
+            return left // right
+        if isinstance(operator, python_ast.Mod) and right != 0:
+            return left % right
+        if isinstance(operator, python_ast.LShift):
+            return left << right
+        if isinstance(operator, python_ast.RShift):
+            return left >> right
+        if isinstance(operator, python_ast.BitAnd):
+            return left & right
+        if isinstance(operator, python_ast.BitOr):
+            return left | right
+        if isinstance(operator, python_ast.BitXor):
+            return left ^ right
+        return None
 
     def map_template_vector_type(self, scalar_type, components):
         if components is None or components < 1 or components > 4:

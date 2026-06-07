@@ -153,6 +153,16 @@ class RustToCrossGLConverter:
         "bvec2": "bvec3",
         "bvec3": "bvec4",
     }
+    VECTOR_TRUNCATE_CONSTRUCTOR_MAP = {
+        "vec3": "vec2",
+        "vec4": "vec3",
+        "ivec3": "ivec2",
+        "ivec4": "ivec3",
+        "uvec3": "uvec2",
+        "uvec4": "uvec3",
+        "bvec3": "bvec2",
+        "bvec4": "bvec3",
+    }
     VECTOR_CONSTRUCTOR_RETURN_TYPES = {
         "vec2": "vec2",
         "vec3": "vec3",
@@ -1452,6 +1462,8 @@ class RustToCrossGLConverter:
     def infer_builtin_method_return_type(self, method_name, receiver_type, args):
         if method_name == "extend" and len(args) == 1:
             return self.extended_vector_constructor(receiver_type)
+        if method_name == "truncate" and not args:
+            return self.truncated_vector_constructor(receiver_type)
         if method_name in {"max_element", "min_element"} and not args:
             return self.vector_element_scalar_type(receiver_type)
         if method_name == "to_bits" and not args:
@@ -4094,6 +4106,11 @@ class RustToCrossGLConverter:
             if constructor is not None:
                 return f"{constructor}({obj}, {args[0]})"
 
+        if method_name == "truncate" and not args:
+            truncated = self.format_vector_truncate_call(obj, receiver_type)
+            if truncated is not None:
+                return truncated
+
         if method_name == "length" and not args:
             return f"length({obj})"
 
@@ -4269,6 +4286,20 @@ class RustToCrossGLConverter:
 
         mapped_type = self.map_type(receiver_type)
         return self.VECTOR_EXTEND_CONSTRUCTOR_MAP.get(mapped_type)
+
+    def truncated_vector_constructor(self, receiver_type):
+        if not receiver_type:
+            return None
+
+        mapped_type = self.map_type(receiver_type)
+        return self.VECTOR_TRUNCATE_CONSTRUCTOR_MAP.get(mapped_type)
+
+    def format_vector_truncate_call(self, obj, receiver_type):
+        constructor = self.truncated_vector_constructor(receiver_type)
+        component_count = self.VECTOR_COMPONENT_COUNTS.get(constructor)
+        if component_count is None:
+            return None
+        return f"{obj}.{'xyzw'[:component_count]}"
 
     def format_vector_element_reduction_call(self, method_name, obj, receiver_type):
         intrinsic = {"max_element": "max", "min_element": "min"}.get(method_name)
