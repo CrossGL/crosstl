@@ -538,6 +538,27 @@ EXTERNAL_FIXTURES = [
             "int16 c_int16_n16 = -16;",
         ),
     ),
+    ExternalFixture(
+        name="directx_shader_compiler_const_eval_numeric_scalar_swizzle",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/vector/vec_elem_const_eval.hlsl",
+        code=textwrap.dedent("""
+            static const float4 a = (1.5).xxxx;
+            static const float4 b = (2).xxxx;
+            static const int4   c = (3.5).xxxx;
+
+            float4 main() : SV_Target {
+              return a + b + c;
+            }
+        """).strip(),
+        contains=(
+            "static const vec4 a = (1.5).xxxx;",
+            "static const vec4 b = (2).xxxx;",
+            "static const ivec4 c = (3.5).xxxx;",
+            "return (a + b) + c;",
+        ),
+    ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler
     # Source commit: 8ed708842c1ccb24bd914eff03125c837a01be71
     # Source path: tools/clang/test/CodeGenSPIRV/constant.scalar.64bit.hlsl

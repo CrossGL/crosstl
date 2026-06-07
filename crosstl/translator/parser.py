@@ -1562,6 +1562,10 @@ class Parser:
         """Parse a comma-separated function parameter list."""
         parameters = []
 
+        if self.current_token[0] == "VOID" and self.peek()[0] == "RPAREN":
+            self.eat("VOID")
+            return parameters
+
         while self.current_token[0] != "RPAREN":
             param = self.parse_parameter()
             parameters.append(param)

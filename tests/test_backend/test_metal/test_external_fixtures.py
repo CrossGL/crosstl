@@ -39,6 +39,7 @@ MLX_UNARY_OPS_COMMIT = "e1a3f2f31fc298cfd7f017d19e8165d88a0c3c59"
 MLX_STEEL_ATTENTION_TYPE_TRAIT_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 MLX_STEEL_GEMM_LOADER_COMMIT = "6ea7a00d05d548219864d10ff6c013b7544b13ea"
 MLX_UTILS_TYPEDEF_COMMIT = "8f0e8b14e0fc028df8618684583af9bef44647b8"
+MLX_SCAN_COMMIT = "8f0e8b14e0fc028df8618684583af9bef44647b8"
 PYTORCH_REPO = "https://github.com/pytorch/pytorch"
 PYTORCH_GRID_SAMPLER_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
 PYTORCH_POOLING_COMMIT = "7168b60c0d3561d93aac7519d03d1bd95ee3e7a3"
@@ -963,6 +964,37 @@ EXTERNAL_FIXTURES = [
         "contains": ["typedef f16 float16_t;"],
         "not_contains": ["typedef float16 float16_t;"],
         "source": "typedef half float16_t;",
+    },
+    {
+        "name": "mlx_scan_template_specialized_struct_reparse",
+        "repo_url": MLX_REPO,
+        "commit": MLX_SCAN_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/scan.h",
+        "roundtrip": True,
+        "struct_names": ["CumProd", "CumProd<bool>"],
+        "contains": [
+            "struct CumProd_u3cbool_u3e",
+            "constant bool init;",
+        ],
+        "not_contains": ["struct CumProd<bool>"],
+        "source": (
+            """
+            template <typename U>
+            struct CumProd {
+                static constexpr constant U init = static_cast<U>(1.0f);
+            };
+
+            template <>
+            struct CumProd<bool> {
+                static constexpr constant bool init = true;
+
+                template <typename T>
+                bool operator()(bool a, T b) {
+                    return a & static_cast<bool>(b);
+                }
+            };
+        """
+        ),
     },
     {
         "name": "mlx_steel_gemm_nested_aligned_read_vector",

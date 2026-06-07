@@ -1065,6 +1065,15 @@ class SlangParser:
         self.eat("RPAREN")
         return "".join(register_parts)
 
+    def parse_register_annotations(self):
+        annotations = []
+        while True:
+            register_name = self.parse_register_annotation()
+            if register_name is None:
+                break
+            annotations.append(register_name)
+        return annotations
+
     def parse_semantic_annotations(self):
         annotations = []
         while self.current_token[0] == "COLON":
@@ -1118,7 +1127,8 @@ class SlangParser:
         self.eat(buffer_token)
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        register_name = self.parse_register_annotation()
+        register_names = self.parse_register_annotations()
+        register_name = register_names[0] if register_names else None
         self.eat("LBRACE")
         members = []
         while self.current_token[0] != "RBRACE":
@@ -1128,6 +1138,7 @@ class SlangParser:
             self.eat("SEMICOLON")
         node = StructNode(name, members)
         node.register = register_name
+        node.registers = register_names
         node.attributes = attributes
         node.qualifiers = qualifiers
         node.buffer_kind = buffer_kind
@@ -1211,7 +1222,8 @@ class SlangParser:
             var_name = self.current_token[1]
             self.eat("IDENTIFIER")
             array_sizes = self.parse_array_suffixes()
-            register_name = self.parse_register_annotation()
+            register_names = self.parse_register_annotations()
+            register_name = register_names[0] if register_names else None
             semantic = None
             if self.current_token[0] == "COLON":
                 semantic = self.parse_semantic_annotations()
@@ -1222,6 +1234,7 @@ class SlangParser:
                 array_sizes=array_sizes,
                 attributes=attributes,
                 register=register_name,
+                registers=register_names,
                 semantic=semantic,
             )
             if self.current_token[0] == "EQUALS":
@@ -2607,9 +2620,11 @@ class SlangParser:
         else:
             var_type = storage_modifier
 
+        register_names = []
         register_name = None
         if allow_register:
-            register_name = self.parse_register_annotation()
+            register_names = self.parse_register_annotations()
+            register_name = register_names[0] if register_names else None
 
         semantic = None
         if allow_semantic and self.current_token[0] == "COLON":
@@ -2622,6 +2637,7 @@ class SlangParser:
             attributes=attributes,
             array_sizes=array_sizes,
             register=register_name,
+            registers=register_names,
             semantic=semantic,
             storage_modifier=storage_modifier,
         )

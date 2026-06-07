@@ -2578,7 +2578,7 @@ class RustParser:
             "NONE",
             "OK",
             "ERR",
-        }
+        } | self.PRIMITIVE_PATH_SEGMENT_TOKENS
 
     def parse_match_path_or_call(self):
         first_segment = self.current_token[1]
