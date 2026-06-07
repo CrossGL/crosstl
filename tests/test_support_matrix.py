@@ -761,6 +761,9 @@ def test_project_diagnostics_document_location_path_checks():
         assert "non-repository-relative diagnostic locations" in (
             backend_support["notes"]
         )
+        assert "include, source override, and exclude scan patterns" in (
+            backend_support["notes"]
+        )
         assert "validation rejects missing diagnostic summary rollups" in (
             backend_support["notes"]
         )
@@ -799,6 +802,14 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_diagnostic_summary_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_exclude_patterns_outside_project"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_drive_relative_exclude_patterns"
         ) in backend_support["evidence"]
 
 
