@@ -2273,6 +2273,28 @@ def test_codegen_canonicalizes_stencil_ref_semantic():
     assert "uint stencil: SV_StencilRef;" in regenerated_hlsl
 
 
+def test_codegen_fragment_sv_position_parameter_imports_as_frag_coord():
+    fragment_output = generate_crossgl("""
+        float4 PSMain(float4 pos : SV_Position) : SV_Target0 {
+            return float4(pos.xy, 0.0, 1.0);
+        }
+    """)
+
+    assert "vec4 PSMain(vec4 pos @ gl_FragCoord) @ gl_FragData[0]" in fragment_output
+    assert "@ gl_Position" not in fragment_output
+    parse_crossgl(fragment_output)
+
+    vertex_output = generate_crossgl("""
+        float4 VSMain(float3 position : POSITION) : SV_Position {
+            return float4(position, 1.0);
+        }
+    """)
+
+    assert "vec4 VSMain(vec3 position @ Position) @ gl_Position" in vertex_output
+    assert "@ gl_FragCoord" not in vertex_output
+    parse_crossgl(vertex_output)
+
+
 def test_codegen_register_bindings_emitted():
     output = generate_crossgl(REGISTER_BINDINGS_HLSL)
     assert "@ register" in output

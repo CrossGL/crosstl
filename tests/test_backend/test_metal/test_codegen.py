@@ -183,6 +183,26 @@ def test_codegen_fragment_front_facing_attribute_uses_parseable_crossgl_builtin(
     assert parse_crossgl(result) is not None
 
 
+def test_codegen_fragment_sample_mask_parameter_uses_input_builtin():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 fragment_main(uint coverage [[sample_mask]]) {
+        return float4(float(coverage), 0.0, 0.0, 1.0);
+    }
+    """
+    result = convert(code)
+
+    assert "uint coverage @gl_SampleMaskIn" in result
+    assert re.search(r"uint coverage @gl_SampleMask(?!In)\b", result) is None
+    assert parse_crossgl(result) is not None
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(result))
+
+    assert "uint coverage [[sample_mask]]" in regenerated
+
+
 def test_codegen_trailing_return_type_helper_from_msl_cxx14_grammar():
     code = """
     #include <metal_stdlib>

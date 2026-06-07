@@ -681,6 +681,32 @@ def test_raster_system_semantics_codegen_canonicalizes_layer_viewport_and_distan
     cgl_translator.parse(generated_code)
 
 
+def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
+    code = """
+    [shader("fragment")]
+    float4 fragmentMain(float4 pos : SV_Position) : SV_Target
+    {
+        return float4(pos.xy, 0.0, 1.0);
+    }
+
+    [shader("vertex")]
+    float4 vertexMain(float3 position : POSITION) : SV_Position
+    {
+        return float4(position, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
+    assert (
+        "vec4 vertexMain(vec3 position @ in_Position) @ Out_Position" in generated_code
+    )
+    cgl_translator.parse(generated_code)
+
+
 def test_interpolation_qualifiers_codegen_remains_parseable_crossgl():
     code = """
     struct VSOutput

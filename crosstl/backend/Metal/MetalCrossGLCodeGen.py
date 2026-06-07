@@ -1427,7 +1427,9 @@ class MetalToCrossGLConverter:
             array_type and self.normalized_metal_type(array_type[0]) == "sampler"
         )
 
-    def format_decl(self, var, include_semantic=False, declare_name=True):
+    def format_decl(
+        self, var, include_semantic=False, declare_name=True, semantic_context=None
+    ):
         alignas_prefix = ""
         if hasattr(var, "alignas") and var.alignas:
             parts = []
@@ -1467,7 +1469,9 @@ class MetalToCrossGLConverter:
             else ""
         )
         semantic = (
-            self.map_semantic(getattr(var, "attributes", None))
+            self.map_semantic(
+                getattr(var, "attributes", None), context=semantic_context
+            )
             if include_semantic
             else ""
         )
@@ -1522,7 +1526,8 @@ class MetalToCrossGLConverter:
                 if self.structured_buffer_pointer_type(param):
                     self.current_structured_buffer_names.add(param.name)
             params = ", ".join(
-                self.format_decl(p, include_semantic=True) for p in func.params
+                self.format_decl(p, include_semantic=True, semantic_context="parameter")
+                for p in func.params
             )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
@@ -2844,7 +2849,7 @@ class MetalToCrossGLConverter:
             return "vec4"
         return None
 
-    def map_semantic(self, semantic):
+    def map_semantic(self, semantic, *, context=None):
         """Map Metal attributes to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
@@ -2856,7 +2861,10 @@ class MetalToCrossGLConverter:
             name = attr.name
             args = [str(a).strip() for a in attr.args] if attr.args else []
             key = f"{name}({args[0]})" if args else name
-            out = self.map_semantics.get(key, self.map_semantics.get(name, None))
+            if context == "parameter" and name == "sample_mask":
+                out = "gl_SampleMaskIn"
+            else:
+                out = self.map_semantics.get(key, self.map_semantics.get(name, None))
             if out is None:
                 out = self.dynamic_fragment_output_semantic(name, args)
             if out is None:

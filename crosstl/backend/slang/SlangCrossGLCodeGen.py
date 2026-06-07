@@ -883,9 +883,12 @@ class SlangToCrossGLConverter:
         self.push_storage_image_resource_scope(func.params)
         for param in func.params:
             self.register_identifier_declaration(param)
+        function_qualifier = self.effective_function_qualifier(func)
         preserve_parameter_qualifiers = self.is_entry_like_function(func)
         params = ", ".join(
-            self.generate_parameter(p, preserve_parameter_qualifiers)
+            self.generate_parameter(
+                p, preserve_parameter_qualifiers, function_qualifier
+            )
             for p in func.params
         )
         semantic = self.map_semantic(func.semantic)
@@ -902,7 +905,9 @@ class SlangToCrossGLConverter:
         self.pop_identifier_scope()
         return code
 
-    def generate_parameter(self, param, preserve_qualifiers=False):
+    def generate_parameter(
+        self, param, preserve_qualifiers=False, function_qualifier=None
+    ):
         qualifier_prefix = self.format_parameter_qualifier_prefix(
             param, preserve_qualifiers
         )
@@ -911,7 +916,11 @@ class SlangToCrossGLConverter:
             f"{self.format_identifier(param.name)}"
             f"{self.format_array_suffixes(param)}"
         )
-        semantic = self.map_semantic(param.semantic)
+        semantic = self.map_semantic(
+            param.semantic,
+            function_qualifier=function_qualifier,
+            parameter=param,
+        )
         if semantic:
             parameter += f" {semantic}"
         return parameter
@@ -2713,13 +2722,30 @@ class SlangToCrossGLConverter:
             return self.expression_base_name(expr.array)
         return None
 
-    def map_semantic(self, semantic):
+    def is_fragment_position_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if semantic is None or str(semantic).upper() != "SV_POSITION":
+            return False
+        if str(function_qualifier or "").lower() not in {"fragment", "pixel"}:
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
+    def map_semantic(self, semantic, function_qualifier=None, parameter=None):
         """Map a Slang semantic to CrossGL semantic annotation syntax."""
         if semantic is None:
             return ""
         ray_payload_access = self.map_ray_payload_access_semantic(semantic)
         if ray_payload_access:
             return ray_payload_access
+        if self.is_fragment_position_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            return "@ gl_FragCoord"
         mapped_semantic = self.semantic_map.get(semantic)
         if mapped_semantic is None:
             mapped_semantic = self.hlsl_system_semantic_map.get(str(semantic).lower())

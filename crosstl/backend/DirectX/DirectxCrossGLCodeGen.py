@@ -1732,7 +1732,9 @@ class HLSLToCrossGLConverter:
         semantic = self.map_semantic(
             self.infer_ray_parameter_semantic(
                 function_qualifier, parameter, parameter_index
-            )
+            ),
+            function_qualifier=function_qualifier,
+            parameter=parameter,
         )
         interpolation_attributes = self.format_interpolation_attributes(parameter)
         if semantic or interpolation_attributes:
@@ -4277,7 +4279,20 @@ class HLSLToCrossGLConverter:
             return f"i{image_type}"
         return image_type
 
-    def map_semantic(self, semantic):
+    def is_fragment_position_input_parameter(
+        self, semantic, function_qualifier=None, parameter=None
+    ):
+        if not semantic or str(semantic).upper() != "SV_POSITION":
+            return False
+        if str(function_qualifier or "").lower() not in {"fragment", "pixel"}:
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        return not qualifiers.intersection({"out", "inout"})
+
+    def map_semantic(self, semantic, function_qualifier=None, parameter=None):
         """Map an HLSL semantic to CrossGL semantic annotation syntax."""
         if not semantic:
             return ""
@@ -4292,6 +4307,10 @@ class HLSLToCrossGLConverter:
                 payload_access.append(f"@ hlsl_{access_name}({args})")
         if payload_access:
             return " ".join(payload_access)
+        if self.is_fragment_position_input_parameter(
+            semantic, function_qualifier, parameter
+        ):
+            return "@ gl_FragCoord"
         mapped = self.semantic_map.get(semantic)
         if mapped is None and isinstance(semantic, str):
             semantic_upper = semantic.upper()
