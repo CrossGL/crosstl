@@ -125,6 +125,63 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
         ),
         pytest.param(
             """
+            #version 460 core
+            #extension GL_EXT_fragment_shader_barycentric : require
+
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = vec4(gl_BaryCoordEXT, 1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "#extension GL_EXT_fragment_shader_barycentric : require",
+                "outColor = vec4(gl_BaryCoordEXT, 1.0);",
+            ],
+            id="vulkan-fragment-barycoord-builtin-infers-fragment",
+        ),
+        pytest.param(
+            """
+            #version 460 core
+            #extension GL_EXT_fragment_shader_barycentric : require
+
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = vec4(gl_BaryCoordNoPerspEXT, 1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "outColor = vec4(gl_BaryCoordNoPerspEXT, 1.0);",
+            ],
+            id="vulkan-fragment-barycoord-nopersp-builtin-infers-fragment",
+        ),
+        pytest.param(
+            """
+            #version 450 core
+            #extension GL_ARB_shader_stencil_export : require
+
+            void main() {
+                gl_FragStencilRefARB = 7;
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "#extension GL_ARB_shader_stencil_export : require",
+                "gl_FragStencilRefARB = 7;",
+            ],
+            id="vulkan-fragment-stencil-export-builtin-infers-fragment",
+        ),
+        pytest.param(
+            """
             #version 450 core
             #extension GL_AMD_shader_early_and_late_fragment_tests : enable
 

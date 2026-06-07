@@ -345,9 +345,13 @@ FRAGMENT_LAYOUT_QUALIFIERS = {
     "depth_unchanged",
 }
 FRAGMENT_BUILTINS = {
+    "gl_BaryCoordEXT",
+    "gl_BaryCoordNoPerspEXT",
     "gl_FragCoord",
     "gl_FragColor",
     "gl_FragDepth",
+    "gl_FragStencilRefARB",
+    "gl_FragStencilRefEXT",
     "gl_FrontFacing",
     "gl_HelperInvocation",
     "gl_PointCoord",
