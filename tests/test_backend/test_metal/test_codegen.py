@@ -572,6 +572,36 @@ def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     parse_crossgl(crossgl)
 
 
+def test_codegen_uint_vertex_id_roundtrips_to_opengl_builtin_int():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Vertex {
+        float4 position [[position]];
+        float4 color;
+    };
+
+    vertex Vertex vertex_main(const device Vertex *vertices [[buffer(0)]],
+                              uint vid [[vertex_id]]) {
+        return vertices[vid];
+    }
+
+    fragment float4 fragment_main(Vertex inVertex [[stage_in]]) {
+        return inVertex.color;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "int vid @gl_VertexID" in crossgl
+    assert "uint vid @gl_VertexID" not in crossgl
+    ast = parse_crossgl(crossgl)
+    generated = GLSLCodeGen().generate(ast)
+
+    assert "uint vid" not in generated
+    assert "verticesBuffer" in generated
+
+
 def test_codegen_gnu_attribute_between_function_qualifiers_and_return_type_from_spirv_cross():
     # Reduced from:
     # Repo: https://github.com/KhronosGroup/SPIRV-Cross

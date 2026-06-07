@@ -154,13 +154,17 @@ def test_source_registry_covers_backend_dirs():
         ".frag",
         ".fragment",
         ".comp",
+        ".cs",
         ".csh",
         ".compute",
         ".geom",
+        ".gs",
         ".gsh",
         ".geometry",
         ".tesc",
+        ".tcs",
         ".tese",
+        ".tes",
     ),
 )
 def test_source_registry_recognizes_glsl_stage_extensions(extension):

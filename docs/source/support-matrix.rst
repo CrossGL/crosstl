@@ -24,7 +24,7 @@ implicitly supported.
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1012", "291", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1116", "175", "GLSL 4.60 specification; OpenGL registry"
-   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "909", "491", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "910", "491", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "913", "34", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "690", "194", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "747", "136", "ROCm HIP documentation"

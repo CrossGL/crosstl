@@ -1367,6 +1367,16 @@ class MetalToCrossGLConverter:
             return self.map_type(resolved_type)
         return self.map_type(type_to_map)
 
+    def map_declared_variable_type(self, var):
+        mapped_type = self.map_variable_type(var)
+        semantics = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(var, "attributes", []) or []
+        }
+        if semantics.intersection({"vertex_id", "instance_id", "primitive_id"}):
+            return "int"
+        return mapped_type
+
     def address_space_qualifier_prefix(self, var):
         if self.structured_buffer_pointer_type(var):
             return ""
@@ -1421,7 +1431,7 @@ class MetalToCrossGLConverter:
                 else:
                     parts.append(f"alignas({self.generate_expression(item, False)})")
             alignas_prefix = " ".join(parts) + " "
-        mapped_type = self.map_variable_type(var)
+        mapped_type = self.map_declared_variable_type(var)
         name_array_suffix = ""
         include_declarator_arrays = True
         grouped_type_suffix = (
