@@ -876,7 +876,15 @@ def _format_inactive_status_records(label, records):
             or status == "active"
         ):
             continue
-        entries.append(f"{path or '(empty)'} ({status})")
+        details = [status]
+        resolved_path = record.get("resolvedPath")
+        if isinstance(resolved_path, str) and resolved_path:
+            details.append(f"resolved={resolved_path}")
+        for visibility_field in ("scanVisible", "frontendVisible"):
+            visibility = record.get(visibility_field)
+            if isinstance(visibility, bool):
+                details.append(f"{visibility_field}={str(visibility).lower()}")
+        entries.append(f"{path or '(empty)'} ({'; '.join(details)})")
 
     if not entries:
         return None

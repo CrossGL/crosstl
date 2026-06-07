@@ -245,9 +245,10 @@ def test_project_repo_scan_documents_source_root_status():
         assert "extensionless unsupported explicit includes" in (
             backend_support["notes"]
         )
-        assert "text inspection identifies inactive source roots by path" in (
-            backend_support["notes"]
-        )
+        assert (
+            "text inspection identifies inactive source roots by path, "
+            "resolved path, and scan visibility"
+        ) in backend_support["notes"]
         assert "exclude patterns that leave valid units visible" in (
             backend_support["notes"]
         )
@@ -504,9 +505,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert "missing include-path processing variant rollups" in (
             backend_support["notes"]
         )
-        assert "text inspection identifies inactive include directories by path" in (
-            backend_support["notes"]
-        )
+        assert (
+            "text inspection identifies inactive include directories by path, "
+            "resolved path, and frontend visibility"
+        ) in backend_support["notes"]
         assert (
             "include dependency status, kind, source-backend, "
             "source-backend status, resolution-source"

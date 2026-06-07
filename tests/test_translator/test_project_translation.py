@@ -15782,7 +15782,11 @@ def test_project_cli_inspect_report_text_includes_include_dir_status(tmp_path):
 
     assert result.returncode == 0
     assert "Include dirs by status: active=1, missing=1" in result.stdout
-    assert "Include dir issues: missing-includes (missing)" in result.stdout
+    assert (
+        "Include dir issues: missing-includes "
+        f"(missing; resolved={(repo / 'missing-includes').resolve()}; "
+        "frontendVisible=false)"
+    ) in result.stdout
     assert "includes (active)" not in result.stdout
 
     payload = inspect_project_report(report_path)
@@ -15959,7 +15963,11 @@ def test_project_cli_inspect_report_text_includes_source_root_status(tmp_path):
 
     assert result.returncode == 0
     assert "Source roots by status: active=1, missing=1" in result.stdout
-    assert "Source root issues: missing-shaders (missing)" in result.stdout
+    assert (
+        "Source root issues: missing-shaders "
+        f"(missing; resolved={(repo / 'missing-shaders').resolve()}; "
+        "scanVisible=false)"
+    ) in result.stdout
     assert "shaders (active)" not in result.stdout
 
     payload = inspect_project_report(report_path)
