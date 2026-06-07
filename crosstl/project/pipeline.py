@@ -2903,6 +2903,24 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
             continue
 
         override = _override_for_path(relative_path, config)
+        unsupported_extension_message = (
+            None
+            if override
+            else SOURCE_REGISTRY.unsupported_extension_message(str(path))
+        )
+        if unsupported_extension_message:
+            skipped.append({"path": relative_path, "reason": "unsupported-extension"})
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="warning",
+                    code="project.scan.unsupported-source",
+                    message=f"{relative_path}: {unsupported_extension_message}",
+                    location=SourceLocation(file=relative_path),
+                    missing_capabilities=["source.discovery"],
+                )
+            )
+            continue
+
         source_spec = (
             SOURCE_REGISTRY.get(override)
             if override

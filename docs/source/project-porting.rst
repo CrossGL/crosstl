@@ -265,6 +265,11 @@ backend. Override patterns are also considered during default discovery, so
 override-only files do not require broad include globs. CLI source overrides are
 merged with this configuration before scan or translation. Invalid override
 backend names are reported as configuration diagnostics.
+Explicit broad include patterns may also match compiled shader artifacts or
+known source formats that CrossTL cannot parse yet. Project scans keep those
+files in the skipped-file rollups and emit structured diagnostics with the
+same specific guidance as single-file translation, while continuing to discover
+supported translation units in the repository.
 Include directories, defines, and named
 variants are recorded in project reports. Project reports include
 order-preserving include-directory status records and status counts so missing,
@@ -402,8 +407,10 @@ Project reports are JSON documents with:
   cycle for triage.
 - ``skipped``: repository-relative files intentionally left untranslated with
   reason codes and source override metadata when an override selected an
-  unsupported source backend. Full reports require skipped source override
-  metadata to match the configured source override map.
+  unsupported source backend. Known unsupported source or binary artifact
+  extensions are recorded with ``unsupported-extension`` and a matching scan
+  diagnostic so broad repository scans remain auditable. Full reports require
+  skipped source override metadata to match the configured source override map.
 - ``artifacts``: attempted outputs with source path, source backend, target,
   applied define map, optional variant name, target/variant-scoped output path
   with the target backend suffix, status, source hash, generated artifact hash,

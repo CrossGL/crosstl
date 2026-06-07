@@ -247,6 +247,41 @@ def test_scan_project_reports_explicitly_included_unsupported_sources(tmp_path):
     }
 
 
+def test_scan_project_skips_known_unsupported_source_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "compiled.spv").write_bytes(b"\x03\x02#shader-binary")
+    (repo / "future.wgsl").write_text("@compute fn main() {}\n", encoding="utf-8")
+
+    config = load_project_config(repo)
+    scan = scan_project(config)
+    payload = scan.to_report(targets=["cgl"]).to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert scan.skipped == [
+        {"path": "compiled.spv", "reason": "unsupported-extension"},
+        {"path": "future.wgsl", "reason": "unsupported-extension"},
+    ]
+    assert payload["summary"]["skippedByReason"] == {"unsupported-extension": 2}
+    assert payload["summary"]["skippedByExtension"] == {".spv": 1, ".wgsl": 1}
+    diagnostics_by_file = {
+        diagnostic.location.file: diagnostic for diagnostic in scan.diagnostics
+    }
+    assert diagnostics_by_file["compiled.spv"].code == "project.scan.unsupported-source"
+    assert "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
+    assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
+    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+
+
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

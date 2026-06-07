@@ -375,6 +375,22 @@ def test_spirv_source_inference_distinguishes_assembly_from_binary():
         SOURCE_REGISTRY.get_by_extension("shader.spv")
 
 
+def test_source_registry_exposes_known_unsupported_extension_diagnostics():
+    register_default_sources()
+
+    assert (
+        SOURCE_REGISTRY.unsupported_extension_message("shader.spv")
+        == "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
+        "assembly (.spvasm) or disassemble the binary with spirv-dis first."
+    )
+    assert (
+        SOURCE_REGISTRY.unsupported_extension_message("shader.spv.json")
+        == "Binary SPIR-V input files (.spv) are not supported; provide SPIR-V "
+        "assembly (.spvasm) or disassemble the binary with spirv-dis first."
+    )
+    assert SOURCE_REGISTRY.unsupported_extension_message("shader.cgl") is None
+
+
 @pytest.mark.parametrize(
     ("filename", "diagnostic"),
     sorted(UNSUPPORTED_SOURCE_EXTENSION_DIAGNOSTICS.items()),

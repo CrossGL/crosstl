@@ -172,6 +172,33 @@ class SourceRegistry:
             raise ValueError(f"Unsupported extension '{ext_key}' already registered")
         self._unsupported_extensions[ext_key] = message
 
+    def unsupported_extension_message(
+        self, path_or_ext: str | os.PathLike[str]
+    ) -> str | None:
+        """Return the diagnostic for a known-but-unsupported source extension."""
+        path_or_ext = _coerce_path_or_extension(path_or_ext)
+        compound_unsupported_message = _compound_unsupported_extension_message(
+            path_or_ext
+        )
+        if compound_unsupported_message:
+            return compound_unsupported_message
+
+        ext = path_or_ext
+        if path_or_ext:
+            looks_like_path = os.path.basename(path_or_ext) != path_or_ext
+            looks_like_filename = not path_or_ext.startswith(".") and "." in path_or_ext
+            if looks_like_path or looks_like_filename:
+                _, ext = os.path.splitext(path_or_ext)
+        ext_key = _normalize_extension(ext or "")
+        unsupported_message = self._unsupported_extensions.get(ext_key)
+        if unsupported_message:
+            return unsupported_message
+        if ext_key.startswith("."):
+            _, trailing_ext = os.path.splitext(ext_key)
+            if trailing_ext and trailing_ext != ext_key:
+                return self._unsupported_extensions.get(trailing_ext)
+        return None
+
     def resolve_name(self, name: str) -> str | None:
         """Resolve a source name or alias to its canonical registry name."""
         if not name:
@@ -193,11 +220,9 @@ class SourceRegistry:
     ) -> SourceSpec | None:
         """Return the source spec registered for a file path or extension."""
         path_or_ext = _coerce_path_or_extension(path_or_ext)
-        compound_unsupported_message = _compound_unsupported_extension_message(
-            path_or_ext
-        )
-        if compound_unsupported_message:
-            raise ValueError(compound_unsupported_message)
+        unsupported_message = self.unsupported_extension_message(path_or_ext)
+        if unsupported_message:
+            raise ValueError(unsupported_message)
 
         ext = path_or_ext
         if path_or_ext:
@@ -206,14 +231,10 @@ class SourceRegistry:
             if looks_like_path or looks_like_filename:
                 _, ext = os.path.splitext(path_or_ext)
         ext_key = _normalize_extension(ext or "")
-        if ext_key in self._unsupported_extensions:
-            raise ValueError(self._unsupported_extensions[ext_key])
         name = self._by_extension.get(ext_key)
         if not name and ext_key.startswith("."):
             _, trailing_ext = os.path.splitext(ext_key)
             if trailing_ext and trailing_ext != ext_key:
-                if trailing_ext in self._unsupported_extensions:
-                    raise ValueError(self._unsupported_extensions[trailing_ext])
                 name = self._by_extension.get(_normalize_extension(trailing_ext))
         if not name:
             return None
