@@ -1169,6 +1169,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_records_unavailable_toolchains_"
+            "deterministically"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_or_forged_artifact_provenance"
         ) in backend_support["evidence"]
         assert (

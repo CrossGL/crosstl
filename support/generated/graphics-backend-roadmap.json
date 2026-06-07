@@ -2189,6 +2189,7 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_unavailable_toolchains_deterministically",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_run_variant_rollups",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_timeouts",
@@ -2315,6 +2316,7 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_unavailable_toolchains_deterministically",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_run_variant_rollups",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_timeouts",
@@ -2441,6 +2443,7 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_unavailable_toolchains_deterministically",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_run_variant_rollups",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_timeouts",

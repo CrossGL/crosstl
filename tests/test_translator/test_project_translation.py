@@ -5448,6 +5448,51 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
     assert payload["diagnosticCounts"]["error"] == 0
 
 
+def test_validate_project_report_records_unavailable_toolchains_deterministically(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    monkeypatch.setattr(project_pipeline.shutil, "which", lambda tool: None)
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert validation["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.toolchain-unavailable": 1
+    }
+    assert validation["missingCapabilityCounts"] == {"toolchain.validation": 1}
+    assert validation["toolchainStatusCounts"] == {
+        "available": 0,
+        "not-configured": 0,
+        "unavailable": 1,
+    }
+    assert validation["validation"]["toolchains"] == [
+        {
+            "target": "opengl",
+            "status": "unavailable",
+            "tools": [
+                {
+                    "name": "glslangValidator",
+                    "path": None,
+                    "available": False,
+                }
+            ],
+        }
+    ]
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.toolchain-unavailable"
+    assert diagnostic["severity"] == "warning"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["missingCapabilities"] == ["toolchain.validation"]
+
+
 def test_validate_project_report_preserves_source_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
