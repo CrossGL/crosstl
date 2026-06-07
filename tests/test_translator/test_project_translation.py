@@ -5665,6 +5665,92 @@ def test_translate_project_skips_invalid_external_corpus_entries(tmp_path):
     assert "path must be repository-relative" in diagnostic["message"]
 
 
+def test_translate_project_skips_invalid_external_corpus_provenance(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "commit": "1" * 40,
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/"
+                            f"{'1' * 40}/simple.cgl"
+                        ),
+                    },
+                    {
+                        "id": "repo/bad-commit",
+                        "path": "bad-commit.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "commit": "ABC123",
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/ABC123/"
+                            "bad-commit.cgl"
+                        ),
+                    },
+                    {
+                        "id": "repo/bad-source-url",
+                        "path": "bad-source-url.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "commit": "2" * 40,
+                        "sourceUrl": (
+                            "https://github.com/other/project/blob/"
+                            f"{'2' * 40}/bad-source-url.cgl"
+                        ),
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["summary"]["manifestEntryCount"] == 3
+    assert external_corpus["summary"]["validEntryCount"] == 1
+    assert external_corpus["summary"]["invalidEntryCount"] == 2
+    assert [entry["id"] for entry in external_corpus["entries"]] == ["repo/simple"]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    diagnostic_messages = [
+        diagnostic["message"] for diagnostic in payload["diagnostics"]
+    ]
+    assert any(
+        "entry 2" in message
+        and "commit must be a lowercase 40-character hex digest" in message
+        for message in diagnostic_messages
+    )
+    assert any(
+        "entry 3" in message and "sourceUrl must start with repository" in message
+        for message in diagnostic_messages
+    )
+
+
 def test_translate_project_skips_duplicate_external_corpus_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -8856,6 +8942,65 @@ def test_validate_project_report_rejects_noncanonical_external_corpus_targets(
         "externalCorpus.entries[0].targets must use normalized backend names "
         "without duplicates"
     ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_malformed_external_corpus_provenance(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/simple",
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                        "repository": "https://github.com/example/project",
+                        "commit": "1" * 40,
+                        "sourceUrl": (
+                            "https://github.com/example/project/blob/"
+                            f"{'1' * 40}/simple.cgl"
+                        ),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["externalCorpus"]["entries"][0]["commit"] = "ABC123"
+    payload["externalCorpus"]["entries"][0][
+        "sourceUrl"
+    ] = "https://github.com/other/project/blob/ABC123/simple.cgl"
+    report_path = repo / "malformed-external-corpus-provenance.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.entries[0].commit must be a lowercase "
+        "40-character hex digest"
+    ) in diagnostic["message"]
+    assert (
+        "externalCorpus.entries[0].sourceUrl must start with repository"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_drive_relative_external_corpus_paths(

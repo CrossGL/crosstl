@@ -1455,6 +1455,9 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         assert "entry presence/discovery/source-backend consistency" in (
             backend_support["notes"]
         )
+        assert "commit hash and source URL provenance consistency" in (
+            backend_support["notes"]
+        )
         assert "required manifest accounting" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1486,8 +1489,17 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_skips_invalid_external_corpus_provenance"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_external_corpus_"
             "accounting"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_malformed_external_corpus_"
+            "provenance"
         ) in backend_support["evidence"]
 
 

@@ -454,6 +454,7 @@ TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 
 CROSSL_TARGETS = {"cgl", "crossgl"}
 SHA256_HEX_LENGTH = 64
+GIT_COMMIT_HEX_LENGTH = 40
 LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
 VALIDATION_ARTIFACT_STATUSES = frozenset(("ok", "failed"))
 SOURCE_HASH_VALIDATION_STATUSES = frozenset(
@@ -1610,6 +1611,24 @@ def _external_corpus_manifest_entry_reasons(entry: Any) -> list[str]:
         )
         if not valid_targets:
             reasons.append("targets must be a string or list of strings")
+
+    for field_name in ("repository", "commit", "sourceUrl"):
+        if field_name in entry and not _is_non_empty_string(entry.get(field_name)):
+            reasons.append(f"{field_name} must be a string")
+    commit = entry.get("commit")
+    if _is_non_empty_string(commit) and not _is_lowercase_hex_digest(
+        commit,
+        GIT_COMMIT_HEX_LENGTH,
+    ):
+        reasons.append("commit must be a lowercase 40-character hex digest")
+    repository = entry.get("repository")
+    source_url = entry.get("sourceUrl")
+    if (
+        _is_non_empty_string(repository)
+        and _is_non_empty_string(source_url)
+        and not _source_url_matches_repository(source_url, repository)
+    ):
+        reasons.append("sourceUrl must start with repository")
 
     return reasons
 
@@ -6033,12 +6052,20 @@ def _is_non_negative_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-def _is_sha256_digest(value: Any) -> bool:
+def _is_lowercase_hex_digest(value: Any, length: int) -> bool:
     return (
         isinstance(value, str)
-        and len(value) == SHA256_HEX_LENGTH
+        and len(value) == length
         and all(character in LOWERCASE_HEX_DIGITS for character in value)
     )
+
+
+def _is_sha256_digest(value: Any) -> bool:
+    return _is_lowercase_hex_digest(value, SHA256_HEX_LENGTH)
+
+
+def _source_url_matches_repository(source_url: str, repository: str) -> bool:
+    return source_url.startswith(f"{repository.rstrip('/')}/")
 
 
 def _hash_contract_reasons(
@@ -8954,6 +8981,20 @@ def _external_corpus_entry_contract_reasons(
     for field_name in ("repository", "commit", "sourceUrl"):
         if field_name in entry and not _is_non_empty_string(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    commit = entry.get("commit")
+    if _is_non_empty_string(commit) and not _is_lowercase_hex_digest(
+        commit,
+        GIT_COMMIT_HEX_LENGTH,
+    ):
+        reasons.append(f"{prefix}.commit must be a lowercase 40-character hex digest")
+    repository = entry.get("repository")
+    source_url = entry.get("sourceUrl")
+    if (
+        _is_non_empty_string(repository)
+        and _is_non_empty_string(source_url)
+        and not _source_url_matches_repository(source_url, repository)
+    ):
+        reasons.append(f"{prefix}.sourceUrl must start with repository")
     return reasons
 
 
