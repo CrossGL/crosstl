@@ -26017,6 +26017,159 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    @pytest.mark.parametrize("semantic", ["gl_SampleMaskIn", "SV_Coverage"])
+    def test_fragment_sample_mask_input_parameter_uses_builtin_interface(
+        self, tmp_path, semantic
+    ):
+        source_code = f"""
+        shader FragmentSampleMaskInput {{
+            fragment {{
+                vec4 main(int coverage @ {semantic}) @ SV_Target {{
+                    return vec4(float(coverage));
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        sample_mask = spirv_named_variable(
+            spv_code, "gl_SampleMaskIn", storage_class="Input"
+        )
+        color_output = spirv_named_variable(
+            spv_code, "main_return_SV_Target", storage_class="Output"
+        )
+
+        assert f"OpDecorate {sample_mask} BuiltIn SampleMask" in spv_code
+        assert f"OpDecorate {sample_mask} Location" not in spv_code
+        assert f"OpDecorate {color_output} Location 0" in spv_code
+        assert "OpCompositeExtract" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("semantic", "builtin"),
+        [
+            ("gl_BaryCoordEXT", "BaryCoordKHR"),
+            ("gl_BaryCoordNoPerspEXT", "BaryCoordNoPerspKHR"),
+        ],
+    )
+    def test_fragment_barycentric_input_parameter_uses_builtin_interface(
+        self, tmp_path, semantic, builtin
+    ):
+        source_code = f"""
+        shader FragmentBarycentricInput {{
+            fragment {{
+                vec4 main(vec3 bary @ {semantic}) @ SV_Target {{
+                    return vec4(bary, 1.0);
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        barycentric = spirv_named_variable(spv_code, semantic, storage_class="Input")
+
+        assert "OpCapability FragmentBarycentricKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_fragment_shader_barycentric"' in spv_code
+        assert f"OpDecorate {barycentric} BuiltIn {builtin}" in spv_code
+        assert f"OpDecorate {barycentric} Location" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    @pytest.mark.parametrize("semantic", ["gl_SampleMask", "SV_Coverage"])
+    def test_fragment_sample_mask_output_uses_builtin_interface(
+        self, tmp_path, semantic
+    ):
+        source_code = f"""
+        shader FragmentSampleMaskOutput {{
+            struct FragmentOutput {{
+                int coverage @ {semantic};
+                vec4 color @ SV_Target;
+            }};
+
+            fragment {{
+                FragmentOutput main() {{
+                    FragmentOutput output;
+                    output.coverage = 1;
+                    output.color = vec4(1.0);
+                    return output;
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        sample_mask = spirv_named_variable(
+            spv_code, "gl_SampleMask", storage_class="Output"
+        )
+        color_output = spirv_named_variable(
+            spv_code, "CrossGL_fragment_output_main_color", storage_class="Output"
+        )
+
+        assert f"OpDecorate {sample_mask} BuiltIn SampleMask" in spv_code
+        assert f"OpDecorate {sample_mask} Location" not in spv_code
+        assert f"OpDecorate {color_output} Location 0" in spv_code
+        assert "OpCompositeConstruct" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_fragment_stencil_ref_output_uses_builtin_interface(self, tmp_path):
+        source_code = """
+        shader FragmentStencilRefOutput {
+            struct FragmentOutput {
+                int stencil @ gl_FragStencilRefEXT;
+                vec4 color @ SV_Target;
+            };
+
+            fragment {
+                FragmentOutput main() {
+                    FragmentOutput output;
+                    output.stencil = 7;
+                    output.color = vec4(1.0);
+                    return output;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        stencil_ref = spirv_named_variable(
+            spv_code, "gl_FragStencilRefEXT", storage_class="Output"
+        )
+        fragment_entry = re.search(
+            r'OpEntryPoint Fragment (%\d+) "main"(?P<interfaces>[^\n]*)',
+            spv_code,
+        )
+        assert fragment_entry is not None
+
+        assert "OpCapability StencilExportEXT" in spv_code
+        assert 'OpExtension "SPV_EXT_shader_stencil_export"' in spv_code
+        assert f"OpDecorate {stencil_ref} BuiltIn FragStencilRefEXT" in spv_code
+        assert f"OpDecorate {stencil_ref} Location" not in spv_code
+        assert (
+            f"OpExecutionMode {fragment_entry.group(1)} StencilRefReplacingEXT"
+            in spv_code
+        )
+        assert stencil_ref in fragment_entry.group("interfaces").split()
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_direct_return_semantics_lower_fragment_color_to_location_output(
         self, tmp_path
     ):

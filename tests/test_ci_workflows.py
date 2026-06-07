@@ -1648,7 +1648,7 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     )
     assert _matrix_values(backend_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
-    _assert_windows_legacy_python_uses_windows_2022_runner(backend_tests)
+    _assert_windows_legacy_python_is_excluded(backend_tests)
     assert "fail-fast: false" in backend_tests
     assert "max-parallel: 24" in backend_tests
     assert "id: setup_python" in backend_tests
@@ -1695,7 +1695,7 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "component") == expected_components
     assert _matrix_values(translator_tests, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
-    _assert_windows_legacy_python_uses_windows_2022_runner(translator_tests)
+    _assert_windows_legacy_python_is_excluded(translator_tests)
     assert "fail-fast: false" in translator_tests
     assert "max-parallel: 24" in translator_tests
     assert "id: setup_python" in translator_tests

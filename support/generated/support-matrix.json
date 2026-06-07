@@ -379,7 +379,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 34,
+        "unsupported_marker_count": 36,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -455,11 +455,11 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} {context} for SPIR-V {stage_name} stage; \""
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} return semantic for SPIR-V codegen; \""
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           }
         ]
       },
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 916
+        "test_count": 920
       },
       "translator_codegen": {
         "exists": true,
