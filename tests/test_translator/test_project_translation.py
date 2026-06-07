@@ -10459,6 +10459,70 @@ def test_validate_project_report_rejects_noncanonical_migration_action_targets(
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_empty_migration_action_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    actions = [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": "Review host runtime integration.",
+            "targets": [],
+        }
+    ]
+    payload["migration"].update(project_pipeline._migration_action_rollups(actions))
+    payload["migration"]["actions"] = actions
+    report_path = repo / "out" / "empty-migration-target-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "migration.actions[0].targets must not be empty" in (diagnostic["message"])
+
+
+def test_validate_project_report_rejects_migration_actions_without_translated_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(
+        repo,
+        targets=["cgl", "not-a-backend"],
+        output_dir="out",
+    ).to_json()
+    actions = [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": "Review host runtime integration.",
+            "targets": ["cgl", "not-a-backend"],
+        }
+    ]
+    payload["migration"].update(project_pipeline._migration_action_rollups(actions))
+    payload["migration"]["actions"] = actions
+    report_path = repo / "out" / "stale-migration-target-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.validate.invalid-report"
+    )
+    assert (
+        "migration.actions[0].targets must reference translated artifact targets"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_altered_migration_non_goals(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -13126,7 +13190,7 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
     assert "Migration actions by severity: note=1" in result.stdout
     assert "Migration actions by target: cgl=1" in result.stdout
     assert "Migration actions:" in result.stdout
-    assert "- manual-runtime-integration:" in result.stdout
+    assert "- manual-runtime-integration [targets: cgl]:" in result.stdout
     assert "CrossTL translated shader/kernel source artifacts only" in result.stdout
     assert (
         "review host runtime API calls, resource binding setup, build scripts, "
@@ -13155,12 +13219,14 @@ def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp
 
     assert result.returncode == 0
     assert "Migration actions by kind: manual-runtime-integration=21" in result.stdout
-    assert "- manual-runtime-integration: Review host integration task 0." in (
-        result.stdout
-    )
-    assert "- manual-runtime-integration: Review host integration task 19." in (
-        result.stdout
-    )
+    assert (
+        "- manual-runtime-integration [targets: cgl]: "
+        "Review host integration task 0."
+    ) in (result.stdout)
+    assert (
+        "- manual-runtime-integration [targets: cgl]: "
+        "Review host integration task 19."
+    ) in (result.stdout)
     assert "Review host integration task 20." not in result.stdout
     assert "- +1 more" in result.stdout
 

@@ -311,8 +311,8 @@ def test_project_report_inspection_documents_rollups():
         assert "skipped source-override" in backend_support["notes"]
         assert (
             "migration scope, non-goals, action count and kind, severity, and "
-            "target rollups, bounded migration action samples with truncation "
-            "metadata"
+            "target rollups, bounded migration action samples with target lists "
+            "and truncation metadata"
         ) in backend_support["notes"]
 
 
@@ -331,11 +331,16 @@ def test_project_migration_actions_are_first_class_support_feature():
     for backend_support in feature["support"].values():
         assert backend_support["status"] == "supported"
         assert "noncanonical or duplicate action targets" in backend_support["notes"]
+        assert "empty action targets" in backend_support["notes"]
+        assert "action targets without translated artifacts" in (
+            backend_support["notes"]
+        )
         assert "action count and kind, severity, and target rollups" in (
             backend_support["notes"]
         )
-        assert "bounded inspection samples with truncation metadata" in (
-            backend_support["notes"]
+        assert (
+            "bounded inspection samples with target lists and truncation metadata"
+            in (backend_support["notes"])
         )
         assert "missing or altered action rollups" in backend_support["notes"]
         assert "shader/kernel source translation from host runtime APIs" in (
@@ -354,6 +359,15 @@ def test_project_migration_actions_are_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_noncanonical_migration_action_"
             "targets"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_empty_migration_action_targets"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_migration_actions_without_"
+            "translated_targets"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -995,7 +1009,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
     for backend_support in feature["support"].values():
         assert (
             "migration scope, non-goals, required action count and kind, "
-            "severity, and target rollups, and canonical target declarations"
+            "severity, and target rollups, non-empty action targets, "
+            "translated artifact target references, and canonical target "
+            "declarations"
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]

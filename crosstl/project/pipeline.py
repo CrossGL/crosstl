@@ -8890,6 +8890,18 @@ def _migration_contract_reasons(
     declared_targets = (
         set(_normalized_targets(project_targets)) if project_targets_valid else set()
     )
+    artifacts = report.get("artifacts")
+    translated_artifact_targets = None
+    if isinstance(artifacts, list) and artifacts:
+        translated_artifact_targets = {
+            artifact.get("target")
+            for artifact in artifacts
+            if (
+                isinstance(artifact, Mapping)
+                and artifact.get("status") == "translated"
+                and _is_non_empty_string(artifact.get("target"))
+            )
+        }
     if migration.get("scope") != REPORT_MIGRATION_SCOPE:
         reasons.append(f"migration.scope must be {REPORT_MIGRATION_SCOPE}")
     non_goal_reasons = _string_list_contract_reasons(
@@ -8936,6 +8948,9 @@ def _migration_contract_reasons(
             reasons.extend(target_reasons)
             action_targets = action.get("targets")
             if not target_reasons:
+                if not action_targets:
+                    reasons.append(f"{prefix}.targets must not be empty")
+                    continue
                 normalized_action_targets = _normalized_targets(action_targets)
                 if normalized_action_targets != action_targets:
                     reasons.append(
@@ -8947,6 +8962,14 @@ def _migration_contract_reasons(
                         if target not in declared_targets:
                             reasons.append(
                                 f"{prefix}.targets must be listed in project.targets"
+                            )
+                            break
+                if translated_artifact_targets is not None:
+                    for target in normalized_action_targets:
+                        if target not in translated_artifact_targets:
+                            reasons.append(
+                                f"{prefix}.targets must reference translated "
+                                "artifact targets"
                             )
                             break
         rollups = _migration_action_rollups(actions)

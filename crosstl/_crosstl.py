@@ -2355,8 +2355,16 @@ def _format_project_report_inspection(payload):
         for action in actions:
             if not isinstance(action, Mapping):
                 continue
+            targets = action.get("targets")
+            target_suffix = ""
+            if isinstance(targets, list):
+                target_names = [target for target in targets if isinstance(target, str)]
+                if target_names:
+                    target_suffix = f" [targets: {', '.join(target_names)}]"
             lines.append(
-                "- " f"{action.get('kind', 'unknown')}: " f"{action.get('message', '')}"
+                "- "
+                f"{action.get('kind', 'unknown')}{target_suffix}: "
+                f"{action.get('message', '')}"
             )
         truncated_actions = migration.get("truncatedActionCount", 0)
         if (
