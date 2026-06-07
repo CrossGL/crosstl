@@ -2530,6 +2530,8 @@ class MetalParser:
             return BlockNode(self.parse_block())
         if self.is_statement_expression_block_start():
             return self.parse_statement_expression_block()
+        if self.current_token[0] == "ENUM":
+            return self.parse_enum()
         if self.is_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         elif self.current_token[0] == "IF":

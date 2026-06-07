@@ -237,6 +237,39 @@ def test_glsl_layout_qualifiers_and_uniform_blocks_from_libretro_shader():
     ]
 
 
+def test_glsl_storage_buffer_block_from_allow_glsl_parsing():
+    code = """
+    buffer MyBlockName {
+        vec4 result;
+    } outputBuffer;
+
+    void main() {
+        outputBuffer.result = vec4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    block = ast.cbuffers[0]
+    instance = block.instances[0]
+    assignment = find_function(ast, "main").body[0]
+
+    assert block.name == "MyBlockName"
+    assert block.glsl_block_kind == "buffer"
+    assert block.qualifiers == ["buffer"]
+    assert [(member.vtype, member.name) for member in block.members] == [
+        ("vec4", "result")
+    ]
+    assert (instance.vtype, instance.name, instance.glsl_block_kind) == (
+        "MyBlockName",
+        "outputBuffer",
+        "buffer",
+    )
+    assert isinstance(assignment.left, MemberAccessNode)
+    assert assignment.left.object.name == "outputBuffer"
+    assert assignment.left.member == "result"
+
+
 def test_struct_array_member_declarator_parsing():
     code = """
     struct Cluster {

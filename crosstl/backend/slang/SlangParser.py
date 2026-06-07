@@ -216,9 +216,9 @@ class SlangParser:
                 extensions.append(self.parse_extension())
             elif declaration_token in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
-            elif self.is_glsl_uniform_block_declaration_start():
+            elif self.is_glsl_interface_block_declaration_start():
                 cbuffers.append(
-                    self.parse_glsl_uniform_block(attributes=pending_attributes)
+                    self.parse_glsl_interface_block(attributes=pending_attributes)
                 )
             elif self.is_standalone_layout_declaration_start():
                 self.skip_semicolon_terminated_declaration()
@@ -1144,16 +1144,17 @@ class SlangParser:
         node.buffer_kind = buffer_kind
         return node
 
-    def is_glsl_uniform_block_declaration_start(self):
+    def is_glsl_interface_block_declaration_start(self, allowed_block_kinds=None):
+        allowed_block_kinds = allowed_block_kinds or {"uniform", "buffer"}
         current_pos = self.pos
-        saw_uniform = False
+        block_kind = None
         while current_pos < len(self.tokens):
             if self.is_layout_qualifier_at(current_pos):
                 current_pos = self.skip_layout_qualifier_tokens(current_pos)
                 continue
             token_type, token_value = self.tokens[current_pos]
-            if token_type == "IDENTIFIER" and token_value == "uniform":
-                saw_uniform = True
+            if token_type == "IDENTIFIER" and token_value in allowed_block_kinds:
+                block_kind = token_value
                 current_pos += 1
                 continue
             if self.is_qualifier_token_at(current_pos):
@@ -1161,15 +1162,23 @@ class SlangParser:
                 continue
             break
 
-        if not saw_uniform or current_pos + 1 >= len(self.tokens):
+        if block_kind is None or current_pos + 1 >= len(self.tokens):
             return False
         if self.tokens[current_pos][0] not in self.TYPE_NAME_TOKENS:
             return False
         return self.tokens[current_pos + 1][0] == "LBRACE"
 
-    def parse_glsl_uniform_block(self, attributes=None):
+    def is_glsl_uniform_block_declaration_start(self):
+        return self.is_glsl_interface_block_declaration_start({"uniform"})
+
+    def parse_glsl_interface_block(self, attributes=None):
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
+        block_kind = "uniform" if "uniform" in qualifiers else None
+        if self.current_token == ("IDENTIFIER", "buffer"):
+            block_kind = "buffer"
+            qualifiers.append("buffer")
+            self.eat("IDENTIFIER")
         name = self.parse_type_name()
         self.eat("LBRACE")
         members = []
@@ -1188,6 +1197,7 @@ class SlangParser:
                     qualifiers=qualifiers,
                     array_sizes=self.parse_array_suffixes(),
                     attributes=attributes,
+                    glsl_block_kind=block_kind,
                 )
             )
             if self.current_token[0] != "COMMA":
@@ -1201,7 +1211,11 @@ class SlangParser:
         node.qualifiers = qualifiers
         node.attributes = attributes
         node.instances = instances
+        node.glsl_block_kind = block_kind
         return node
+
+    def parse_glsl_uniform_block(self, attributes=None):
+        return self.parse_glsl_interface_block(attributes=attributes)
 
     def parse_global_variable(self, attributes=None):
         attributes = attributes or []

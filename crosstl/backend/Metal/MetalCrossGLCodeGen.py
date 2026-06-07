@@ -1656,6 +1656,8 @@ class MetalToCrossGLConverter:
                     code += f"static_assert({cond}, {msg});\n"
                 else:
                     code += f"static_assert({cond});\n"
+            elif isinstance(stmt, EnumNode):
+                code += self.generate_local_enum(stmt, indent, is_main)
             elif isinstance(stmt, str):
                 code += f"{stmt};\n"
             else:
@@ -1664,6 +1666,17 @@ class MetalToCrossGLConverter:
                     code += f"{expr};\n"
                 else:
                     code += f"// Unhandled statement type: {type(stmt).__name__}\n"
+        return code
+
+    def generate_local_enum(self, enum, indent, is_main):
+        enum_name = enum.name or "MetalAnonymousEnum"
+        code = f"enum {enum_name} {{\n"
+        for member_name, member_value in enum.members:
+            code += "    " * (indent + 1) + member_name
+            if member_value is not None:
+                code += f" = {self.generate_expression(member_value, is_main)}"
+            code += ",\n"
+        code += "    " * indent + "};\n"
         return code
 
     def generate_for_loop(self, node, indent, is_main):

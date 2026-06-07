@@ -714,6 +714,8 @@ class SlangToCrossGLConverter:
             declaration = node.left if isinstance(node, AssignmentNode) else node
             if isinstance(declaration, VariableNode):
                 self.register_identifier_declaration(declaration)
+        for instance in self.glsl_block_instances(ast):
+            self.register_identifier_declaration(instance)
 
     def push_identifier_scope(self):
         self.identifier_rename_scopes.append({})
@@ -845,6 +847,9 @@ class SlangToCrossGLConverter:
         code = ""
         for node in ast.cbuffers:
             if isinstance(node, StructNode):
+                if self.is_glsl_storage_block(node):
+                    code += self.generate_glsl_storage_block(node)
+                    continue
                 metadata = self.format_variable_metadata(node)
                 code += f"    cbuffer {node.name}{metadata} {{\n"
                 for member in node.members:
@@ -854,6 +859,18 @@ class SlangToCrossGLConverter:
                         f"{self.format_array_suffixes(member)};\n"
                     )
                 code += "    }\n"
+        return code
+
+    def is_glsl_storage_block(self, node):
+        return getattr(node, "glsl_block_kind", None) == "buffer"
+
+    def generate_glsl_storage_block(self, node):
+        code = f"    struct {node.name} {{\n"
+        for member in node.members:
+            code += f"        {self.generate_struct_member(node, member)};\n"
+        code += "    }\n"
+        for instance in getattr(node, "instances", []) or []:
+            code += f"    {self.generate_variable_declaration(instance)};\n"
         return code
 
     def generate_function(self, func, indent=1):
@@ -1251,6 +1268,10 @@ class SlangToCrossGLConverter:
                 elif name == "push_constant":
                     append_metadata("push_constant", "@push_constant")
 
+        if getattr(node, "glsl_block_kind", None) == "buffer":
+            layout = self.glsl_buffer_block_layout(node)
+            append_metadata("glsl_buffer_block", f"@glsl_buffer_block({layout})")
+
         for attribute in getattr(node, "attributes", []) or []:
             name = str(attribute.get("name", "")).lower()
             arguments = attribute.get("arguments", [])
@@ -1273,6 +1294,13 @@ class SlangToCrossGLConverter:
         if not metadata:
             return ""
         return " " + " ".join(metadata)
+
+    def glsl_buffer_block_layout(self, node):
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            for name, _value in self.layout_metadata_entries(qualifier):
+                if name in {"std140", "std430", "scalar"}:
+                    return name
+        return "std430"
 
     def layout_metadata_entries(self, qualifier):
         text = str(qualifier).strip()
@@ -1740,12 +1768,24 @@ class SlangToCrossGLConverter:
             vtype = getattr(declaration, "vtype", None)
             if name is not None and vtype:
                 variables[name] = vtype
+        for instance in self.glsl_block_instances(ast):
+            name = getattr(instance, "name", None)
+            vtype = getattr(instance, "vtype", None)
+            if name is not None and vtype:
+                variables[name] = vtype
         return variables
+
+    def glsl_block_instances(self, ast):
+        for block in getattr(ast, "cbuffers", []) or []:
+            yield from getattr(block, "instances", []) or []
 
     def collect_struct_member_types(self, ast):
         structs = {}
         for struct in getattr(ast, "structs", []) or []:
             self.collect_struct_member_types_from_node(struct, structs)
+        for cbuffer in getattr(ast, "cbuffers", []) or []:
+            if isinstance(cbuffer, StructNode):
+                self.collect_struct_member_types_from_node(cbuffer, structs)
         for export in getattr(ast, "exports", []) or []:
             item = getattr(export, "item", None)
             if isinstance(item, StructNode):

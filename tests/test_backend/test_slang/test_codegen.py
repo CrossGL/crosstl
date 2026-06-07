@@ -1746,6 +1746,28 @@ def test_resource_binding_metadata_round_trips_to_crossgl_attributes():
     assert "sampler linearSampler @register(s4);" in generated_code
 
 
+def test_glsl_storage_buffer_block_from_allow_glsl_codegen():
+    code = """
+    buffer MyBlockName {
+        vec4 result;
+    } outputBuffer;
+
+    void main() {
+        outputBuffer.result = vec4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct MyBlockName {" in generated_code
+    assert "vec4 result;" in generated_code
+    assert "MyBlockName outputBuffer @glsl_buffer_block(std430);" in generated_code
+    assert "outputBuffer.result = vec4(1.0);" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_standalone_layout_declarations_from_first_slang_shader_docs_codegen():
     code = """
     layout(row_major) uniform;

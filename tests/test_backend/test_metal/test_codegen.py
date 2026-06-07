@@ -3044,6 +3044,25 @@ def test_codegen_enum_and_typedef():
     assert "enum Mode" in result
 
 
+def test_codegen_local_enum_declaration_from_metal_function_body():
+    code = """
+    fragment float4 local_enum_frag(float4 color [[stage_in]]) {
+        enum Mode { ModeA = 0, ModeB = 1 };
+        Mode mode = ModeA;
+        return mode == ModeA ? color : float4(0.0);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "enum Mode {" in crossgl
+    assert "ModeA = 0" in crossgl
+    assert "ModeB = 1" in crossgl
+    assert "Mode mode = ModeA;" in crossgl
+    assert "return mode == ModeA ? color : vec4(0.0);" in crossgl
+    assert "Unhandled statement type: EnumNode" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_anonymous_enum_uses_synthetic_name_from_metal_base_effect():
     code = """
     enum {

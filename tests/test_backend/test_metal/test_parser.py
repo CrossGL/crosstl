@@ -21,7 +21,7 @@ from crosstl.backend.common_ast import (
     VectorConstructorNode,
     WhileNode,
 )
-from crosstl.backend.Metal.MetalAst import BlockNode, LambdaNode
+from crosstl.backend.Metal.MetalAst import BlockNode, EnumNode, LambdaNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -1081,6 +1081,28 @@ def test_parse_enum_and_typedef():
     }
     """
     parse_ok(code)
+
+
+def test_parse_local_enum_declaration_from_metal_function_body():
+    code = """
+    fragment float4 local_enum_frag(float4 color [[stage_in]]) {
+        enum Mode { ModeA = 0, ModeB = 1 };
+        Mode mode = ModeA;
+        return mode == ModeA ? color : float4(0.0);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+    local_enum = function.body[0]
+    mode_declaration = function.body[1]
+
+    assert isinstance(local_enum, EnumNode)
+    assert local_enum.name == "Mode"
+    assert local_enum.members == [("ModeA", "0"), ("ModeB", "1")]
+    assert isinstance(mode_declaration, AssignmentNode)
+    assert mode_declaration.left.vtype == "Mode"
+    assert mode_declaration.left.name == "mode"
+    assert mode_declaration.right.name == "ModeA"
 
 
 def test_parse_scoped_enum_with_underlying_type_from_metal4_basics():
