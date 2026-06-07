@@ -438,6 +438,9 @@ class HLSLToCrossGLConverter:
         self.integer_constant_values = {}
         self.suppress_storage_image_index_lowering = False
         self.function_identifier_renames = {}
+        self.legacy_sampler_bindings = {}
+        self.legacy_sampler_declaration_ids = set()
+        self.legacy_bound_texture_types = {}
 
     @staticmethod
     def minimum_precision_type_map():
@@ -1292,7 +1295,13 @@ class HLSLToCrossGLConverter:
         if expected_sampler_types is None or not raw_args:
             return None
 
+        rendered_args = list(rendered_args)
         sampler_type = self.raw_type_base(self.expression_raw_type(raw_args[0]))
+        bound_texture = self.legacy_sampler_bound_texture(raw_args[0])
+        if bound_texture is not None:
+            sampler_type = self.legacy_texture_function_bound_sampler_type(func_name)
+            rendered_args[0] = self.generate_expression(bound_texture, is_main)
+
         if sampler_type not in expected_sampler_types:
             return None
 
@@ -1310,6 +1319,23 @@ class HLSLToCrossGLConverter:
             return f"textureGrad({', '.join(rendered_args)})"
 
         return None
+
+    def legacy_texture_function_bound_sampler_type(self, func_name):
+        return {
+            "tex1D": "sampler1D",
+            "tex2D": "sampler2D",
+            "tex2Dlod": "sampler2D",
+            "tex2Dbias": "sampler2D",
+            "tex2Dgrad": "sampler2D",
+            "tex3D": "sampler3D",
+            "texCUBE": "samplerCube",
+        }.get(func_name)
+
+    def legacy_sampler_bound_texture(self, expr):
+        sampler_name = self.expression_base_name(expr)
+        if not sampler_name:
+            return None
+        return self.legacy_sampler_bindings.get(sampler_name)
 
     def legacy_texture_packed_2d_coord_and_w(
         self, coord_arg, rendered_coord, is_main=False
@@ -2711,6 +2737,12 @@ class HLSLToCrossGLConverter:
         return shadow_names
 
     def map_variable_type(self, node):
+        legacy_texture_type = self.legacy_bound_texture_types.get(
+            getattr(node, "name", None)
+        )
+        if legacy_texture_type:
+            return legacy_texture_type
+
         hlsl_type = getattr(node, "vtype", None)
         if id(node) not in self.shadow_texture_declaration_ids:
             return self.map_type(hlsl_type)
@@ -2741,6 +2773,11 @@ class HLSLToCrossGLConverter:
         self.struct_member_array_dims = self.collect_struct_member_array_dims(
             ast.structs
         )
+        (
+            self.legacy_sampler_bindings,
+            self.legacy_sampler_declaration_ids,
+        ) = self.collect_legacy_sampler_bindings(ast)
+        self.legacy_bound_texture_types = self.collect_legacy_bound_texture_types(ast)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
@@ -2848,6 +2885,53 @@ class HLSLToCrossGLConverter:
             declarations.extend(getattr(struct, "variable_declarations", []) or [])
         return declarations
 
+    def is_legacy_sampler_declaration(self, node):
+        return self.raw_type_base(getattr(node, "vtype", None)) in {
+            "sampler",
+            "sampler_state",
+        }
+
+    def sampler_state_texture_value(self, node):
+        if not self.is_legacy_sampler_declaration(node):
+            return None
+        for state_name, state_value in getattr(node, "sampler_state", []) or []:
+            if str(state_name).lower() == "texture":
+                return state_value
+        return None
+
+    def collect_legacy_sampler_bindings(self, ast):
+        bindings = {}
+        declaration_ids = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            sampler_name = getattr(node, "name", None)
+            texture_value = self.sampler_state_texture_value(node)
+            if sampler_name and texture_value is not None:
+                bindings[sampler_name] = texture_value
+                declaration_ids.add(id(node))
+        return bindings, declaration_ids
+
+    def collect_legacy_bound_texture_types(self, root):
+        texture_types = {}
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, FunctionCallNode) and isinstance(node.name, str):
+                func_name = self.normalize_hlsl_intrinsic_name(node.name)
+                sampler_type = self.legacy_texture_function_bound_sampler_type(
+                    func_name
+                )
+                if sampler_type and getattr(node, "args", None):
+                    texture_expr = self.legacy_sampler_bound_texture(node.args[0])
+                    texture_name = self.expression_base_name(texture_expr)
+                    if texture_name:
+                        texture_types.setdefault(texture_name, sampler_type)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return texture_types
+
     def collect_integer_constant_values(self, ast):
         constants = {}
         for node in getattr(ast, "global_variables", []) or []:
@@ -2924,6 +3008,8 @@ class HLSLToCrossGLConverter:
         self.record_variable_type(
             node, self.global_variable_types, self.global_resource_array_dims
         )
+        if id(node) in self.legacy_sampler_declaration_ids:
+            return ""
         code = self.format_attributes(getattr(node, "attributes", []), 1)
         code += self.format_resource_qualifier_attributes(node, 1)
         code += self.format_binding_attributes(node, 1)

@@ -594,6 +594,33 @@ def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
 
 
+def test_codegen_legacy_d3d9_fx_sampler_state_binding_imports_bound_texture_call():
+    hlsl = textwrap.dedent("""
+        texture g_MeshTexture;
+        sampler MeshTextureSampler = sampler_state {
+            Texture = <g_MeshTexture>;
+        };
+
+        float4 PS(float2 uv : TEXCOORD0) : COLOR0 {
+            return tex2D(MeshTextureSampler, uv);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "sampler2D g_MeshTexture;" in crossgl
+    assert "return texture(g_MeshTexture, uv);" in crossgl
+    assert "sampler MeshTextureSampler" not in crossgl
+    assert "sampler_state" not in crossgl
+    assert "tex2D(" not in crossgl
+
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D g_MeshTexture" in regenerated_hlsl
+    assert "SamplerState g_MeshTextureSampler" in regenerated_hlsl
+    assert "g_MeshTexture.Sample(g_MeshTextureSampler, uv)" in regenerated_hlsl
+
+
 def test_codegen_legacy_texcube_from_microsoft_docs_imports_canonical_texture_call():
     # Source: Microsoft Learn "Writing HLSL Shaders in Direct3D 9",
     # Samplers and Texture Objects cube sampling example.

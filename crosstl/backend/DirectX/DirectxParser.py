@@ -2585,6 +2585,8 @@ class HLSLParser:
         sampler_state = None
         if self.is_sampler_state_type(vtype) and self.current_token[0] == "LBRACE":
             sampler_state = self.parse_sampler_state_block()
+            if self.is_sampler_state_initializer(value):
+                value = None
         elif self.current_token[0] == "LBRACE":
             self.skip_balanced_brace_block()
 
@@ -2649,7 +2651,12 @@ class HLSLParser:
         return str(vtype).split("<", 1)[0] in {
             "SamplerState",
             "SamplerComparisonState",
+            "sampler",
+            "sampler_state",
         }
+
+    def is_sampler_state_initializer(self, value):
+        return isinstance(value, str) and value.lower() == "sampler_state"
 
     def parse_sampler_state_block(self):
         self.eat("LBRACE")
@@ -2658,11 +2665,40 @@ class HLSLParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("EQUALS")
-            value = self.parse_expression()
+            value = self.parse_sampler_state_value()
             self.eat("SEMICOLON")
             state.append((name, value))
         self.eat("RBRACE")
         return state
+
+    def parse_sampler_state_value(self):
+        if self.current_token[0] == "LESS_THAN":
+            return self.parse_sampler_state_angle_value()
+        return self.parse_expression()
+
+    def parse_sampler_state_angle_value(self):
+        self.eat("LESS_THAN")
+        tokens = []
+        depth = 1
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LESS_THAN":
+                depth += 1
+                tokens.append(self.current_token)
+                self.eat("LESS_THAN")
+                continue
+            if token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("GREATER_THAN")
+                    return self.format_generic_argument_tokens(tokens)
+                tokens.append(self.current_token)
+                self.eat("GREATER_THAN")
+                continue
+            tokens.append(self.current_token)
+            self.eat(token_type)
+
+        raise SyntaxError("Unterminated sampler_state angle-bracket value")
 
     def parse_condition_expression(self):
         if self.looks_like_declaration():

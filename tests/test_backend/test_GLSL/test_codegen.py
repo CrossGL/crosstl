@@ -2007,6 +2007,35 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
     parse_crossgl(crossgl)
 
 
+def test_codegen_arrayed_descriptor_uniform_block_preserves_instance_metadata():
+    code = textwrap.dedent("""
+        #version 450
+        struct Foo { vec4 v; };
+        layout(set = 2, binding = 4) uniform UBO { Foo foo; } ubos[2];
+        layout(location = 0) out vec4 FragColor;
+
+        void main() {
+            FragColor = ubos[1].foo.v;
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct UBO" in crossgl
+    assert "Foo foo;" in crossgl
+    assert "uniform UBO ubos[2] @set(2) @binding(4);" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "ubos[1].foo.v" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "uniform UBO {" in glsl
+    assert "Foo foo;" in glsl
+    assert "} ubos[2];" in glsl
+    assert "FragColor = ubos[1].foo.v;" in glsl
+
+
 def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():
     code = textwrap.dedent("""
         #version 460 core

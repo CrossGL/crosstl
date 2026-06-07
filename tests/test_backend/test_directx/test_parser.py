@@ -1134,6 +1134,22 @@ def test_parse_sampler_state_initializer_blocks_from_microsoft_docs():
     ]
 
 
+def test_parse_legacy_d3d9_sampler_state_initializer_texture_binding():
+    code = """
+    texture g_MeshTexture;
+    sampler MeshTextureSampler = sampler_state {
+        Texture = <g_MeshTexture>;
+    };
+    """
+    ast = parse_code(code)
+    texture_decl, sampler_decl = ast.global_variables
+
+    assert texture_decl.vtype == "texture"
+    assert sampler_decl.vtype == "sampler"
+    assert sampler_decl.value is None
+    assert sampler_decl.sampler_state == [("Texture", "g_MeshTexture")]
+
+
 def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter():
     code = """
     Texture2D tex : register(t1), tex2 : register(t2)

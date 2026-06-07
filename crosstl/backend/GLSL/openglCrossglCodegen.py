@@ -1470,6 +1470,18 @@ class GLSLToCrossGLConverter:
         layout = getattr(struct, "interface_layout", None) or {}
         return "uniform" in qualifiers and self.layout_has_key(layout, "set")
 
+    def is_arrayed_descriptor_set_uniform_block_struct(self, struct):
+        return self.is_descriptor_set_uniform_block_struct(struct) and getattr(
+            struct, "interface_instance_is_array", False
+        )
+
+    def is_arrayed_descriptor_set_uniform_block(self, var):
+        if not getattr(var, "is_array", False):
+            return False
+        block_name = self.uniform_block_name(var)
+        block_struct = self.structs_by_name.get(block_name)
+        return self.is_arrayed_descriptor_set_uniform_block_struct(block_struct)
+
     def push_constant_block_name(self, var):
         return self.uniform_block_name(var)
 
@@ -1539,7 +1551,9 @@ class GLSLToCrossGLConverter:
         return result
 
     def descriptor_set_uniform_block_name(self, var):
-        if self.is_push_constant_uniform(var) or getattr(var, "is_array", False):
+        if self.is_push_constant_uniform(
+            var
+        ) or self.is_arrayed_descriptor_set_uniform_block(var):
             return None
 
         block_name = self.uniform_block_name(var)
@@ -1550,6 +1564,15 @@ class GLSLToCrossGLConverter:
         if not self.layout_has_key(layout, "set"):
             return None
         return block_name
+
+    def generate_arrayed_descriptor_set_uniform_block(self, var):
+        block_name = self.uniform_block_name(var)
+        attributes = self.descriptor_set_uniform_block_attribute_suffix(
+            block_name, [var]
+        )
+        var_type = self.convert_type(block_name)
+        array_suffix = self.array_suffix(var)
+        return f"uniform {var_type} {var.name}{array_suffix}{attributes};\n"
 
     def descriptor_set_uniform_block_attribute_suffix(self, block_name, uniforms):
         layout = self.uniform_block_layout(block_name, uniforms)
@@ -1881,9 +1904,10 @@ class GLSLToCrossGLConverter:
         for struct in self.structs_for_crossgl_output(node.structs):
             if struct.name in self.converted_ssbo_struct_names:
                 continue
-            if self.is_push_constant_interface_block_struct(
-                struct
-            ) or self.is_descriptor_set_uniform_block_struct(struct):
+            if self.is_push_constant_interface_block_struct(struct) or (
+                self.is_descriptor_set_uniform_block_struct(struct)
+                and not self.is_arrayed_descriptor_set_uniform_block_struct(struct)
+            ):
                 continue
             result += self.indent_str + self.generate_struct(struct) + "\n\n"
 
@@ -1927,11 +1951,14 @@ class GLSLToCrossGLConverter:
             ]
             push_constant_blocks = {}
             descriptor_set_uniform_blocks = {}
+            arrayed_descriptor_set_uniform_blocks = []
             ordinary_data_uniforms = []
             for uniform in data_uniforms:
                 if self.is_push_constant_uniform(uniform):
                     block_name = self.push_constant_block_name(uniform)
                     push_constant_blocks.setdefault(block_name, []).append(uniform)
+                elif self.is_arrayed_descriptor_set_uniform_block(uniform):
+                    arrayed_descriptor_set_uniform_blocks.append(uniform)
                 else:
                     block_name = self.descriptor_set_uniform_block_name(uniform)
                     if block_name:
@@ -1966,6 +1993,12 @@ class GLSLToCrossGLConverter:
             for block_name, uniforms in descriptor_set_uniform_blocks.items():
                 result += self.indent_str + self.generate_descriptor_set_uniform_block(
                     block_name, uniforms
+                )
+
+            for uniform in arrayed_descriptor_set_uniform_blocks:
+                result += (
+                    self.indent_str
+                    + self.generate_arrayed_descriptor_set_uniform_block(uniform)
                 )
 
             if ordinary_data_uniforms:
