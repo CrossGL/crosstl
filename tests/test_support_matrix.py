@@ -1040,9 +1040,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "artifact provenance summary rollups by pipeline, intermediate "
             "marker, and source backend with intermediate marker"
         ) in backend_support["notes"]
-        assert "bounded artifact provenance inspection samples" in (
-            backend_support["notes"]
-        )
+        assert (
+            "bounded direct, bridged, and combined artifact provenance "
+            "inspection samples"
+        ) in backend_support["notes"]
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]
         )
@@ -1089,6 +1090,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_inspect_project_report_applies_custom_sample_limits"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_groups_direct_and_bridged_artifact_"
+            "provenance"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

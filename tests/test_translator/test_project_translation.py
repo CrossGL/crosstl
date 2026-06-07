@@ -5204,6 +5204,94 @@ def test_translate_project_records_bridge_artifact_provenance_rollups(
     }
 
 
+def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "direct.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "shader.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.sources]
+            "*.rs" = "rust"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = inspect_project_report(report_path)
+    provenance = payload["artifactProvenance"]
+    direct_artifact = provenance["directArtifacts"][0]
+    bridged_artifact = provenance["bridgedArtifacts"][0]
+
+    assert payload["success"] is True
+    assert provenance["artifactCount"] == 2
+    assert provenance["directArtifactCount"] == 1
+    assert provenance["truncatedDirectArtifactCount"] == 0
+    assert provenance["bridgedArtifactCount"] == 1
+    assert provenance["truncatedBridgedArtifactCount"] == 0
+    assert direct_artifact["source"] == "direct.cgl"
+    assert direct_artifact["intermediate"] == "none"
+    assert bridged_artifact["source"] == "shader.rs"
+    assert bridged_artifact["intermediate"] == "crossgl"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Artifact provenance samples:" in result.stdout
+    assert "Direct artifact provenance samples:" in result.stdout
+    assert (
+        "- direct.cgl -> out/opengl/direct.glsl "
+        "(sourceBackend=cgl, target=opengl, "
+        "pipeline=single-file-translate, intermediate=none)"
+    ) in result.stdout
+    assert "Bridged artifact provenance samples:" in result.stdout
+    assert (
+        "- shader.rs -> out/opengl/shader.glsl "
+        "(sourceBackend=rust, target=opengl, "
+        "pipeline=single-file-translate, intermediate=crossgl)"
+    ) in result.stdout
+
+
 def test_translate_project_records_file_granularity_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -13551,6 +13639,21 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "intermediate": "none",
             }
         ],
+        "directArtifactCount": 1,
+        "truncatedDirectArtifactCount": 0,
+        "directArtifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "pipeline": "single-file-translate",
+                "intermediate": "none",
+            }
+        ],
+        "bridgedArtifactCount": 0,
+        "truncatedBridgedArtifactCount": 0,
+        "bridgedArtifacts": [],
     }
     assert payload["defineProcessing"] == {
         "available": True,
@@ -14033,6 +14136,12 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
     assert payload["artifactProvenance"]["artifactCount"] == 4
     assert payload["artifactProvenance"]["truncatedArtifactCount"] == 2
     assert len(payload["artifactProvenance"]["artifacts"]) == 2
+    assert payload["artifactProvenance"]["directArtifactCount"] == 4
+    assert payload["artifactProvenance"]["truncatedDirectArtifactCount"] == 2
+    assert len(payload["artifactProvenance"]["directArtifacts"]) == 2
+    assert payload["artifactProvenance"]["bridgedArtifactCount"] == 0
+    assert payload["artifactProvenance"]["truncatedBridgedArtifactCount"] == 0
+    assert payload["artifactProvenance"]["bridgedArtifacts"] == []
     assert payload["defineProcessing"]["artifactCount"] == 4
     assert payload["defineProcessing"]["truncatedArtifactCount"] == 2
     assert len(payload["defineProcessing"]["artifacts"]) == 2
@@ -14179,6 +14288,21 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "intermediate": "none",
             }
         ],
+        "directArtifactCount": 1,
+        "truncatedDirectArtifactCount": 0,
+        "directArtifacts": [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "cgl",
+                "path": "out/cgl/simple.cgl",
+                "pipeline": "single-file-translate",
+                "intermediate": "none",
+            }
+        ],
+        "bridgedArtifactCount": 0,
+        "truncatedBridgedArtifactCount": 0,
+        "bridgedArtifacts": [],
     }
     assert payload["defineProcessing"] == {
         "available": True,

@@ -1019,14 +1019,15 @@ def _format_artifact_provenance_line(artifact):
     return f"- {source} -> {path}{suffix}"
 
 
-def _format_artifact_provenance_lines(artifact_provenance):
-    if not isinstance(artifact_provenance, Mapping):
-        return []
-    artifacts = artifact_provenance.get("artifacts")
+def _format_artifact_provenance_sample_lines(
+    title,
+    artifacts,
+    truncated_count,
+):
     if not isinstance(artifacts, list) or not artifacts:
         return []
 
-    lines = ["Artifact provenance samples:"]
+    lines = [f"{title}:"]
     for artifact in artifacts:
         line = _format_artifact_provenance_line(artifact)
         if line:
@@ -1034,13 +1035,49 @@ def _format_artifact_provenance_lines(artifact_provenance):
     if len(lines) == 1:
         return []
 
-    truncated_count = artifact_provenance.get("truncatedArtifactCount")
     if (
         isinstance(truncated_count, int)
         and not isinstance(truncated_count, bool)
         and truncated_count > 0
     ):
         lines.append(f"- +{truncated_count} more")
+    return lines
+
+
+def _format_artifact_provenance_lines(artifact_provenance):
+    if not isinstance(artifact_provenance, Mapping):
+        return []
+
+    lines = _format_artifact_provenance_sample_lines(
+        "Artifact provenance samples",
+        artifact_provenance.get("artifacts"),
+        artifact_provenance.get("truncatedArtifactCount"),
+    )
+
+    direct_count = artifact_provenance.get("directArtifactCount")
+    bridged_count = artifact_provenance.get("bridgedArtifactCount")
+    if (
+        isinstance(direct_count, int)
+        and not isinstance(direct_count, bool)
+        and direct_count > 0
+        and isinstance(bridged_count, int)
+        and not isinstance(bridged_count, bool)
+        and bridged_count > 0
+    ):
+        lines.extend(
+            _format_artifact_provenance_sample_lines(
+                "Direct artifact provenance samples",
+                artifact_provenance.get("directArtifacts"),
+                artifact_provenance.get("truncatedDirectArtifactCount"),
+            )
+        )
+        lines.extend(
+            _format_artifact_provenance_sample_lines(
+                "Bridged artifact provenance samples",
+                artifact_provenance.get("bridgedArtifacts"),
+                artifact_provenance.get("truncatedBridgedArtifactCount"),
+            )
+        )
     return lines
 
 

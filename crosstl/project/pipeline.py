@@ -5811,6 +5811,19 @@ def _inspection_artifact_provenance_artifact(
     return {key: value for key, value in sample.items() if value is not None}
 
 
+def _is_direct_artifact_provenance_sample(sample: Mapping[str, Any]) -> bool:
+    return sample.get("intermediate") == "none"
+
+
+def _is_bridged_artifact_provenance_sample(sample: Mapping[str, Any]) -> bool:
+    intermediate = sample.get("intermediate")
+    return (
+        isinstance(intermediate, str)
+        and intermediate != "none"
+        and intermediate != "unknown"
+    )
+
+
 def _inspection_artifact_provenance_summary(
     summary: Any,
     artifacts: Any = None,
@@ -5837,6 +5850,17 @@ def _inspection_artifact_provenance_summary(
         if sample:
             provenance_artifacts.append(sample)
 
+    direct_artifacts = [
+        artifact
+        for artifact in provenance_artifacts
+        if _is_direct_artifact_provenance_sample(artifact)
+    ]
+    bridged_artifacts = [
+        artifact
+        for artifact in provenance_artifacts
+        if _is_bridged_artifact_provenance_sample(artifact)
+    ]
+
     return {
         "available": True,
         "byPipeline": dict(by_pipeline),
@@ -5856,6 +5880,18 @@ def _inspection_artifact_provenance_summary(
             len(provenance_artifacts) - sample_limit,
         ),
         "artifacts": provenance_artifacts[:sample_limit],
+        "directArtifactCount": len(direct_artifacts),
+        "truncatedDirectArtifactCount": max(
+            0,
+            len(direct_artifacts) - sample_limit,
+        ),
+        "directArtifacts": direct_artifacts[:sample_limit],
+        "bridgedArtifactCount": len(bridged_artifacts),
+        "truncatedBridgedArtifactCount": max(
+            0,
+            len(bridged_artifacts) - sample_limit,
+        ),
+        "bridgedArtifacts": bridged_artifacts[:sample_limit],
     }
 
 
