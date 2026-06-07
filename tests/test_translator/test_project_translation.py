@@ -1078,6 +1078,88 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
     ]
 
 
+def test_scan_project_reports_nested_include_read_failures(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    nested_dir = shader_dir / "include"
+    nested_dir.mkdir(parents=True)
+    material_path = nested_dir / "material.inc"
+    material_path.write_text(
+        '#include "constants.inc"\nvec4 material_color();\n',
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "include/material.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    config = load_project_config(repo)
+    original_read_text = Path.read_text
+    unreadable_path = material_path.resolve()
+
+    def read_text_or_fail(path, *args, **kwargs):
+        if path.resolve() == unreadable_path:
+            raise OSError("permission denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text_or_fail)
+
+    report = scan_project(config).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "include/material.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "shaders/include/material.inc",
+            "resolvedHash": project_pipeline._source_hash(material_path),
+            "resolvedFrom": "source",
+        }
+    ]
+    assert payload["summary"]["includeDependencyCount"] == 1
+    assert payload["summary"]["includeDependenciesByKind"] == {"local": 1}
+    assert payload["summary"]["includeDependenciesByStatus"] == {"resolved": 1}
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {"source": 1}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.include-read-failed": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 1}
+    assert validation["diagnosticsByCode"] == {"project.scan.include-read-failed": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic == {
+        "severity": "warning",
+        "code": "project.scan.include-read-failed",
+        "message": (
+            "Could not scan include directives in shaders/include/material.inc: "
+            "permission denied"
+        ),
+        "location": {
+            "file": "shaders/include/material.inc",
+            "line": 1,
+            "column": 1,
+            "offset": 0,
+            "length": 0,
+            "endLine": 1,
+            "endColumn": 1,
+            "endOffset": 0,
+        },
+        "missingCapabilities": ["include.resolution"],
+    }
+
+
 def test_scan_project_reports_nested_include_cycles(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

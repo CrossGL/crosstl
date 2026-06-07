@@ -324,6 +324,9 @@ Resolved include files are scanned recursively for additional dependencies.
 Nested dependency records keep ``source`` when the directive came from a
 resolved include file rather than the root translation unit, so diagnostics and
 inspection output can point to the include file that introduced the dependency.
+If a resolved nested include cannot be read, the already discovered dependency
+is kept and project scan emits ``project.scan.include-read-failed`` with
+``include.resolution`` capability metadata.
 Unresolved system includes are recorded without warning because they often
 refer to SDK or toolchain headers. Missing local includes, dynamic include
 expressions, and include paths that resolve outside the repository emit
