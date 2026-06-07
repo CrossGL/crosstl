@@ -15,6 +15,84 @@ rewrite host runtime code, application build systems, resource binding setup, or
 framework-specific backend integration. Those migration steps are reported as
 manual follow-up work in the portability report.
 
+Porting Workflow
+----------------
+
+Use the project pipeline as an audit-first migration workflow:
+
+1. Start with a scan-only report to confirm discovery, source backend
+   detection, configured targets, include directories, source overrides, and
+   diagnostics before writing translated artifacts.
+2. Add or refine ``crosstl.toml`` so repository-relative source roots,
+   include/exclude patterns, source overrides, include directories, defines,
+   named variants, output directory, targets, and optional external corpus
+   manifest are explicit.
+3. Run ``translate-project`` into a separate output directory and keep the
+   generated portability report with the translated artifacts.
+4. Run ``validate-project`` on the generated report. Use the JSON output for
+   automation, text output for local triage, or SARIF output for code-scanning
+   systems.
+5. Run ``inspect-report`` when the raw report is too large to review directly.
+   The inspection output keeps bounded samples for diagnostics, failed
+   artifacts, source maps, source remaps, validation records, external corpus
+   entries, and migration actions.
+6. Treat ``migration`` actions as manual host-integration work. They identify
+   runtime API, resource binding, build-system, and backend framework review
+   that remains outside shader/kernel source translation.
+
+A typical first pass looks like:
+
+.. code-block:: bash
+
+   python -m crosstl._crosstl scan /path/to/repo \
+     --target metal \
+     --target opengl \
+     --output scan-report.json
+
+   python -m crosstl._crosstl translate-project /path/to/repo \
+     --target metal \
+     --target opengl \
+     --output-dir crosstl-out \
+     --report crosstl-out/portability-report.json
+
+   python -m crosstl._crosstl validate-project \
+     crosstl-out/portability-report.json \
+     --format text
+
+   python -m crosstl._crosstl inspect-report \
+     crosstl-out/portability-report.json \
+     --format text
+
+Use these report fields to decide the next action:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 32 68
+
+   * - Report field
+     - Triage use
+   * - ``diagnosticCounts`` and ``diagnosticsByCode``
+     - Separate configuration errors from source/backend translation failures
+       before reviewing artifacts.
+   * - ``missingCapabilityCounts``
+     - Group unsupported source features, include resolution gaps, define
+       forwarding gaps, artifact manifest issues, provenance issues, and
+       optional toolchain validation gaps.
+   * - ``artifactMatrix``
+     - Confirm every discovered unit, target, and named variant produced the
+       expected artifact record, and identify missing or extra artifacts.
+   * - ``validation``
+     - Check current source hashes, generated artifact hashes, source maps,
+       source remaps, optional toolchain availability, and opt-in smoke test
+       results after translation.
+   * - ``externalCorpus``
+     - Compare pinned reduced corpus entries with discovered units and emitted
+       artifacts without treating the manifest as whole-repository semantic
+       parity.
+   * - ``migration``
+     - Track manual runtime, binding, build-system, and backend integration
+       follow-up work separately from translated shader/kernel artifacts.
+
 Commands
 --------
 
