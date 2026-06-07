@@ -14477,6 +14477,100 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     ) in result.stdout
 
 
+def test_project_cli_inspect_report_applies_external_corpus_sample_limit(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "fixtures").mkdir()
+    (repo / "src" / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    for index in range(3):
+        (repo / "fixtures" / f"undiscovered-{index}.cgl").write_text(
+            SIMPLE_CROSSL,
+            encoding="utf-8",
+        )
+    corpus_entries = [
+        {
+            "id": "repo/simple",
+            "path": "src/simple.cgl",
+            "sourceBackend": "cgl",
+            "targets": ["cgl"],
+        },
+        *[
+            {
+                "id": f"repo/missing-{index}",
+                "path": f"missing-{index}.hlsl",
+                "sourceBackend": "directx",
+                "targets": ["cgl"],
+            }
+            for index in range(3)
+        ],
+        *[
+            {
+                "id": f"repo/undiscovered-{index}",
+                "path": f"fixtures/undiscovered-{index}.cgl",
+                "sourceBackend": "cgl",
+                "targets": ["cgl"],
+            }
+            for index in range(3)
+        ],
+    ]
+    (repo / "corpus.json").write_text(
+        json.dumps({"schemaVersion": 1, "entries": corpus_entries}),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = inspect_project_report(report_path, max_external_corpus_entries=2)
+
+    assert payload["externalCorpus"]["missingEntryCount"] == 3
+    assert payload["externalCorpus"]["truncatedMissingEntryCount"] == 1
+    assert [entry["id"] for entry in payload["externalCorpus"]["missingEntries"]] == [
+        "repo/missing-0",
+        "repo/missing-1",
+    ]
+    assert payload["externalCorpus"]["undiscoveredPresentEntryCount"] == 3
+    assert payload["externalCorpus"]["truncatedUndiscoveredPresentEntryCount"] == 1
+    assert [
+        entry["id"] for entry in payload["externalCorpus"]["undiscoveredPresentEntries"]
+    ] == [
+        "repo/undiscovered-0",
+        "repo/undiscovered-1",
+    ]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--max-external-corpus-entries",
+            "1",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    cli_payload = json.loads(result.stdout)
+    assert result.returncode == 0
+    assert len(cli_payload["externalCorpus"]["missingEntries"]) == 1
+    assert cli_payload["externalCorpus"]["truncatedMissingEntryCount"] == 2
+    assert len(cli_payload["externalCorpus"]["undiscoveredPresentEntries"]) == 1
+    assert cli_payload["externalCorpus"]["truncatedUndiscoveredPresentEntryCount"] == 2
+
+
 def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -14737,6 +14831,7 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
         "--max-validation-artifacts",
         "--max-toolchain-runs",
         "--max-migration-actions",
+        "--max-external-corpus-entries",
     ),
 )
 def test_project_cli_inspect_report_rejects_negative_sample_limits(

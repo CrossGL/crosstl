@@ -2434,6 +2434,7 @@ def _run_inspect_report(args):
         max_validation_artifacts=args.max_validation_artifacts,
         max_toolchain_runs=args.max_toolchain_runs,
         max_migration_actions=args.max_migration_actions,
+        max_external_corpus_entries=args.max_external_corpus_entries,
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -2595,6 +2596,12 @@ def _build_parser():
         type=_non_negative_int,
         default=20,
         help="Maximum migration action samples to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-external-corpus-entries",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum external corpus entry samples to include in the inspection summary",
     )
     inspect_parser.add_argument(
         "--run-toolchains",

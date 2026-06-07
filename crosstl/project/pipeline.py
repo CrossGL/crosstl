@@ -4525,6 +4525,7 @@ def _inspection_external_corpus_sample(
     *,
     present: bool,
     discovered: bool,
+    limit: int = EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT,
 ) -> tuple[list[dict[str, Any]], int, int]:
     sampled_entries = [
         _inspection_external_corpus_entry(entry)
@@ -4534,9 +4535,9 @@ def _inspection_external_corpus_sample(
         and entry.get("discovered") is discovered
     ]
     return (
-        sampled_entries[:EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT],
+        sampled_entries[:limit],
         len(sampled_entries),
-        max(0, len(sampled_entries) - EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT),
+        max(0, len(sampled_entries) - limit),
     )
 
 
@@ -4565,6 +4566,7 @@ def inspect_project_report(
     max_validation_artifacts: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_toolchain_runs: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_migration_actions: int = MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
+    max_external_corpus_entries: int = EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     """Build a concise inspection summary for a project portability report."""
     path = Path(report_path)
@@ -4574,6 +4576,7 @@ def inspect_project_report(
     validation_artifact_limit = max(0, max_validation_artifacts)
     toolchain_run_limit = max(0, max_toolchain_runs)
     migration_action_limit = max(0, max_migration_actions)
+    external_corpus_entry_limit = max(0, max_external_corpus_entries)
     diagnostics = list(validation_report.get("diagnostics", []))
     validation_result = validation_report.get("validation", {})
     validation_toolchains = (
@@ -4889,6 +4892,7 @@ def inspect_project_report(
                 external_entries,
                 present=False,
                 discovered=False,
+                limit=external_corpus_entry_limit,
             )
         )
         undiscovered_entries, undiscovered_entry_count, truncated_undiscovered_count = (
@@ -4896,6 +4900,7 @@ def inspect_project_report(
                 external_entries,
                 present=True,
                 discovered=False,
+                limit=external_corpus_entry_limit,
             )
         )
         payload["externalCorpus"] = {
