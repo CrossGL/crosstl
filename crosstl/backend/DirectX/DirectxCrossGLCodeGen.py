@@ -433,6 +433,7 @@ class HLSLToCrossGLConverter:
         self.current_resource_array_dims = {}
         self.current_identifier_renames = {}
         self.struct_member_types = {}
+        self.struct_member_array_dims = {}
         self.suppress_storage_image_index_lowering = False
         self.function_identifier_renames = {}
 
@@ -1669,6 +1670,19 @@ class HLSLToCrossGLConverter:
             }
         return member_types
 
+    def collect_struct_member_array_dims(self, structs):
+        member_array_dims = {}
+        for struct in structs or []:
+            if not isinstance(struct, StructNode):
+                continue
+            if getattr(struct, "is_forward_declaration", False):
+                continue
+            member_array_dims[struct.name] = {
+                member.name: len(getattr(member, "array_sizes", None) or [])
+                for member in getattr(struct, "members", []) or []
+            }
+        return member_array_dims
+
     def vector_swizzle_raw_type(self, type_name, swizzle):
         if not type_name or not isinstance(swizzle, str):
             return None
@@ -1739,12 +1753,23 @@ class HLSLToCrossGLConverter:
         return raw_type
 
     def expression_resource_array_dims(self, expr):
+        member_array_dims = self.expression_struct_member_array_dims(expr)
+        if member_array_dims is not None:
+            return member_array_dims
         name = self.expression_base_name(expr)
         if not name:
             return 0
         if name in self.current_resource_array_dims:
             return self.current_resource_array_dims[name]
         return self.global_resource_array_dims.get(name, 0)
+
+    def expression_struct_member_array_dims(self, expr):
+        while isinstance(expr, ArrayAccessNode):
+            expr = expr.array
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        owner_base = self.raw_type_base(self.expression_raw_type(expr.object))
+        return self.struct_member_array_dims.get(owner_base, {}).get(expr.member)
 
     def raw_type_base(self, type_name):
         if not type_name:
@@ -2068,6 +2093,15 @@ class HLSLToCrossGLConverter:
     def is_sampled_multisample_texture_type(self, type_name):
         return self.raw_type_base(type_name) in {"Texture2DMS", "Texture2DMSArray"}
 
+    def is_sampled_texture_operator_type(self, type_name):
+        return self.raw_type_base(type_name) in {
+            "Texture1D",
+            "Texture1DArray",
+            "Texture2D",
+            "Texture2DArray",
+            "Texture3D",
+        }
+
     def generate_multisample_texture_operator_fetch(self, expr, is_main=False):
         if not isinstance(expr, ArrayAccessNode):
             return None
@@ -2096,6 +2130,23 @@ class HLSLToCrossGLConverter:
         ):
             return None
 
+        if (
+            self.array_access_depth(expr)
+            != self.expression_resource_array_dims(expr) + 1
+        ):
+            return None
+
+        texture = self.generate_expression(expr.array, is_main)
+        coord = self.generate_expression(expr.index, is_main)
+        return f"texelFetch({texture}, {coord}, 0)"
+
+    def generate_sampled_texture_operator_fetch(self, expr, is_main=False):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        if not self.is_sampled_texture_operator_type(
+            self.expression_raw_type(expr.array)
+        ):
+            return None
         if (
             self.array_access_depth(expr)
             != self.expression_resource_array_dims(expr) + 1
@@ -2605,6 +2656,9 @@ class HLSLToCrossGLConverter:
 
     def generate(self, ast):
         self.struct_member_types = self.collect_struct_member_types(ast.structs)
+        self.struct_member_array_dims = self.collect_struct_member_array_dims(
+            ast.structs
+        )
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
@@ -3584,6 +3638,9 @@ class HLSLToCrossGLConverter:
             )
             if multisample_fetch is not None:
                 return multisample_fetch
+            sampled_fetch = self.generate_sampled_texture_operator_fetch(expr, is_main)
+            if sampled_fetch is not None:
+                return sampled_fetch
             if (
                 not self.suppress_storage_image_index_lowering
                 and self.is_storage_image_texel_access(expr)

@@ -722,6 +722,9 @@ class MetalToCrossGLConverter:
         mapped_type = self.resource_classification_type(
             self.expression_mapped_type(texture_expr)
         )
+        return self.sampled_array_coordinate_constructor_for_type(mapped_type)
+
+    def sampled_array_coordinate_constructor_for_type(self, mapped_type):
         return {
             "sampler1DArray": "vec2",
             "isampler1DArray": "vec2",
@@ -729,7 +732,9 @@ class MetalToCrossGLConverter:
             "sampler2DArray": "vec3",
             "isampler2DArray": "vec3",
             "usampler2DArray": "vec3",
+            "sampler2DArrayShadow": "vec3",
             "samplerCubeArray": "vec4",
+            "samplerCubeArrayShadow": "vec4",
         }.get(mapped_type)
 
     def texture_sample_coordinate_and_options(
@@ -827,9 +832,77 @@ class MetalToCrossGLConverter:
             f"{option_name} on {obj} */"
         )
 
-    def texture_gather_call(self, obj, method_args, is_main=False):
-        args = [self.texture_gather_argument(arg, is_main) for arg in method_args]
-        return f"textureGather({obj}, {', '.join(args)})"
+    def texture_gather_call(self, obj, texture_expr, method_args, is_main=False):
+        args, offset = self.texture_gather_arguments(texture_expr, method_args, is_main)
+        function = "textureGatherOffset" if offset else "textureGather"
+        return f"{function}({obj}, {', '.join(args)})"
+
+    def texture_gather_arguments(self, texture_expr, method_args, is_main=False):
+        if len(method_args) < 2:
+            return [
+                self.texture_gather_argument(arg, is_main) for arg in method_args
+            ], False
+
+        sampler = self.generate_expression(method_args[0], is_main)
+        coords = self.generate_expression(method_args[1], is_main)
+        tail = list(method_args[2:])
+        constructor = self.sampled_array_coordinate_constructor(texture_expr)
+        if constructor and tail:
+            layer = self.generate_expression(tail.pop(0), is_main)
+            coords = f"{constructor}({coords}, {layer})"
+
+        args = [sampler, coords]
+        has_offset = False
+        if tail:
+            if self.texture_gather_component_index(tail[0]) is None:
+                args.append(self.generate_expression(tail.pop(0), is_main))
+                has_offset = True
+            if tail:
+                args.append(self.texture_gather_argument(tail.pop(0), is_main))
+
+        args.extend(self.texture_gather_argument(arg, is_main) for arg in tail)
+        return args, has_offset
+
+    def texture_gather_compare_call(self, obj, obj_expr, method_args, is_main=False):
+        compare_args, consumed = self.texture_gather_compare_base_arguments(
+            obj_expr, method_args, is_main
+        )
+        tail = list(method_args[consumed:])
+        if len(tail) > 1:
+            return None
+        if tail:
+            offset = self.generate_expression(tail[0], is_main)
+            return (
+                "textureGatherCompareOffset("
+                f"{obj}, {', '.join(compare_args + [offset])})"
+            )
+        return f"textureGatherCompare({obj}, {', '.join(compare_args)})"
+
+    def texture_gather_compare_base_arguments(
+        self, obj_expr, method_args, is_main=False
+    ):
+        if len(method_args) < 3:
+            return [self.generate_expression(arg, is_main) for arg in method_args], len(
+                method_args
+            )
+
+        mapped_type = self.resource_classification_type(
+            self.expression_mapped_type(obj_expr)
+        )
+        if (
+            mapped_type in {"sampler2DArrayShadow", "samplerCubeArrayShadow"}
+            and len(method_args) >= 4
+        ):
+            constructor = self.sampled_array_coordinate_constructor_for_type(
+                mapped_type
+            )
+            sampler = self.generate_expression(method_args[0], is_main)
+            coord = self.generate_expression(method_args[1], is_main)
+            layer = self.generate_expression(method_args[2], is_main)
+            compare = self.generate_expression(method_args[3], is_main)
+            return [sampler, f"{constructor}({coord}, {layer})", compare], 4
+
+        return [self.generate_expression(arg, is_main) for arg in method_args[:3]], 3
 
     def texture_gather_argument(self, arg, is_main=False):
         component = self.texture_gather_component_index(arg)
@@ -1787,7 +1860,13 @@ class MetalToCrossGLConverter:
                     expr.object, method, is_main
                 )
             if descriptor and method == "gather":
-                return self.texture_gather_call(obj, expr.args, is_main)
+                return self.texture_gather_call(obj, expr.object, expr.args, is_main)
+            if descriptor and method == "gather_compare":
+                gather_compare_call = self.texture_gather_compare_call(
+                    obj, expr.object, expr.args, is_main
+                )
+                if gather_compare_call is not None:
+                    return gather_compare_call
             if descriptor:
                 return f"{descriptor['function']}({obj}, {args})"
             return f"{obj}.{method}({args})"

@@ -2001,6 +2001,40 @@ def test_codegen_texture2dms_sample_operator_from_microsoft_docs():
     parse_crossgl(output)
 
 
+def test_codegen_sampled_texture_operator_index_from_microsoft_docs():
+    # Source: Microsoft Texture2D::Operator docs. The sampled texture operator
+    # reads mip level zero; HLSL Load handles explicit mip levels separately.
+    output = generate_crossgl("""
+        Texture1D<float4> ramp : register(t0);
+        Texture2D<float4> colorMap : register(t1);
+        Texture2DArray<float4> layers : register(t2);
+        Texture3D<float4> volume : register(t3);
+        Texture2D<float4> textures[2] : register(t4);
+
+        float4 main(
+            uint x : TEXCOORD0,
+            uint2 pixel : TEXCOORD1,
+            uint3 pixelLayer : TEXCOORD2,
+            uint3 voxel : TEXCOORD3,
+            uint slot : TEXCOORD4
+        ) : SV_Target0 {
+            return ramp[x] + colorMap[pixel] + layers[pixelLayer]
+                + volume[voxel] + textures[slot][pixel];
+        }
+    """)
+
+    assert "texelFetch(ramp, x, 0)" in output
+    assert "texelFetch(colorMap, pixel, 0)" in output
+    assert "texelFetch(layers, pixelLayer, 0)" in output
+    assert "texelFetch(volume, voxel, 0)" in output
+    assert "texelFetch(textures[slot], pixel, 0)" in output
+    assert "colorMap[pixel]" not in output
+    assert "layers[pixelLayer]" not in output
+    assert "volume[voxel]" not in output
+    assert "textures[slot][pixel]" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_sv_target_index_roundtrips_to_hlsl_semantic():
     output = generate_crossgl("""
         float4 PSMain(float2 uv : TEXCOORD0) : SV_Target1 {

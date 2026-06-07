@@ -4228,10 +4228,10 @@ class RustToCrossGLConverter:
         function_name, args = parsed
         function_name, _ = self.split_function_type_arguments(function_name)
         operand_name = function_name.rsplit("::", 1)[-1]
-        if operand_name not in {"bias", "lod", "grad"}:
+        if operand_name not in {"bias", "lod", "grad", "offset"}:
             return None
 
-        if operand_name in {"bias", "lod"} and len(args) != 1:
+        if operand_name in {"bias", "lod", "offset"} and len(args) != 1:
             return None
         if operand_name == "grad" and len(args) != 2:
             return None
@@ -4260,6 +4260,8 @@ class RustToCrossGLConverter:
             return f"{base_intrinsic}Lod"
         if operand_name == "grad":
             return f"{base_intrinsic}Grad"
+        if operand_name == "offset":
+            return f"{base_intrinsic}Offset"
         return None
 
     def is_resource_method_name(self, method_name):

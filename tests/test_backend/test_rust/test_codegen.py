@@ -937,6 +937,55 @@ def test_rust_gpu_sample_with_and_depth_project_methods_codegen_from_upstream():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_sample_with_offset_methods_codegen_from_spirv_std_api():
+    # Reduced from the spirv_std::image SampleParams API exposed through
+    # sample_with::offset(...) on sampled image methods.
+    code = """
+    use spirv_std::spirv;
+    use spirv_std::{Image, Sampler};
+    use spirv_std::image::sample_with;
+
+    #[spirv(fragment)]
+    pub fn main(
+        #[spirv(descriptor_set = 0, binding = 0)] color_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 1)] projected_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 2)] depth_image: &Image!(2D, type=f32, sampled),
+        #[spirv(descriptor_set = 0, binding = 3)] sampler: &Sampler,
+        output_color: &mut Vec4,
+        output_depth: &mut f32,
+    ) {
+        let uv = Vec2::new(0.0, 1.0);
+        let uvw = Vec3::new(0.0, 1.0, 0.5);
+        let offset = IVec2::new(1, -1);
+        let offset_color: Vec4 = color_image.sample_with(*sampler, uv, sample_with::offset(offset));
+        let projected: Vec4 = projected_image.sample_with_project_coordinate_with(*sampler, uvw, sample_with::offset(offset));
+        let depth: f32 = depth_image.sample_depth_reference_with(*sampler, uv, 0.5, sample_with::offset(offset));
+        let projected_depth: f32 = depth_image.sample_depth_reference_with_project_coordinate_with(*sampler, uvw, 0.5, sample_with::offset(offset));
+        *output_color = offset_color + projected;
+        *output_depth = depth + projected_depth;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "offset_color = textureOffset(color_image, sampler_, uv, offset);" in result
+    assert (
+        "projected = textureProjOffset(projected_image, sampler_, uvw, offset);"
+        in result
+    )
+    assert "depth = textureCompareOffset(depth_image, sampler_, uv, 0.5, offset);" in (
+        result
+    )
+    assert (
+        "projected_depth = textureCompareProjOffset("
+        "depth_image, sampler_, uvw, 0.5, offset);"
+    ) in result
+    assert ".sample_with(" not in result
+    assert ".sample_depth_reference" not in result
+    assert "sample_with::offset" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_glam_vec3a_constructor_codegen_from_depth_sample_compiletest():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
