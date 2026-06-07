@@ -868,6 +868,7 @@ class GLSLCodeGen:
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
+        self.current_glsl_extensions = set()
         self.current_mesh_output_count_limits = {}
         self.task_payload_shared_variables = []
         self.current_target_stage = None
@@ -1400,6 +1401,34 @@ class GLSLCodeGen:
         ) & self.RAY_STAGE_NAMES or self.uses_ray_extension_type(ast, target_stage):
             return "#version 460 core"
         return "#version 450 core"
+
+    def glsl_preprocessor_extensions(self, ast):
+        extensions = set()
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if not isinstance(directive, PreprocessorNode):
+                continue
+            if directive.directive != "extension":
+                continue
+
+            content = str(getattr(directive, "content", "") or "").strip()
+            if not content:
+                continue
+
+            extension_name, separator, behavior_text = content.partition(":")
+            extension_name_parts = extension_name.strip().split()
+            if not extension_name_parts:
+                continue
+            extension_name = extension_name_parts[0]
+            behavior = behavior_text.strip().split()[0] if separator else ""
+            if behavior in {"", "enable", "require"}:
+                extensions.add(extension_name)
+        return extensions
+
+    def glsl_extension_enabled(self, extension_name):
+        return extension_name in self.current_glsl_extensions
+
+    def glsl_texture_offset_non_const_enabled(self):
+        return self.glsl_extension_enabled("GL_EXT_texture_offset_non_const")
 
     def glsl_stage_extension_lines(self, ast, target_stage=None):
         stage_names = self.glsl_stage_names(ast, target_stage)
@@ -2069,6 +2098,7 @@ class GLSLCodeGen:
         self.stage_entry_functions_by_stage = {}
         self.current_identifier_aliases = {}
         self.current_target_stage = target_stage
+        self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
         stage_names = {
             stage_name
             for stage_name in self.glsl_stage_names(ast, target_stage)
@@ -12371,6 +12401,9 @@ class GLSLCodeGen:
         )
 
     def glsl_texture_call_offsets_are_compile_time_constants(self, func_name, args):
+        if self.glsl_texture_offset_non_const_enabled():
+            return True
+
         offset_indices = texture_offset_argument_indices(
             func_name,
             self.texture_call_uses_explicit_sampler(args),
