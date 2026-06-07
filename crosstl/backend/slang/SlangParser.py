@@ -2334,6 +2334,8 @@ class SlangParser:
             return self.parse_typedef()
         if self.current_token == ("IDENTIFIER", "defer"):
             return self.parse_defer_statement()
+        if self.current_token == ("IDENTIFIER", "__target_switch"):
+            return self.parse_target_switch_statement()
         if self.is_variable_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
@@ -2394,6 +2396,82 @@ class SlangParser:
         self.eat("IDENTIFIER")
         body = self.parse_statement_or_block()
         return DeferNode(body)
+
+    def parse_target_switch_statement(self):
+        self.eat("IDENTIFIER")
+        self.eat("LBRACE")
+        default_body = []
+
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated __target_switch statement")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+
+            if self.current_token[0] == "CASE":
+                self.eat("CASE")
+                self.skip_target_switch_label()
+                self.eat("COLON")
+                self.skip_target_switch_arm_body()
+                continue
+
+            if self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                while self.current_token[0] not in {"CASE", "RBRACE"}:
+                    if self.current_token[0] == "EOF":
+                        raise SyntaxError("Unterminated __target_switch default arm")
+                    if self.current_token[0] == "SEMICOLON":
+                        self.eat("SEMICOLON")
+                        continue
+                    self.append_parsed_statement(default_body, self.parse_statement())
+                continue
+
+            raise SyntaxError(
+                f"Expected __target_switch arm, got {self.current_token[0]}"
+            )
+
+        self.eat("RBRACE")
+        return default_body
+
+    def skip_target_switch_label(self):
+        while self.current_token[0] not in {"COLON", "EOF"}:
+            self.eat(self.current_token[0])
+        if self.current_token[0] == "EOF":
+            raise SyntaxError("Unterminated __target_switch case label")
+
+    def skip_target_switch_arm_body(self):
+        brace_depth = 0
+        paren_depth = 0
+        bracket_depth = 0
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if (
+                brace_depth == 0
+                and paren_depth == 0
+                and bracket_depth == 0
+                and token_type in {"CASE", "DEFAULT", "RBRACE"}
+            ):
+                return
+
+            if token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE":
+                if brace_depth == 0:
+                    return
+                brace_depth -= 1
+            elif token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            self.eat(token_type)
+
+        raise SyntaxError("Unterminated __target_switch arm")
 
     def is_variable_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)

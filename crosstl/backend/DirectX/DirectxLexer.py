@@ -110,13 +110,13 @@ TOKENS = tuple(
             "MATRIX",
             r"\b(float|half|fixed|double|int|uint|bool|min16float|min10float|"
             r"min16int|min12int|min16uint|float16_t|float32_t|int16_t|"
-            r"int32_t|int64_t|uint16_t|uint32_t|uint64_t)[1-4]x[1-4]\b",
+            r"float64_t|int32_t|int64_t|uint16_t|uint32_t|uint64_t)[1-4]x[1-4]\b",
         ),
         # Vector types (must come before scalar types)
         (
             "FVECTOR",
             r"\b(float|half|fixed|double|min16float|min10float|float16_t|"
-            r"float32_t)[1-4]\b",
+            r"float32_t|float64_t)[1-4]\b",
         ),
         ("IVECTOR", r"\b(int|min16int|min12int|int16_t|int32_t|int64_t)[1-4]\b"),
         ("UVECTOR", r"\b(uint|min16uint|uint16_t|uint32_t|uint64_t)[1-4]\b"),
@@ -138,6 +138,7 @@ TOKENS = tuple(
         ("MIN16UINT", r"\bmin16uint\b"),
         ("FLOAT16_T", r"\bfloat16_t\b"),
         ("FLOAT32_T", r"\bfloat32_t\b"),
+        ("FLOAT64_T", r"\bfloat64_t\b"),
         ("INT16_T", r"\bint16_t\b"),
         ("INT32_T", r"\bint32_t\b"),
         ("UINT16_T", r"\buint16_t\b"),
@@ -342,6 +343,7 @@ KEYWORDS = {
     "min16uint": "MIN16UINT",
     "float16_t": "FLOAT16_T",
     "float32_t": "FLOAT32_T",
+    "float64_t": "FLOAT64_T",
     "int16_t": "INT16_T",
     "int32_t": "INT32_T",
     "uint16_t": "UINT16_T",

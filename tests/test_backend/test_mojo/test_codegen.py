@@ -1566,6 +1566,28 @@ def test_for_in_descending_range_codegen_uses_greater_than_condition():
     )
 
 
+def test_for_in_target_conventions_codegen_from_modular_control_flow_docs():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
+    # mojo/docs/code/manual/control-flow/for_loop.mojo for-loop examples.
+    code = """
+    fn main(values: List[Int], capitals: Dict[String, String]):
+        for ref value in values:
+            value -= 1
+        for var state in capitals:
+            sink(state)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "for value in values {" in generated_code
+    assert "value -= 1;" in generated_code
+    assert "for state in capitals {" in generated_code
+    assert "for ref value" not in generated_code
+    assert "for var state" not in generated_code
+
+
 def test_comptime_for_codegen_preserves_loop_output():
     code = """
     fn main():
