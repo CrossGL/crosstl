@@ -948,6 +948,98 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
     ]
 
 
+def test_scan_project_reports_nested_include_cycles(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    nested_dir = shader_dir / "include"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "a.inc").write_text('#include "b.inc"\n', encoding="utf-8")
+    (nested_dir / "b.inc").write_text('#include "a.inc"\n', encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "include/a.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "include/a.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "resolvedPath": "shaders/include/a.inc",
+            "resolvedHash": project_pipeline._source_hash(nested_dir / "a.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/include/a.inc",
+            "include": "b.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "resolvedPath": "shaders/include/b.inc",
+            "resolvedHash": project_pipeline._source_hash(nested_dir / "b.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "source": "shaders/include/b.inc",
+            "include": "a.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "resolvedPath": "shaders/include/a.inc",
+            "resolvedHash": project_pipeline._source_hash(nested_dir / "a.inc"),
+            "resolvedFrom": "source",
+        },
+    ]
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["diagnostics"] == [
+        {
+            "severity": "warning",
+            "code": "project.scan.include-cycle",
+            "message": (
+                "Include directive in shaders/include/b.inc:1 creates a cycle "
+                "and was not scanned recursively: a.inc"
+            ),
+            "location": {
+                "file": "shaders/include/b.inc",
+                "line": 1,
+                "column": 1,
+                "offset": 0,
+                "length": 0,
+                "endLine": 1,
+                "endColumn": 1,
+                "endOffset": 0,
+            },
+            "missingCapabilities": ["include.resolution"],
+        }
+    ]
+    assert payload["summary"]["includeDependencyCount"] == 3
+    assert payload["summary"]["includeDependenciesByKind"] == {"local": 3}
+    assert payload["summary"]["includeDependenciesByStatus"] == {"resolved": 3}
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {"source": 3}
+    assert payload["summary"]["diagnosticsByCode"] == {"project.scan.include-cycle": 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 1}
+    assert validation["diagnosticsByCode"] == {"project.scan.include-cycle": 1}
+    assert validation["missingCapabilityCounts"] == {"include.resolution": 1}
+
+
 def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -396,7 +396,10 @@ Project reports are JSON documents with:
   ``includeDependencies`` records for project-level include triage. Resolved
   include dependencies record repository-relative include paths, resolution
   source, and SHA-256 hashes so report validation can detect include file
-  content drift after scan.
+  content drift after scan. Recursive include scans stop at include cycles and
+  emit ``project.scan.include-cycle`` diagnostics with ``include.resolution``
+  missing-capability rollups while preserving the dependency that closes the
+  cycle for triage.
 - ``skipped``: repository-relative files intentionally left untranslated with
   reason codes and source override metadata when an override selected an
   unsupported source backend. Full reports require skipped source override
