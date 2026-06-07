@@ -225,7 +225,7 @@ def test_support_project_feature_evidence_references_existing_tests():
     )
     test_file = ROOT / "tests" / "test_translator" / "test_project_translation.py"
     declared_tests = {
-        line.strip().split("(", 1)[0].removeprefix("def ")
+        line.strip().split("(", 1)[0][len("def ") :]
         for line in test_file.read_text(encoding="utf-8").splitlines()
         if line.strip().startswith("def test_")
     }
@@ -250,7 +250,7 @@ def test_support_project_feature_evidence_references_existing_tests():
                 missing_evidence.append(f"{feature.get('id')}:{backend}")
                 continue
             for item in project_evidence:
-                test_name = item.removeprefix(evidence_prefix)
+                test_name = item[len(evidence_prefix) :]
                 if test_name not in declared_tests:
                     missing_tests.append(item)
 
