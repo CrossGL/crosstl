@@ -2190,6 +2190,41 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
         ),
         (
             """
+            [project]
+            source_roots = [" "]
+            """,
+            "project.source_roots entries must be non-empty strings",
+        ),
+        (
+            """
+            [project]
+            include = [" "]
+            """,
+            "project.include entries must be non-empty strings",
+        ),
+        (
+            """
+            [project]
+            exclude = [" "]
+            """,
+            "project.exclude entries must be non-empty strings",
+        ),
+        (
+            """
+            [project]
+            targets = [" "]
+            """,
+            "project.targets entries must be non-empty strings",
+        ),
+        (
+            """
+            [project]
+            include_dirs = [" "]
+            """,
+            "project.include_dirs entries must be non-empty strings",
+        ),
+        (
+            """
             [project.sources]
             "gpu/*.shader" = 1
             """,

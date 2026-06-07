@@ -524,16 +524,23 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 
 def _as_str_list(value: Any, *, field_name: str) -> list[str]:
+    def append_item(result: list[str], item: Any) -> None:
+        if not isinstance(item, str):
+            raise ValueError(f"{field_name} entries must be strings")
+        if not item.strip():
+            raise ValueError(f"{field_name} entries must be non-empty strings")
+        result.append(item)
+
     if value is None:
         return []
     if isinstance(value, str):
-        return [value]
+        result: list[str] = []
+        append_item(result, value)
+        return result
     if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        result = []
+        result: list[str] = []
         for item in value:
-            if not isinstance(item, str):
-                raise ValueError(f"{field_name} entries must be strings")
-            result.append(item)
+            append_item(result, item)
         return result
     raise ValueError(f"{field_name} must be a string or list of strings")
 

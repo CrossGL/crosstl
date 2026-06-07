@@ -252,6 +252,9 @@ def test_project_repo_scan_documents_source_root_status():
             backend_support["notes"]
         )
         assert "rejects missing explicit config paths" in backend_support["notes"]
+        assert "project configuration scalar, list, and source override metadata" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_source_roots_that_are_not_directories"
