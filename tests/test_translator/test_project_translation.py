@@ -3763,6 +3763,41 @@ def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_pa
     )
 
 
+def test_validate_project_report_rejects_artifact_matrix_variant_mode_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["artifactMatrix"]["variantMode"] = "none"
+    report_path = repo / "out" / "invalid-artifact-matrix-variant-mode-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifactMatrix.variantMode must match project.variants"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_unexpected_generated_artifact_matrix_fields(
     tmp_path,
 ):

@@ -792,6 +792,11 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_matrix_variant_"
+            "mode_mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_translated_artifacts_with_"
             "error_metadata"
         ) in backend_support["evidence"]
@@ -1049,6 +1054,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_matrix_count_"
             "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_matrix_variant_"
+            "mode_mismatches"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
