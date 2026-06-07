@@ -66,6 +66,10 @@ class RustCodeGen:
         self.type_mapping = {
             # Scalar Types
             "void": "()",
+            "i8": "i8",
+            "u8": "u8",
+            "i16": "i16",
+            "u16": "u16",
             "int": "i32",
             "short": "i16",
             "long": "i64",
@@ -77,17 +81,33 @@ class RustCodeGen:
             "float": "f32",
             "double": "f64",
             "half": "f16",
+            "f16": "f16",
             "bool": "bool",
             "string": "&'static str",
             "str": "&'static str",
             "char": "char",
             # Vector Types (using GPU-style vector types)
+            "vec2<f16>": "Vec2<f16>",
+            "vec3<f16>": "Vec3<f16>",
+            "vec4<f16>": "Vec4<f16>",
             "vec2<f32>": "Vec2<f32>",
             "vec3<f32>": "Vec3<f32>",
             "vec4<f32>": "Vec4<f32>",
             "vec2<f64>": "Vec2<f64>",
             "vec3<f64>": "Vec3<f64>",
             "vec4<f64>": "Vec4<f64>",
+            "vec2<i8>": "Vec2<i8>",
+            "vec3<i8>": "Vec3<i8>",
+            "vec4<i8>": "Vec4<i8>",
+            "vec2<u8>": "Vec2<u8>",
+            "vec3<u8>": "Vec3<u8>",
+            "vec4<u8>": "Vec4<u8>",
+            "vec2<i16>": "Vec2<i16>",
+            "vec3<i16>": "Vec3<i16>",
+            "vec4<i16>": "Vec4<i16>",
+            "vec2<u16>": "Vec2<u16>",
+            "vec3<u16>": "Vec3<u16>",
+            "vec4<u16>": "Vec4<u16>",
             "vec2<i32>": "Vec2<i32>",
             "vec3<i32>": "Vec3<i32>",
             "vec4<i32>": "Vec4<i32>",
@@ -3247,6 +3267,8 @@ class RustCodeGen:
                 return f"dvec{size}"
             elif element_type == "bool":
                 return f"bvec{size}"
+            elif element_type in {"i8", "u8", "i16", "u16", "f16"}:
+                return f"vec{size}<{element_type}>"
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
@@ -3536,6 +3558,10 @@ class RustCodeGen:
         matrix_alias = self.normalize_hlsl_matrix_type_name(type_str)
         if matrix_alias != str(type_str):
             return self.map_type(matrix_alias)
+
+        mapped_type = self.map_type(type_str)
+        if mapped_type != type_str:
+            return mapped_type
 
         if type_str.startswith("float") and len(type_str) > 5:
             size = type_str[5:]
@@ -11755,6 +11781,8 @@ class RustCodeGen:
             "half": "f16",
             "float": "f32",
             "double": "f64",
+            "i8": "i8",
+            "u8": "u8",
             "i16": "i16",
             "u16": "u16",
             "i32": "i32",
@@ -13610,12 +13638,27 @@ class RustCodeGen:
         mapped_type = self.map_type(type_name)
         mapped_type = self.unqualify_runtime_type_name(mapped_type)
         vector_details = {
+            "Vec2<f16>": ("f16", 2),
+            "Vec3<f16>": ("f16", 3),
+            "Vec4<f16>": ("f16", 4),
             "Vec2<f32>": ("float", 2),
             "Vec3<f32>": ("float", 3),
             "Vec4<f32>": ("float", 4),
             "Vec2<f64>": ("double", 2),
             "Vec3<f64>": ("double", 3),
             "Vec4<f64>": ("double", 4),
+            "Vec2<i8>": ("i8", 2),
+            "Vec3<i8>": ("i8", 3),
+            "Vec4<i8>": ("i8", 4),
+            "Vec2<u8>": ("u8", 2),
+            "Vec3<u8>": ("u8", 3),
+            "Vec4<u8>": ("u8", 4),
+            "Vec2<i16>": ("i16", 2),
+            "Vec3<i16>": ("i16", 3),
+            "Vec4<i16>": ("i16", 4),
+            "Vec2<u16>": ("u16", 2),
+            "Vec3<u16>": ("u16", 3),
+            "Vec4<u16>": ("u16", 4),
             "Vec2<i32>": ("int", 2),
             "Vec3<i32>": ("int", 3),
             "Vec4<i32>": ("int", 4),
@@ -13704,6 +13747,8 @@ class RustCodeGen:
         scalar_type = self.normalize_scalar_type(scalar_type)
         aliases = {
             "bool": "bool",
+            "i8": "i8",
+            "u8": "u8",
             "i16": "short",
             "u16": "ushort",
             "i32": "int",
@@ -13730,6 +13775,13 @@ class RustCodeGen:
         return f"{prefix}{columns}x{rows}"
 
     def vector_type_for_components(self, component_type, component_count):
+        normalized_component = self.normalize_scalar_type(component_type)
+        if (
+            normalized_component in {"i8", "u8", "i16", "u16", "f16"}
+            and 2 <= component_count <= 4
+        ):
+            return f"vec{component_count}<{normalized_component}>"
+
         component_type = self.scalar_type_for_type_constructor(component_type)
         if component_type is None:
             return None

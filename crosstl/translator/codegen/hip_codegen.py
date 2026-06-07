@@ -319,6 +319,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec3": "float3",
             "vec4": "float4",
             "vec2<f16>": "half2",
+            "vec2<i8>": "char2",
+            "vec3<i8>": "char3",
+            "vec4<i8>": "char4",
+            "vec2<u8>": "uchar2",
+            "vec3<u8>": "uchar3",
+            "vec4<u8>": "uchar4",
+            "vec2<i16>": "short2",
+            "vec3<i16>": "short3",
+            "vec4<i16>": "short4",
+            "vec2<u16>": "ushort2",
+            "vec3<u16>": "ushort3",
+            "vec4<u16>": "ushort4",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",
@@ -486,6 +498,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
             "vec4<f32>": "make_float4",
+            "vec2<i8>": "make_char2",
+            "vec3<i8>": "make_char3",
+            "vec4<i8>": "make_char4",
+            "vec2<u8>": "make_uchar2",
+            "vec3<u8>": "make_uchar3",
+            "vec4<u8>": "make_uchar4",
+            "vec2<i16>": "make_short2",
+            "vec3<i16>": "make_short3",
+            "vec4<i16>": "make_short4",
+            "vec2<u16>": "make_ushort2",
+            "vec3<u16>": "make_ushort3",
+            "vec4<u16>": "make_ushort4",
             "ivec2": "make_int2",
             "ivec3": "make_int3",
             "ivec4": "make_int4",
@@ -5774,6 +5798,47 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     def map_vector_arithmetic_type(self, type_name):
         return self.map_type(type_name)
 
+    def vector_type_info(self, type_name):
+        narrow_info = self.hip_narrow_integer_vector_type_info(type_name)
+        if narrow_info is not None:
+            return narrow_info
+        return super().vector_type_info(type_name)
+
+    def hip_narrow_integer_vector_type_info(self, type_name):
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+
+        compact_type = "".join(str(type_text).split())
+        if (
+            len(compact_type) < 8
+            or not compact_type.startswith("vec")
+            or compact_type[3] not in {"2", "3", "4"}
+            or compact_type[4] != "<"
+            or compact_type[-1] != ">"
+        ):
+            return None
+
+        scalar_type = compact_type[5:-1]
+        native_prefix, component_type = {
+            "i8": ("char", "int"),
+            "u8": ("uchar", "uint"),
+            "i16": ("short", "int"),
+            "u16": ("ushort", "uint"),
+        }.get(scalar_type, (None, None))
+        if native_prefix is None:
+            return None
+
+        size = int(compact_type[3])
+        components = ("x", "y", "z", "w")[:size]
+        vector_type = f"{native_prefix}{size}"
+        return {
+            "type": vector_type,
+            "constructor": f"make_{vector_type}",
+            "component_type": component_type,
+            "components": components,
+        }
+
     def hip_unsupported_fp16_vector_type(self, type_name):
         type_text = self.type_name_string(type_name)
         if type_text is None:
@@ -8684,6 +8749,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     return f"vec{size}<f16>"
                 elif element_type == "int":
                     return f"int{size}"
+                elif element_type in {"i8", "u8", "i16", "u16"}:
+                    return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
         else:

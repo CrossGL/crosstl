@@ -3722,6 +3722,9 @@ class TestHipCodeGen:
                     vec2<f64> precise = vec2<f64>(1.0, 2.0);
                     vec3<i32> index = vec3<i32>(1, 2, 3);
                     vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
+                    vec4<u8> bytes = vec4<u8>(1, 2, 3, 4);
+                    vec2<i16> shorts = vec2<i16>(1, 2);
+                    vec2<f16> halves = vec2<f16>(1.0, 2.0);
                     vec2<bool> flags = vec2<bool>(true, false);
                 }
             }
@@ -3738,7 +3741,13 @@ class TestHipCodeGen:
         assert "double2 precise = make_double2(1.0, 2.0);" in hip_code
         assert "int3 index = make_int3(1, 2, 3);" in hip_code
         assert "uint4 mask = make_uint4(1, 2, 3, 4);" in hip_code
+        assert "uchar4 bytes = make_uchar4(1, 2, 3, 4);" in hip_code
+        assert "short2 shorts = make_short2(1, 2);" in hip_code
+        assert "half2 halves = __floats2half2_rn(1.0, 2.0);" in hip_code
         assert "uchar2 flags = make_uchar2(true, false);" in hip_code
+        assert "u84" not in hip_code
+        assert "i162" not in hip_code
+        assert "f162" not in hip_code
         assert "vec2<" not in hip_code
         assert "vec3<" not in hip_code
         assert "vec4<" not in hip_code

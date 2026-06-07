@@ -833,10 +833,17 @@ class VulkanToCrossGLConverter:
             self.generate_function_parameter(param)
             for param in self.function_params(node)
         )
-        code += f"    {return_type} {node.name}({params}) {{\n"
+        attributes = self.function_attribute_suffix(node)
+        code += f"    {return_type} {node.name}({params}){attributes} {{\n"
         code += self.generate_function_body(node.body, indent=indent + 1)
         code += "    }\n\n"
         return code
+
+    def function_attribute_suffix(self, node):
+        """Return CrossGL attributes needed to preserve stage entry identity."""
+        if self.function_shader_stage(node) is not None and node.name != "main":
+            return " @stage_entry"
+        return ""
 
     def generate_function_parameter(self, node):
         return (

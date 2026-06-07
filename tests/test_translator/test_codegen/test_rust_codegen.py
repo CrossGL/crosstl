@@ -22746,6 +22746,37 @@ def test_generic_vector_constructors_emit_rust_names(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_narrow_generic_vector_constructors_emit_rust_names():
+    code = """
+    shader main {
+        compute {
+            void main() {
+                vec4<u8> bytes = vec4<u8>(1, 2, 3, 4);
+                vec2<i16> shorts = vec2<i16>(1, 2);
+                vec2<f16> halves = vec2<f16>(1.0, 2.0);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let bytes: Vec4<u8> = Vec4::<u8>::new(1, 2, 3, 4);" in generated_code
+    assert "let shorts: Vec2<i16> = Vec2::<i16>::new(1, 2);" in generated_code
+    assert (
+        "let halves: Vec2<f16> = "
+        "Vec2::<f16>::new((1.0 as f16), (2.0 as f16));" in generated_code
+    )
+    assert "u84" not in generated_code
+    assert "i162" not in generated_code
+    assert "f162" not in generated_code
+    assert "vec4<u8>" not in generated_code
+    assert "vec2<i16>" not in generated_code
+    assert "vec2<f16>" not in generated_code
+
+
 def test_inferred_let_vector_declarations_preserve_vector_type():
     code = """
     shader main {

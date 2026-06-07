@@ -20638,9 +20638,12 @@ def test_generic_vector_constructors_emit_mojo_names():
         compute {
             void main() {
                 vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                vec2<f16> halfPair = vec2<f16>(1.0, 2.0);
                 vec3<f16> lowp = vec3<f16>(1.0, 2.0, 3.0);
                 vec3<i32> index = vec3<i32>(1, 2, 3);
+                vec2<i16> shortPair = vec2<i16>(1, 2);
                 vec4<i16> smallIndex = vec4<i16>(1, 2, 3, 4);
+                vec4<u8> bytes = vec4<u8>(1, 2, 3, 4);
                 vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
                 vec3<u16> smallMask = vec3<u16>(1, 2, 3);
                 vec2<bool> flags = vec2<bool>(true, false);
@@ -20657,13 +20660,22 @@ def test_generic_vector_constructors_emit_mojo_names():
         "var precise: SIMD[DType.float64, 2] = SIMD[DType.float64, 2](1.0, 2.0)"
     ) in generated_code
     assert (
+        "var halfPair: SIMD[DType.float16, 2] = " "SIMD[DType.float16, 2](1.0, 2.0)"
+    ) in generated_code
+    assert (
         "var lowp: SIMD[DType.float16, 4] = SIMD[DType.float16, 4](1.0, 2.0, 3.0, 0.0)"
     ) in generated_code
     assert (
         "var index: SIMD[DType.int32, 4] = SIMD[DType.int32, 4](1, 2, 3, 0)"
     ) in generated_code
     assert (
+        "var shortPair: SIMD[DType.int16, 2] = SIMD[DType.int16, 2](1, 2)"
+    ) in generated_code
+    assert (
         "var smallIndex: SIMD[DType.int16, 4] = SIMD[DType.int16, 4](1, 2, 3, 4)"
+    ) in generated_code
+    assert (
+        "var bytes: SIMD[DType.uint8, 4] = SIMD[DType.uint8, 4](1, 2, 3, 4)"
     ) in generated_code
     assert (
         "var mask: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](1, 2, 3, 4)"
@@ -20674,6 +20686,9 @@ def test_generic_vector_constructors_emit_mojo_names():
     assert (
         "var flags: SIMD[DType.bool, 2] = SIMD[DType.bool, 2](True, False)"
     ) in generated_code
+    assert "u84" not in generated_code
+    assert "i162" not in generated_code
+    assert "f162" not in generated_code
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code

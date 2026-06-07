@@ -7,6 +7,8 @@ from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
+from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
 
@@ -101,6 +103,28 @@ OpDecorate %17 Block
 %19 = OpVariable %18 Output
 %22 = OpFunction %20 None %21
 %23 = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_NON_MAIN_VERTEX_ENTRY_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "vs_main" %pos
+OpName %pos "outPosition"
+OpDecorate %pos BuiltIn Position
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%void = OpTypeVoid
+%ptr_output_v4float = OpTypePointer Output %v4float
+%fn = OpTypeFunction %void
+%float_0 = OpConstant %float 0
+%float_1 = OpConstant %float 1
+%const_pos = OpConstantComposite %v4float %float_0 %float_0 %float_0 %float_1
+%pos = OpVariable %ptr_output_v4float Output
+%vs = OpFunction %void None %fn
+%label = OpLabel
+OpStore %pos %const_pos
 OpReturn
 OpFunctionEnd
 """
@@ -4793,6 +4817,28 @@ def test_spirv_assembly_location_decorated_interfaces_codegen():
     assert "float4 gl_Position @output @gl_Position;" in generated_code
     assert "%4" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
+    tokens = tokenize_code(SPIRV_NON_MAIN_VERTEX_ENTRY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void vs_main() @stage_entry" in generated_code
+    assert "gl_Position = float4(0, 0, 0, 1);" in generated_code
+
+    reparsed = parse_crossgl(generated_code)
+    vertex_stage = reparsed.stages[ShaderStage.VERTEX]
+
+    assert vertex_stage.entry_point.name == "vs_main"
+    assert len(vertex_stage.entry_point.body.statements) == 2
+    assert vertex_stage.local_functions == []
+
+    downstream_code = VulkanSPIRVCodeGen().generate(reparsed)
+
+    assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
+    assert downstream_code.count("OpFunction ") == 1
+    assert "OpStore" in downstream_code
 
 
 def test_spirv_assembly_matrix_interface_codegen():
