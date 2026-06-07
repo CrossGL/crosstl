@@ -329,6 +329,7 @@ SOURCE_MAP_PAYLOAD_FIELDS = frozenset(
 )
 SOURCE_MAP_MAPPING_FIELDS = frozenset(("source", "generated"))
 SOURCE_MAP_SPAN_FIELD_SET = frozenset(SOURCE_MAP_SPAN_FIELDS)
+SOURCE_MAP_GRANULARITIES = ("file", "line", "statement", "token")
 COMPILER_SOURCE_REMAP_PAYLOAD_FIELDS = frozenset(
     ("schemaVersion", "generatedFile", "mappings")
 )
@@ -9385,6 +9386,7 @@ def _source_map_anchor_reasons(
     reasons = []
     source = source_map.get("source")
     generated = source_map.get("generated")
+    is_file_granularity = source_map.get("mappingGranularity") == "file"
 
     if isinstance(source, Mapping) and _is_non_empty_string(source.get("file")):
         if _is_non_empty_string(artifact.get("source")):
@@ -9409,14 +9411,44 @@ def _source_map_anchor_reasons(
             continue
         mapping_source = mapping.get("source")
         if isinstance(source, Mapping) and isinstance(mapping_source, Mapping):
-            if dict(mapping_source) != dict(source):
-                reasons.append(f"{mapping_prefix}.source must match {prefix}.source")
+            if is_file_granularity:
+                if dict(mapping_source) != dict(source):
+                    reasons.append(
+                        f"{mapping_prefix}.source must match {prefix}.source"
+                    )
+            elif (
+                _is_non_empty_string(source.get("file"))
+                and _is_non_empty_string(mapping_source.get("file"))
+                and mapping_source.get("file") != source.get("file")
+            ):
+                reasons.append(
+                    f"{mapping_prefix}.source.file must match {prefix}.source.file"
+                )
         mapping_generated = mapping.get("generated")
         if isinstance(generated, Mapping) and isinstance(mapping_generated, Mapping):
-            if dict(mapping_generated) != dict(generated):
+            if is_file_granularity:
+                if dict(mapping_generated) != dict(generated):
+                    reasons.append(
+                        f"{mapping_prefix}.generated must match {prefix}.generated"
+                    )
+            elif (
+                _is_non_empty_string(generated.get("file"))
+                and _is_non_empty_string(mapping_generated.get("file"))
+                and mapping_generated.get("file") != generated.get("file")
+            ):
                 reasons.append(
-                    f"{mapping_prefix}.generated must match {prefix}.generated"
+                    f"{mapping_prefix}.generated.file must match "
+                    f"{prefix}.generated.file"
                 )
+    return reasons
+
+
+def _fine_grained_source_map_span_reasons(prefix: str, value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    reasons = []
+    if _is_non_negative_int(value.get("length")) and value["length"] <= 0:
+        reasons.append(f"{prefix}.length must be greater than zero")
     return reasons
 
 
@@ -9440,8 +9472,12 @@ def _source_map_contract_reasons(
         reasons.append(f"{prefix}.schemaVersion must be 1")
     if source_map.get("kind") != "crosstl-artifact-source-map":
         reasons.append(f"{prefix}.kind must be crosstl-artifact-source-map")
-    if source_map.get("mappingGranularity") != "file":
-        reasons.append(f"{prefix}.mappingGranularity must be file")
+    mapping_granularity = source_map.get("mappingGranularity")
+    if mapping_granularity not in SOURCE_MAP_GRANULARITIES:
+        reasons.append(
+            f"{prefix}.mappingGranularity must be one of "
+            f"{', '.join(SOURCE_MAP_GRANULARITIES)}"
+        )
 
     target = source_map.get("target")
     if not _is_non_empty_string(target):
@@ -9461,7 +9497,7 @@ def _source_map_contract_reasons(
         reasons.append(f"{prefix}.mappings must be a list")
     elif not mappings:
         reasons.append(f"{prefix}.mappings must not be empty")
-    elif len(mappings) != 1:
+    elif mapping_granularity == "file" and len(mappings) != 1:
         reasons.append(f"{prefix}.mappings must contain one file-level mapping")
     else:
         for mapping_index, mapping in enumerate(mappings):
@@ -9484,6 +9520,17 @@ def _source_map_contract_reasons(
                     f"{mapping_prefix}.generated", mapping.get("generated")
                 )
             )
+            if mapping_granularity != "file":
+                reasons.extend(
+                    _fine_grained_source_map_span_reasons(
+                        f"{mapping_prefix}.source", mapping.get("source")
+                    )
+                )
+                reasons.extend(
+                    _fine_grained_source_map_span_reasons(
+                        f"{mapping_prefix}.generated", mapping.get("generated")
+                    )
+                )
 
     reasons.extend(_source_map_anchor_reasons(index, source_map, artifact))
     return reasons

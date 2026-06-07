@@ -8374,7 +8374,7 @@ def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
                         "sourceMap": {
                             "schemaVersion": 2,
                             "kind": "wrong-kind",
-                            "mappingGranularity": "line",
+                            "mappingGranularity": "block",
                             "target": "metal",
                             "source": {"file": "simple.cgl", "line": 1},
                             "generated": "out/opengl/simple.glsl",
@@ -8397,9 +8397,10 @@ def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
     assert "artifacts[0].sourceMap.kind must be crosstl-artifact-source-map" in (
         diagnostic["message"]
     )
-    assert "artifacts[0].sourceMap.mappingGranularity must be file" in (
-        diagnostic["message"]
-    )
+    assert (
+        "artifacts[0].sourceMap.mappingGranularity must be one of "
+        "file, line, statement, token"
+    ) in diagnostic["message"]
     assert "artifacts[0].sourceMap.target must match artifacts[0].target" in (
         diagnostic["message"]
     )
@@ -8489,6 +8490,119 @@ def test_validate_project_report_rejects_multiple_file_level_source_map_mappings
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "artifacts[0].sourceMap.mappings must contain one file-level mapping"
+        in diagnostic["message"]
+    )
+
+
+def test_validate_project_report_accepts_fine_grained_source_map_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["mappingGranularity"] = "line"
+    source_map["mappings"] = [
+        {
+            "source": dict(source_map["source"]),
+            "generated": dict(source_map["generated"]),
+        },
+        {
+            "source": dict(source_map["source"]),
+            "generated": dict(source_map["generated"]),
+        },
+    ]
+    payload["summary"]["fineGrainedSourceMapCount"] = 1
+    payload["summary"]["sourceMapsByGranularity"] = {"line": 1}
+    report_path = repo / "out" / "fine-grained-source-map-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert validation["validation"]["summary"]["sourceMapStatusCounts"] == (
+        _source_map_status_counts(ok=1)
+    )
+    assert validation["validation"]["summary"]["sourceRemapStatusCounts"] == (
+        _source_remap_status_counts(ok=1)
+    )
+
+
+def test_validate_project_report_rejects_fine_grained_source_map_file_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["mappingGranularity"] = "statement"
+    source_map["mappings"] = [
+        {
+            "source": dict(source_map["source"], file="other.cgl"),
+            "generated": dict(source_map["generated"], file="out/cgl/other.cgl"),
+        }
+    ]
+    payload["summary"]["fineGrainedSourceMapCount"] = 1
+    payload["summary"]["sourceMapsByGranularity"] = {"statement": 1}
+    report_path = repo / "out" / "fine-grained-source-map-file-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceMap.mappings[0].source.file must match "
+        "artifacts[0].sourceMap.source.file"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].sourceMap.mappings[0].generated.file must match "
+        "artifacts[0].sourceMap.generated.file"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_zero_length_fine_grained_source_map_spans(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["mappingGranularity"] = "token"
+    source_span = dict(source_map["source"])
+    generated_span = dict(source_map["generated"])
+    for span in (source_span, generated_span):
+        span["length"] = 0
+        span["endOffset"] = span["offset"]
+        span["endLine"] = span["line"]
+        span["endColumn"] = span["column"]
+    source_map["mappings"] = [{"source": source_span, "generated": generated_span}]
+    payload["summary"]["fineGrainedSourceMapCount"] = 1
+    payload["summary"]["sourceMapsByGranularity"] = {"token": 1}
+    report_path = repo / "out" / "zero-length-fine-grained-source-map-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceMap.mappings[0].source.length must be greater than zero"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].sourceMap.mappings[0].generated.length must be greater than zero"
         in diagnostic["message"]
     )
 

@@ -7395,8 +7395,8 @@
       "name": "Source provenance and source-map bridge",
       "description": "Record source provenance and source-map metadata for project reports.",
       "support_plan": {
-        "current_gap": "Project artifacts carry file-level source maps and compiler-compatible source-remap sidecars, and source-map rollups correctly account for non-file map granularity, but generated fine-grained statement or token mappings are not implemented.",
-        "next_scope": "Define the generated fine-grained mapping contract that can interoperate with compiler source-map consumers, then add generated mappings and validation checks for translated artifacts.",
+        "current_gap": "Project artifacts carry file-level source maps and compiler-compatible source-remap sidecars, source-map rollups correctly account for non-file map granularity, and report validation accepts a closed line, statement, and token source-map contract, but generated fine-grained mappings are not implemented.",
+        "next_scope": "Add generated line, statement, or token mappings and validation checks for translated artifacts when backend pipelines expose enough span data.",
         "completion_criteria": "Mark supported when generated reports validate file-level and fine-grained source maps or source-remap records for all translated artifacts, and inspection output surfaces actionable provenance without stale hashes."
       },
       "support": {
