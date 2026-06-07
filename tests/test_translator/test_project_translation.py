@@ -1601,21 +1601,21 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
 
     assert captured_include_paths == [[str(include_dir.resolve())]]
     assert validation["success"] is True
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 4, "error": 0}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 3, "error": 0}
     assert payload["artifacts"][0]["includePathProcessing"] == {
-        "status": "not-supported",
+        "status": "forwarded",
         "frontend": "lexer",
-        "supportsIncludePaths": False,
+        "supportsIncludePaths": True,
         "includePathCount": 1,
     }
-    assert payload["summary"]["includePathProcessingByStatus"] == {"not-supported": 1}
+    assert payload["summary"]["includePathProcessingByStatus"] == {"forwarded": 1}
     assert payload["summary"]["includePathProcessingBySourceBackend"] == {
-        "cgl": {"not-supported": 1}
+        "cgl": {"forwarded": 1}
     }
     assert inspection["includePathProcessing"] == {
         "available": True,
-        "byStatus": {"not-supported": 1},
-        "bySourceBackend": {"cgl": {"not-supported": 1}},
+        "byStatus": {"forwarded": 1},
+        "bySourceBackend": {"cgl": {"forwarded": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -1625,44 +1625,28 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
                 "sourceBackend": "cgl",
                 "target": "opengl",
                 "path": artifact_path,
-                "status": "not-supported",
+                "status": "forwarded",
                 "frontend": "lexer",
-                "supportsIncludePaths": False,
+                "supportsIncludePaths": True,
                 "includePathCount": 1,
             }
         ],
-        "notSupportedArtifactCount": 1,
+        "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
-        "notSupportedArtifacts": [
-            {
-                "source": "shaders/simple.cgl",
-                "sourceBackend": "cgl",
-                "target": "opengl",
-                "path": artifact_path,
-                "status": "not-supported",
-                "frontend": "lexer",
-                "supportsIncludePaths": False,
-                "includePathCount": 1,
-            }
-        ],
+        "notSupportedArtifacts": [],
     }
     assert result.returncode == 0
-    assert "Include path processing: not-supported=1" in result.stdout
+    assert "Include path processing: forwarded=1" in result.stdout
     assert (
-        "Include path processing by source backend: cgl=(not-supported=1)"
-        in result.stdout
+        "Include path processing by source backend: cgl=(forwarded=1)" in result.stdout
     )
     assert "Include path processing artifacts:" in result.stdout
     assert (
         f"- shaders/simple.cgl -> {artifact_path} "
-        "(sourceBackend=cgl, target=opengl, status=not-supported, "
-        "frontend=lexer, supportsIncludePaths=false, includePaths=1)"
+        "(sourceBackend=cgl, target=opengl, status=forwarded, "
+        "frontend=lexer, supportsIncludePaths=true, includePaths=1)"
     ) in result.stdout
-    assert "Include path processing issues:" in result.stdout
-    assert (
-        f"- shaders/simple.cgl -> opengl at {artifact_path}: "
-        "1 include path not forwarded by cgl lexer frontend"
-    ) in result.stdout
+    assert "Include path processing issues:" not in result.stdout
     assert payload["project"]["includeDirs"] == [
         "includes",
         "missing-includes",
@@ -1706,29 +1690,10 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "project.config.include-dir-outside-project": 1,
         "project.config.include-dir-not-directory": 1,
         "project.config.missing-include-dir": 1,
-        "project.translate.include-paths-not-forwarded": 1,
     }
     assert payload["summary"]["missingCapabilityCounts"] == {
-        "include.forwarding": 1,
         "include.resolution": 3,
     }
-    include_forwarding_diagnostic = next(
-        diagnostic
-        for diagnostic in payload["diagnostics"]
-        if diagnostic["code"] == "project.translate.include-paths-not-forwarded"
-    )
-    assert include_forwarding_diagnostic["missingCapabilities"] == [
-        "include.forwarding"
-    ]
-    assert include_forwarding_diagnostic["location"]["file"] == "shaders/simple.cgl"
-    assert "not forwarded to the cgl lexer frontend" in (
-        include_forwarding_diagnostic["message"]
-    )
-    assert (
-        validation["diagnosticsByCode"]["project.translate.include-paths-not-forwarded"]
-        == 1
-    )
-    assert validation["missingCapabilityCounts"]["include.forwarding"] == 1
     assert validation["missingCapabilityCounts"]["include.resolution"] == 3
 
 
@@ -2988,7 +2953,7 @@ def test_validate_project_report_rejects_artifact_include_path_processing_mismat
 
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
-    payload["artifacts"][0]["includePathProcessing"]["supportsIncludePaths"] = True
+    payload["artifacts"][0]["includePathProcessing"]["supportsIncludePaths"] = False
     report_path = repo / "out" / "portability-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -10877,7 +10842,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "status": "not-requested",
                 "frontend": "lexer",
-                "supportsIncludePaths": False,
+                "supportsIncludePaths": True,
                 "includePathCount": 0,
             }
         ],
@@ -11349,7 +11314,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "status": "not-requested",
                 "frontend": "lexer",
-                "supportsIncludePaths": False,
+                "supportsIncludePaths": True,
                 "includePathCount": 0,
             }
         ],
@@ -11972,7 +11937,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         "(sourceBackend=cgl, target=cgl, status=not-requested, "
-        "frontend=lexer, supportsIncludePaths=false, includePaths=0)"
+        "frontend=lexer, supportsIncludePaths=true, includePaths=0)"
     ) in result.stdout
     assert "Source maps by granularity: file=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout

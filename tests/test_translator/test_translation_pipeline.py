@@ -130,7 +130,7 @@ def test_source_registry_reports_lexer_option_support():
         "vulkan": True,
     }
     expected_include_support = {
-        "cgl": False,
+        "cgl": True,
         "cuda": True,
         "directx": True,
         "hip": True,
