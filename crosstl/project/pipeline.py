@@ -365,12 +365,14 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
         "variant",
         "sourceBackend",
         "command",
+        "checkKind",
         "returncode",
         "status",
         "stdout",
         "stderr",
     )
 )
+VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS = frozenset(("artifact", "tool-availability"))
 SOURCE_MAP_SPAN_FIELDS = (
     "file",
     "line",
@@ -5328,6 +5330,7 @@ def _inspection_validation_toolchain_run(run: Any) -> dict[str, Any] | None:
         "sourceBackend": run.get("sourceBackend"),
         "target": run.get("target"),
         "path": run.get("path"),
+        "checkKind": run.get("checkKind"),
         "status": run.get("status"),
         "returncode": run.get("returncode"),
     }
@@ -8904,6 +8907,12 @@ def _toolchain_run_contract_reasons(
                 f"for target {normalized_target}"
             )
 
+    if "checkKind" in run and run.get("checkKind") not in (
+        VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS
+    ):
+        allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
+        reasons.append(f"{prefix}.checkKind must be one of {allowed}")
+
     returncode = run.get("returncode")
     if not isinstance(returncode, int) or isinstance(returncode, bool):
         reasons.append(f"{prefix}.returncode must be an integer")
@@ -10676,12 +10685,16 @@ def _run_toolchain_smoke(
             continue
         if target == "opengl":
             command = [tools[0], "--stdin"]
+            check_kind = "artifact"
         elif target == "vulkan":
             command = [tools[0], str(artifact_path)]
+            check_kind = "artifact"
         elif target == "directx":
             command = [tools[0], "-help"]
+            check_kind = "tool-availability"
         elif target == "metal":
             command = [tools[0], "metal", "-v"]
+            check_kind = "tool-availability"
         else:
             continue
         try:
@@ -10715,6 +10728,7 @@ def _run_toolchain_smoke(
             "target": target,
             "path": str(artifact["path"]),
             "command": command,
+            "checkKind": check_kind,
             "returncode": returncode,
             "status": "ok" if returncode == 0 else "failed",
             "stdout": stdout[-4000:],

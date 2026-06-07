@@ -1313,6 +1313,9 @@ def _format_validation_toolchain_run_sample_line(run):
     status = run.get("status")
     if isinstance(status, str) and status:
         details.append(f"status={status}")
+    check_kind = run.get("checkKind")
+    if isinstance(check_kind, str) and check_kind:
+        details.append(f"checkKind={check_kind}")
     returncode = run.get("returncode")
     if isinstance(returncode, int) and not isinstance(returncode, bool):
         details.append(f"returncode={returncode}")

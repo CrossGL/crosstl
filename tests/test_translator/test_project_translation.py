@@ -6062,6 +6062,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
             "command": ["glslangValidator", "--stdin"],
+            "checkKind": "artifact",
             "returncode": 0,
             "status": "ok",
             "stdout": "validation ok",
@@ -7665,6 +7666,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "path": "",
                             "variant": "",
                             "command": ["glslangValidator", ""],
+                            "checkKind": "maybe",
                             "returncode": True,
                             "status": "ok",
                             "stdout": [],
@@ -7774,6 +7776,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert (
         "validation.toolchainRuns[0].command must be a non-empty list of strings"
         in diagnostic["message"]
+    )
+    assert "validation.toolchainRuns[0].checkKind must be one of" in (
+        diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].returncode must be an integer" in (
         diagnostic["message"]
@@ -12112,6 +12117,38 @@ def _write_opengl_toolchain_report(repo, *, variant=None):
     return report_path
 
 
+def _write_target_toolchain_report(repo, *, target, extension):
+    repo.mkdir()
+    artifact = repo / "out" / target / f"simple.{extension}"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("void main() {}\n", encoding="utf-8")
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": [target],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "target": target,
+                        "path": artifact.relative_to(repo).as_posix(),
+                        "status": "translated",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return report_path
+
+
 def test_validate_project_report_records_toolchain_failures(
     tmp_path, monkeypatch, capsys
 ):
@@ -12142,6 +12179,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["diagnostics"][0]["location"]["file"] == ("out/opengl/simple.glsl")
     assert payload["validation"]["toolchainRuns"][0]["status"] == "failed"
     assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "cgl"
+    assert payload["validation"]["toolchainRuns"][0]["checkKind"] == "artifact"
     assert payload["validation"]["toolchainRuns"][0]["returncode"] == 2
     assert payload["validation"]["toolchainRuns"][0]["stderr"] == (
         "shader validation failed"
@@ -12183,6 +12221,7 @@ def test_validate_project_report_records_toolchain_failures(
             "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
+            "checkKind": "artifact",
             "status": "failed",
             "returncode": 2,
             "command": ["glslangValidator", "--stdin"],
@@ -12232,9 +12271,59 @@ def test_validate_project_report_records_toolchain_failures(
     assert "Validation toolchain run samples:" in stdout
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
-        "(sourceBackend=cgl, status=failed, returncode=2, "
+        "(sourceBackend=cgl, status=failed, checkKind=artifact, returncode=2, "
         "command=glslangValidator --stdin, stdout=0 chars, stderr=24 chars)"
     ) in stdout
+
+
+@pytest.mark.parametrize(
+    ("target", "extension", "tool", "command"),
+    (
+        ("directx", "hlsl", "dxc", ["dxc", "-help"]),
+        ("metal", "metal", "xcrun", ["xcrun", "metal", "-v"]),
+    ),
+)
+def test_validate_project_report_marks_availability_only_toolchain_runs(
+    tmp_path, monkeypatch, target, extension, tool, command
+):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target=target, extension=extension
+    )
+    calls = []
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda requested_tool: f"/usr/bin/{tool}" if requested_tool == tool else None,
+    )
+
+    def run_toolchain(*args, **kwargs):
+        calls.append((args, kwargs))
+        assert args[0] == command
+        assert kwargs["input"] is None
+        return SimpleNamespace(returncode=0, stdout="tool available", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is True
+    assert calls
+    run = payload["validation"]["toolchainRuns"][0]
+    assert run["source"] == "simple.cgl"
+    assert run["sourceBackend"] == "cgl"
+    assert run["target"] == target
+    assert run["path"] == f"out/{target}/simple.{extension}"
+    assert run["command"] == command
+    assert run["checkKind"] == "tool-availability"
+    assert run["status"] == "ok"
+    assert payload["toolchainRunStatusByTarget"] == {
+        target: {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+
+    inspection = inspect_project_report(report_path, run_toolchains=True)
+    assert inspection["validation"]["toolchainRuns"][0]["checkKind"] == (
+        "tool-availability"
+    )
 
 
 def test_validate_project_report_records_toolchain_run_variant_rollups(
@@ -12263,6 +12352,7 @@ def test_validate_project_report_records_toolchain_run_variant_rollups(
     assert payload["success"] is True
     assert payload["validation"]["toolchainRuns"][0]["variant"] == "debug"
     assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "cgl"
+    assert payload["validation"]["toolchainRuns"][0]["checkKind"] == "artifact"
     assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 1}
     assert payload["toolchainRunStatusByTarget"] == {
         "opengl": {"runCount": 1, "okCount": 1, "failedCount": 0}
@@ -12305,6 +12395,7 @@ def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatc
     run = payload["validation"]["toolchainRuns"][0]
     assert run["status"] == "failed"
     assert run["sourceBackend"] == "cgl"
+    assert run["checkKind"] == "artifact"
     assert run["returncode"] == project_pipeline.TOOLCHAIN_TIMEOUT_RETURNCODE
     assert run["stdout"] == "partial stdout"
     assert run["stderr"] == (

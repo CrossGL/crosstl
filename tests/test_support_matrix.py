@@ -1188,6 +1188,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "unit and skipped source override provenance" in (
             backend_support["notes"]
         )
+        assert "check-kind metadata" in backend_support["notes"]
         assert "summary rollups including source override counts" in (
             backend_support["notes"]
         )
@@ -1402,6 +1403,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_records_toolchain_run_variant_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_marks_availability_only_toolchain_runs"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

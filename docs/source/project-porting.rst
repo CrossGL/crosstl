@@ -83,8 +83,8 @@ Use these report fields to decide the next action:
        expected artifact record, and identify missing or extra artifacts.
    * - ``validation``
      - Check current source hashes, generated artifact hashes, source maps,
-       source remaps, optional toolchain availability, and opt-in smoke test
-       results after translation.
+       source remaps, optional toolchain availability, and opt-in artifact or
+       availability smoke test results after translation.
    * - ``externalCorpus``
      - Compare pinned reduced corpus entries with discovered units and emitted
        artifacts without treating the manifest as whole-repository semantic
@@ -149,6 +149,8 @@ source-map and source-remap status, and configured toolchain availability
 without invoking external compiler tools.
 ``--run-toolchains`` implies artifact validation and records any available
 bounded toolchain smoke-check results in the generated portability report.
+Smoke-check records include a check kind so report consumers can distinguish
+artifact checks from target tool availability checks.
 
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``
@@ -189,12 +191,15 @@ source files with recorded hashes are missing or changed, or opt-in toolchain
 smoke checks fail.
 Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository. Each smoke check is bounded by a short subprocess timeout, and
-timeouts are reported as failed toolchain runs. Validation reports include
+timeouts are reported as failed toolchain runs. DirectX and Metal hooks currently
+record target tool availability because full compiler invocation needs backend-
+specific entry point and profile selection. Validation reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, artifact source-backend,
 artifact variant, hash-status, source-map status, source-remap status,
 toolchain status, toolchain-run status, toolchain-run target, toolchain-run
-source backend, and toolchain-run variant rollups for validation results.
+source backend, toolchain-run check kind, and toolchain-run variant rollups for
+validation results.
 The JSON validation report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift.
 The default output is JSON; ``--format text``
@@ -547,8 +552,9 @@ Project reports are JSON documents with:
   summarized validation artifacts, aggregate validation artifact and validation
   status summary counts, direct validation report artifact target, source
   backend, variant, hash-status, source-map status, source-remap status,
-  toolchain status, toolchain-run status rollups, and a closed standalone
-  validation-report field set, failed-artifact text with
+  toolchain status, toolchain-run status rollups, toolchain-run check-kind
+  metadata, and a closed standalone validation-report field set,
+  failed-artifact text with
   non-OK hash, source-map, and source-remap statuses, bounded validation artifact
   and validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, unit source
