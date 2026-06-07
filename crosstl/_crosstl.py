@@ -265,6 +265,16 @@ def _parse_project_source_roots(values):
     return tuple(source_roots)
 
 
+def _parse_project_include_dirs(values):
+    include_dirs = []
+    for value in values or []:
+        include_dir = value.strip()
+        if not include_dir:
+            raise ValueError("--include-dir entries must be non-empty")
+        include_dirs.append(include_dir)
+    return tuple(include_dirs)
+
+
 def _load_project_config_from_args(args):
     from .project import load_project_config
 
@@ -272,8 +282,8 @@ def _load_project_config_from_args(args):
     source_roots = _parse_project_source_roots(
         getattr(args, "source_root", None),
     )
-    include_dirs = tuple(config.include_dirs) + tuple(
-        getattr(args, "include_dir", None) or ()
+    include_dirs = tuple(config.include_dirs) + _parse_project_include_dirs(
+        getattr(args, "include_dir", None)
     )
     define_overrides = _parse_project_define_overrides(getattr(args, "define", None))
     source_overrides = _parse_project_source_overrides(

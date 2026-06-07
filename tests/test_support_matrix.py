@@ -472,7 +472,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert "only active existing repository-contained resolved paths" in (
             backend_support["notes"]
         )
-        assert "applies CLI include-directory overrides" in backend_support["notes"]
+        assert (
+            "applies CLI include-directory overrides and rejects empty CLI "
+            "include-directory overrides"
+        ) in backend_support["notes"]
         assert "include-path processing status" in backend_support["notes"]
         assert "source frontend support metadata" in backend_support["notes"]
         assert "warning diagnostics and missing-capability rollups" in (
@@ -617,6 +620,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_report_records_include_dir_and_define_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scan_rejects_empty_include_dir_override"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

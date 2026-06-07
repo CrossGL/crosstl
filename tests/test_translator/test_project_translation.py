@@ -13820,6 +13820,30 @@ def test_project_cli_scan_rejects_empty_source_root_override(tmp_path):
     assert "Error: --source-root entries must be non-empty" in result.stdout
 
 
+def test_project_cli_scan_rejects_empty_include_dir_override(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--include-dir",
+            " ",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Error: --include-dir entries must be non-empty" in result.stdout
+
+
 def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
