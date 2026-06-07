@@ -578,6 +578,29 @@ def test_parse_noperspective_interpolation_modifier_from_hlsl_docs():
     assert param.qualifiers == ["noperspective"]
 
 
+def test_parse_post_semantic_interpolation_modifiers_from_hlsl_function_docs():
+    # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-function-parameters
+    ast = parse_code("""
+    float4 PSMain(
+        float4 color : COLOR0 noperspective,
+        uint materialId : TEXCOORD1 : nointerpolation
+    ) : SV_Target0 {
+        return color + float4(materialId, 0, 0, 0);
+    }
+    """)
+
+    color, material_id = ast.functions[0].params
+
+    assert color.vtype == "float4"
+    assert color.name == "color"
+    assert color.semantic == "COLOR0"
+    assert color.qualifiers == ["noperspective"]
+    assert material_id.vtype == "uint"
+    assert material_id.name == "materialId"
+    assert material_id.semantic == "TEXCOORD1"
+    assert material_id.qualifiers == ["nointerpolation"]
+
+
 def test_parse_center_interpolation_modifier_from_dxc_center_keyword():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/HLSLFileCheck/hlsl/types/modifiers/center/center_kwd.hlsl

@@ -215,10 +215,12 @@ class CudaParser:
         "DEVICE",
         "MANAGED",
     }
+    CUDA_FUNCTION_ENTRY_TOKENS = {"GLOBAL", "TILE_GLOBAL", "TILE", "DEVICE", "HOST"}
     FUNCTION_ATTRIBUTE_TOKENS = {"LAUNCH_BOUNDS", "CLUSTER_DIMS", "BLOCK_SIZE"}
     FUNCTION_SPECIFIER_TOKENS = {
         "GLOBAL",
         "TILE_GLOBAL",
+        "TILE",
         "DEVICE",
         "HOST",
         "INLINE",
@@ -476,7 +478,7 @@ class CudaParser:
                     kernels.append(func)
                 else:
                     functions.append(func)
-            elif self.current_token[0] in ["GLOBAL", "TILE_GLOBAL", "DEVICE", "HOST"]:
+            elif self.current_token[0] in self.CUDA_FUNCTION_ENTRY_TOKENS:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
                     self.append_parsed_global_variable(
                         global_variables, self.parse_global_variable()
@@ -1188,7 +1190,7 @@ class CudaParser:
                 func = self.parse_function()
                 if func is not None:
                     items.append(func)
-            elif self.current_token[0] in ["GLOBAL", "TILE_GLOBAL", "DEVICE", "HOST"]:
+            elif self.current_token[0] in self.CUDA_FUNCTION_ENTRY_TOKENS:
                 if self.current_token[0] == "DEVICE" and self.peek_variable():
                     self.append_parsed_global_variable(
                         items, self.parse_global_variable()

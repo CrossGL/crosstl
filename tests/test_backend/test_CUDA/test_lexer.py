@@ -4,7 +4,7 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 class TestCudaLexer:
     def test_cuda_keywords(self):
         code = (
-            "__global__ __device__ __shared__ __constant__ "
+            "__global__ __tile_global__ __tile__ __device__ __shared__ __constant__ "
             "__launch_bounds__ __grid_constant__"
         )
         lexer = CudaLexer(code)
@@ -12,6 +12,8 @@ class TestCudaLexer:
 
         expected_tokens = [
             ("GLOBAL", "__global__"),
+            ("TILE_GLOBAL", "__tile_global__"),
+            ("TILE", "__tile__"),
             ("DEVICE", "__device__"),
             ("SHARED", "__shared__"),
             ("CONSTANT", "__constant__"),

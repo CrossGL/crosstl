@@ -837,6 +837,33 @@ def test_rust_gpu_vector_splat_codegen_from_image_components_compiletest():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_vector_from_tuple_codegen_from_image_write_compiletest():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/compiletests/ui/image/write.rs.
+    code = """
+    use spirv_std::glam::*;
+    use spirv_std::spirv;
+    use spirv_std::{Image, arch};
+
+    #[spirv(fragment)]
+    pub fn main(
+        texels: Vec2,
+        #[spirv(descriptor_set = 0, binding = 0)] image: &Image!(2D, type=f32, sampled=false),
+    ) {
+        unsafe {
+            image.write(UVec2::new(0, 1), Vec4::from((texels, 0., 0.)));
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "imageStore(image, uvec2(0, 1), vec4(texels, 0., 0.));" in result
+    assert "Vec4::from" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_extra_image_macro_dimensions_codegen_from_upstream():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

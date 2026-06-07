@@ -3260,7 +3260,15 @@ class VulkanParser:
             )
 
         if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
-            if is_projected and offset is not None:
+            if dref is not None and is_projected and offset is not None:
+                function_name = "textureCompareProjGradOffset"
+            elif dref is not None and is_projected:
+                function_name = "textureCompareProjGrad"
+            elif dref is not None and offset is not None:
+                function_name = "textureCompareGradOffset"
+            elif dref is not None:
+                function_name = "textureCompareGrad"
+            elif is_projected and offset is not None:
                 function_name = "textureProjGradOffset"
             elif is_projected:
                 function_name = "textureProjGrad"
@@ -3277,7 +3285,15 @@ class VulkanParser:
             )
 
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
-            if is_projected and offset is not None:
+            if dref is not None and is_projected and offset is not None:
+                function_name = "textureCompareProjLodOffset"
+            elif dref is not None and is_projected:
+                function_name = "textureCompareProjLod"
+            elif dref is not None and offset is not None:
+                function_name = "textureCompareLodOffset"
+            elif dref is not None:
+                function_name = "textureCompareLod"
+            elif is_projected and offset is not None:
                 function_name = "textureProjLodOffset"
             elif is_projected:
                 function_name = "textureProjLod"
@@ -3297,10 +3313,20 @@ class VulkanParser:
             args = [*base_args, offset]
             if bias is not None:
                 args.append(bias)
-            function_name = "textureProjOffset" if is_projected else "textureOffset"
+            if dref is not None and bias is None and is_projected:
+                function_name = "textureCompareProjOffset"
+            elif dref is not None and bias is None:
+                function_name = "textureCompareOffset"
+            else:
+                function_name = "textureProjOffset" if is_projected else "textureOffset"
             return FunctionCallNode(function_name, args)
 
-        function_name = "textureProj" if is_projected else "texture"
+        if dref is not None and bias is None and is_projected:
+            function_name = "textureCompareProj"
+        elif dref is not None and bias is None:
+            function_name = "textureCompare"
+        else:
+            function_name = "textureProj" if is_projected else "texture"
         args = list(base_args)
         if bias is not None:
             args.append(bias)
