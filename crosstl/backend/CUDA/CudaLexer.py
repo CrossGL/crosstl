@@ -70,6 +70,7 @@ TOKENS = tuple(
         ("INLINE", r"\b(?:inline|__inline__)\b"),
         ("CONST", r"\bconst\b"),
         ("VOLATILE", r"\b(?:volatile|__volatile__)\b"),
+        ("REGISTER", r"\bregister\b"),
         ("MUTABLE", r"\bmutable\b"),
         ("VIRTUAL", r"\bvirtual\b"),
         ("PUBLIC", r"\bpublic\b"),
@@ -269,6 +270,7 @@ KEYWORDS = {
     "__inline__": "INLINE",
     "const": "CONST",
     "volatile": "VOLATILE",
+    "register": "REGISTER",
     "mutable": "MUTABLE",
     "virtual": "VIRTUAL",
     "public": "PUBLIC",
@@ -355,6 +357,7 @@ class TokenType(Enum):
     INLINE = auto()
     CONST = auto()
     VOLATILE = auto()
+    REGISTER = auto()
     MUTABLE = auto()
     VIRTUAL = auto()
     PUBLIC = auto()

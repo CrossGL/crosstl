@@ -25,6 +25,25 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Kernel: simple_kernel" in result
 
+    def test_register_storage_class_local_variable_conversion(self):
+        code = """
+        __global__ void register_kernel(float* out) {
+            register int lane = threadIdx.x;
+            out[lane] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: register_kernel" in result
+        assert "var lane: i32 = gl_LocalInvocationID.x;" in result
+        assert "register int lane" not in result
+
     def test_launch_bounds_kernel_attribute_conversion(self):
         code = """
         __launch_bounds__(128) __global__ void bounded(float* data) {
