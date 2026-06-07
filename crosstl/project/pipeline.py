@@ -141,6 +141,25 @@ REPORT_MIGRATION_FIELDS = frozenset(
     )
 )
 REPORT_MIGRATION_ACTION_FIELDS = frozenset(("kind", "severity", "message", "targets"))
+REPORT_ARTIFACT_MATRIX_FIELDS = frozenset(
+    (
+        "unitCount",
+        "targetCount",
+        "variantCount",
+        "variantMode",
+        "expectedArtifactCount",
+        "emittedArtifactCount",
+        "translatedCount",
+        "failedCount",
+        "identityCoverageAvailable",
+        "missingArtifactCount",
+        "extraArtifactCount",
+        "complete",
+        "statusByTarget",
+        "statusBySourceBackend",
+        "statusByVariant",
+    )
+)
 REPORT_DIAGNOSTIC_FIELDS = frozenset(
     ("severity", "code", "message", "location", "target", "missingCapabilities")
 )
@@ -6274,7 +6293,9 @@ def _artifact_matrix_metadata_contract_reasons(
     if expected is None:
         return []
 
-    reasons = []
+    reasons = _unsupported_mapping_field_reasons(
+        "artifactMatrix", artifact_matrix, REPORT_ARTIFACT_MATRIX_FIELDS
+    )
     for field_name in ("unitCount", "targetCount", "variantCount"):
         reasons.extend(
             _count_field_contract_reasons(

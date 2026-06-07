@@ -2589,6 +2589,27 @@ def test_validate_project_report_rejects_artifact_matrix_count_mismatches(tmp_pa
     )
 
 
+def test_validate_project_report_rejects_unexpected_generated_artifact_matrix_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifactMatrix"]["unexpected"] = "metadata"
+    report_path = repo / "out" / "unexpected-artifact-matrix-fields-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifactMatrix.unexpected is not allowed" in diagnostic["message"]
+
+
 def test_translate_project_artifact_matrix_rolls_up_source_backends(
     tmp_path,
     monkeypatch,
@@ -2665,6 +2686,41 @@ def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_p
     )
     assert (
         "artifactMatrix.statusBySourceBackend must match artifact matrix artifacts"
+        in diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_artifact_matrix_variant_rollup_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "out"
+
+            [project.variants.debug]
+            MODE = "debug"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["artifactMatrix"]["statusByVariant"] = {}
+    report_path = repo / "out" / "invalid-artifact-matrix-variant-rollup-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifactMatrix.statusByVariant must match artifact matrix artifacts"
         in diagnostic["message"]
     )
 
