@@ -508,6 +508,29 @@ def test_struct_conditional_trait_conformance_parse_from_modular_docs():
     ]
 
 
+def test_pass_placeholder_in_struct_and_trait_bodies_parse_from_modular_sources():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # mojo/docs/code/manual/generics/conditional_trait_conformance.mojo Foo
+    # and max/kernels/src/structured_kernels/tile_types.mojo TilePayload.
+    code = """
+    @fieldwise_init
+    struct Foo[T: AnyType](Copyable, Writable where conforms_to(T, Writable)):
+        pass
+
+    trait TilePayload(TrivialRegisterPassable):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "Foo")
+    trait_node = next(node for node in ast.traits if node.name == "TilePayload")
+
+    assert len(struct_node.members) == 1
+    assert isinstance(struct_node.members[0], PassNode)
+    assert len(trait_node.members) == 1
+    assert isinstance(trait_node.members[0], PassNode)
+
+
 def test_struct_generic_parameter_list_parsing_from_modular_corpus():
     code = """
     struct AddConstant[value: Int]:

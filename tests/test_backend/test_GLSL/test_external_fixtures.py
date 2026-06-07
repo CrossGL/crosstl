@@ -223,6 +223,38 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.intrinsicsSpirvByReference.vert.
+    # Reduced from GL_EXT_spirv_intrinsics by-reference parameter qualifier coverage.
+    ExternalFixture(
+        name="glslang-spv-intrinsics-spirv-by-reference-parameter",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.intrinsicsSpirvByReference.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 450 core
+
+            #extension GL_EXT_spirv_intrinsics: enable
+
+            spirv_instruction (set = "GLSL.std.450", id = 35)
+            float modf(float x, spirv_by_reference float i);
+
+            layout(location = 0) in float floatIn;
+            layout(location = 0) out vec2 vec2Out;
+            layout(location = 1) out float floatOut;
+
+            void func(spirv_by_reference float f)
+            {
+                f = 0.5;
+            }
+
+            void main()
+            {
+                vec2Out.x = modf(floatIn, vec2Out.y);
+                func(floatOut);
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/preprocessor.edge_cases.vert.
     # Exercises block comments inside macro replacement lists before logical
     # line splitting.
@@ -1293,6 +1325,23 @@ def test_parse_glslang_spirv_instruction_prefix_fixture():
     assert main.body[0].left.name == "uvec2Out"
 
 
+def test_parse_glslang_spirv_by_reference_parameter_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-intrinsics-spirv-by-reference-parameter"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    intrinsic = next(function for function in ast.functions if function.name == "modf")
+    func = next(function for function in ast.functions if function.name == "func")
+
+    assert intrinsic.params[1].vtype == "float"
+    assert intrinsic.params[1].name == "i"
+    assert intrinsic.params[1].qualifiers == ["spirv_by_reference"]
+    assert func.params[0].qualifiers == ["spirv_by_reference"]
+
+
 def test_parse_glslang_preprocessor_edge_case_block_comment_macro_fixture():
     fixture = next(
         item
@@ -2030,6 +2079,22 @@ def test_codegen_glslang_spirv_instruction_prefix_fixture_snippet():
     assert "spirv_instruction" not in crossgl
     assert "uvec2 clockRealtime2x32EXT(int _param0)" in crossgl
     assert "clockRealtime2x32EXT(1)" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_spirv_by_reference_parameter_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-intrinsics-spirv-by-reference-parameter"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "spirv_instruction" not in crossgl
+    assert "float modf(float x, float i @spirv_by_reference)" in crossgl
+    assert "void func(float f @spirv_by_reference)" in crossgl
+    assert "modf(input.floatIn, output.vec2Out.y)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

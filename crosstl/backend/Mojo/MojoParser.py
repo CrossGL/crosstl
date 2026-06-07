@@ -473,6 +473,10 @@ class MojoParser:
     def parse_struct_member(self):
         self.skip_newlines()
         attributes = self.parse_attributes()
+        if self.current_token[0] == "PASS":
+            self.eat("PASS")
+            self.consume_statement_terminator()
+            return PassNode()
         if self.is_function_declaration_start():
             return self.parse_function(attributes)
         if self.current_token[0] in ["COMPTIME", "ALIAS"]:
@@ -624,6 +628,10 @@ class MojoParser:
 
         if self.is_ellipsis_statement():
             return self.parse_ellipsis_statement()
+        if self.current_token[0] == "PASS":
+            self.eat("PASS")
+            self.consume_statement_terminator()
+            return PassNode()
         if self.is_function_declaration_start():
             return self.parse_function(attributes)
         if self.current_token[0] == "CLASS":

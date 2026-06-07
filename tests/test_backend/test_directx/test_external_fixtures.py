@@ -35,6 +35,9 @@ DIRECTX_SHADER_COMPILER_FLOAT64_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be
 DIRECTX_SHADER_COMPILER_BUFFER_ACCESS_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
 )
+DIRECTX_SHADER_COMPILER_CONTEXTUAL_RESOURCE_COMMIT = (
+    "8ed708842c1ccb24bd914eff03125c837a01be71"
+)
 DIRECTX_SHADER_COMPILER_REWRITER_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
@@ -776,6 +779,32 @@ EXTERNAL_FIXTURES = [
             "ivec2 int2 = int2buf[address];",
             "uvec3 uint3 = uint3buf[address];",
             "float b = float4buf[address][2];",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_contextual_resource_member_name",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_CONTEXTUAL_RESOURCE_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/type.rwstructured-buffer.baseclass.counter.hlsl",
+        code=textwrap.dedent("""
+            RWStructuredBuffer<uint> Buf1;
+
+            struct A
+            {
+              RWStructuredBuffer<uint> Buffer;
+            };
+
+            [numthreads(1, 1, 1)]
+            void main()
+            {
+              A a;
+              a.Buffer = Buf1;
+            }
+        """).strip(),
+        contains=(
+            "RWStructuredBuffer<uint> Buffer;",
+            "@ numthreads(1, 1, 1)",
+            "a.Buffer = Buf1;",
         ),
     ),
     ExternalFixture(

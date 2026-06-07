@@ -4533,6 +4533,11 @@ class CudaToCrossGLConverter:
                 return f"(WaveActiveAllTrue({predicate}) ? 1 : 0)"
             return f"WaveActiveBallot({predicate}).x"
 
+        if function_name == "__match_any_sync":
+            if len(args) == 2 and self.is_full_or_active_warp_mask(args[0]):
+                return f"WaveMatch({args[1]}).x"
+            return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
+
         if function_name in {
             "__shfl_sync",
             "__shfl_up_sync",

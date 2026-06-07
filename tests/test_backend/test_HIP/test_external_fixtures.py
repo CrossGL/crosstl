@@ -2,6 +2,7 @@ from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     BinaryOpNode,
     FunctionCallNode,
+    FunctionNode,
     HipAsmNode,
     IfNode,
     KernelLaunchNode,
@@ -736,6 +737,31 @@ def test_external_rocwmma_float_aliases_codegen_reparse():
     assert "float16_t" not in crossgl
     assert "float32_t" not in crossgl
     assert "float64_t" not in crossgl
+
+
+def test_external_rocwmma_device_macro_auto_helper_codegen_reparse():
+    # Upstream: ROCm/rocWMMA@1e3bed23f981d8ca0ce1b8634e6b91b5ccf91cfb,
+    # samples/perf_sgemm.cpp, transformGRFragAToLWFragA.
+    source = """
+    ROCWMMA_DEVICE auto transformGRFragAToLWFragA(GRFragA const& grFragA) {
+        return apply_data_layout<DataLayoutLds>(grFragA);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+    return_call = function.body[0].value
+
+    assert isinstance(function, FunctionNode)
+    assert function.return_type == "auto"
+    assert function.name == "transformGRFragAToLWFragA"
+    assert function.qualifiers == ["ROCWMMA_DEVICE"]
+    assert function.params == [{"type": "GRFragA const &", "name": "grFragA"}]
+    assert isinstance(return_call, FunctionCallNode)
+    assert return_call.name == "apply_data_layout<DataLayoutLds>"
+    assert "auto transformGRFragAToLWFragA(GRFragA grFragA)" in crossgl
+    assert "return apply_data_layout<DataLayoutLds>(grFragA);" in crossgl
+    assert "ROCWMMA_DEVICE" not in crossgl
 
 
 def test_external_hpc_training_double2_launch_codegen():

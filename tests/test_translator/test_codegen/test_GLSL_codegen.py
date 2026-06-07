@@ -6356,6 +6356,41 @@ def test_glsl_default_float_image_scalar_and_vector_load_store():
     assert "imageStore(image, pixel, vec4((vectorOld + value)));" not in generated_code
 
 
+def test_glsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
+    # Reduced from CrossGL-Compiler
+    # tests/frontend/fixtures/StorageImageHIRShader.cgl.
+    code = """
+    shader StorageImageHIRShader {
+        compute {
+            layout(set = 0, binding = 0) uniform iimage2D labelImage;
+            layout(set = 0, binding = 1) uniform uimage2D maskImage;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 1);
+                ivec4 label2D = imageLoad(labelImage, pixel);
+                uvec4 mask2D = imageLoad(maskImage, pixel);
+                imageStore(labelImage, pixel, label2D);
+                imageStore(maskImage, pixel, mask2D);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "layout(r32i, binding = 0) uniform iimage2D labelImage;" in generated_code
+    assert "layout(r32ui, binding = 1) uniform uimage2D maskImage;" in generated_code
+    assert "ivec4 label2D = imageLoad(labelImage, pixel);" in generated_code
+    assert "uvec4 mask2D = imageLoad(maskImage, pixel);" in generated_code
+    assert "ivec4 label2D = imageLoad(labelImage, pixel).x;" not in generated_code
+    assert "uvec4 mask2D = imageLoad(maskImage, pixel).x;" not in generated_code
+    assert "imageStore(labelImage, pixel, ivec4(label2D));" in generated_code
+    assert "imageStore(maskImage, pixel, uvec4(mask2D));" in generated_code
+
+
 def test_glsl_rg_image_scalar_and_vector_load_store():
     code = """
     shader RGImageScalarVector {

@@ -66,7 +66,10 @@ EXTERNAL_SAMPLES = [
     {
         "repo": "https://github.com/NVIDIA/cccl",
         "commit": "cea7dcd759b81d3059db8b74a3d5d4005ce4a398",
-        "paths": ["README.md"],
+        "paths": [
+            "README.md",
+            "libcudacxx/include/cuda/__barrier/barrier_block_scope.h",
+        ],
     },
     {
         "repo": "https://github.com/NVIDIA/cutlass",
@@ -976,6 +979,36 @@ def test_cccl_readme_span_reduce_kernel_codegen_reparse():
         crossgl
     )
     assert "cuda::std::span" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_barrier_match_any_sync_active_mask_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: cea7dcd759b81d3059db8b74a3d5d4005ce4a398
+    # path: libcudacxx/include/cuda/__barrier/barrier_block_scope.h
+    # lines: 170-172
+    source = """
+    __device__ unsigned int match_barrier_update(unsigned int update,
+                                                 unsigned int barrier_key) {
+        unsigned int mask = ::__activemask();
+        unsigned int activeA = ::__match_any_sync(mask, update);
+        unsigned int activeB = __match_any_sync(mask, barrier_key);
+        return activeA & activeB;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert body[0].value.name == "::__activemask"
+    assert body[1].value.name == "::__match_any_sync"
+    assert body[2].value.name == "__match_any_sync"
+    assert "var mask: u32 = WaveActiveBallot(true).x;" in crossgl
+    assert "var activeA: u32 = WaveMatch(update).x;" in crossgl
+    assert "var activeB: u32 = WaveMatch(barrier_key).x;" in crossgl
+    assert "__match_any_sync" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

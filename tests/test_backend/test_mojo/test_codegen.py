@@ -1448,6 +1448,25 @@ def test_struct_conditional_trait_conformance_codegen_from_modular_docs():
     assert "Unhandled" not in generated_code
 
 
+def test_pass_placeholder_struct_codegen_from_modular_docs_reparses_crossgl():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # mojo/docs/code/manual/generics/conditional_trait_conformance.mojo Foo.
+    code = """
+    @fieldwise_init
+    struct Foo[T: AnyType](Copyable, Writable where conforms_to(T, Writable)):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+    reparsed = parse_crossgl(generated_code)
+
+    assert "struct Foo" in generated_code
+    assert "pass" not in generated_code
+    assert "Unhandled" not in generated_code
+    assert reparsed.structs[0].name == "Foo"
+
+
 def test_if_codegen():
     code = """
     struct VSInput:
