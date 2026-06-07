@@ -882,6 +882,7 @@ def test_project_batch_translation_documents_artifact_matrix_rollups():
             "backends, and variants"
         ) in backend_support["notes"]
         assert "command-scoped source-root overrides" in backend_support["notes"]
+        assert "rejects empty CLI target overrides" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_records_artifact_matrix_metadata"
@@ -902,6 +903,10 @@ def test_project_batch_translation_documents_artifact_matrix_rollups():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_translate_project_applies_source_root_overrides"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scan_rejects_empty_target_override"
         ) in backend_support["evidence"]
 
 

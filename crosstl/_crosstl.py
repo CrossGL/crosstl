@@ -275,6 +275,18 @@ def _parse_project_include_dirs(values):
     return tuple(include_dirs)
 
 
+def _parse_project_targets(values):
+    if values is None:
+        return None
+    targets = []
+    for value in values:
+        target = value.strip()
+        if not target:
+            raise ValueError("--target entries must be non-empty")
+        targets.append(target)
+    return tuple(targets)
+
+
 def _load_project_config_from_args(args):
     from .project import load_project_config
 
@@ -341,7 +353,7 @@ def _run_project_scan(args):
     from .project import scan_project
 
     config = _load_project_config_from_args(args)
-    report = scan_project(config).to_report(targets=args.target)
+    report = scan_project(config).to_report(targets=_parse_project_targets(args.target))
     payload = report.to_json()
     _write_json_payload(payload, args.output)
     return 1 if payload["summary"]["diagnosticCounts"]["error"] else 0
@@ -353,7 +365,7 @@ def _run_translate_project(args):
     config = _load_project_config_from_args(args)
     report = translate_project(
         config,
-        targets=args.target,
+        targets=_parse_project_targets(args.target),
         output_dir=args.output_dir,
         variants=args.variant,
         format_output=not args.no_format,
