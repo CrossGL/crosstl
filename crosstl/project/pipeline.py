@@ -5717,6 +5717,11 @@ def _inspection_define_processing_artifact(
         and define_count >= 0
     ):
         sample["defineCount"] = define_count
+    defines = artifact.get("defines")
+    if isinstance(defines, Mapping):
+        define_names = sorted(name for name in defines if _is_non_empty_string(name))
+        if define_names:
+            sample["defineNames"] = define_names
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
     return {key: value for key, value in sample.items() if value is not None}

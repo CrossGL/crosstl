@@ -700,6 +700,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "sampled define-processing artifact metadata" in (
             backend_support["notes"]
         )
+        assert "with define names and without define values" in backend_support["notes"]
         assert "scoped runs for selected declared variants" in backend_support["notes"]
         assert "de-duplicates repeated selections before artifact planning" in (
             backend_support["notes"]

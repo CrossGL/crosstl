@@ -1535,6 +1535,11 @@ def _format_define_processing_artifact_line(artifact):
         and define_count >= 0
     ):
         details.append(f"defines={define_count}")
+    define_names = artifact.get("defineNames")
+    if isinstance(define_names, list):
+        names = [name for name in define_names if isinstance(name, str) and name]
+        if names:
+            details.append("defineNames=" + ",".join(names))
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {path}{suffix}"

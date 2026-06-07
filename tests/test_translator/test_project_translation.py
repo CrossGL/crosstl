@@ -3246,6 +3246,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "frontend": "lexer",
             "supportsDefines": True,
             "defineCount": 2,
+            "defineNames": ["MODE", "USE_FAST_PATH"],
             "variant": "debug",
         },
         {
@@ -3257,10 +3258,15 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "frontend": "lexer",
             "supportsDefines": True,
             "defineCount": 2,
+            "defineNames": ["MODE", "USE_FAST_PATH"],
             "variant": "release",
         },
     ]
-    assert "MODE" not in json.dumps(inspection["defineProcessing"]["artifacts"])
+    assert all(
+        "defines" not in artifact
+        for artifact in inspection["defineProcessing"]["artifacts"]
+    )
+    assert '"base"' not in json.dumps(inspection["defineProcessing"]["artifacts"])
     assert inspection["includePathProcessing"]["byVariant"] == {
         "debug": {"not-requested": 1},
         "release": {"not-requested": 1},
@@ -3269,6 +3275,19 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     assert "Define processing by source backend: cgl=(forwarded=2)" in result.stdout
     assert (
         "Define processing by variant: debug=(forwarded=1), release=(forwarded=1)"
+    ) in result.stdout
+    assert "Define processing artifacts:" in result.stdout
+    assert (
+        "- simple.cgl -> translated/opengl/debug/simple.glsl "
+        "(sourceBackend=cgl, target=opengl, variant=debug, status=forwarded, "
+        "frontend=lexer, supportsDefines=true, defines=2, "
+        "defineNames=MODE,USE_FAST_PATH)"
+    ) in result.stdout
+    assert (
+        "- simple.cgl -> translated/opengl/release/simple.glsl "
+        "(sourceBackend=cgl, target=opengl, variant=release, status=forwarded, "
+        "frontend=lexer, supportsDefines=true, defines=2, "
+        "defineNames=MODE,USE_FAST_PATH)"
     ) in result.stdout
     assert (
         "Include path processing by variant: "
@@ -4281,6 +4300,7 @@ def test_translate_project_records_define_processing_without_frontend_support(
                 "frontend": "lexer",
                 "supportsDefines": False,
                 "defineCount": 1,
+                "defineNames": ["ENABLE_PATH"],
             }
         ],
         "notSupportedArtifactCount": 1,
@@ -4295,6 +4315,7 @@ def test_translate_project_records_define_processing_without_frontend_support(
                 "frontend": "lexer",
                 "supportsDefines": False,
                 "defineCount": 1,
+                "defineNames": ["ENABLE_PATH"],
             }
         ],
     }
@@ -15715,7 +15736,10 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "Artifacts by variant: debug=1 artifact (1 translated, 0 failed), "
         "release=1 artifact (1 translated, 0 failed)"
     ) in result.stdout
-    assert "MODE" not in result.stdout
+    assert "defineNames=MODE" in result.stdout
+    assert "MODE=base" not in result.stdout
+    assert "MODE=debug" not in result.stdout
+    assert "MODE=release" not in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
