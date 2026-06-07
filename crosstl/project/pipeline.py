@@ -168,6 +168,31 @@ REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
 REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
     ("schemaVersion", "path", "target", "generatedFile", "mappingGranularity", "hash")
 )
+REPORT_UNIT_FIELDS = frozenset(
+    (
+        "id",
+        "path",
+        "sourceBackend",
+        "extension",
+        "sourceOverride",
+        "sourceHash",
+        "includeDependencies",
+    )
+)
+REPORT_INCLUDE_DEPENDENCY_FIELDS = frozenset(
+    (
+        "include",
+        "kind",
+        "status",
+        "line",
+        "column",
+        "resolvedPath",
+        "resolvedHash",
+        "resolvedFrom",
+        "resolvedFromDefine",
+    )
+)
+REPORT_SKIPPED_FIELDS = frozenset(("path", "reason", "sourceOverride"))
 VALIDATION_FIELDS = frozenset(("toolchains", "artifacts", "summary", "toolchainRuns"))
 VALIDATION_TOOLCHAIN_FIELDS = frozenset(("target", "status", "tools", "message"))
 VALIDATION_TOOL_FIELDS = frozenset(("name", "path", "available"))
@@ -6622,12 +6647,20 @@ def _include_dependency_contract_reasons(
     unit_index: int,
     dependency_index: int,
     dependency: Any,
+    *,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"units[{unit_index}].includeDependencies[{dependency_index}]"
     if not isinstance(dependency, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(
+            prefix, dependency, REPORT_INCLUDE_DEPENDENCY_FIELDS
+        )
+        if require_closed_fields
+        else []
+    )
     include_value = dependency.get("include")
     if not _is_non_empty_string(include_value):
         reasons.append(f"{prefix}.include must be a string")
@@ -6666,7 +6699,9 @@ def _include_dependency_contract_reasons(
     if status == "resolved":
         reasons.extend(
             _hash_contract_reasons(
-                f"{prefix}.resolvedHash", dependency.get("resolvedHash")
+                f"{prefix}.resolvedHash",
+                dependency.get("resolvedHash"),
+                require_closed_fields=require_closed_fields,
             )
         )
     elif "resolvedHash" in dependency:
@@ -6801,6 +6836,7 @@ def _unit_include_dependencies_contract_reasons(
     *,
     root_path: Path | None = None,
     project: Mapping[str, Any] | None = None,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     if "includeDependencies" not in unit:
         return []
@@ -6813,7 +6849,10 @@ def _unit_include_dependencies_contract_reasons(
     include_config = _project_config_for_include_validation(project, root_path)
     for dependency_index, dependency in enumerate(dependencies):
         dependency_reasons = _include_dependency_contract_reasons(
-            index, dependency_index, dependency
+            index,
+            dependency_index,
+            dependency,
+            require_closed_fields=require_closed_fields,
         )
         reasons.extend(dependency_reasons)
         if dependency_reasons or not isinstance(dependency, Mapping):
@@ -6841,12 +6880,17 @@ def _unit_contract_reasons(
     check_current_source_hash: bool = False,
     require_registered_source_backend: bool = False,
     require_declared_source_override: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"units[{index}]"
     if not isinstance(unit, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(prefix, unit, REPORT_UNIT_FIELDS)
+        if require_closed_fields
+        else []
+    )
     path = unit.get("path")
     reasons.extend(_repository_path_contract_reasons(f"{prefix}.path", path))
 
@@ -6894,6 +6938,7 @@ def _unit_contract_reasons(
             unit,
             root_path=root_path,
             project=project,
+            require_closed_fields=require_closed_fields,
         )
     )
     return reasons
@@ -6947,12 +6992,17 @@ def _skipped_contract_reasons(
     *,
     project: Mapping[str, Any] | None = None,
     require_declared_source_override: bool = False,
+    require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"skipped[{index}]"
     if not isinstance(skipped, Mapping):
         return [f"{prefix} must be an object"]
 
-    reasons = []
+    reasons = (
+        _unsupported_mapping_field_reasons(prefix, skipped, REPORT_SKIPPED_FIELDS)
+        if require_closed_fields
+        else []
+    )
     reasons.extend(
         _repository_path_contract_reasons(f"{prefix}.path", skipped.get("path"))
     )
@@ -9205,6 +9255,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         require_source_hash=has_summary,
                         require_registered_source_backend=has_summary,
                         require_declared_source_override=has_summary,
+                        require_closed_fields=has_summary,
                         check_current_source_hash=(
                             has_summary
                             and isinstance(report.get("artifacts", []), list)
@@ -9228,6 +9279,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         skipped_record,
                         project=project if isinstance(project, Mapping) else None,
                         require_declared_source_override=has_summary,
+                        require_closed_fields=has_summary,
                     )
                 )
             reasons.extend(_duplicate_path_contract_reasons("skipped", skipped))

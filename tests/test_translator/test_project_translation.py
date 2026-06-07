@@ -4886,6 +4886,58 @@ def test_validate_project_report_rejects_malformed_unit_and_skipped_records(tmp_
     assert "skipped[1] must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_fields(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (shader_dir / "local.inc").write_text("// local include\n", encoding="utf-8")
+    (repo / "notes.txt").write_text("not shader code\n", encoding="utf-8")
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    unit = payload["units"][0]
+    dependency = unit["includeDependencies"][0]
+    skipped = payload["skipped"][0]
+    unit["unexpected"] = "metadata"
+    dependency["unexpected"] = "metadata"
+    dependency["resolvedHash"]["unexpected"] = "metadata"
+    skipped["unexpected"] = "metadata"
+    report_path = repo / "unexpected-generated-unit-and-skipped-fields-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].unexpected is not allowed" in diagnostic["message"]
+    assert (
+        "units[0].includeDependencies[0].unexpected is not allowed"
+        in diagnostic["message"]
+    )
+    assert (
+        "units[0].includeDependencies[0].resolvedHash.unexpected is not allowed"
+        in diagnostic["message"]
+    )
+    assert "skipped[0].unexpected is not allowed" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_missing_unit_source_hashes(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
