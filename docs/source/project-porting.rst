@@ -278,14 +278,14 @@ so active, missing, non-directory, outside-project, and scan-visible roots can
 be triaged without re-running discovery. Missing source roots, source roots
 that resolve to files or other non-directory paths, and roots that resolve
 outside the repository are reported as scan or configuration diagnostics.
-Include and source override patterns must also be
+Include, exclude, and source override patterns must also be
 repository-relative; absolute patterns or patterns containing parent-directory
-segments are reported as configuration diagnostics and skipped. Source overrides
-allow extensionless or non-standard files to be assigned to a registered source
-backend. Override patterns are also considered during default discovery, so
-override-only files do not require broad include globs. CLI source overrides are
-merged with this configuration before scan or translation. Invalid override
-backend names are reported as configuration diagnostics.
+segments are reported as configuration diagnostics and skipped. Source
+overrides allow extensionless or non-standard files to be assigned to a
+registered source backend. Override patterns are also considered during default
+discovery, so override-only files do not require broad include globs. CLI source
+overrides are merged with this configuration before scan or translation.
+Invalid override backend names are reported as configuration diagnostics.
 Explicit broad include patterns may also match compiled shader artifacts or
 known source formats that CrossTL cannot parse yet. Project scans keep those
 files in the skipped-file rollups and emit structured diagnostics with the

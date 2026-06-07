@@ -597,6 +597,70 @@ def test_scan_project_reports_drive_relative_include_patterns(tmp_path):
     assert diagnostic["missingCapabilities"] == ["repo.scan"]
 
 
+def test_scan_project_reports_exclude_patterns_outside_project(tmp_path):
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside"
+    repo.mkdir()
+    outside.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (outside / "external.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    absolute_pattern = (outside / "*.cgl").as_posix()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(f"""
+            [project]
+            exclude = ["{absolute_pattern}", "../outside/*.cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 2,
+    }
+    diagnostics = {diagnostic["message"] for diagnostic in payload["diagnostics"]}
+    assert any(absolute_pattern in message for message in diagnostics)
+    assert any("../outside/*.cgl" in message for message in diagnostics)
+    assert [diagnostic["code"] for diagnostic in payload["diagnostics"]] == [
+        "project.config.exclude-pattern-outside-project",
+        "project.config.exclude-pattern-outside-project",
+    ]
+    assert all(
+        diagnostic["missingCapabilities"] == ["repo.scan"]
+        for diagnostic in payload["diagnostics"]
+    )
+
+
+def test_scan_project_reports_drive_relative_exclude_patterns(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            exclude = ["C:tmp/*.cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(load_project_config(repo)).to_report().to_json()
+
+    assert [unit["path"] for unit in payload["units"]] == ["simple.cgl"]
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 1,
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.exclude-pattern-outside-project"
+    assert "C:tmp/*.cgl" in diagnostic["message"]
+    assert diagnostic["missingCapabilities"] == ["repo.scan"]
+
+
 def test_scan_report_normalizes_and_deduplicates_targets(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -2617,6 +2617,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["repo.scan"],
             )
         )
+    for pattern in config.exclude_patterns:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.exclude-pattern-outside-project",
+                message=(
+                    f"Configured exclude pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["repo.scan"],
+            )
+        )
     for pattern in config.source_overrides:
         if _is_repository_relative_glob(pattern):
             continue
@@ -3009,6 +3024,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
     diagnostics.extend(_source_root_diagnostics(config))
     diagnostics.extend(_include_dir_diagnostics(config))
     diagnostics.extend(_scan_pattern_diagnostics(config))
+    exclude_patterns = _repository_relative_globs(config.exclude_patterns)
     internal_exclude_patterns = _internal_exclude_patterns(config)
 
     for path in _iter_scan_candidates(config):
@@ -3016,7 +3032,7 @@ def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> Proj
             relative_path = _relpath(path, config.root)
         except ValueError:
             continue
-        if _path_matches(relative_path, config.exclude_patterns):
+        if _path_matches(relative_path, exclude_patterns):
             continue
         if _path_matches(relative_path, internal_exclude_patterns):
             continue
