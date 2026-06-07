@@ -6080,6 +6080,14 @@ def _inspection_source_remap_artifact(
     }
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
+    source_remap_hash = source_remap.get("hash")
+    if isinstance(source_remap_hash, Mapping):
+        hash_algorithm = source_remap_hash.get("algorithm")
+        hash_value = source_remap_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["sourceRemapHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["sourceRemapHash"] = hash_value
     return {key: value for key, value in sample.items() if value is not None}
 
 

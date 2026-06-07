@@ -14650,6 +14650,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     report.write_json(report_path)
 
     payload = inspect_project_report(report_path)
+    source_remap_hash = project_pipeline._source_hash(
+        repo / "out" / "cgl" / "simple.source-remap.json"
+    )
 
     assert payload["kind"] == "crosstl-project-report-inspection"
     assert payload["sourceReport"] == str(report_path)
@@ -14695,6 +14698,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "file",
+                "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
+                "sourceRemapHash": source_remap_hash["value"],
             }
         ],
         "sourceMapsByGranularity": {"line": 1},
@@ -15303,6 +15308,10 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     )
 
     payload = json.loads(output.read_text(encoding="utf-8"))
+    source_remap_hash = project_pipeline._source_hash(
+        repo / "out" / "cgl" / "simple.source-remap.json"
+    )
+
     assert result.returncode == 0
     assert "Wrote" in result.stdout
     assert payload["success"] is True
@@ -15348,6 +15357,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "file",
+                "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
+                "sourceRemapHash": source_remap_hash["value"],
             }
         ],
         "sourceMapsByGranularity": {"line": 1},
@@ -16124,9 +16135,16 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         f"mappings={line_mapping_count})"
     ) in result.stdout
     assert "Source remap artifacts:" in result.stdout
+    source_remap_hash = project_pipeline._source_hash(
+        repo / "out" / "cgl" / "simple.source-remap.json"
+    )
+    source_remap_hash_preview = (
+        f"{source_remap_hash['algorithm']}:{source_remap_hash['value'][:12]}..."
+    )
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
-        "(sourceBackend=cgl, target=cgl, granularity=file)"
+        f"(sourceBackend=cgl, target=cgl, granularity=file, "
+        f"hash={source_remap_hash_preview})"
     ) in result.stdout
     assert "Artifact provenance by pipeline: single-file-translate=1" in result.stdout
     assert "Artifact provenance by intermediate: none=1" in result.stdout
@@ -16182,6 +16200,12 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
     )
     assert result.returncode == 1
     assert "Report: invalid" in result.stdout
+    source_remap_hash = project_pipeline._source_hash(
+        repo / "out" / "cgl" / "simple.source-remap.json"
+    )
+    source_remap_hash_preview = (
+        f"{source_remap_hash['algorithm']}:{source_remap_hash['value'][:12]}..."
+    )
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, sourceMapTarget=opengl, "
@@ -16189,8 +16213,8 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
     ) in result.stdout
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
-        "(sourceBackend=cgl, target=cgl, sourceRemapTarget=opengl, "
-        "granularity=file)"
+        f"(sourceBackend=cgl, target=cgl, sourceRemapTarget=opengl, "
+        f"granularity=file, hash={source_remap_hash_preview})"
     ) in result.stdout
 
 

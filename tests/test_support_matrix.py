@@ -173,7 +173,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert (
             "source-map count, source-map artifact samples, source-remap artifact "
-            "samples, and provenance rollups"
+            "samples with sidecar hash metadata, and provenance rollups"
         ) in backend_support["notes"]
         assert (
             "report-or-translation-artifact-derived metadata source, does not "
@@ -1099,7 +1099,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "canonical source-map and source-remap target metadata" in (
             backend_support["notes"]
         )
-        assert "source-map and source-remap target metadata inspection" in (
+        assert "source-map, source-remap target, and source-remap sidecar hash" in (
             backend_support["notes"]
         )
         assert "missing source-map and source-remap variant rollups" in (
@@ -1113,7 +1113,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert (
             "bounded source-map and source-remap artifact inspection samples "
-            "with custom limits"
+            "with sidecar hash metadata and custom limits"
         ) in backend_support["notes"]
         assert (
             "text inspection derives file-level source-map counts from total "

@@ -994,6 +994,14 @@ def _format_source_map_artifact_lines(source_maps):
     return lines
 
 
+def _format_hash_preview(algorithm, value):
+    if not isinstance(value, str) or not value:
+        return None
+    prefix = f"{algorithm}:" if isinstance(algorithm, str) and algorithm else ""
+    suffix = "..." if len(value) > 12 else ""
+    return f"{prefix}{value[:12]}{suffix}"
+
+
 def _format_source_remap_artifact_line(artifact):
     if not isinstance(artifact, Mapping):
         return None
@@ -1025,6 +1033,12 @@ def _format_source_remap_artifact_line(artifact):
     granularity = artifact.get("mappingGranularity")
     if isinstance(granularity, str) and granularity:
         details.append(f"granularity={granularity}")
+    hash_preview = _format_hash_preview(
+        artifact.get("sourceRemapHashAlgorithm"),
+        artifact.get("sourceRemapHash"),
+    )
+    if hash_preview:
+        details.append(f"hash={hash_preview}")
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {remap_path} -> {generated}{suffix}"
