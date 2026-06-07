@@ -702,8 +702,9 @@ def test_project_macro_variants_document_artifact_define_maps():
             backend_support["notes"]
         )
         assert (
-            "malformed define/variant metadata including empty mapping keys and "
-            "forged variant define counts"
+            "malformed define/variant metadata including empty mapping keys, "
+            "punctuation-bearing variant keys in config/report diagnostics, "
+            "and forged variant define counts"
         ) in backend_support["notes"]
         assert "artifact define maps that do not match base defines merged" in (
             backend_support["notes"]
@@ -812,6 +813,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_project_mapping_keys"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_quotes_variant_keys_with_punctuation"
         ) in backend_support["evidence"]
 
 

@@ -507,6 +507,7 @@ INCLUDE_LITERAL_RE = re.compile(r'^(?P<open>["<])(?P<path>[^">]+)(?P<close>[">])
 INCLUDE_CONDITION_TOKEN_RE = re.compile(
     r"defined|&&|\|\||!|\(|\)|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|\S"
 )
+REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -521,6 +522,12 @@ def _load_toml(path: Path) -> dict[str, Any]:
             ) from exc
     with path.open("rb") as handle:
         return tomllib.load(handle)
+
+
+def _mapping_key_path(prefix: str, key: str) -> str:
+    if REPORT_PATH_BARE_KEY_RE.match(key):
+        return f"{prefix}.{key}"
+    return f"{prefix}[{json.dumps(key)}]"
 
 
 def _as_str_list(value: Any, *, field_name: str) -> list[str]:
@@ -583,10 +590,11 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
             raise ValueError(
                 "crosstl.toml [project.variants] keys must be non-empty strings"
             )
+        variant_path = _mapping_key_path("project.variants", name)
         if not isinstance(value, Mapping):
-            raise ValueError(f"crosstl.toml [project.variants.{name}] must be a table")
+            raise ValueError(f"crosstl.toml [{variant_path}] must be a table")
         result[name] = _as_str_mapping(
-            value, field_name=f"crosstl.toml [project.variants.{name}]"
+            value, field_name=f"crosstl.toml [{variant_path}]"
         )
     return result
 
@@ -8060,9 +8068,11 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
 
     reasons = []
     for variant_name, defines in value.items():
-        variant_prefix = f"{prefix}.{variant_name}"
         if not _is_non_empty_string(variant_name):
             reasons.append(f"{prefix} keys must be non-empty strings")
+            variant_prefix = prefix
+        else:
+            variant_prefix = _mapping_key_path(prefix, variant_name)
         reasons.extend(_string_mapping_contract_reasons(variant_prefix, defines))
     return reasons
 

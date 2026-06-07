@@ -2329,6 +2329,16 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
         ),
         (
             """
+            [project.variants."qa/profile"]
+            MODE = 1
+            """,
+            (
+                'crosstl.toml [project.variants["qa/profile"]] entries must map '
+                "non-empty strings to strings"
+            ),
+        ),
+        (
+            """
             [project.variants.""]
             MODE = "debug"
             """,
@@ -7083,7 +7093,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     )
     assert "project.variants keys must be non-empty strings" in diagnostic["message"]
     assert "project.variants.debug must be an object" in diagnostic["message"]
-    assert "project.variants. values must be strings" in diagnostic["message"]
+    assert "project.variants values must be strings" in diagnostic["message"]
     assert "project.variantCount must be a non-negative integer" in (
         diagnostic["message"]
     )
@@ -7312,6 +7322,39 @@ def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
         diagnostic["message"]
     )
     assert "project.variants.debug keys must be non-empty strings" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_quotes_variant_keys_with_punctuation(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "punctuated-variant-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "variants": {"qa/profile": {"": "1"}},
+                    "variantDefineCounts": {"qa/profile": 1},
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert 'project.variants["qa/profile"] keys must be non-empty strings' in (
         diagnostic["message"]
     )
 
