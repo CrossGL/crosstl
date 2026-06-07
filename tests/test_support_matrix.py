@@ -1013,6 +1013,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "artifact source hashes that do not match declared" in (
             backend_support["notes"]
         )
+        assert "exact-copy line-granularity source-map mappings" in (
+            backend_support["notes"]
+        )
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "file-level source-map mapping cardinality" in backend_support["notes"]
         assert "fine-grained positive-length source-map mappings" in (
@@ -1036,7 +1039,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "missing source-map and source-remap variant rollups" in (
             backend_support["notes"]
         )
-        assert "current file-level source-map span coverage" in (
+        assert "current artifact-level source-map span coverage" in (
             backend_support["notes"]
         )
         assert "closed compiler source-remap sidecar field sets" in (

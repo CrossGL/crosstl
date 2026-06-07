@@ -805,17 +805,20 @@ def _variant_output_segment(variant: str) -> str:
     return f"{safe[:48]}-{digest}"
 
 
-def _file_span(path: Path, report_path: str) -> SourceLocation:
-    source_bytes = path.read_bytes()
-    text = source_bytes.decode("utf-8", errors="replace")
-    line = 1
-    column = 1
+def _advance_source_position(text: str, line: int, column: int) -> tuple[int, int]:
     for character in text:
         if character == "\n":
             line += 1
             column = 1
         else:
             column += 1
+    return line, column
+
+
+def _file_span(path: Path, report_path: str) -> SourceLocation:
+    source_bytes = path.read_bytes()
+    text = source_bytes.decode("utf-8", errors="replace")
+    line, column = _advance_source_position(text, 1, 1)
     return SourceLocation(
         file=report_path,
         length=len(source_bytes),
@@ -823,6 +826,34 @@ def _file_span(path: Path, report_path: str) -> SourceLocation:
         end_column=column,
         end_offset=len(source_bytes),
     )
+
+
+def _line_spans(path: Path, report_path: str) -> list[SourceLocation]:
+    source_bytes = path.read_bytes()
+    spans = []
+    offset = 0
+    line = 1
+    while offset < len(source_bytes):
+        newline_index = source_bytes.find(b"\n", offset)
+        end_offset = len(source_bytes) if newline_index == -1 else newline_index + 1
+        line_bytes = source_bytes[offset:end_offset]
+        text = line_bytes.decode("utf-8", errors="replace")
+        end_line, end_column = _advance_source_position(text, line, 1)
+        spans.append(
+            SourceLocation(
+                file=report_path,
+                line=line,
+                column=1,
+                offset=offset,
+                length=len(line_bytes),
+                end_line=end_line,
+                end_column=end_column,
+                end_offset=end_offset,
+            )
+        )
+        offset = end_offset
+        line = end_line
+    return spans
 
 
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
@@ -3442,19 +3473,41 @@ def _artifact_source_map(
     artifact_path = _artifact_report_path(output_path, config)
     source_span = _file_span(unit.path, unit.relative_path)
     generated_span = _file_span(output_path, artifact_path)
-    return {
-        "schemaVersion": 1,
-        "kind": "crosstl-artifact-source-map",
-        "mappingGranularity": "file",
-        "target": target,
-        "source": source_span.to_json(),
-        "generated": generated_span.to_json(),
-        "mappings": [
+    source_bytes = unit.path.read_bytes()
+    generated_bytes = output_path.read_bytes()
+    line_mappings = []
+    if source_bytes == generated_bytes:
+        source_line_spans = _line_spans(unit.path, unit.relative_path)
+        generated_line_spans = _line_spans(output_path, artifact_path)
+        if source_line_spans and len(source_line_spans) == len(generated_line_spans):
+            line_mappings = [
+                {
+                    "source": source_line_span.to_json(),
+                    "generated": generated_line_span.to_json(),
+                }
+                for source_line_span, generated_line_span in zip(
+                    source_line_spans, generated_line_spans
+                )
+            ]
+    mapping_granularity = "line" if line_mappings else "file"
+    mappings = (
+        line_mappings
+        if line_mappings
+        else [
             {
                 "source": source_span.to_json(),
                 "generated": generated_span.to_json(),
             }
-        ],
+        ]
+    )
+    return {
+        "schemaVersion": 1,
+        "kind": "crosstl-artifact-source-map",
+        "mappingGranularity": mapping_granularity,
+        "target": target,
+        "source": source_span.to_json(),
+        "generated": generated_span.to_json(),
+        "mappings": mappings,
     }
 
 
@@ -4083,10 +4136,7 @@ def _source_map_file_span_validation_diagnostics(
         return []
 
     source_map = artifact.get("sourceMap")
-    if (
-        not isinstance(source_map, Mapping)
-        or source_map.get("mappingGranularity") != "file"
-    ):
+    if not isinstance(source_map, Mapping):
         return []
 
     reasons = []
@@ -4131,7 +4181,7 @@ def _source_map_file_span_validation_diagnostics(
             severity="error",
             code="project.validate.source-map-file-span-mismatch",
             message=(
-                "Source map file-level spans do not match current files: "
+                "Source map file spans do not match current files: "
                 f"{artifact.get('path')}: {'; '.join(reasons)}"
             ),
             location=SourceLocation(file=str(artifact.get("source", ""))),

@@ -5292,7 +5292,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     ) in result.stdout
 
 
-def test_translate_project_records_file_granularity_source_maps(tmp_path):
+def test_translate_project_records_exact_copy_line_source_maps(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -5304,8 +5304,8 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     source_map = artifact["sourceMap"]
 
     assert payload["summary"]["sourceMapCount"] == 1
-    assert payload["summary"]["fineGrainedSourceMapCount"] == 0
-    assert payload["summary"]["sourceMapsByGranularity"] == {"file": 1}
+    assert payload["summary"]["fineGrainedSourceMapCount"] == 1
+    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 1}
     assert payload["summary"]["sourceMapsByTarget"] == {"cgl": 1}
     assert payload["summary"]["sourceMapsBySourceBackend"] == {"cgl": 1}
     assert payload["summary"]["sourceMapsByVariant"] == {}
@@ -5315,7 +5315,7 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     assert payload["summary"]["sourceRemapsByVariant"] == {}
     assert source_map["schemaVersion"] == 1
     assert source_map["kind"] == "crosstl-artifact-source-map"
-    assert source_map["mappingGranularity"] == "file"
+    assert source_map["mappingGranularity"] == "line"
     assert source_map["target"] == "cgl"
     assert source_map["source"]["file"] == "simple.cgl"
     assert source_map["generated"]["file"] == "out/cgl/simple.cgl"
@@ -5325,10 +5325,16 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
     )
     assert source_map["mappings"] == [
         {
-            "source": source_map["source"],
-            "generated": source_map["generated"],
+            "source": source_span.to_json(),
+            "generated": generated_span.to_json(),
         }
+        for source_span, generated_span in zip(
+            project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl"),
+            project_pipeline._line_spans(repo / artifact["path"], "out/cgl/simple.cgl"),
+        )
     ]
+    assert all(mapping["source"]["length"] > 0 for mapping in source_map["mappings"])
+    assert all(mapping["generated"]["length"] > 0 for mapping in source_map["mappings"])
     source_remap = artifact["sourceRemap"]
     source_remap_path = repo / source_remap["path"]
     source_remap_payload = json.loads(source_remap_path.read_text(encoding="utf-8"))
@@ -5350,6 +5356,30 @@ def test_translate_project_records_file_granularity_source_maps(tmp_path):
             }
         ],
     }
+
+
+def test_translate_project_uses_file_source_maps_for_generated_artifacts(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+
+    assert payload["summary"]["sourceMapCount"] == 1
+    assert payload["summary"]["fineGrainedSourceMapCount"] == 0
+    assert payload["summary"]["sourceMapsByGranularity"] == {"file": 1}
+    assert source_map["mappingGranularity"] == "file"
+    assert source_map["mappings"] == [
+        {
+            "source": source_map["source"],
+            "generated": source_map["generated"],
+        }
+    ]
+    assert "sourceRemap" not in artifact
 
 
 def test_source_map_rollups_count_fine_grained_artifact_maps():
@@ -5406,6 +5436,28 @@ def test_file_level_source_map_spans_use_utf8_byte_offsets(tmp_path):
     assert span["length"] == len(source_bytes)
     assert span["endOffset"] == len(source_bytes)
     assert span["endOffset"] > len(source_text)
+
+
+def test_line_source_map_spans_use_utf8_byte_offsets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    first_line = "// unicode marker: \u2603\n"
+    source_path = repo / "simple.cgl"
+    source_path.write_text(first_line + SIMPLE_CROSSL, encoding="utf-8")
+
+    spans = [
+        span.to_json()
+        for span in project_pipeline._line_spans(source_path, "simple.cgl")
+    ]
+
+    assert spans[0]["file"] == "simple.cgl"
+    assert spans[0]["line"] == 1
+    assert spans[0]["column"] == 1
+    assert spans[0]["offset"] == 0
+    assert spans[0]["length"] == len(first_line.encode("utf-8"))
+    assert spans[0]["endOffset"] == len(first_line.encode("utf-8"))
+    assert spans[0]["endOffset"] > len(first_line)
+    assert spans[1]["offset"] == spans[0]["endOffset"]
 
 
 def test_translate_project_reports_source_maps_and_remaps_by_variant(
@@ -10286,7 +10338,15 @@ def test_validate_project_report_rejects_multiple_file_level_source_map_mappings
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     report = translate_project(repo, targets=["cgl"], output_dir="out")
     payload = report.to_json()
-    mappings = payload["artifacts"][0]["sourceMap"]["mappings"]
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["mappingGranularity"] = "file"
+    source_map["mappings"] = [
+        {
+            "source": dict(source_map["source"]),
+            "generated": dict(source_map["generated"]),
+        }
+    ]
+    mappings = source_map["mappings"]
     mappings.append(dict(mappings[0]))
     report_path = repo / "out" / "multiple-source-map-mappings-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -10594,11 +10654,16 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
     payload = report.to_json()
     artifact = payload["artifacts"][0]
     source_map = artifact["sourceMap"]
+    source_map["mappingGranularity"] = "file"
     for span in (source_map["source"], source_map["generated"]):
         span["length"] -= 1
         span["endOffset"] -= 1
-    source_map["mappings"][0]["source"] = dict(source_map["source"])
-    source_map["mappings"][0]["generated"] = dict(source_map["generated"])
+    source_map["mappings"] = [
+        {
+            "source": dict(source_map["source"]),
+            "generated": dict(source_map["generated"]),
+        }
+    ]
     source_remap_path = repo / artifact["sourceRemap"]["path"]
     source_remap_path.write_text(
         json.dumps(
@@ -10610,6 +10675,7 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
         encoding="utf-8",
     )
     artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    _refresh_artifact_summary(payload)
     report_path = repo / "out" / "incomplete-source-map-span-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -11040,13 +11106,18 @@ def test_validate_project_report_rejects_compiler_incompatible_source_remap_side
     payload = report.to_json()
     artifact = payload["artifacts"][0]
     source_map = artifact["sourceMap"]
+    source_map["mappingGranularity"] = "file"
     for span in (source_map["source"], source_map["generated"]):
         span["length"] = 0
         span["endOffset"] = span["offset"]
         span["endLine"] = span["line"]
         span["endColumn"] = span["column"]
-    source_map["mappings"][0]["source"] = dict(source_map["source"])
-    source_map["mappings"][0]["generated"] = dict(source_map["generated"])
+    source_map["mappings"] = [
+        {
+            "source": dict(source_map["source"]),
+            "generated": dict(source_map["generated"]),
+        }
+    ]
     source_remap_path = repo / artifact["sourceRemap"]["path"]
     source_remap_path.write_text(
         json.dumps(
@@ -11058,6 +11129,7 @@ def test_validate_project_report_rejects_compiler_incompatible_source_remap_side
         encoding="utf-8",
     )
     artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    _refresh_artifact_summary(payload)
     report_path = repo / "out" / "compiler-incompatible-source-remap-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -13860,8 +13932,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["sourceMaps"] == {
         "available": True,
         "sourceMapCount": 1,
-        "fileLevelSourceMapCount": 1,
-        "fineGrainedSourceMapCount": 0,
+        "fileLevelSourceMapCount": 0,
+        "fineGrainedSourceMapCount": 1,
         "sourceMapArtifactCount": 1,
         "truncatedSourceMapArtifactCount": 0,
         "sourceMapArtifacts": [
@@ -13870,10 +13942,12 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceBackend": "cgl",
                 "target": "cgl",
                 "path": "out/cgl/simple.cgl",
-                "mappingGranularity": "file",
+                "mappingGranularity": "line",
                 "sourceFile": "simple.cgl",
                 "generatedFile": "out/cgl/simple.cgl",
-                "mappingCount": 1,
+                "mappingCount": len(
+                    project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+                ),
             }
         ],
         "sourceRemapCount": 1,
@@ -13890,7 +13964,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "mappingGranularity": "file",
             }
         ],
-        "sourceMapsByGranularity": {"file": 1},
+        "sourceMapsByGranularity": {"line": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
         "sourceMapsByVariant": {},
@@ -14509,8 +14583,8 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["sourceMaps"] == {
         "available": True,
         "sourceMapCount": 1,
-        "fileLevelSourceMapCount": 1,
-        "fineGrainedSourceMapCount": 0,
+        "fileLevelSourceMapCount": 0,
+        "fineGrainedSourceMapCount": 1,
         "sourceMapArtifactCount": 1,
         "truncatedSourceMapArtifactCount": 0,
         "sourceMapArtifacts": [
@@ -14519,10 +14593,12 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceBackend": "cgl",
                 "target": "cgl",
                 "path": "out/cgl/simple.cgl",
-                "mappingGranularity": "file",
+                "mappingGranularity": "line",
                 "sourceFile": "simple.cgl",
                 "generatedFile": "out/cgl/simple.cgl",
-                "mappingCount": 1,
+                "mappingCount": len(
+                    project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+                ),
             }
         ],
         "sourceRemapCount": 1,
@@ -14539,7 +14615,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "mappingGranularity": "file",
             }
         ],
-        "sourceMapsByGranularity": {"file": 1},
+        "sourceMapsByGranularity": {"line": 1},
         "sourceMapsByTarget": {"cgl": 1},
         "sourceMapsBySourceBackend": {"cgl": 1},
         "sourceMapsByVariant": {},
@@ -15269,7 +15345,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "Source maps: 1 file-level, 0 fine-grained" in result.stdout
+    assert "Source maps: 0 file-level, 1 fine-grained" in result.stdout
     assert "Source remaps: 1" in result.stdout
     assert "Define processing: not-requested=1" in result.stdout
     assert "Define processing by source backend: cgl=(not-requested=1)" in result.stdout
@@ -15290,15 +15366,19 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "(sourceBackend=cgl, target=cgl, status=not-requested, "
         "frontend=lexer, supportsIncludePaths=true, includePaths=0)"
     ) in result.stdout
-    assert "Source maps by granularity: file=1" in result.stdout
+    assert "Source maps by granularity: line=1" in result.stdout
     assert "Source maps by target: cgl=1" in result.stdout
     assert "Source maps by source backend: cgl=1" in result.stdout
     assert "Source remaps by target: cgl=1" in result.stdout
     assert "Source remaps by source backend: cgl=1" in result.stdout
     assert "Source map artifacts:" in result.stdout
+    line_mapping_count = len(
+        project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+    )
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
-        "(sourceBackend=cgl, target=cgl, granularity=file, mappings=1)"
+        f"(sourceBackend=cgl, target=cgl, granularity=line, "
+        f"mappings={line_mapping_count})"
     ) in result.stdout
     assert "Source remap artifacts:" in result.stdout
     assert (
