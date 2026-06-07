@@ -906,6 +906,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "fine-grained positive-length source-map mappings" in (
             backend_support["notes"]
         )
+        assert "fine-grained source-map span containment" in (backend_support["notes"])
         assert "source-map summary rollups" in backend_support["notes"]
         assert "source-map summary rollups including variant rollups" in (
             backend_support["notes"]
@@ -959,6 +960,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_source_hash_"
             "mismatches_unit_source_hash"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_out_of_anchor_fine_grained_"
+            "source_map_spans"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1172,6 +1178,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "fine-grained positive-length source-map mappings" in (
             backend_support["notes"]
         )
+        assert "fine-grained source-map span containment" in (backend_support["notes"])
         assert "repository-relative file paths" in backend_support["notes"]
         assert "required summarized validation artifact status fields" in (
             backend_support["notes"]

@@ -9651,6 +9651,28 @@ def _fine_grained_source_map_span_reasons(prefix: str, value: Any) -> list[str]:
     return reasons
 
 
+def _source_map_span_within_anchor_reasons(
+    prefix: str,
+    value: Any,
+    anchor: Any,
+    anchor_prefix: str,
+) -> list[str]:
+    if not isinstance(value, Mapping) or not isinstance(anchor, Mapping):
+        return []
+    offset = value.get("offset")
+    end_offset = value.get("endOffset")
+    anchor_offset = anchor.get("offset")
+    anchor_end_offset = anchor.get("endOffset")
+    if not all(
+        _is_non_negative_int(candidate)
+        for candidate in (offset, end_offset, anchor_offset, anchor_end_offset)
+    ):
+        return []
+    if offset < anchor_offset or end_offset > anchor_end_offset:
+        return [f"{prefix} must be within {anchor_prefix}"]
+    return []
+
+
 def _source_map_contract_reasons(
     index: int, artifact: Mapping[str, Any], *, required: bool = False
 ) -> list[str]:
@@ -9690,6 +9712,8 @@ def _source_map_contract_reasons(
     reasons.extend(
         _source_map_span_reasons(f"{prefix}.generated", source_map.get("generated"))
     )
+    source_anchor = source_map.get("source")
+    generated_anchor = source_map.get("generated")
 
     mappings = source_map.get("mappings")
     if not isinstance(mappings, list):
@@ -9726,8 +9750,24 @@ def _source_map_contract_reasons(
                     )
                 )
                 reasons.extend(
+                    _source_map_span_within_anchor_reasons(
+                        f"{mapping_prefix}.source",
+                        mapping.get("source"),
+                        source_anchor,
+                        f"{prefix}.source",
+                    )
+                )
+                reasons.extend(
                     _fine_grained_source_map_span_reasons(
                         f"{mapping_prefix}.generated", mapping.get("generated")
+                    )
+                )
+                reasons.extend(
+                    _source_map_span_within_anchor_reasons(
+                        f"{mapping_prefix}.generated",
+                        mapping.get("generated"),
+                        generated_anchor,
+                        f"{prefix}.generated",
                     )
                 )
 

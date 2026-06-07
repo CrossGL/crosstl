@@ -9630,6 +9630,47 @@ def test_validate_project_report_rejects_zero_length_fine_grained_source_map_spa
     )
 
 
+def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    source_map["mappingGranularity"] = "line"
+    source_span = dict(source_map["source"])
+    generated_span = dict(source_map["generated"])
+    for span in (source_span, generated_span):
+        span["offset"] = span["endOffset"] + 1
+        span["length"] = 1
+        span["endOffset"] = span["offset"] + 1
+        span["endLine"] = span["line"]
+        span["endColumn"] = span["column"] + 1
+    source_map["mappings"] = [{"source": source_span, "generated": generated_span}]
+    payload["summary"]["fineGrainedSourceMapCount"] = 1
+    payload["summary"]["sourceMapsByGranularity"] = {"line": 1}
+    report_path = repo / "out" / "out-of-anchor-source-map-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceMap.mappings[0].source must be within "
+        "artifacts[0].sourceMap.source"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].sourceMap.mappings[0].generated must be within "
+        "artifacts[0].sourceMap.generated"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
