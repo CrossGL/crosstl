@@ -1337,6 +1337,9 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     inspection = inspect_project_report(report_path)
+    material_hash = project_pipeline._source_hash(nested_dir / "material.inc")
+    constants_hash = project_pipeline._source_hash(nested_dir / "constants.inc")
+    shared_hash = project_pipeline._source_hash(include_dir / "shared.inc")
 
     assert validation["success"] is True
     assert payload["units"][0]["includeDependencies"] == [
@@ -1347,7 +1350,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "line": 2,
             "column": 1,
             "resolvedPath": "shaders/include/material.inc",
-            "resolvedHash": project_pipeline._source_hash(nested_dir / "material.inc"),
+            "resolvedHash": material_hash,
             "resolvedFrom": "source",
         },
         {
@@ -1358,7 +1361,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "line": 1,
             "column": 1,
             "resolvedPath": "shaders/include/constants.inc",
-            "resolvedHash": project_pipeline._source_hash(nested_dir / "constants.inc"),
+            "resolvedHash": constants_hash,
             "resolvedFrom": "source",
         },
         {
@@ -1369,7 +1372,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "line": 2,
             "column": 1,
             "resolvedPath": "includes/shared.inc",
-            "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedHash": shared_hash,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -1394,6 +1397,8 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/material.inc",
             "resolvedFrom": "source",
+            "resolvedHashAlgorithm": material_hash["algorithm"],
+            "resolvedHash": material_hash["value"],
         },
         {
             "source": "shaders/include/material.inc",
@@ -1405,6 +1410,8 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/constants.inc",
             "resolvedFrom": "source",
+            "resolvedHashAlgorithm": constants_hash["algorithm"],
+            "resolvedHash": constants_hash["value"],
         },
         {
             "source": "shaders/include/material.inc",
@@ -1416,6 +1423,8 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "includes/shared.inc",
             "resolvedFrom": "include-dir",
+            "resolvedHashAlgorithm": shared_hash["algorithm"],
+            "resolvedHash": shared_hash["value"],
         },
     ]
 
@@ -1702,6 +1711,12 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     inspection = inspect_project_report(report_path)
+    debug_hash = project_pipeline._source_hash(repo / "debug.inc")
+    release_hash = project_pipeline._source_hash(include_dir / "release.inc")
+    debug_hash_preview = f"{debug_hash['algorithm']}:{debug_hash['value'][:12]}..."
+    release_hash_preview = (
+        f"{release_hash['algorithm']}:{release_hash['value'][:12]}..."
+    )
 
     assert validation["success"] is True
     assert payload["units"][0]["includeDependencies"] == [
@@ -1714,7 +1729,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "resolvedFromDefine": "PROJECT_HEADER",
             "variant": "debug",
             "resolvedPath": "debug.inc",
-            "resolvedHash": project_pipeline._source_hash(repo / "debug.inc"),
+            "resolvedHash": debug_hash,
             "resolvedFrom": "source",
         },
         {
@@ -1726,7 +1741,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "resolvedFromDefine": "PROJECT_HEADER",
             "variant": "release",
             "resolvedPath": "includes/release.inc",
-            "resolvedHash": project_pipeline._source_hash(include_dir / "release.inc"),
+            "resolvedHash": release_hash,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -1760,6 +1775,8 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "resolvedFrom": "source",
             "resolvedFromDefine": "PROJECT_HEADER",
             "variant": "debug",
+            "resolvedHashAlgorithm": debug_hash["algorithm"],
+            "resolvedHash": debug_hash["value"],
         },
         {
             "source": "main.frag",
@@ -1773,6 +1790,8 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "resolvedFrom": "include-dir",
             "resolvedFromDefine": "PROJECT_HEADER",
             "variant": "release",
+            "resolvedHashAlgorithm": release_hash["algorithm"],
+            "resolvedHash": release_hash["value"],
         },
     ]
 
@@ -1796,11 +1815,13 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
     assert "Include dependencies by variant: debug=1, release=1" in result.stdout
     assert (
         "- main.frag:1:1 [opengl]: resolved local include debug.inc -> debug.inc "
-        "(variant debug, source, define PROJECT_HEADER)"
+        f"(variant debug, source, define PROJECT_HEADER, hash={debug_hash_preview})"
     ) in result.stdout
     assert (
         "- main.frag:1:1 [opengl]: resolved system include release.inc -> "
-        "includes/release.inc (variant release, include-dir, define PROJECT_HEADER)"
+        "includes/release.inc "
+        f"(variant release, include-dir, define PROJECT_HEADER, "
+        f"hash={release_hash_preview})"
     ) in result.stdout
 
 
@@ -15860,6 +15881,12 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     )
 
     assert result.returncode == 0
+    shared_hash = project_pipeline._source_hash(include_dir / "shared.inc")
+    generated_hash = project_pipeline._source_hash(repo / "generated.inc")
+    shared_hash_preview = f"{shared_hash['algorithm']}:{shared_hash['value'][:12]}..."
+    generated_hash_preview = (
+        f"{generated_hash['algorithm']}:{generated_hash['value'][:12]}..."
+    )
     assert "Include dependencies by status: resolved=2, missing=1" in result.stdout
     assert "Include dependencies by kind: local=2, system=1" in result.stdout
     assert "Include dependencies by source backend: opengl=3" in result.stdout
@@ -15874,11 +15901,12 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert "Resolved include dependencies:" in result.stdout
     assert (
         "- main.frag:2:1 [opengl]: resolved system include shared.inc -> "
-        "includes/shared.inc (include-dir)"
+        f"includes/shared.inc (include-dir, hash={shared_hash_preview})"
     ) in result.stdout
     assert (
         "- main.frag:3:1 [opengl]: resolved local include generated.inc -> "
-        "generated.inc (source, define PROJECT_HEADER)"
+        f"generated.inc (source, define PROJECT_HEADER, "
+        f"hash={generated_hash_preview})"
     ) in result.stdout
     assert "Include dependency issues:" in result.stdout
     assert "- main.frag:4:1 [opengl]: missing local include missing.inc" in (
@@ -15908,6 +15936,8 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "column": 1,
                 "resolvedPath": "includes/shared.inc",
                 "resolvedFrom": "include-dir",
+                "resolvedHashAlgorithm": shared_hash["algorithm"],
+                "resolvedHash": shared_hash["value"],
             },
             {
                 "source": "main.frag",
@@ -15920,6 +15950,8 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "resolvedPath": "generated.inc",
                 "resolvedFrom": "source",
                 "resolvedFromDefine": "PROJECT_HEADER",
+                "resolvedHashAlgorithm": generated_hash["algorithm"],
+                "resolvedHash": generated_hash["value"],
             },
         ],
         "unresolvedDependencyCount": 1,

@@ -201,9 +201,10 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "variant-name summaries" in backend_support["notes"]
         assert "source-root status" in backend_support["notes"]
         assert "include-directory status rollups" in backend_support["notes"]
-        assert "include dependency status, kind, and resolution-source rollups" in (
-            backend_support["notes"]
-        )
+        assert (
+            "include dependency status, kind, and resolution-source rollups plus "
+            "resolved include hash metadata"
+        ) in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_root_status"
@@ -517,9 +518,10 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert (
-            "source-backend labels, project-define provenance, and variant names"
+            "source-backend labels, project-define provenance, variant names"
             in backend_support["notes"]
         )
+        assert "resolved include hash metadata" in backend_support["notes"]
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "
             "variant-specific conditional output"

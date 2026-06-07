@@ -5925,6 +5925,14 @@ def _inspection_include_dependency_sample(
         value = dependency.get(field_name)
         if _is_non_empty_string(value):
             sample[field_name] = value
+    resolved_hash = dependency.get("resolvedHash")
+    if isinstance(resolved_hash, Mapping):
+        hash_algorithm = resolved_hash.get("algorithm")
+        hash_value = resolved_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["resolvedHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["resolvedHash"] = hash_value
     return {key: value for key, value in sample.items() if value is not None}
 
 
