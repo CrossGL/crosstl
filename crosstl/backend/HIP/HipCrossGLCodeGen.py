@@ -153,6 +153,7 @@ class HipToCrossGLConverter:
         "tex2D": "sampler2D",
         "tex2DLod": "sampler2D",
         "tex2DGrad": "sampler2D",
+        "tex2Dgather": "sampler2D",
         "tex3D": "sampler3D",
         "tex3DLod": "sampler3D",
         "tex3DGrad": "sampler3D",
@@ -5428,6 +5429,8 @@ class HipToCrossGLConverter:
             return self.format_hip_texture_call(base_name, args, "vec1", 1, raw_args)
         if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
             return self.format_hip_texture_call(base_name, args, "vec2", 2, raw_args)
+        if base_name == "tex2Dgather":
+            return self.format_hip_texture_gather_call(args)
         if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
             return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
         if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
@@ -5678,6 +5681,23 @@ class HipToCrossGLConverter:
             f"{function_name} sparse residency",
             "vec4<f32>(0.0, 0.0, 0.0, 0.0)",
         )
+
+    def format_hip_texture_gather_call(self, args):
+        if len(args) == 2:
+            texture_name, coordinate = args
+            component = None
+        elif len(args) in {3, 4}:
+            texture_name = args[0]
+            coordinate = self.format_vector_constructor("vec2", args[1:3])
+            component = args[3] if len(args) == 4 else None
+        else:
+            return self.format_unsupported_hip_texture_sparse_residency_call(
+                "tex2Dgather"
+            )
+
+        if component is not None:
+            return f"textureGather({texture_name}, {coordinate}, {component})"
+        return f"textureGather({texture_name}, {coordinate})"
 
     def format_hip_texture_coordinate_rank_diagnostic(self, function_name):
         return self.format_unsupported_hip_resource_expression(

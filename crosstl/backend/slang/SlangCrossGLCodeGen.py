@@ -95,6 +95,7 @@ class SlangToCrossGLConverter:
         "Sample": "texture",
         "SampleBias": "texture",
         "SampleCmp": "textureCompare",
+        "SampleCmpBias": "textureCompare",
         "SampleCmpLevel": "textureCompareLod",
         "SampleCmpLevelZero": "textureCompareLod",
         "SampleCmpGrad": "textureCompareGrad",
@@ -2214,6 +2215,11 @@ class SlangToCrossGLConverter:
                 return "textureCompareOffset", prefix + [coord, compare, offset, *rest]
             return "textureCompare", prefix + [coord, *extra_args]
 
+        if expr.method == "SampleCmpBias":
+            return self.crossgl_texture_compare_bias_call_parts(
+                expr, prefix, coord, extra_args
+            )
+
         if expr.method == "SampleCmpLevel":
             if len(extra_args) > 2:
                 compare, lod, offset, *rest = extra_args
@@ -2242,6 +2248,58 @@ class SlangToCrossGLConverter:
             return "textureCompareGrad", prefix + [coord, *extra_args]
 
         return self.SAMPLE_METHOD_MAP[expr.method], prefix + [coord, *extra_args]
+
+    def crossgl_texture_compare_bias_call_parts(self, expr, prefix, coord, extra_args):
+        if len(extra_args) < 2:
+            return "textureCompare", prefix + [coord, *extra_args]
+
+        compare = extra_args[0]
+        resource_base = self.resource_type_base(
+            self.sampleable_resource_expression_type(expr.object)
+        )
+        offset_index = (
+            2
+            if len(extra_args) > 2
+            and resource_base
+            not in {
+                "TextureCube",
+                "TextureCubeArray",
+                "SamplerCube",
+                "SamplerCubeArray",
+                "SamplerCubeShadow",
+                "SamplerCubeArrayShadow",
+            }
+            else None
+        )
+        dropped_parameters = ["LOD bias"]
+
+        if offset_index is None:
+            texture_func = "textureCompare"
+            args = prefix + [coord, compare]
+            trailing_args = extra_args[2:]
+        else:
+            texture_func = "textureCompareOffset"
+            args = prefix + [coord, compare, extra_args[offset_index]]
+            trailing_args = extra_args[offset_index + 1 :]
+
+        if trailing_args:
+            dropped_parameters.append("LOD clamp")
+        if len(trailing_args) > 1:
+            dropped_parameters.append("status output")
+        if len(trailing_args) > 2:
+            dropped_parameters.append("extra arguments")
+
+        diagnostic = self.texture_overload_extras_diagnostic(
+            "SampleCmpBias", dropped_parameters
+        )
+        return f"{diagnostic} {texture_func}", args
+
+    def texture_overload_extras_diagnostic(self, member, dropped_parameters):
+        parameters = ", ".join(dropped_parameters)
+        return (
+            f"/* unsupported Slang texture overload extras for {member}: "
+            f"dropped {parameters} */"
+        )
 
     def crossgl_texture_gather_call_parts(self, expr, is_main=False):
         prefix, coord, extra_args = self.split_texture_sample_args(expr, is_main)

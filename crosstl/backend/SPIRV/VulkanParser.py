@@ -3189,6 +3189,7 @@ class VulkanParser:
         offset = self.spirv_assembly_image_offset_operand(parsed_operands)
         bias = self.spirv_assembly_image_bias_operand(parsed_operands)
         min_lod = self.spirv_assembly_image_min_lod_operand(parsed_operands)
+        is_projected = "Proj" in opcode
 
         if min_lod is not None:
             return self.spirv_assembly_image_min_lod_sample_expression(
@@ -3201,14 +3202,16 @@ class VulkanParser:
             )
 
         if "Grad" in parsed_operands and len(parsed_operands["Grad"]) >= 2:
-            if "Proj" in opcode:
+            if is_projected and offset is not None:
+                function_name = "textureProjGradOffset"
+            elif is_projected:
                 function_name = "textureProjGrad"
             elif offset is not None:
                 function_name = "textureGradOffset"
             else:
                 function_name = "textureGrad"
             args = [*base_args, *parsed_operands["Grad"][:2]]
-            if offset is not None and "Proj" not in opcode:
+            if offset is not None:
                 args.append(offset)
             return FunctionCallNode(
                 function_name,
@@ -3216,27 +3219,30 @@ class VulkanParser:
             )
 
         if "Lod" in parsed_operands and parsed_operands["Lod"]:
-            if "Proj" in opcode:
+            if is_projected and offset is not None:
+                function_name = "textureProjLodOffset"
+            elif is_projected:
                 function_name = "textureProjLod"
             elif offset is not None:
                 function_name = "textureLodOffset"
             else:
                 function_name = "textureLod"
             args = [*base_args, parsed_operands["Lod"][0]]
-            if offset is not None and "Proj" not in opcode:
+            if offset is not None:
                 args.append(offset)
             return FunctionCallNode(
                 function_name,
                 args,
             )
 
-        if offset is not None and "Proj" not in opcode:
+        if offset is not None:
             args = [*base_args, offset]
             if bias is not None:
                 args.append(bias)
-            return FunctionCallNode("textureOffset", args)
+            function_name = "textureProjOffset" if is_projected else "textureOffset"
+            return FunctionCallNode(function_name, args)
 
-        function_name = "textureProj" if "Proj" in opcode else "texture"
+        function_name = "textureProj" if is_projected else "texture"
         args = list(base_args)
         if bias is not None:
             args.append(bias)

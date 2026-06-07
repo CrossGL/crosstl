@@ -2294,7 +2294,8 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_coordinate_shapes_emit_hip_helpers_or_diagnostics",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_offset_and_projected_texture_calls_emit_hip_diagnostics",
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_external_rocm_texture_management_lod_grad_gather_codegen_reparse"
           ]
         },
         "mojo": {
@@ -2488,7 +2489,8 @@
           "status": "supported",
           "notes": "Covers HIP 2D textureGather lowering with component selection, split sampler arguments, parameters, and deterministic diagnostics for unsupported gather offsets, offset arrays, coordinate ranks, components, and non-2D target shapes.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_gather_calls_emit_hip_intrinsics_and_diagnostics"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_gather_calls_emit_hip_intrinsics_and_diagnostics",
+            "tests/test_backend/test_HIP/test_external_fixtures.py::def test_external_rocm_texture_management_lod_grad_gather_codegen_reparse"
           ]
         },
         "mojo": {
