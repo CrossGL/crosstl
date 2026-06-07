@@ -1067,6 +1067,9 @@ class HLSLParser:
                     )
                 )
                 continue
+            if self.current_token[0] == "ENUM":
+                members.append(self.parse_enum())
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,
@@ -1166,6 +1169,9 @@ class HLSLParser:
                         attributes=member_attributes,
                     )
                 )
+                continue
+            if self.current_token[0] == "ENUM":
+                nested_members.append(self.parse_enum())
                 continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
@@ -1370,6 +1376,9 @@ class HLSLParser:
                         attributes=attributes,
                     )
                 )
+                continue
+            if self.current_token[0] == "ENUM":
+                members.append(self.parse_enum())
                 continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(

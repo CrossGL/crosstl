@@ -243,6 +243,18 @@ class VulkanParser:
         "BitReverse": "bitfieldReverse",
         "OuterProduct": "outerProduct",
         "QuantizeToF16": "spirvQuantizeToF16",
+        "SDot": "spirvSDot",
+        "SDotKHR": "spirvSDot",
+        "SUDot": "spirvSUDot",
+        "SUDotKHR": "spirvSUDot",
+        "UDot": "spirvUDot",
+        "UDotKHR": "spirvUDot",
+        "SDotAccSat": "spirvSDotAccSat",
+        "SDotAccSatKHR": "spirvSDotAccSat",
+        "SUDotAccSat": "spirvSUDotAccSat",
+        "SUDotAccSatKHR": "spirvSUDotAccSat",
+        "UDotAccSat": "spirvUDotAccSat",
+        "UDotAccSatKHR": "spirvUDotAccSat",
     }
     SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS = {
         "IAddCarry": "spirvIAddCarry",

@@ -1423,6 +1423,19 @@ class HLSLToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
+    def generate_enum(self, enum, indent=1):
+        code = "    " * indent + f"enum {enum.name} {{\n"
+        for member_name, member_value in enum.members:
+            if member_value is None:
+                code += "    " * (indent + 1) + f"{member_name},\n"
+            else:
+                code += (
+                    "    " * (indent + 1)
+                    + f"{member_name} = {self.generate_expression(member_value)},\n"
+                )
+        code += "    " * indent + "}\n"
+        return code
+
     def collect_cbuffer_reserved_names(self, ast):
         names = set()
         for collection in (
@@ -2748,16 +2761,7 @@ class HLSLToCrossGLConverter:
         if enums:
             for enum in enums:
                 if isinstance(enum, EnumNode):
-                    code += f"    enum {enum.name} {{\n"
-                    for member_name, member_value in enum.members:
-                        if member_value is None:
-                            code += f"        {member_name},\n"
-                        else:
-                            code += (
-                                f"        {member_name} = "
-                                f"{self.generate_expression(member_value)},\n"
-                            )
-                    code += "    }\n"
+                    code += self.generate_enum(enum)
         # Generate structs
         for node in ast.structs:
             if getattr(node, "is_forward_declaration", False):
@@ -2765,6 +2769,9 @@ class HLSLToCrossGLConverter:
             if isinstance(node, StructNode):
                 code += f"    struct {node.name} {{\n"
                 for member in node.members:
+                    if isinstance(member, EnumNode):
+                        code += self.generate_enum(member, 2)
+                        continue
                     array_suffix = self.format_array_suffixes(member)
                     attributes = self.format_semantic_and_interpolation_attributes(
                         member, member.semantic

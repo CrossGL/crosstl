@@ -501,6 +501,32 @@ def test_rust_gpu_uniform_descriptor_parameter_keeps_storage_class_from_dev_guid
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_legacy_storage_class_wrappers_unwrap_from_release_notes():
+    # Reduced from EmbarkStudios/rust-gpu v0.3 release notes, commit 499bf4c:
+    # https://github.com/EmbarkStudios/rust-gpu/releases/tag/v0.3.0
+    code = """
+    use spirv_std::{glam::Vec4, storage_class::{Input, Output}};
+    use spirv_std::spirv;
+
+    #[spirv(fragment)]
+    pub fn main_fs(
+        #[spirv(frag_coord)] in_frag_coord: Input<Vec4>,
+        mut output: Output<Vec4>,
+    ) {
+        output = in_frag_coord;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "fragment main_fs {" in result
+    assert "vec4 in_frag_coord @ gl_FragCoord" in result
+    assert "vec4 output" in result
+    assert "Input<" not in result
+    assert "Output<" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_spirv_entry_point_name_drives_stage_name():
     code = """
     use spirv_std::spirv;

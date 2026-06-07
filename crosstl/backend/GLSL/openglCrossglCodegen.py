@@ -62,6 +62,7 @@ class GLSLToCrossGLConverter:
     STORAGE_QUALIFIER_ATTRIBUTES = {
         **RAY_STORAGE_QUALIFIERS,
         "taskpayloadsharedext": "taskPayloadSharedEXT",
+        "tileimageext": "tileImageEXT",
     }
     INTERFACE_QUALIFIER_NAMES = {
         "in": "in",

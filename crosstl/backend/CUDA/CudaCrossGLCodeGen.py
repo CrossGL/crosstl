@@ -4324,6 +4324,10 @@ class CudaToCrossGLConverter:
         if time_function is not None:
             return time_function
 
+        nanosleep = self.format_cuda_nanosleep_call(raw_name, args)
+        if nanosleep is not None:
+            return nanosleep
+
         warp_intrinsic = self.format_cuda_warp_intrinsic_call(raw_name, args)
         if warp_intrinsic is not None:
             return warp_intrinsic
@@ -4372,6 +4376,22 @@ class CudaToCrossGLConverter:
         args_text = ", ".join(args)
         return (
             f"(/* cuda time function {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
+
+    def format_cuda_nanosleep_call(self, function_name, args):
+        if not isinstance(function_name, str):
+            return None
+
+        normalized_name = (
+            function_name[2:] if function_name.startswith("::") else function_name
+        )
+        if normalized_name != "__nanosleep":
+            return None
+
+        args_text = ", ".join(args)
+        return (
+            f"(/* cuda nanosleep __nanosleep({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
 

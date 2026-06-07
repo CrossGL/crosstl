@@ -1965,3 +1965,33 @@ def test_public_cuda_kernel_if_init_statement_codegen_reparse():
     assert "if (((r < num) && (di < dim))) {" in crossgl
     assert "out[r] = di;" in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_programming_guide_nanosleep_mutex_codegen_reparse():
+    # Upstream source:
+    # NVIDIA CUDA C++ Programming Guide v12.5.1, section 7.23.3.
+    # URL:
+    # https://docs.nvidia.com/cuda/archive/12.5.1/cuda-c-programming-guide/index.html#nanosleep-function
+    source = """
+    __device__ void mutex_lock(unsigned int *mutex) {
+        unsigned int ns = 8;
+        while (atomicCAS(mutex, 0, 1) == 1) {
+            __nanosleep(ns);
+            if (ns < 256) {
+                ns *= 2;
+            }
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    loop = ast.functions[0].body[1]
+    crossgl = CudaToCrossGLConverter().generate(ast)
+
+    assert loop.body[0].name == "__nanosleep"
+    assert (
+        "/* cuda nanosleep __nanosleep(ns) not directly supported in CrossGL */ 0"
+        in crossgl
+    )
+    assert "__nanosleep(ns);" not in crossgl
+    assert_crossgl_reparse(crossgl)

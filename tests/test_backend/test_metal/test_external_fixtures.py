@@ -56,6 +56,10 @@ BLENDER_STRING_COMMIT = "e5fc656cdab0e682296f8dd024b942b548e788f4"
 BLENDER_TEXTURE_READ_COMMIT = "38657e6c5ccb9968bfcc55b4fd384ca528c71d10"
 METAL_RIPPLE_REPO = "https://github.com/swiftandcurious/MetalRipple"
 METAL_RIPPLE_COMMIT = "125274960b1bf0184b6570afa97f097ee3d2c6b1"
+UNIXZII_GPU_PARTICLE_GIST = (
+    "https://gist.github.com/unixzii/aeefe8edbd6a685cb3e230b5b30841db"
+)
+UNIXZII_GPU_PARTICLE_VERSION = "GitHub Gist, last active 2024-03-30"
 
 
 EXTERNAL_FIXTURES = [
@@ -1510,6 +1514,58 @@ EXTERNAL_FIXTURES = [
                 half4 color = layer.sample(newPosition);
                 color.rgb += 0.3 * (rippleAmount / amplitude) * color.a;
                 return color;
+            }
+        """
+        ),
+    },
+    {
+        "name": "unixzii_gpu_particle_parenthesized_unary_position",
+        "repo_url": UNIXZII_GPU_PARTICLE_GIST,
+        "commit": UNIXZII_GPU_PARTICLE_VERSION,
+        "source_path": "Shaders.metal",
+        "roundtrip": True,
+        "contains": [
+            "v.position.y = (-(v.position.y + p.position.y - resolution.y / 2)) "
+            "/ (resolution.y / 2);"
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct Particle {
+                float2 position;
+                float2 velocity;
+                float life;
+            };
+
+            struct Vertex {
+                float4 position [[position]];
+                float2 uv;
+                float opacity;
+            };
+
+            vertex Vertex particleVertex(
+                const device Vertex *vertices [[buffer(0)]],
+                const device float2 &resolution [[buffer(1)]],
+                const device Particle *particles [[buffer(2)]],
+                const device float2 &targetFrameSize [[buffer(3)]],
+                unsigned int vid [[vertex_id]],
+                unsigned int particleId [[instance_id]]) {
+                int row = particleId / int(targetFrameSize.x);
+                int col = particleId % int(targetFrameSize.x);
+                Vertex v = vertices[vid];
+                Particle p = particles[particleId];
+                v.position.x =
+                    ((v.position.x + p.position.x) - resolution.x / 2) /
+                    (resolution.x / 2);
+                v.position.y =
+                    -((v.position.y + p.position.y) - resolution.y / 2) /
+                    (resolution.y / 2);
+                v.uv.x = float(col) / targetFrameSize.x;
+                v.uv.y = float(row) / targetFrameSize.y;
+                v.opacity = 1.0 - (p.life / 1000.0);
+                return v;
             }
         """
         ),

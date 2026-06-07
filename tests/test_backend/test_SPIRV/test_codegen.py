@@ -478,6 +478,42 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_INTEGER_DOT_PRODUCT_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.int_dot.frag.out
+; Reduced from SPV_KHR_integer_dot_product SDotKHR vector operations.
+OpCapability Shader
+OpCapability DotProductKHR
+OpExtension "SPV_KHR_integer_dot_product"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_a %input_b %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_a "inputA"
+OpName %input_b "inputB"
+OpName %out_value "outValue"
+OpDecorate %input_a Location 0
+OpDecorate %input_b Location 1
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%v4int = OpTypeVector %int 4
+%ptr_input_v4int = OpTypePointer Input %v4int
+%ptr_output_int = OpTypePointer Output %int
+%input_a = OpVariable %ptr_input_v4int Input
+%input_b = OpVariable %ptr_input_v4int Input
+%out_value = OpVariable %ptr_output_int Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_a = OpLoad %v4int %input_a
+%loaded_b = OpLoad %v4int %input_b
+%dot = OpSDotKHR %int %loaded_a %loaded_b
+OpStore %out_value %dot
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_SPEC_VECTOR_EXTRACT_DYNAMIC_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Reduced from the core OpVectorExtractDynamic instruction definition.
@@ -4399,6 +4435,20 @@ def test_glslang_precise_dot_codegen_reparse():
     assert "float outValue @output @location(0);" in generated_code
     assert "float4 inputVec @input @location(0);" in generated_code
     assert "outValue = dot(inputVec, inputVec);" in generated_code
+    assert "outValue = dot;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_integer_dot_product_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_INTEGER_DOT_PRODUCT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int4 inputA @input @location(0);" in generated_code
+    assert "int4 inputB @input @location(1);" in generated_code
+    assert "int outValue @output @location(0);" in generated_code
+    assert "outValue = spirvSDot(inputA, inputB);" in generated_code
     assert "outValue = dot;" not in generated_code
     assert "Unhandled statement type" not in generated_code
 

@@ -1909,6 +1909,8 @@ class MetalToCrossGLConverter:
             operand = self.generate_expression(expr.operand, is_main)
             if expr.op == "post...":
                 return f"{operand}..."
+            if isinstance(expr.operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
+                operand = f"({operand})"
             return f"({expr.op}{operand})"
         elif isinstance(expr, PostfixOpNode):
             operand = self.generate_expression(expr.operand, is_main)
