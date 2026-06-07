@@ -6038,6 +6038,10 @@ def _inspection_source_map_artifact(
     if isinstance(source, Mapping) and _is_non_empty_string(source.get("file")):
         sample["sourceFile"] = source.get("file")
 
+    source_map_target = source_map.get("target")
+    if _is_non_empty_string(source_map_target):
+        sample["sourceMapTarget"] = source_map_target
+
     generated = source_map.get("generated")
     if isinstance(generated, Mapping) and _is_non_empty_string(generated.get("file")):
         sample["generatedFile"] = generated.get("file")
@@ -6062,6 +6066,7 @@ def _inspection_source_remap_artifact(
         "target": artifact.get("target"),
         "path": artifact.get("path"),
         "sourceRemapPath": source_remap.get("path"),
+        "sourceRemapTarget": source_remap.get("target"),
         "generatedFile": source_remap.get("generatedFile"),
         "mappingGranularity": source_remap.get("mappingGranularity"),
     }

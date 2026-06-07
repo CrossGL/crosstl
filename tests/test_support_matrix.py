@@ -1084,6 +1084,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "canonical source-map and source-remap target metadata" in (
             backend_support["notes"]
         )
+        assert "source-map and source-remap target metadata inspection" in (
+            backend_support["notes"]
+        )
         assert "missing source-map and source-remap variant rollups" in (
             backend_support["notes"]
         )
@@ -1151,6 +1154,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_source_map_target_"
+            "mismatches"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

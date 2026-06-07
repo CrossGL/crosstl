@@ -14588,6 +14588,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "mappingGranularity": "line",
                 "sourceFile": "simple.cgl",
+                "sourceMapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingCount": len(
                     project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
@@ -14604,6 +14605,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "target": "cgl",
                 "path": "out/cgl/simple.cgl",
                 "sourceRemapPath": "out/cgl/simple.source-remap.json",
+                "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "file",
             }
@@ -15239,6 +15241,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "mappingGranularity": "line",
                 "sourceFile": "simple.cgl",
+                "sourceMapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingCount": len(
                     project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
@@ -15255,6 +15258,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "target": "cgl",
                 "path": "out/cgl/simple.cgl",
                 "sourceRemapPath": "out/cgl/simple.source-remap.json",
+                "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "file",
             }
@@ -16046,6 +16050,52 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "- simple.cgl -> cgl at out/cgl/simple.cgl "
         "(status=ok, exists=true, sourceHash=ok, generatedHash=ok, "
         "sourceMap=ok, sourceRemap=ok)"
+    ) in result.stdout
+
+
+def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    artifact = payload["artifacts"][0]
+    artifact["sourceMap"]["target"] = "opengl"
+    artifact["sourceRemap"]["target"] = "opengl"
+    report_path = repo / "out" / "source-map-target-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    line_mapping_count = len(
+        project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+    )
+    assert result.returncode == 1
+    assert "Report: invalid" in result.stdout
+    assert (
+        "- simple.cgl -> out/cgl/simple.cgl "
+        f"(sourceBackend=cgl, target=cgl, sourceMapTarget=opengl, "
+        f"granularity=line, mappings={line_mapping_count})"
+    ) in result.stdout
+    assert (
+        "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
+        "(sourceBackend=cgl, target=cgl, sourceRemapTarget=opengl, "
+        "granularity=file)"
     ) in result.stdout
 
 

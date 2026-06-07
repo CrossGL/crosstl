@@ -936,6 +936,13 @@ def _format_source_map_artifact_line(artifact):
     target = artifact.get("target")
     if isinstance(target, str) and target:
         details.append(f"target={target}")
+    source_map_target = artifact.get("sourceMapTarget")
+    if (
+        isinstance(source_map_target, str)
+        and source_map_target
+        and source_map_target != target
+    ):
+        details.append(f"sourceMapTarget={source_map_target}")
     variant = artifact.get("variant")
     if isinstance(variant, str) and variant:
         details.append(f"variant={variant}")
@@ -997,6 +1004,13 @@ def _format_source_remap_artifact_line(artifact):
     target = artifact.get("target")
     if isinstance(target, str) and target:
         details.append(f"target={target}")
+    source_remap_target = artifact.get("sourceRemapTarget")
+    if (
+        isinstance(source_remap_target, str)
+        and source_remap_target
+        and source_remap_target != target
+    ):
+        details.append(f"sourceRemapTarget={source_remap_target}")
     variant = artifact.get("variant")
     if isinstance(variant, str) and variant:
         details.append(f"variant={variant}")
