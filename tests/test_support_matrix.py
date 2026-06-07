@@ -554,6 +554,9 @@ def test_project_include_resolution_documents_status_reporting():
         assert "current status, resolved path, resolved include hash" in (
             backend_support["notes"]
         )
+        assert "current-scan mismatch labels include project-define provenance" in (
+            backend_support["notes"]
+        )
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_include_dir_files_without_hiding_units"
@@ -607,6 +610,10 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_include_dependency_resolution_"
             "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_labels_forged_define_include_provenance"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

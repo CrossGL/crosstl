@@ -1957,6 +1957,48 @@ def test_validate_project_report_rejects_extra_current_include_dependencies(
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_labels_forged_define_include_provenance(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (repo / "main.frag").write_text('#include "local.inc"\n', encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.defines]
+            PROJECT_HEADER = "\\"local.inc\\""
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    payload["units"][0]["includeDependencies"][0][
+        "resolvedFromDefine"
+    ] = "PROJECT_HEADER"
+    report_path = repo / "forged-define-include-provenance-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies must include current include dependency "
+        "unit source:1:1 resolved local include local.inc"
+    ) in diagnostic["message"]
+    assert (
+        "units[0].includeDependencies contains include dependency not found "
+        "in current source: unit source:1:1 resolved local include local.inc "
+        "define PROJECT_HEADER"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_undeclared_include_dependency_variants(
     tmp_path,
 ):

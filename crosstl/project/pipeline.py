@@ -7743,6 +7743,9 @@ def _include_dependency_scan_label(
     variant = values.get("variant")
     if isinstance(variant, str) and variant:
         label = f"{label} variant {variant}"
+    resolved_from_define = values.get("resolvedFromDefine")
+    if isinstance(resolved_from_define, str) and resolved_from_define:
+        label = f"{label} define {resolved_from_define}"
     return label
 
 
