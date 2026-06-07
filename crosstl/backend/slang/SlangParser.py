@@ -374,18 +374,31 @@ class SlangParser:
             return None
 
         current_pos += 1
-        while (
-            current_pos + 1 < len(self.tokens)
-            and self.tokens[current_pos][0] == "DOT"
-            and self.tokens[current_pos + 1][0] == "IDENTIFIER"
-        ):
-            current_pos += 2
+        while current_pos < len(self.tokens):
+            if self.tokens[current_pos][0] == "DOT":
+                delimiter_width = 1
+            elif (
+                self.tokens[current_pos][0] == "COLON"
+                and current_pos + 1 < len(self.tokens)
+                and self.tokens[current_pos + 1][0] == "COLON"
+            ):
+                delimiter_width = 2
+            else:
+                break
+
+            segment_pos = current_pos + delimiter_width
+            if (
+                segment_pos >= len(self.tokens)
+                or self.tokens[segment_pos][0] != "IDENTIFIER"
+            ):
+                break
+            current_pos = segment_pos + 1
 
         return current_pos
 
     def parse_namespace_declaration(self):
         self.eat("IDENTIFIER")
-        namespace_name = self.parse_module_path(allow_string=False)
+        namespace_name = self.parse_namespace_path()
         self.eat("LBRACE")
         global_variables = []
         while self.current_token[0] != "RBRACE":
@@ -423,6 +436,25 @@ class SlangParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
         return global_variables
+
+    def parse_namespace_path(self):
+        parts = [self.current_token[1]]
+        self.eat("IDENTIFIER")
+        while True:
+            if self.current_token[0] == "DOT":
+                self.eat("DOT")
+            elif (
+                self.current_token[0] == "COLON"
+                and self.pos + 1 < len(self.tokens)
+                and self.tokens[self.pos + 1][0] == "COLON"
+            ):
+                self.eat("COLON")
+                self.eat("COLON")
+            else:
+                break
+            parts.append(self.current_token[1])
+            self.eat("IDENTIFIER")
+        return ".".join(parts)
 
     def prefix_namespace_declaration_names(self, declaration, namespace_name):
         for item in self.as_statement_list(declaration):

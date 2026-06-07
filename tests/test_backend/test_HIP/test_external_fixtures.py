@@ -68,6 +68,13 @@ EXTERNAL_FIXTURE_SOURCES = {
             "catch/unit/deviceLib/popc.cc",
         ],
     },
+    "hip_tests_cooperative_groups": {
+        "url": "https://github.com/ROCm/hip-tests",
+        "commit": "8889ba5c7a89a85d5262dadcfbde17589a53ccfb",
+        "paths": [
+            "catch/unit/cooperativeGrps/hipCGThreadBlockTileTypeShfl_old.cc",
+        ],
+    },
     "llvm_project": {
         "url": "https://github.com/llvm/llvm-project",
         "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
@@ -241,6 +248,65 @@ def test_external_rocm_cooperative_groups_thread_group_parameter_codegen_reparse
     assert "var<workgroup> workspace: array<u32, 2048>;" in crossgl
     assert "g.sync()" not in crossgl
     assert "g.thread_rank()" not in crossgl
+
+
+def test_external_hip_tests_thread_block_tile_shuffle_codegen_reparse():
+    # Upstream: ROCm/hip-tests@8889ba5c7a89a85d5262dadcfbde17589a53ccfb,
+    # catch/unit/cooperativeGrps/hipCGThreadBlockTileTypeShfl_old.cc.
+    source = """
+    namespace cg = cooperative_groups;
+
+    template <unsigned int tileSz>
+    __device__ int reduction_kernel_shfl(cg::thread_block_tile<tileSz> const& g,
+                                         int val) {
+        int sz = g.size();
+
+        for(int i = sz / 2; i > 0; i >>= 1) {
+            val += g.shfl_down(val, i);
+            val += g.shfl_xor(val, i);
+            val += g.shfl_up(val, i);
+        }
+
+        return val;
+    }
+
+    template <unsigned int tile_size>
+    static __global__ void kernel_cg_group_partition_static(int* result) {
+        cg::thread_block thread_block_CG_ty = cg::this_thread_block();
+        cg::thread_block_tile<tile_size> tiled_part =
+            cg::tiled_partition<tile_size>(thread_block_CG_ty);
+
+        int input = tiled_part.thread_rank();
+        result[thread_block_CG_ty.thread_rank()] =
+            reduction_kernel_shfl(tiled_part, input);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    helper = ast.statements[0]
+
+    assert helper.params[0]["type"] == "cg::thread_block_tile<tileSz> const &"
+    assert "cooperative_groups_thread_block_tile_tileSz g" in crossgl
+    assert "var sz: i32 = tileSz;" in crossgl
+    assert "WaveReadLaneAt(val, (WaveGetLaneIndex() + (i)))" in crossgl
+    assert (
+        "WaveReadLaneAt(val, ((WaveGetLaneIndex() - "
+        "(WaveGetLaneIndex() % tileSz)) + ((WaveGetLaneIndex() % tileSz) ^ (i))))"
+        in crossgl
+    )
+    assert "WaveReadLaneAt(val, (WaveGetLaneIndex() - (i)))" in crossgl
+    assert (
+        "cooperative_groups thread_block_tile.shfl_down not directly supported"
+        not in crossgl
+    )
+    assert (
+        "cooperative_groups thread_block_tile.shfl_xor not directly supported"
+        not in crossgl
+    )
+    assert (
+        "cooperative_groups thread_block_tile.shfl_up not directly supported"
+        not in crossgl
+    )
 
 
 def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():

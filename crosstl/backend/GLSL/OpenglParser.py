@@ -187,6 +187,7 @@ IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= VULKAN_MEMORY_MODEL_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= {"nonuniformEXT", "tileImageEXT"}
 CONTEXTUAL_QUALIFIERS = {"static"}
+DECLARATION_ANNOTATION_PREFIXES = {"spirv_instruction"}
 TEMPLATE_TYPE_NAMES = {"vector"}
 TEMPLATE_DECLARATION_TYPE_NAMES = {
     "coopmat",
@@ -936,7 +937,16 @@ class GLSLParser:
     def is_macro_declaration_prefix(self):
         if self.current_token[0] != "IDENTIFIER":
             return False
-        if not self.is_uppercase_macro_identifier(self.current_token[1]):
+
+        identifier = self.current_token[1]
+        if identifier in DECLARATION_ANNOTATION_PREFIXES:
+            if self.peek()[0] != "LPAREN":
+                return False
+            end_index = self.skip_balanced_suffix(self.index + 1, "LPAREN", "RPAREN")
+            next_token = self.token_at(self.skip_newline_index(end_index))
+            return self.can_follow_macro_declaration_prefix(next_token)
+
+        if not self.is_uppercase_macro_identifier(identifier):
             return False
 
         if self.peek()[0] == "LPAREN":

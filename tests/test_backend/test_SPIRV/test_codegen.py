@@ -3652,6 +3652,27 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_GEOMETRY_EMIT_PRIMITIVE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders/asm/geom/unroll-glposition-load.asm.geom
+; Reduced from the geometry helper body containing OpEmitVertex and OpEndPrimitive.
+OpCapability Geometry
+OpMemoryModel Logical GLSL450
+OpEntryPoint Geometry %main "main"
+OpExecutionMode %main Triangles
+OpExecutionMode %main OutputTriangleStrip
+OpExecutionMode %main OutputVertices 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpEmitVertex
+OpEndPrimitive
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_ISNAN_ISINF_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -5888,6 +5909,22 @@ def test_glslang_geometry_execution_modes_codegen_reparse():
     assert "float3 inColor[3] @input @location(0);" in generated_code
     assert "float3 outColor @output @location(0);" in generated_code
     assert "fragment {" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_geometry_emit_primitive_codegen_reparse():
+    tokens = tokenize_code(SPIRV_CROSS_GEOMETRY_EMIT_PRIMITIVE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "geometry {" in generated_code
+    assert "layout(triangles) in;" in generated_code
+    assert "layout(triangle_strip, max_vertices = 1) out;" in generated_code
+    assert "EmitVertex();" in generated_code
+    assert "EndPrimitive();" in generated_code
+    assert "OpEmitVertex" not in generated_code
+    assert "OpEndPrimitive" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

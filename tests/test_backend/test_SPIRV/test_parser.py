@@ -1584,6 +1584,27 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSS_GEOMETRY_EMIT_PRIMITIVE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders/asm/geom/unroll-glposition-load.asm.geom
+; Reduced from the geometry helper body containing OpEmitVertex and OpEndPrimitive.
+OpCapability Geometry
+OpMemoryModel Logical GLSL450
+OpEntryPoint Geometry %main "main"
+OpExecutionMode %main Triangles
+OpExecutionMode %main OutputTriangleStrip
+OpExecutionMode %main OutputVertices 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpEmitVertex
+OpEndPrimitive
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_VOID_FUNCTION_CALL_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source grammar: https://github.com/KhronosGroup/SPIRV-Headers/blob/1e770e7de8373a8dd49f23416cf7ca4001d01040/include/spirv/unified1/spirv.core.grammar.json
@@ -2541,6 +2562,22 @@ def test_spirv_spec_fragment_termination_parse():
         DiscardNode,
     ]
     assert isinstance(body[3], ReturnNode)
+
+
+def test_spirv_cross_geometry_emit_primitive_parse():
+    tokens = tokenize_code(SPIRV_CROSS_GEOMETRY_EMIT_PRIMITIVE_ASSEMBLY)
+    ast = parse_code(tokens)
+    main = ast.functions[0]
+
+    assert ast.spirv_assembly is True
+    assert main.spirv_execution_model == "Geometry"
+    assert isinstance(main.body[0], FunctionCallNode)
+    assert main.body[0].name == "EmitVertex"
+    assert main.body[0].args == []
+    assert isinstance(main.body[1], FunctionCallNode)
+    assert main.body[1].name == "EndPrimitive"
+    assert main.body[1].args == []
+    assert isinstance(main.body[2], ReturnNode)
 
 
 def test_spirv_glslang_void_function_call_parse():
