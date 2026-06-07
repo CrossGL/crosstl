@@ -168,6 +168,35 @@ def _write_large_migration_report(repo, *, action_count=21):
     return report_path
 
 
+def _write_failed_artifact_report(repo):
+    repo.mkdir()
+    report_path = repo / "portability-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["not-a-backend"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "target": "not-a-backend",
+                        "path": "out/not-a-backend/simple.out",
+                        "status": "failed",
+                        "error": "unsupported target backend",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return report_path
+
+
 def test_support_external_corpus_manifest_documents_pinned_reductions():
     manifest = json.loads(
         (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
@@ -188,6 +217,45 @@ def test_support_external_corpus_manifest_documents_pinned_reductions():
         assert len(entry["commit"]) == 40
         assert entry["sourceUrl"].startswith(entry["repository"])
         assert entry["targets"] == ["cgl"]
+
+
+def test_support_project_feature_evidence_references_existing_tests():
+    catalog = json.loads(
+        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
+    )
+    test_file = ROOT / "tests" / "test_translator" / "test_project_translation.py"
+    declared_tests = {
+        line.strip().split("(", 1)[0].removeprefix("def ")
+        for line in test_file.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("def test_")
+    }
+    evidence_prefix = "tests/test_translator/test_project_translation.py::def "
+
+    missing_evidence = []
+    missing_tests = []
+    for feature in catalog["features"]:
+        if feature.get("category") != "project":
+            continue
+        for backend, support in feature.get("support", {}).items():
+            evidence = support.get("evidence")
+            if not evidence:
+                missing_evidence.append(f"{feature.get('id')}:{backend}")
+                continue
+            project_evidence = [
+                item
+                for item in evidence
+                if isinstance(item, str) and item.startswith(evidence_prefix)
+            ]
+            if not project_evidence:
+                missing_evidence.append(f"{feature.get('id')}:{backend}")
+                continue
+            for item in project_evidence:
+                test_name = item.removeprefix(evidence_prefix)
+                if test_name not in declared_tests:
+                    missing_tests.append(item)
+
+    assert missing_evidence == []
+    assert missing_tests == []
 
 
 def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported(
@@ -11174,31 +11242,7 @@ def test_project_cli_translate_project_rejects_output_dir_outside_project(tmp_pa
 
 def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     repo = tmp_path / "repo"
-    repo.mkdir()
-    report_path = repo / "portability-report.json"
-    report_path.write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "kind": "crosstl-project-portability-report",
-                "project": {
-                    "root": str(repo),
-                    "targets": ["not-a-backend"],
-                    "outputDir": "out",
-                },
-                "artifacts": [
-                    {
-                        "source": "simple.cgl",
-                        "target": "not-a-backend",
-                        "path": "out/not-a-backend/simple.out",
-                        "status": "failed",
-                        "error": "unsupported target backend",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    report_path = _write_failed_artifact_report(repo)
 
     result = subprocess.run(
         [
@@ -11314,6 +11358,44 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
         "target": "not-a-backend",
         "missingCapabilities": ["batch.translation"],
     }
+
+
+@pytest.mark.parametrize(
+    ("format_args", "output_name", "expected_text"),
+    (
+        ([], "validation.json", '"kind": "crosstl-project-validation-report"'),
+        (["--format", "text"], "validation.txt", "Project validation report:"),
+        (["--format", "sarif"], "validation.sarif", '"version": "2.1.0"'),
+    ),
+)
+def test_project_cli_validate_project_writes_selected_format_to_output(
+    tmp_path, format_args, output_name, expected_text
+):
+    report_path = _write_failed_artifact_report(tmp_path / "repo")
+    output_path = tmp_path / output_name
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            *format_args,
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output_text = output_path.read_text(encoding="utf-8")
+    assert result.returncode == 1
+    assert result.stdout == f"Wrote {output_path}\n"
+    assert expected_text in output_text
+    assert expected_text not in result.stdout
 
 
 def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_path):
@@ -12059,6 +12141,49 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
     assert payload["artifactMatrix"]["complete"] is True
+
+
+@pytest.mark.parametrize(
+    ("format_name", "output_name", "expected_text"),
+    (
+        ("text", "inspection.txt", "Project report:"),
+        ("sarif", "inspection.sarif", '"version": "2.1.0"'),
+    ),
+)
+def test_project_cli_inspect_report_writes_selected_format_to_output(
+    tmp_path, format_name, output_name, expected_text
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["not-a-backend"])
+    report_path = repo / "portability-report.json"
+    output_path = tmp_path / output_name
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            format_name,
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output_text = output_path.read_text(encoding="utf-8")
+    assert result.returncode == 1
+    assert result.stdout == f"Wrote {output_path}\n"
+    assert expected_text in output_text
+    assert expected_text not in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
