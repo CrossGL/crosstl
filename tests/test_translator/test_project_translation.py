@@ -12659,6 +12659,47 @@ def test_validate_project_report_records_toolchain_failures(
     ) in stdout
 
 
+def test_inspect_project_report_omits_invalid_toolchain_run_commands(
+    tmp_path, monkeypatch
+):
+    report_path = _write_opengl_toolchain_report(tmp_path / "repo")
+    monkeypatch.setattr(
+        project_pipeline,
+        "_run_toolchain_smoke",
+        lambda *args, **kwargs: [
+            {
+                "source": "simple.cgl",
+                "sourceBackend": "cgl",
+                "target": "opengl",
+                "path": "out/opengl/simple.glsl",
+                "checkKind": "artifact",
+                "command": ["glslangValidator", ""],
+                "returncode": 0,
+                "status": "ok",
+                "stdout": "",
+                "stderr": "",
+            }
+        ],
+    )
+
+    inspection = inspect_project_report(report_path, run_toolchains=True)
+
+    assert inspection["validation"]["toolchainRunCount"] == 1
+    assert inspection["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "opengl",
+            "path": "out/opengl/simple.glsl",
+            "checkKind": "artifact",
+            "status": "ok",
+            "returncode": 0,
+            "stdoutLength": 0,
+            "stderrLength": 0,
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("target", "extension", "tool", "command"),
     (

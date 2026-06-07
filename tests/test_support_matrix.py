@@ -379,10 +379,15 @@ def test_project_report_inspection_documents_rollups():
             "tests/test_translator/test_project_translation.py::def "
             "test_inspect_project_report_applies_include_dependency_sample_limit"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_omits_invalid_toolchain_run_commands"
+        ) in backend_support["evidence"]
         assert "source-override" in backend_support["notes"]
         assert "skipped source-override" in backend_support["notes"]
         assert "negative sample-limit rejection" in backend_support["notes"]
         assert "closed inspection-report field set" in backend_support["notes"]
+        assert "invalid toolchain-run command omission" in backend_support["notes"]
         assert (
             "source-map, source-remap, provenance, define-processing, "
             "include-path-processing, include-dependency, validation artifact, "

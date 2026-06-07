@@ -5554,7 +5554,9 @@ def _inspection_validation_toolchain_run(run: Any) -> dict[str, Any] | None:
         "returncode": run.get("returncode"),
     }
     command = run.get("command")
-    if isinstance(command, list) and all(isinstance(part, str) for part in command):
+    if isinstance(command, list) and all(
+        _is_non_empty_string(part) for part in command
+    ):
         sample["command"] = list(command)
     for field_name in ("stdout", "stderr"):
         value = run.get(field_name)
