@@ -2079,6 +2079,10 @@ class MojoParser:
             else:
                 if entries:
                     raise SyntaxError("Cannot mix Mojo dictionary and braced elements")
+                if not elements and self.current_token[0] == "FOR":
+                    comprehension = self.parse_set_comprehension(key)
+                    self.eat("RBRACE")
+                    return self.parse_postfix_suffixes(comprehension)
                 elements.append(key)
 
             if self.current_token[0] == "COMMA":
@@ -2103,6 +2107,10 @@ class MojoParser:
     def parse_dict_comprehension(self, key, value):
         clauses = self.parse_comprehension_clauses()
         return DictComprehensionNode(key, value, clauses)
+
+    def parse_set_comprehension(self, expression):
+        clauses = self.parse_comprehension_clauses()
+        return SetComprehensionNode(expression, clauses)
 
     def parse_comprehension_clauses(self):
         clauses = []

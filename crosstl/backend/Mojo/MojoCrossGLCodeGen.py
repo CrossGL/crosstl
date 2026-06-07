@@ -1009,6 +1009,8 @@ class MojoToCrossGLConverter:
                 self.generate_expression(element) for element in expr.elements
             )
             return f"{{{elements}}}"
+        elif isinstance(expr, SetComprehensionNode):
+            return self.generate_set_comprehension(expr)
         elif isinstance(expr, DictComprehensionNode):
             return self.generate_dict_comprehension(expr)
         elif isinstance(expr, SliceNode):
@@ -1123,6 +1125,11 @@ class MojoToCrossGLConverter:
         pieces = [self.generate_expression(expr.expression)]
         pieces.extend(self.generate_comprehension_clauses(expr.clauses))
         return f"[{' '.join(pieces)}]"
+
+    def generate_set_comprehension(self, expr):
+        pieces = [self.generate_expression(expr.expression)]
+        pieces.extend(self.generate_comprehension_clauses(expr.clauses))
+        return f"{{{' '.join(pieces)}}}"
 
     def generate_dict_literal(self, expr):
         entries = [

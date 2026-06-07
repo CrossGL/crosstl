@@ -2330,6 +2330,8 @@ class SlangParser:
             return self.parse_block()
         if self.current_token[0] in {"TYPEDEF", "TYPEALIAS"}:
             return self.parse_typedef()
+        if self.current_token == ("IDENTIFIER", "defer"):
+            return self.parse_defer_statement()
         if self.is_variable_declaration_start():
             return self.parse_variable_declaration_or_assignment()
         if self.current_token[0] == "IDENTIFIER" and self.tokens[self.pos + 1][0] in {
@@ -2359,6 +2361,11 @@ class SlangParser:
             return self.parse_discard_statement()
         else:
             return self.parse_expression_statement()
+
+    def parse_defer_statement(self):
+        self.eat("IDENTIFIER")
+        body = self.parse_statement_or_block()
+        return DeferNode(body)
 
     def is_variable_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)

@@ -553,6 +553,20 @@ def test_dict_display_and_comprehension_codegen_from_current_mojo_docs():
     assert "Unhandled expression: DictComprehensionNode" not in generated_code
 
 
+def test_set_comprehension_codegen_from_current_mojo_docs():
+    # Reduced from https://github.com/modular/modular/blob/04cff5a4cc491ec2bf6850ce99e0253075fc908c/mojo/docs/reference/expressions.mdx,
+    # "Set comprehensions" in the Mojo expression reference.
+    code = """
+    def main():
+        var fibs = {fib(x) for x in range(6)}
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var fibs = {fib(x) for x in range(6)};" in generated_code
+    assert "Unhandled expression: SetComprehensionNode" not in generated_code
+
+
 def test_braced_set_and_initializer_list_codegen_from_current_mojo_docs():
     # Reduced from https://mojolang.org/docs/reference/expressions/
     # Version 1.0.0b1, "Collection displays" sets and initializer lists.

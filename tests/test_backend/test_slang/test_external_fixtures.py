@@ -16,6 +16,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "8c4e02e4021d73091a4f1d4eba842c0dd986997e",
     },
+    "shader-slang/slang-current-2026-06-07": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "5230a81f2fe68afe5cb8d04a1b09d56476f6b960",
+    },
     "shader-slang/slang-property-2026-06-04": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
@@ -175,6 +179,32 @@ EXTERNAL_FIXTURES = [
             "a += 10;",
             "outputBuffer[index] = a;",
         ],
+    },
+    {
+        "id": "slang_generated_defer_scope_exit",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": (
+            "docs/generated/tests/design/pipeline/04b-pre-link-passes/"
+            "phase-b-lower-defer-inlines-body-at-scope-exit.slang"
+        ),
+        "source": (
+            """
+            uniform RWStructuredBuffer<int> buf;
+
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid : SV_DispatchThreadID)
+            {
+                defer { buf[1] = 100; }
+                buf[0] = 1;
+            }
+        """
+        ),
+        "crossgl": True,
+        "ordered_contains": [
+            "buf[0] = 1;",
+            "buf[1] = 100;",
+        ],
+        "not_contains": ["defer"],
     },
     {
         "id": "slang_generated_sizeof_type_operand",
@@ -1088,6 +1118,11 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
 
     for expected in fixture.get("contains", []):
         assert expected in generated
+    previous_position = -1
+    for expected in fixture.get("ordered_contains", []):
+        position = generated.find(expected, previous_position + 1)
+        assert position != -1
+        previous_position = position
     for rejected in fixture.get("not_contains", []):
         assert rejected not in generated
 

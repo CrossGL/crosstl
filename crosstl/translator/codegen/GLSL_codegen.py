@@ -577,6 +577,8 @@ class GLSLCodeGen:
         "callabledataext",
         "callabledatain",
         "callabledatainext",
+        "tileimage",
+        "tileimageext",
     }
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
@@ -7881,6 +7883,8 @@ class GLSLCodeGen:
                 add("callableDataEXT")
             elif normalized in {"callabledatain", "callabledatainext"}:
                 add("callableDataInEXT")
+            elif normalized in {"tileimage", "tileimageext"}:
+                add("tileImageEXT")
             elif normalized in {"shared", "groupshared", "workgroup", "threadgroup"}:
                 add("shared")
             elif normalized in {
@@ -7915,16 +7919,17 @@ class GLSLCodeGen:
             "sample": 8,
             "in": 9,
             "out": 10,
-            "lowp": 11,
-            "mediump": 12,
-            "highp": 13,
-            "shared": 14,
-            "taskPayloadSharedEXT": 15,
-            "rayPayloadEXT": 16,
-            "rayPayloadInEXT": 17,
-            "hitAttributeEXT": 18,
-            "callableDataEXT": 19,
-            "callableDataInEXT": 20,
+            "tileImageEXT": 11,
+            "lowp": 12,
+            "mediump": 13,
+            "highp": 14,
+            "shared": 15,
+            "taskPayloadSharedEXT": 16,
+            "rayPayloadEXT": 17,
+            "rayPayloadInEXT": 18,
+            "hitAttributeEXT": 19,
+            "callableDataEXT": 20,
+            "callableDataInEXT": 21,
         }
         emitted.sort(key=lambda qualifier: order.get(qualifier, len(order)))
         return " ".join(emitted)
