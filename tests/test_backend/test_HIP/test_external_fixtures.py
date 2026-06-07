@@ -64,6 +64,7 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/ROCm/hip-tests",
         "commit": "d01e1f96059edc25600eb13434d7e2b71c09af01",
         "paths": [
+            "catch/unit/deviceLib/funnelshift.cc",
             "catch/unit/math/integer_intrinsics.cc",
             "catch/unit/deviceLib/popc.cc",
         ],
@@ -1527,6 +1528,48 @@ def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():
     assert "((s >> 12) & 0xf)" in crossgl
     assert "y[1] = (((x1 >> 24) & 0xffu)" in crossgl
     assert "= __byte_perm(" not in crossgl
+
+
+def test_external_rocm_hip_tests_funnelshift_intrinsics_codegen_reparse():
+    # Reduced from ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/deviceLib/funnelshift.cc.
+    source = """
+    __global__ void funnelshift_kernel(unsigned int* l_out,
+                                       unsigned int* lc_out,
+                                       unsigned int* r_out,
+                                       unsigned int* rc_out) {
+        unsigned int i = threadIdx.x;
+        l_out[i] = __funnelshift_l(0xdeadbeefu, 0xfacefeedu, i);
+        lc_out[i] = __funnelshift_lc(0xdeadbeefu, 0xfacefeedu, i);
+        r_out[i] = __funnelshift_r(0xdeadbeefu, 0xfacefeedu, i);
+        rc_out[i] = __funnelshift_rc(0xdeadbeefu, 0xfacefeedu, i);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert body[1].right.name == "__funnelshift_l"
+    assert body[2].right.name == "__funnelshift_lc"
+    assert body[3].right.name == "__funnelshift_r"
+    assert body[4].right.name == "__funnelshift_rc"
+    assert (
+        "l_out[i] = u32((((u64(0xfacefeedu) << 32u) | "
+        "u64(0xdeadbeefu)) << (i & 31u)) >> 32u);"
+    ) in crossgl
+    assert (
+        "lc_out[i] = u32((((u64(0xfacefeedu) << 32u) | "
+        "u64(0xdeadbeefu)) << min(i, 32u)) >> 32u);"
+    ) in crossgl
+    assert (
+        "r_out[i] = u32(((u64(0xfacefeedu) << 32u) | "
+        "u64(0xdeadbeefu)) >> (i & 31u));"
+    ) in crossgl
+    assert (
+        "rc_out[i] = u32(((u64(0xfacefeedu) << 32u) | "
+        "u64(0xdeadbeefu)) >> min(i, 32u));"
+    ) in crossgl
+    assert "__funnelshift_" not in crossgl
 
 
 def test_public_cuda_kernel_if_init_statement_hip_parity_codegen_reparse():

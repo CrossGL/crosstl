@@ -1951,6 +1951,30 @@ class VulkanParser:
                     expression_type_ids[result_id] = operands[0]
                     continue
 
+            if result_id and opcode == "OpGroupNonUniformBroadcast":
+                if len(operands) >= 4:
+                    expressions[result_id] = FunctionCallNode(
+                        "subgroupBroadcast",
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                            self.spirv_assembly_operand_expression(
+                                operands[3],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        ],
+                    )
+                    expression_type_ids[result_id] = operands[0]
+                    continue
+
             if result_id and opcode in self.SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS:
                 if len(operands) >= 4:
                     expressions[result_id] = (

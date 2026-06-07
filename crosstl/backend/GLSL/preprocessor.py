@@ -11,9 +11,11 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
 
     def _split_logical_lines(self, code: str) -> List[str]:
-        return super()._split_logical_lines(self._strip_comments(code))
+        return super()._split_logical_lines(
+            self._strip_comments(code, preserve_block_newlines=False)
+        )
 
-    def _strip_comments(self, code: str) -> str:
+    def _strip_comments(self, code: str, preserve_block_newlines: bool = True) -> str:
         result = []
         i = 0
         while i < len(code):
@@ -29,7 +31,8 @@ class _GLSLDirectivePreprocessor(HLSLPreprocessor):
             if code.startswith("/*", i):
                 consumed, newline_count = self._skip_block_comment_text(code, i)
                 result.append(" ")
-                result.extend("\n" for _ in range(newline_count))
+                if preserve_block_newlines:
+                    result.extend("\n" for _ in range(newline_count))
                 i += consumed
                 continue
             result.append(ch)
