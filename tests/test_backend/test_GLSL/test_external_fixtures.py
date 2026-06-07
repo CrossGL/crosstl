@@ -99,6 +99,44 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.buffer.autoassign.frag.
+    # Covers HLSL-style cbuffers/register annotations accepted by glslang.
+    ExternalFixture(
+        name="glslang-spv-buffer-autoassign-cbuffer-register",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.buffer.autoassign.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            cbuffer MyUB1 : register(b5)
+            {
+                float g_a;
+                int g_b;
+            };
+
+            cbuffer MyUB2
+            {
+                float g_c;
+            };
+
+            cbuffer MyUB3
+            {
+                float g_d;
+            };
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            PS_OUTPUT main()
+            {
+                PS_OUTPUT psout;
+                psout.Color = g_a + g_b + g_c + g_d;
+                return psout;
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.int16.amd.frag.
     # Reduced from AMD int16 literal and specialization-constant coverage.
     ExternalFixture(
@@ -1860,6 +1898,33 @@ def test_codegen_vulkan_samples_descriptor_set_uniform_block_fixture():
     assert "global_uniform.camera_position" not in crossgl
     assert "vec4 clip = (view_proj * vec4(1.0));" in crossgl
     assert "o_color = (clip + vec4(camera_position, 0.0));" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_cbuffer_register_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-buffer-autoassign-cbuffer-register"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    myub1 = next(struct for struct in ast.structs if struct.name == "MyUB1")
+    ps_output = next(struct for struct in ast.structs if struct.name == "PS_OUTPUT")
+    color = next(member for member in ps_output.members if member.name == "Color")
+
+    assert myub1.interface_layout == {"binding": "5"}
+    assert getattr(myub1, "hlsl_cbuffer", False) is True
+    assert color.semantic == "SV_Target0"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "cbuffer MyUB1 @binding(5) {" in crossgl
+    assert "cbuffer MyUB2 {" in crossgl
+    assert "cbuffer MyUB3 {" in crossgl
+    assert "vec4 Color @ gl_FragData[0];" in crossgl
+    assert "PS_OUTPUT main()" in crossgl
     assert "cbuffer Uniforms" not in crossgl
     assert parse_crossgl(crossgl) is not None
 

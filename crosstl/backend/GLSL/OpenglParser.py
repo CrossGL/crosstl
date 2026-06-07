@@ -513,6 +513,16 @@ class GLSLParser:
                 )
                 continue
 
+            if self.is_hlsl_cbuffer_block_start():
+                struct_node, block_vars = self.parse_hlsl_cbuffer_block(
+                    qualifiers, layout
+                )
+                self.append_struct_with_nested(structs, struct_node)
+                self.append_interface_block_vars(
+                    block_vars, uniforms, io_variables, global_variables
+                )
+                continue
+
             if (
                 self.current_token[0] == "IDENTIFIER"
                 and self.peek_non_newline()[0] == "LBRACE"
@@ -1239,6 +1249,10 @@ class GLSLParser:
                 self.eat("EQUALS")
                 value = self.parse_assignment_expression()
 
+            semantic = None
+            if self.current_token[0] == "COLON":
+                semantic = self.parse_hlsl_semantic()
+
             var = VariableNode(
                 type_name,
                 name,
@@ -1248,6 +1262,7 @@ class GLSLParser:
                 layout=layout,
                 is_array=is_array,
                 array_sizes=array_sizes,
+                semantic=semantic,
             )
 
             lowered = {q.lower() for q in qualifiers or []}
@@ -1342,10 +1357,28 @@ class GLSLParser:
         self.anonymous_struct_count += 1
         return name
 
-    def parse_interface_block(self, qualifiers, layout):
+    def is_hlsl_cbuffer_block_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and str(self.current_token[1]).lower() == "cbuffer"
+            and self.peek_non_newline()[0] == "IDENTIFIER"
+        )
+
+    def parse_hlsl_cbuffer_block(self, qualifiers, layout):
+        self.eat("IDENTIFIER")
+        cbuffer_qualifiers = list(qualifiers or [])
+        if "uniform" not in {qualifier.lower() for qualifier in cbuffer_qualifiers}:
+            cbuffer_qualifiers.append("uniform")
+        return self.parse_interface_block(cbuffer_qualifiers, layout, hlsl_cbuffer=True)
+
+    def parse_interface_block(self, qualifiers, layout, hlsl_cbuffer=False):
         block_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.known_type_names.add(block_name)
+        self.skip_newlines()
+        register_layout = self.parse_hlsl_register_annotation()
+        if register_layout:
+            layout = self.merge_layout_qualifiers(layout, register_layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1404,6 +1437,7 @@ class GLSLParser:
         struct_node.interface_array_size = array_size
         struct_node.interface_array_sizes = array_sizes
         struct_node.nested_structs = nested_structs
+        struct_node.hlsl_cbuffer = hlsl_cbuffer
         block_vars = []
 
         if instance_name:
@@ -1428,6 +1462,59 @@ class GLSLParser:
 
         return struct_node, block_vars
 
+    def parse_hlsl_register_annotation(self):
+        if self.current_token[0] != "COLON":
+            return None
+
+        self.eat("COLON")
+        if not (
+            self.current_token[0] == "IDENTIFIER"
+            and str(self.current_token[1]).lower() == "register"
+        ):
+            raise SyntaxError(f"Expected register annotation, got {self.current_token}")
+        self.eat("IDENTIFIER")
+        self.skip_newlines()
+        self.eat("LPAREN")
+        self.skip_newlines()
+
+        layout = {}
+        register_name = self.current_token[1]
+        self.advance()
+        binding = self.binding_from_hlsl_register(register_name)
+        if binding is not None:
+            layout["binding"] = binding
+
+        self.skip_newlines()
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            self.skip_newlines()
+            token_value = self.current_token[1]
+            self.advance()
+            space = self.space_from_hlsl_register_space(token_value)
+            if space is not None:
+                layout["set"] = space
+            self.skip_newlines()
+
+        self.eat("RPAREN")
+        return layout or None
+
+    def binding_from_hlsl_register(self, register_name):
+        match = re.match(r"^[A-Za-z]+([0-9]+)$", str(register_name))
+        return match.group(1) if match else None
+
+    def space_from_hlsl_register_space(self, space_name):
+        match = re.match(r"^space([0-9]+)$", str(space_name), re.IGNORECASE)
+        return match.group(1) if match else None
+
+    def parse_hlsl_semantic(self):
+        self.eat("COLON")
+        self.skip_newlines()
+        parts = []
+        while self.current_token[0] not in ("COMMA", "SEMICOLON", "RPAREN", "EOF"):
+            parts.append(str(self.current_token[1]))
+            self.advance()
+        return " ".join(parts).strip()
+
     def is_buffer_reference_block(self, qualifiers, layout):
         return bool(layout and "buffer_reference" in layout) and "buffer" in {
             str(qualifier).lower() for qualifier in qualifiers or []
@@ -1444,10 +1531,14 @@ class GLSLParser:
         self.skip_newlines()
         self.skip_statement_attributes()
         self.skip_newlines()
+        semantic = None
+        if self.current_token[0] == "COLON":
+            semantic = self.parse_hlsl_semantic()
+            self.skip_newlines()
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return FunctionNode(
+            function = FunctionNode(
                 return_type,
                 name,
                 params,
@@ -1455,6 +1546,8 @@ class GLSLParser:
                 qualifiers=list(qualifiers or []),
                 layout=layout,
             )
+            function.semantic = semantic
+            return function
 
         self.eat("LBRACE")
         body = self.parse_block()
@@ -1463,7 +1556,7 @@ class GLSLParser:
         function_qualifiers = list(qualifiers or [])
         if qualifier:
             function_qualifiers.append(qualifier)
-        return FunctionNode(
+        function = FunctionNode(
             return_type,
             name,
             params,
@@ -1471,6 +1564,8 @@ class GLSLParser:
             qualifiers=function_qualifiers,
             layout=layout,
         )
+        function.semantic = semantic
+        return function
 
     def parse_parameters(self):
         self.eat("LPAREN")
@@ -1506,6 +1601,10 @@ class GLSLParser:
                     self.eat("EQUALS")
                     default_value = self.parse_assignment_expression()
 
+                semantic = None
+                if self.current_token[0] == "COLON":
+                    semantic = self.parse_hlsl_semantic()
+
                 array_size = array_sizes[0] if array_sizes else None
 
                 params.append(
@@ -1517,6 +1616,7 @@ class GLSLParser:
                         array_sizes=array_sizes,
                         is_array=bool(array_sizes),
                         default_value=default_value,
+                        semantic=semantic,
                     )
                 )
                 if self.current_token[0] == "COMMA":

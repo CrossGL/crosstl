@@ -436,15 +436,33 @@ class GLSLToCrossGLConverter:
             "vec2": "vec2",
             "vec3": "vec3",
             "vec4": "vec4",
+            "float2": "vec2",
+            "float3": "vec3",
+            "float4": "vec4",
             "ivec2": "ivec2",
             "ivec3": "ivec3",
             "ivec4": "ivec4",
+            "int2": "ivec2",
+            "int3": "ivec3",
+            "int4": "ivec4",
+            "uint2": "uvec2",
+            "uint3": "uvec3",
+            "uint4": "uvec4",
             "bvec2": "bvec2",
             "bvec3": "bvec3",
             "bvec4": "bvec4",
             "mat2": "mat2",
             "mat3": "mat3",
             "mat4": "mat4",
+            "float2x2": "mat2",
+            "float3x3": "mat3",
+            "float4x4": "mat4",
+            "float2x3": "mat2x3",
+            "float2x4": "mat2x4",
+            "float3x2": "mat3x2",
+            "float3x4": "mat3x4",
+            "float4x2": "mat4x2",
+            "float4x3": "mat4x3",
             "texture1D": "texture1D",
             "texture2D": "texture2D",
             "texture3D": "texture3D",
@@ -1312,6 +1330,28 @@ class GLSLToCrossGLConverter:
             + self.variable_qualifier_attribute_suffix(var)
         )
 
+    def semantic_attribute_suffix(self, semantic):
+        mapped = self.map_hlsl_style_semantic(semantic)
+        return f" @ {mapped}" if mapped else ""
+
+    def map_hlsl_style_semantic(self, semantic):
+        if not semantic:
+            return ""
+
+        semantic = str(semantic)
+        semantic_upper = semantic.upper()
+        target_match = re.fullmatch(r"SV_TARGET(\d*)", semantic_upper)
+        if target_match:
+            target_index = target_match.group(1)
+            return f"gl_FragData[{target_index}]" if target_index else "gl_FragColor"
+        return semantic
+
+    def is_fragment_explicit_entry_return(self, function):
+        if self.shader_type != "fragment" or function is None:
+            return False
+        return_type = getattr(function, "return_type", None)
+        return bool(return_type and str(return_type) != "void")
+
     def fragment_uses_direct_output_declarations(
         self, fragment_writes_depth=False, fragment_writes_sample_mask=False
     ):
@@ -1376,9 +1416,7 @@ class GLSLToCrossGLConverter:
         qualifier_prefix = self.interface_member_qualifier_prefix(var)
         if qualifier_prefix:
             qualifier_prefix += " "
-        semantic = ""
-        if getattr(var, "semantic", None):
-            semantic = f" @ {var.semantic}"
+        semantic = self.semantic_attribute_suffix(getattr(var, "semantic", None))
         array_suffix = self.array_suffix(var)
         attributes = self.stage_struct_member_attribute_suffix(var)
         return f"{qualifier_prefix}{var_type} {var_name}{array_suffix}{attributes}{semantic};\n"
@@ -1477,7 +1515,9 @@ class GLSLToCrossGLConverter:
             for qualifier in getattr(struct, "interface_qualifiers", []) or []
         }
         layout = getattr(struct, "interface_layout", None) or {}
-        return "uniform" in qualifiers and self.layout_has_key(layout, "set")
+        return "uniform" in qualifiers and (
+            self.layout_has_key(layout, "set") or getattr(struct, "hlsl_cbuffer", False)
+        )
 
     def is_arrayed_descriptor_set_uniform_block_struct(self, struct):
         return self.is_descriptor_set_uniform_block_struct(struct) and getattr(
@@ -1569,8 +1609,12 @@ class GLSLToCrossGLConverter:
         if not block_name or block_name not in self.structs_by_name:
             return None
 
+        block_struct = self.structs_by_name.get(block_name)
         layout = self.uniform_block_layout(block_name, [var])
-        if not self.layout_has_key(layout, "set"):
+        if not (
+            self.layout_has_key(layout, "set")
+            or getattr(block_struct, "hlsl_cbuffer", False)
+        ):
             return None
         return block_name
 
@@ -1884,11 +1928,24 @@ class GLSLToCrossGLConverter:
                 output_names.add(name)
 
         # Ensure fragment outputs include gl_FragColor if no outputs declared
+        fragment_entry_return = None
+        if self.shader_type == "fragment":
+            fragment_entry_return = next(
+                (
+                    function
+                    for function in getattr(node, "functions", []) or []
+                    if getattr(function, "name", None) == "main"
+                    and self.is_fragment_explicit_entry_return(function)
+                ),
+                None,
+            )
+
         if (
             self.shader_type == "fragment"
             and not self.outputs
             and not fragment_writes_depth
             and not fragment_writes_sample_mask
+            and fragment_entry_return is None
         ):
             builtin = VariableNode(
                 "vec4", "gl_FragColor", qualifiers=["out"], semantic="gl_FragColor"
@@ -2130,7 +2187,17 @@ class GLSLToCrossGLConverter:
                     + f"{self.stage_struct_name()}Output main({input_parameter})"
                 )
             elif self.shader_type == "fragment":
-                if fragment_uses_direct_outputs:
+                if self.is_fragment_explicit_entry_return(main_function):
+                    return_type = self.convert_type(main_function.return_type)
+                    semantic = self.semantic_attribute_suffix(
+                        getattr(main_function, "semantic", None)
+                    )
+                    result += (
+                        self.indent()
+                        + f"{return_type} main({input_parameter})"
+                        + semantic
+                    )
+                elif fragment_uses_direct_outputs:
                     result += self.indent() + f"void main({input_parameter})"
                 else:
                     output_type = "vec4"
@@ -2193,6 +2260,7 @@ class GLSLToCrossGLConverter:
                 if (
                     self.shader_type == "fragment"
                     and not fragment_uses_direct_outputs
+                    and not self.is_fragment_explicit_entry_return(main_function)
                     and not any(
                         isinstance(stmt, ReturnNode) for stmt in main_function.body
                     )
@@ -2288,9 +2356,9 @@ class GLSLToCrossGLConverter:
             else:
                 var_type = self.convert_type(getattr(field, "vtype", ""))
                 var_name = getattr(field, "name", "")
-                semantic = ""
-                if getattr(field, "semantic", None):
-                    semantic = f" @ {field.semantic}"
+                semantic = self.semantic_attribute_suffix(
+                    getattr(field, "semantic", None)
+                )
                 array_suffix = self.array_suffix(field)
                 qualifier_prefix = ""
                 if self.is_graphics_interface_block_struct(node):

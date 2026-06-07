@@ -268,7 +268,7 @@ def test_function_parameter_separator_markers_codegen_drops_markers():
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "int kw_only_args(int a1, int a2, bool double)" in generated_code
+    assert "int kw_only_args(int a1, int a2, bool double_)" in generated_code
     assert "int positional_only_args(int a1, int a2, int b1)" in generated_code
     assert "*, double" not in generated_code
     assert "/, b1" not in generated_code
@@ -306,10 +306,25 @@ def test_default_keyword_parameter_name_codegen_from_modular_stdlib():
     assert (
         "SIMD[dtype, width] gather("
         "SIMD[DType.bool, width] mask = SIMD[DType.bool, width](fill = true), "
-        "SIMD[dtype, width] default = 0)"
+        "SIMD[dtype, width] default_ = 0)"
     ) in generated_code
-    assert "return default;" in generated_code
+    assert "return default_;" in generated_code
     assert "Unhandled expression" not in generated_code
+
+
+def test_constant_keyword_parameter_name_codegen_reparses_crossgl():
+    # `constant` is a legal Mojo parameter name despite being a lexer keyword
+    # for top-level constant buffers.
+    code = """
+    def use_constant(constant: Int) -> Int:
+        return constant
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int use_constant(int constant)" in generated_code
+    assert "return constant;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_ref_binding_declaration_codegen_from_official_variables_docs():
@@ -1170,7 +1185,7 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
     assert "let bin_width = (int(UInt8.MAX) + 1);" in generated_code
     assert "void execute(DeviceContext ctx) @ staticmethod" in generated_code
     assert (
-        "void kernel(UnsafePointer[Int64, MutAnyOrigin] output, "
+        "void kernel_(UnsafePointer[Int64, MutAnyOrigin] output, "
         "UnsafePointer[UInt8, MutAnyOrigin] input, int n) "
         "@ __llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA = "
         "StaticTuple[Int32, 1](int(block_dim)))"
@@ -1186,7 +1201,7 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
         in generated_code
     )
     assert (
-        "ctx.enqueue_function[kernel](output, input, n, block_dim = block_dim, "
+        "ctx.enqueue_function[kernel_](output, input, n, block_dim = block_dim, "
         "grid_dim = grid_dim);"
     ) in generated_code
     assert "Unhandled statement type: FunctionNode" not in generated_code
@@ -1325,6 +1340,29 @@ def test_keyword_style_runtime_assert_codegen_from_modular_packing_kernel():
     assert "comptime" not in generated_code
 
 
+def test_comptime_assert_parenthesized_or_condition_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/conv.mojo
+    # Conv.execute CUDA rank guard.
+    code = """
+    def execute():
+        comptime assert (input.rank == 4 and filter.rank == 4) or (
+            input.rank == 5 and filter.rank == 5
+        ), "only rank 4 or 5 tensor is supported on cuda gpu"
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "assert((((input.rank == 4) && (filter.rank == 4)) || "
+        "((input.rank == 5) && (filter.rank == 5))), "
+        '"only rank 4 or 5 tensor is supported on cuda gpu");'
+    ) in generated_code
+    assert "comptime" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     code = """
     def matmul_idiomatic_tiled[
@@ -1362,6 +1400,28 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     assert "Unhandled statement type: VectorConstructorNode" not in generated_code
 
 
+def test_generic_specialization_ellipsis_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/distributed.mojo
+    # vendor_ccl.allreduce specialization arguments.
+    code = """
+    def execute():
+        vendor_ccl.allreduce[
+            ngpus=num_devices,
+            output_lambda=output_lambda[output_index=index, ...],
+        ](in_tensors)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "vendor_ccl.allreduce[ngpus = num_devices, "
+        "output_lambda = output_lambda[output_index = index, ...]](in_tensors);"
+    ) in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_floor_divide_assignment_codegen_from_mojo_gpu_puzzles_reparses_crossgl():
     # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
     # 87de51ac93bea662eba6f09d19e8744e56161027,
@@ -1379,6 +1439,43 @@ def test_floor_divide_assignment_codegen_from_mojo_gpu_puzzles_reparses_crossgl(
     assert "stride /= 2;" in generated_code
     assert "//=" not in generated_code
     assert "TPB // 2" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_comptime_function_type_expression_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/kernels.mojo
+    # where a comptime declaration stores a thin function type.
+    code = """
+    def execute(payload: OpaquePointer):
+        comptime _HostFuncTy = def(OpaquePointer[MutAnyOrigin]) thin -> None
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "let _HostFuncTy = def(OpaquePointer[MutAnyOrigin]) thin -> None;"
+        in generated_code
+    )
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_tuple_assignment_with_index_targets_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/logprobs.mojo
+    # FixedHeightMinHeap.swap.
+    code = """
+    def swap(mut self, a: Int, b: Int) -> None:
+        self.k_array[a], self.k_array[b] = self.k_array[b], self.k_array[a]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "(self.k_array[a], self.k_array[b]) = " "(self.k_array[b], self.k_array[a]);"
+    ) in generated_code
+    assert "Unhandled expression" not in generated_code
     parse_crossgl(generated_code)
 
 
@@ -2471,7 +2568,7 @@ def test_struct_comptime_member_codegen_skips_metadata_field():
     generated_code = generate_code(ast)
 
     assert "struct Tensor" in generated_code
-    assert "DeviceBuffer[Self.dtype] buffer;" in generated_code
+    assert "DeviceBuffer[Self.dtype] buffer_;" in generated_code
     assert "void size;" not in generated_code
     assert "let size" not in generated_code
 
@@ -3132,7 +3229,7 @@ def test_at_attribute_codegen():
         assert "int data @ Position;" in generated_code
         assert "// Compute Shader" in generated_code
         assert "compute {" in generated_code
-        assert "void kernel() {" in generated_code
+        assert "void kernel_() {" in generated_code
         assert "kernel()@ compute_shader" not in generated_code
     except SyntaxError:
         pytest.fail("Attribute parsing or code generation not implemented.")

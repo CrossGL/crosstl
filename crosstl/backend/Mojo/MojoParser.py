@@ -14,9 +14,31 @@ class MojoParser:
     FUNCTION_TOKENS = {"FN", "DEF"}
     ASYNC_FUNCTION_MODIFIER = "async"
     AWAIT_EXPRESSION_IDENTIFIER = "await"
-    IDENTIFIER_NAME_TOKENS = {"IDENTIFIER", "DEFAULT", "BACKTICK_IDENTIFIER"}
+    IDENTIFIER_NAME_TOKENS = {
+        "IDENTIFIER",
+        "DEFAULT",
+        "CONSTANT",
+        "BACKTICK_IDENTIFIER",
+    }
     TYPE_START_TOKENS = {"IDENTIFIER", "INT", "FLOAT", "BOOL", "STRING"}
     FUNCTION_TYPE_TOKENS = {"FN", "DEF"}
+    ASSIGNMENT_OPERATOR_TOKENS = {
+        "EQUALS",
+        "PLUS_EQUALS",
+        "MINUS_EQUALS",
+        "MULTIPLY_EQUALS",
+        "POWER_EQUALS",
+        "DIVIDE_EQUALS",
+        "FLOOR_DIVIDE_EQUALS",
+        "ASSIGN_XOR",
+        "ASSIGN_OR",
+        "ASSIGN_AND",
+        "ASSIGN_SHIFT_LEFT",
+        "ASSIGN_SHIFT_RIGHT",
+        "ASSIGN_MOD",
+        "AT_EQUALS",
+        "WALRUS",
+    }
     PARAMETER_CONVENTION_TOKENS = {"VAR"}
     PARAMETER_CONVENTION_IDENTIFIERS = {
         "borrowed",
@@ -1391,8 +1413,26 @@ class MojoParser:
             return VariableNode(vtype, name, attributes=attributes)
 
         statement = self.parse_assignment()
+        if self.current_token[0] == "COMMA":
+            statement = self.parse_tuple_assignment_tail(statement)
         self.consume_statement_terminator()
         return statement
+
+    def parse_tuple_assignment_tail(self, first_target):
+        targets = [first_target]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            self.skip_layout_tokens()
+            targets.append(self.parse_logical_or())
+            self.skip_expression_layout()
+
+        if self.current_token[0] not in self.ASSIGNMENT_OPERATOR_TOKENS:
+            raise SyntaxError("Expected assignment after expression tuple")
+
+        op = self.current_token[1]
+        self.eat(self.current_token[0])
+        right = self.parse_expression_list_value()
+        return AssignmentNode(TupleNode(targets), right, op)
 
     def is_ref_binding_declaration_start(self):
         return (
@@ -1532,7 +1572,7 @@ class MojoParser:
 
     def parse_assert_statement(self, is_comptime=False):
         self.eat("IDENTIFIER")
-        if self.current_token[0] == "LPAREN":
+        if self.current_token[0] == "LPAREN" and not self.assert_condition_continues():
             node = self.parse_call(VariableNode("", "assert"))
             args = node.args
         else:
@@ -1548,6 +1588,29 @@ class MojoParser:
         if is_comptime:
             node.is_comptime = True
         return node
+
+    def assert_condition_continues(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+
+        index = self.pos
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    index += 1
+                    if index >= len(self.tokens):
+                        return False
+                    return self.tokens[index][0] not in (
+                        self.STATEMENT_END_TOKENS | {"COMMA", "SEMICOLON"}
+                    )
+            index += 1
+
+        return False
 
     def is_comptime_expression_statement(self):
         if self.current_token[0] != "IDENTIFIER":
@@ -1850,23 +1913,7 @@ class MojoParser:
     def parse_assignment(self):
         left = self.parse_logical_or()
         self.skip_expression_layout()
-        if self.current_token[0] in [
-            "EQUALS",
-            "PLUS_EQUALS",
-            "MINUS_EQUALS",
-            "MULTIPLY_EQUALS",
-            "POWER_EQUALS",
-            "DIVIDE_EQUALS",
-            "FLOOR_DIVIDE_EQUALS",
-            "ASSIGN_XOR",
-            "ASSIGN_OR",
-            "ASSIGN_AND",
-            "ASSIGN_SHIFT_LEFT",
-            "ASSIGN_SHIFT_RIGHT",
-            "ASSIGN_MOD",
-            "AT_EQUALS",
-            "WALRUS",
-        ]:
+        if self.current_token[0] in self.ASSIGNMENT_OPERATOR_TOKENS:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_assignment()
@@ -2117,6 +2164,8 @@ class MojoParser:
             value = self.current_token[1]
             self.eat("BOOL_LITERAL")
             return self.parse_postfix_suffixes(value)
+        elif self.is_ellipsis_expression():
+            return self.parse_ellipsis_expression()
         elif self.current_token[0] in ["INT", "FLOAT", "BOOL", "STRING"]:
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
@@ -2168,12 +2217,27 @@ class MojoParser:
             return self.parse_list_literal()
         elif self.current_token[0] == "LBRACE":
             return self.parse_dict_literal()
-        elif self.current_token[0] in ["FN", "DEF", "STRUCT", "CLASS", "LET", "VAR"]:
+        elif self.current_token[0] in self.FUNCTION_TYPE_TOKENS:
+            return self.parse_function_type()
+        elif self.current_token[0] in ["STRUCT", "CLASS", "LET", "VAR"]:
             raise SyntaxError(f"Unexpected top-level keyword: {self.current_token[0]}")
         else:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
+
+    def is_ellipsis_expression(self):
+        return (
+            self.current_token[0] == "DOT"
+            and self.peek_token()[0] == "DOT"
+            and self.peek_token(2)[0] == "DOT"
+        )
+
+    def parse_ellipsis_expression(self):
+        self.eat("DOT")
+        self.eat("DOT")
+        self.eat("DOT")
+        return VariableNode("", "...")
 
     def parse_list_literal(self):
         self.eat("LBRACKET")

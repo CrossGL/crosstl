@@ -388,6 +388,29 @@ def test_default_keyword_parameter_name_parse_from_modular_stdlib():
     assert function.body[0].value.name == "default"
 
 
+def test_constant_keyword_parameter_name_parse_from_modular_conv():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/conv.mojo
+    # PadConstant.execute, where `constant` is an argument name.
+    code = """
+    def execute(
+        padding: InputTensor[rank=1, ...],
+        constant: Scalar[dtype=dtype],
+        ctx: DeviceContext,
+    ) raises:
+        sink(constant)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "execute")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("padding", "InputTensor[rank=1, ...]"),
+        ("constant", "Scalar[dtype=dtype]"),
+        ("ctx", "DeviceContext"),
+    ]
+    assert function.body[0].args[0].name == "constant"
+
+
 def test_ref_binding_declaration_parse_from_official_variables_docs():
     # https://docs.modular.com/mojo/manual/variables/#reference-bindings
     code = """
@@ -994,6 +1017,69 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_parsing():
     assert [arg.name for arg in copy_call.args] == ["a_shared", "a_tile"]
 
 
+def test_generic_specialization_ellipsis_parse_from_modular_distributed():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/distributed.mojo
+    # vendor_ccl.allreduce specialization arguments.
+    code = """
+    def execute():
+        vendor_ccl.allreduce[
+            ngpus=num_devices,
+            output_lambda=output_lambda[output_index=index, ...],
+        ](in_tensors)
+    """
+    ast = parse_code(tokenize_code(code))
+    call = find_function(ast, "execute").body[0]
+    specialization_args = call.callee.index.elements
+    output_lambda = specialization_args[1].right.index.elements
+
+    assert isinstance(call, CallNode)
+    assert call.callee.array.member == "allreduce"
+    assert specialization_args[0].left.name == "ngpus"
+    assert output_lambda[0].left.name == "output_index"
+    assert output_lambda[1].name == "..."
+
+
+def test_comptime_function_type_expression_parse_from_modular_graph_kernels():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/kernels.mojo
+    # where a comptime declaration stores a thin function type.
+    code = """
+    def execute(payload: OpaquePointer):
+        comptime _HostFuncTy = def(OpaquePointer[MutAnyOrigin]) thin -> None
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "execute").body[0]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert declaration.name == "_HostFuncTy"
+    assert declaration.initial_value == (
+        "def(OpaquePointer[MutAnyOrigin]) thin -> None"
+    )
+    assert getattr(declaration, "is_comptime", False)
+
+
+def test_comptime_assert_parenthesized_or_condition_parse_from_modular_conv():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/conv.mojo
+    # Conv.execute CUDA rank guard.
+    code = """
+    def execute():
+        comptime assert (input.rank == 4 and filter.rank == 4) or (
+            input.rank == 5 and filter.rank == 5
+        ), "only rank 4 or 5 tensor is supported on cuda gpu"
+    """
+    ast = parse_code(tokenize_code(code))
+    assertion = find_function(ast, "execute").body[0]
+
+    assert isinstance(assertion, FunctionCallNode)
+    assert assertion.name == "assert"
+    assert getattr(assertion, "is_comptime", False)
+    assert isinstance(assertion.args[0], BinaryOpNode)
+    assert assertion.args[0].op == "||"
+    assert assertion.args[1] == '"only rank 4 or 5 tensor is supported on cuda gpu"'
+
+
 def test_modular_top_k_type_of_parameter_type_parsing():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
@@ -1018,6 +1104,28 @@ def test_modular_top_k_type_of_parameter_type_parsing():
         ("out_idxs", "type_of(out_idxs_tensor)"),
         ("in_vals", "type_of(in_vals_tensor)"),
     ]
+
+
+def test_tuple_assignment_with_index_targets_parse_from_modular_logprobs():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/logprobs.mojo
+    # FixedHeightMinHeap.swap.
+    code = """
+    def swap(mut self, a: Int, b: Int) -> None:
+        self.k_array[a], self.k_array[b] = self.k_array[b], self.k_array[a]
+    """
+    ast = parse_code(tokenize_code(code))
+    assignment = find_function(ast, "swap").body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, TupleNode)
+    assert isinstance(assignment.right, TupleNode)
+    assert [target.array.member for target in assignment.left.elements] == [
+        "k_array",
+        "k_array",
+    ]
+    assert [target.index.name for target in assignment.left.elements] == ["a", "b"]
+    assert [value.index.name for value in assignment.right.elements] == ["b", "a"]
 
 
 def test_statement_attributes_parse_from_real_world_mojo():

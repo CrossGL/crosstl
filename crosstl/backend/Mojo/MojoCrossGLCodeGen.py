@@ -1357,6 +1357,8 @@ class MojoToCrossGLConverter:
 
         match = self.BACKTICK_IDENTIFIER_PATTERN.match(member)
         if not match:
+            if member in self.CROSSGL_RESERVED_IDENTIFIERS:
+                return f"{member}_"
             return member
 
         return self.sanitize_identifier(match.group(1))

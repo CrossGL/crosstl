@@ -394,7 +394,7 @@ extern "C" __global__ void saxpy_kernel()
     assert 'name: "saxpy_kernel.cu"' in crossgl
 
 
-def test_external_rocm_convolution_std_array_template_extent_codegen():
+def test_external_rocm_convolution_std_array_template_extent_codegen_reparse():
     source = """
     const constexpr std::array<float, 5 * 5> convolution_filter_5x5 = {
         1.0f, 3.0f, 0.0f, -2.0f, -0.0f
@@ -414,18 +414,21 @@ def test_external_rocm_convolution_std_array_template_extent_codegen():
     }
     """
 
-    ast, crossgl = generate_crossgl_from_hip(source)
+    ast, crossgl = assert_crossgl_reparses(source)
 
     host_filter = ast.statements[0]
     assert isinstance(host_filter, VariableNode)
     assert host_filter.vtype == "const std::array<float, 5*5>"
     assert set(host_filter.qualifiers) == {"constexpr"}
     assert (
-        "var convolution_filter_5x5: array<f32, 5*5> = "
+        "var convolution_filter_5x5: array<f32, hip_array_extent_5_mul_5> = "
         "{1.0f, 3.0f, 0.0f, (-2.0f), (-0.0f)};"
     ) in crossgl
     assert "ptr<std::array" not in crossgl
-    assert "@group(0) @binding(0) var<uniform> d_mask: array<f32, (5 * 5)>;" in crossgl
+    assert (
+        "@group(0) @binding(0) var<uniform> d_mask: "
+        "array<f32, hip_array_extent_5_mul_5>;"
+    ) in crossgl
     assert "fn convolution(" in crossgl
 
 

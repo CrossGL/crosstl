@@ -389,6 +389,8 @@ EXTERNAL_FIXTURES = [
         "path": "Source/RenderPasses/DebugPasses/ColorMapPass/ColorMapParams.slang",
         "source": (
             """
+            BEGIN_NAMESPACE_FALCOR
+
             enum class ColorMap : uint32_t
             {
                 Grey,
@@ -398,6 +400,27 @@ EXTERNAL_FIXTURES = [
                 Magma,
                 Inferno,
             };
+
+            FALCOR_ENUM_INFO(
+                ColorMap,
+                {
+                    { ColorMap::Grey, "Grey" },
+                    { ColorMap::Jet, "Jet" },
+                    { ColorMap::Viridis, "Viridis" },
+                    { ColorMap::Plasma, "Plasma" },
+                    { ColorMap::Magma, "Magma" },
+                    { ColorMap::Inferno, "Inferno" },
+                }
+            );
+            FALCOR_ENUM_REGISTER(ColorMap);
+
+            struct ColorMapParams
+            {
+                float minValue = 0.f;
+                float maxValue = 1.f;
+            };
+
+            END_NAMESPACE_FALCOR
         """
         ),
         "crossgl": True,
@@ -406,7 +429,10 @@ EXTERNAL_FIXTURES = [
             "enum ColorMap {",
             "Grey,",
             "Inferno,",
+            "struct ColorMapParams {",
+            "float minValue = 0.0;",
         ],
+        "not_contains": ["BEGIN_NAMESPACE_FALCOR", "FALCOR_ENUM_INFO"],
     },
     {
         "id": "slang_gfx_tool_public_enums",
@@ -778,8 +804,9 @@ EXTERNAL_FIXTURES = [
             """
             struct MatrixData
             {
-                row_major float4x4 m1;
-                column_major float2x4 m2;
+                MATRIX_LAYOUT float4x4 m1;
+                MATRIX_LAYOUT float2x4 m2;
+                MATRIX_LAYOUT float3x2 m3;
             };
 
             RWStructuredBuffer<float> outputBuffer;
@@ -798,9 +825,10 @@ EXTERNAL_FIXTURES = [
             "struct MatrixData {",
             "mat4 m1;",
             "float2x4 m2;",
+            "float3x2 m3;",
             "outputBuffer[0] = MatrixData().m1[0][0];",
         ],
-        "not_contains": ["row_major", "column_major"],
+        "not_contains": ["MATRIX_LAYOUT", "row_major", "column_major"],
     },
     {
         "id": "slang_generated_subscript_get_accessor",
@@ -1381,6 +1409,65 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
 
     if fixture.get("crossgl", False):
         cgl_translator.parse(generated)
+
+
+def test_gfx_public_namespace_static_constants_codegen_crossgl_reparse():
+    # Source: shader-slang/slang tools/gfx/gfx.slang at
+    # c6f104ca76a54ca1565dac54363ea763dd906de6.
+    source = """
+        import slang;
+
+        public namespace gfx
+        {
+        public static const uint64_t kTimeoutInfinite = 0xFFFFFFFFFFFFFFFF;
+        public static const uint kWholeSize = 0xFFFFFFFF;
+        }
+    """
+
+    ast = parse_slang(source)
+    generated = generate_crossgl(ast)
+
+    assert [
+        getattr(getattr(node, "left", node), "name", None) for node in ast.global_vars
+    ] == [
+        "gfx.kTimeoutInfinite",
+        "gfx.kWholeSize",
+    ]
+    assert (
+        "static const uint64_t gfx_kTimeoutInfinite = 0xFFFFFFFFFFFFFFFF;" in generated
+    )
+    assert "static const uint gfx_kWholeSize = 0xFFFFFFFF;" in generated
+    assert "public namespace" not in generated
+    cgl_translator.parse(generated)
+
+
+def test_wgsl_texture_load_shorthand_where_conformance_constraints_parse():
+    # Source: shader-slang/slang tests/wgsl/texture-load.slang at
+    # 726e0973b3f547c7729b86f122ff7aef8322bace.
+    source = """
+        bool TEST_textureLoad<T>(
+            Texture1D<T> t1D,
+            Texture2D<T> t2D,
+            Texture3D<T> t3D,
+            Texture2DMS<T> t2DMS,
+            Texture2DArray<T> t2DArray)
+            where T : ITexelElement, IArithmetic
+        {
+            typealias Tvn = T;
+            return true && all(Tvn(T.Element(0)) == t1D.Load(int2(0, 0)));
+        }
+    """
+
+    ast = parse_slang(source)
+    function = ast.functions[0]
+
+    assert [
+        (constraint.parameter, constraint.relation, constraint.constraint_type)
+        for constraint in function.generic_constraints
+    ] == [
+        ("T", ":", "ITexelElement"),
+        ("T", ":", "IArithmetic"),
+    ]
 
 
 def test_falcor_exported_import_and_default_interface_parameter_parse():

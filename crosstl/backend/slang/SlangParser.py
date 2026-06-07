@@ -38,6 +38,7 @@ class SlangParser:
         "pervertex",
         "row_major",
         "column_major",
+        "MATRIX_LAYOUT",
         "__prefix",
         "__postfix",
         "__exported",
@@ -232,6 +233,10 @@ class SlangParser:
                 self.skip_semicolon_terminated_declaration()
             elif self.is_using_declaration_start():
                 self.skip_semicolon_terminated_declaration()
+            elif self.is_namespace_marker_macro_start():
+                self.eat("IDENTIFIER")
+            elif self.is_top_level_macro_invocation_start():
+                self.skip_top_level_macro_invocation()
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_func_keyword_declaration_start():
                     functions.append(
@@ -356,7 +361,8 @@ class SlangParser:
         return current_pos
 
     def is_namespace_declaration_start(self):
-        body_pos = self.namespace_declaration_body_index(self.pos)
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        body_pos = self.namespace_declaration_body_index(current_pos)
         return body_pos is not None and self.tokens[body_pos][0] == "LBRACE"
 
     def namespace_declaration_body_index(self, index):
@@ -397,6 +403,7 @@ class SlangParser:
         return current_pos
 
     def parse_namespace_declaration(self):
+        self.parse_qualifiers()
         self.eat("IDENTIFIER")
         namespace_name = self.parse_namespace_path()
         self.eat("LBRACE")
@@ -473,6 +480,26 @@ class SlangParser:
                 self.eat("SEMICOLON")
                 return
             self.eat(self.current_token[0])
+
+    def is_namespace_marker_macro_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        name = self.current_token[1]
+        return name.startswith("BEGIN_NAMESPACE") or name.startswith("END_NAMESPACE")
+
+    def is_top_level_macro_invocation_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1].isupper()
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "LPAREN"
+        )
+
+    def skip_top_level_macro_invocation(self):
+        self.eat("IDENTIFIER")
+        self.parse_balanced_parenthesized_tokens("top-level macro invocation")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def is_require_capability_declaration_start(self):
         return self.current_token == ("IDENTIFIER", "__require_capability")
@@ -2264,6 +2291,8 @@ class SlangParser:
     def parse_generic_constraints(self):
         constraints = []
         self.eat("WHERE")
+        previous_parameter = None
+        previous_relation = None
         while True:
             if self.current_token[0] != "IDENTIFIER":
                 raise SyntaxError(
@@ -2287,6 +2316,10 @@ class SlangParser:
                 }:
                     relation = self.current_token[1]
                     self.eat("IDENTIFIER")
+            elif previous_relation == ":":
+                constraint_type = parameter
+                parameter = previous_parameter
+                relation = previous_relation
             else:
                 raise SyntaxError(
                     "Only simple generic conformance and equality constraints are supported"
@@ -2294,6 +2327,8 @@ class SlangParser:
             constraint = GenericConstraintNode(parameter, constraint_type)
             constraint.relation = relation
             constraints.append(constraint)
+            previous_parameter = parameter
+            previous_relation = relation
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")

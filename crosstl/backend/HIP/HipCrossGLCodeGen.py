@@ -1002,6 +1002,30 @@ class HipToCrossGLConverter:
             return f"{name}_"
         return name
 
+    def format_crossgl_array_extent(self, size):
+        size = str(size).strip()
+        if not size:
+            return size
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xX][0-9A-Fa-f]+|\d+)[uU]?", size):
+            return size
+        replacements = {
+            "*": "_mul_",
+            "/": "_div_",
+            "%": "_mod_",
+            "+": "_plus_",
+            "-": "_minus_",
+        }
+        extent = size
+        for operator, word in replacements.items():
+            extent = extent.replace(operator, word)
+        extent = re.sub(r"[^A-Za-z0-9_]+", "_", extent).strip("_")
+        extent = re.sub(r"_+", "_", extent)
+        if not extent:
+            extent = "expr"
+        if extent[0].isdigit():
+            extent = f"hip_array_extent_{extent}"
+        return self.sanitize_identifier_name(extent)
+
     def sanitize_qualified_variable_name(self, name):
         if not isinstance(name, str) or "::" not in name:
             return None
@@ -4709,7 +4733,7 @@ class HipToCrossGLConverter:
                 "shared memory size"
             )
         if node.size is not None:
-            size = self.visit(node.size)
+            size = self.format_crossgl_array_extent(self.visit(node.size))
             self.emit(f"var<workgroup> {output_name}: array<{var_type}, {size}>;")
         else:
             self.emit(f"var<workgroup> {output_name}: {var_type};")
@@ -6869,7 +6893,9 @@ class HipToCrossGLConverter:
 
         for size in reversed(dimensions):
             if size:
-                mapped_type = f"array<{mapped_type}, {size}>"
+                mapped_type = (
+                    f"array<{mapped_type}, {self.format_crossgl_array_extent(size)}>"
+                )
             else:
                 mapped_type = f"array<{mapped_type}>"
 
@@ -7003,7 +7029,7 @@ class HipToCrossGLConverter:
             return f"array<{element_type}>"
         if self.is_std_array_base_name(base_name) and len(template_args) >= 2:
             element_type = self.convert_hip_type_to_crossgl(template_args[0])
-            size = template_args[1].strip()
+            size = self.format_crossgl_array_extent(template_args[1])
             return f"array<{element_type}, {size}>"
         return None
 
@@ -7138,7 +7164,9 @@ class HipToCrossGLConverter:
             mapped_type = self.convert_hip_type_to_crossgl(base_type)
         for size in reversed(dimensions):
             if size:
-                mapped_type = f"array<{mapped_type}, {size}>"
+                mapped_type = (
+                    f"array<{mapped_type}, {self.format_crossgl_array_extent(size)}>"
+                )
             else:
                 mapped_type = f"array<{mapped_type}>"
 
