@@ -5905,6 +5905,7 @@ def _inspection_include_path_processing_summary(
 def _inspection_include_dependency_sample(
     unit_path: Any,
     source_backend: Any,
+    unit_source_hash: Any,
     dependency: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     include = dependency.get("include")
@@ -5935,6 +5936,13 @@ def _inspection_include_dependency_sample(
         value = dependency.get(field_name)
         if _is_non_empty_string(value):
             sample[field_name] = value
+    if isinstance(unit_source_hash, Mapping):
+        hash_algorithm = unit_source_hash.get("algorithm")
+        hash_value = unit_source_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["unitSourceHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["unitSourceHash"] = hash_value
     resolved_hash = dependency.get("resolvedHash")
     if isinstance(resolved_hash, Mapping):
         hash_algorithm = resolved_hash.get("algorithm")
@@ -5988,6 +5996,7 @@ def _inspection_include_dependency_summary(
                 sample = _inspection_include_dependency_sample(
                     unit.get("path"),
                     unit.get("sourceBackend"),
+                    unit.get("sourceHash"),
                     dependency,
                 )
                 if sample:
@@ -6002,6 +6011,7 @@ def _inspection_include_dependency_summary(
             sample = _inspection_include_dependency_sample(
                 unit.get("path"),
                 unit.get("sourceBackend"),
+                unit.get("sourceHash"),
                 dependency,
             )
             if sample:

@@ -1337,6 +1337,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     inspection = inspect_project_report(report_path)
+    unit_hash = project_pipeline._source_hash(shader_dir / "main.frag")
     material_hash = project_pipeline._source_hash(nested_dir / "material.inc")
     constants_hash = project_pipeline._source_hash(nested_dir / "constants.inc")
     shared_hash = project_pipeline._source_hash(include_dir / "shared.inc")
@@ -1397,6 +1398,8 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/material.inc",
             "resolvedFrom": "source",
+            "unitSourceHashAlgorithm": unit_hash["algorithm"],
+            "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": material_hash["algorithm"],
             "resolvedHash": material_hash["value"],
         },
@@ -1410,6 +1413,8 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/constants.inc",
             "resolvedFrom": "source",
+            "unitSourceHashAlgorithm": unit_hash["algorithm"],
+            "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": constants_hash["algorithm"],
             "resolvedHash": constants_hash["value"],
         },
@@ -1423,6 +1428,8 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "includes/shared.inc",
             "resolvedFrom": "include-dir",
+            "unitSourceHashAlgorithm": unit_hash["algorithm"],
+            "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": shared_hash["algorithm"],
             "resolvedHash": shared_hash["value"],
         },
@@ -1640,6 +1647,7 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
     report_path = repo / "scan-report.json"
     report.write_json(report_path)
     inspection = inspect_project_report(report_path)
+    unit_hash = project_pipeline._source_hash(repo / "main.frag")
     assert inspection["includeDependencies"]["unresolvedDependencies"] == [
         {
             "source": "main.frag",
@@ -1650,6 +1658,8 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
             "line": 1,
             "column": 1,
             "resolvedFromDefine": "PROJECT_HEADER",
+            "unitSourceHashAlgorithm": unit_hash["algorithm"],
+            "unitSourceHash": unit_hash["value"],
         }
     ]
 
@@ -1670,9 +1680,10 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
     )
 
     assert result.returncode == 0
+    unit_hash_preview = f"{unit_hash['algorithm']}:{unit_hash['value'][:12]}..."
     assert (
         "- main.frag:1:1 [opengl]: missing local include missing.inc "
-        "(define PROJECT_HEADER)"
+        f"(define PROJECT_HEADER, unitHash={unit_hash_preview})"
     ) in result.stdout
 
 
@@ -1711,6 +1722,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     inspection = inspect_project_report(report_path)
+    unit_hash = project_pipeline._source_hash(repo / "main.frag")
     debug_hash = project_pipeline._source_hash(repo / "debug.inc")
     release_hash = project_pipeline._source_hash(include_dir / "release.inc")
     debug_hash_preview = f"{debug_hash['algorithm']}:{debug_hash['value'][:12]}..."
@@ -1775,6 +1787,8 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "resolvedFrom": "source",
             "resolvedFromDefine": "PROJECT_HEADER",
             "variant": "debug",
+            "unitSourceHashAlgorithm": unit_hash["algorithm"],
+            "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": debug_hash["algorithm"],
             "resolvedHash": debug_hash["value"],
         },
@@ -1790,6 +1804,8 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "resolvedFrom": "include-dir",
             "resolvedFromDefine": "PROJECT_HEADER",
             "variant": "release",
+            "unitSourceHashAlgorithm": unit_hash["algorithm"],
+            "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": release_hash["algorithm"],
             "resolvedHash": release_hash["value"],
         },
@@ -1813,15 +1829,17 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
 
     assert result.returncode == 0
     assert "Include dependencies by variant: debug=1, release=1" in result.stdout
+    unit_hash_preview = f"{unit_hash['algorithm']}:{unit_hash['value'][:12]}..."
     assert (
         "- main.frag:1:1 [opengl]: resolved local include debug.inc -> debug.inc "
-        f"(variant debug, source, define PROJECT_HEADER, hash={debug_hash_preview})"
+        f"(variant debug, source, define PROJECT_HEADER, "
+        f"unitHash={unit_hash_preview}, hash={debug_hash_preview})"
     ) in result.stdout
     assert (
         "- main.frag:1:1 [opengl]: resolved system include release.inc -> "
         "includes/release.inc "
         f"(variant release, include-dir, define PROJECT_HEADER, "
-        f"hash={release_hash_preview})"
+        f"unitHash={unit_hash_preview}, hash={release_hash_preview})"
     ) in result.stdout
 
 
@@ -15929,8 +15947,10 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     )
 
     assert result.returncode == 0
+    unit_hash = project_pipeline._source_hash(repo / "main.frag")
     shared_hash = project_pipeline._source_hash(include_dir / "shared.inc")
     generated_hash = project_pipeline._source_hash(repo / "generated.inc")
+    unit_hash_preview = f"{unit_hash['algorithm']}:{unit_hash['value'][:12]}..."
     shared_hash_preview = f"{shared_hash['algorithm']}:{shared_hash['value'][:12]}..."
     generated_hash_preview = (
         f"{generated_hash['algorithm']}:{generated_hash['value'][:12]}..."
@@ -15949,17 +15969,19 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert "Resolved include dependencies:" in result.stdout
     assert (
         "- main.frag:2:1 [opengl]: resolved system include shared.inc -> "
-        f"includes/shared.inc (include-dir, hash={shared_hash_preview})"
+        f"includes/shared.inc (include-dir, unitHash={unit_hash_preview}, "
+        f"hash={shared_hash_preview})"
     ) in result.stdout
     assert (
         "- main.frag:3:1 [opengl]: resolved local include generated.inc -> "
         f"generated.inc (source, define PROJECT_HEADER, "
-        f"hash={generated_hash_preview})"
+        f"unitHash={unit_hash_preview}, hash={generated_hash_preview})"
     ) in result.stdout
     assert "Include dependency issues:" in result.stdout
-    assert "- main.frag:4:1 [opengl]: missing local include missing.inc" in (
-        result.stdout
-    )
+    assert (
+        "- main.frag:4:1 [opengl]: missing local include missing.inc "
+        f"(unitHash={unit_hash_preview})"
+    ) in result.stdout
 
     payload = inspect_project_report(report_path)
     assert payload["includeDependencies"] == {
@@ -15984,6 +16006,8 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "column": 1,
                 "resolvedPath": "includes/shared.inc",
                 "resolvedFrom": "include-dir",
+                "unitSourceHashAlgorithm": unit_hash["algorithm"],
+                "unitSourceHash": unit_hash["value"],
                 "resolvedHashAlgorithm": shared_hash["algorithm"],
                 "resolvedHash": shared_hash["value"],
             },
@@ -15998,6 +16022,8 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "resolvedPath": "generated.inc",
                 "resolvedFrom": "source",
                 "resolvedFromDefine": "PROJECT_HEADER",
+                "unitSourceHashAlgorithm": unit_hash["algorithm"],
+                "unitSourceHash": unit_hash["value"],
                 "resolvedHashAlgorithm": generated_hash["algorithm"],
                 "resolvedHash": generated_hash["value"],
             },
@@ -16013,6 +16039,8 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "kind": "local",
                 "line": 4,
                 "column": 1,
+                "unitSourceHashAlgorithm": unit_hash["algorithm"],
+                "unitSourceHash": unit_hash["value"],
             }
         ],
     }

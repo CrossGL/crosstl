@@ -521,6 +521,7 @@ def test_project_include_resolution_documents_status_reporting():
             "source-backend labels, project-define provenance, variant names"
             in backend_support["notes"]
         )
+        assert "unit source hash metadata" in backend_support["notes"]
         assert "resolved include hash metadata" in backend_support["notes"]
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "

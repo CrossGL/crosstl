@@ -1727,6 +1727,12 @@ def _format_include_dependency_provenance_label(dependency):
     resolved_from_define = dependency.get("resolvedFromDefine")
     if isinstance(resolved_from_define, str) and resolved_from_define:
         parts.append(f"define {resolved_from_define}")
+    unit_hash_preview = _format_hash_preview(
+        dependency.get("unitSourceHashAlgorithm"),
+        dependency.get("unitSourceHash"),
+    )
+    if unit_hash_preview:
+        parts.append(f"unitHash={unit_hash_preview}")
     hash_preview = _format_hash_preview(
         dependency.get("resolvedHashAlgorithm"),
         dependency.get("resolvedHash"),
