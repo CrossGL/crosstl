@@ -502,6 +502,10 @@ def test_project_include_resolution_documents_status_reporting():
             "variant-specific conditional output"
         ) in backend_support["notes"]
         assert (
+            "DirectX/HLSL project translation with resolved local headers "
+            "and variant-specific conditional output"
+        ) in backend_support["notes"]
+        assert (
             "CUDA/HIP project translation with unresolved runtime system includes, "
             "resolved local headers, and variant-specific conditional output"
         ) in backend_support["notes"]
@@ -592,6 +596,10 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_cuda_hip_preprocessor"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_directx_preprocessor"
+        ) in backend_support["evidence"]
 
 
 def test_project_macro_variants_document_artifact_define_maps():
@@ -655,6 +663,10 @@ def test_project_macro_variants_document_artifact_define_maps():
             in backend_support["notes"]
         )
         assert (
+            "DirectX/HLSL native preprocessing during project translation"
+            in backend_support["notes"]
+        )
+        assert (
             "CUDA/HIP native preprocessing during project translation"
             in backend_support["notes"]
         )
@@ -705,6 +717,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_cuda_hip_preprocessor"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_directx_preprocessor"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
