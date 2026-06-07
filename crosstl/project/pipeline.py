@@ -9612,6 +9612,13 @@ def _source_remap_contract_reasons(
         if require_closed_fields
         else []
     )
+    artifact_target = artifact.get("target")
+    if _is_non_empty_string(artifact_target) and not _is_crossgl_target(
+        artifact_target
+    ):
+        reasons.append(
+            f"{prefix} must be omitted unless artifacts[{index}].target is CrossGL"
+        )
     if source_remap.get("schemaVersion") != SOURCE_REMAP_SCHEMA_VERSION:
         reasons.append(f"{prefix}.schemaVersion must be 1")
 

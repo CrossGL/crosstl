@@ -9866,6 +9866,36 @@ def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_pat
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_non_crossgl_source_remap_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
+    artifact = payload["artifacts"][0]
+    artifact["sourceRemap"] = {
+        "schemaVersion": 1,
+        "path": "out/opengl/simple.source-remap.json",
+        "target": "opengl",
+        "generatedFile": artifact["path"],
+        "mappingGranularity": "file",
+        "hash": {"algorithm": "sha256", "value": "0" * 64},
+    }
+    _refresh_artifact_summary(payload)
+    report_path = repo / "out" / "non-crossgl-source-remap-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceRemap must be omitted unless "
+        "artifacts[0].target is CrossGL"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_backslash_source_remap_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
