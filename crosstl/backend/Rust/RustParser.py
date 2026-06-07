@@ -2632,7 +2632,12 @@ class RustParser:
         self.eat("FOR")
         pattern = self.parse_let_pattern()
         self.eat("IN")
-        iterable = self.parse_expression()
+        previous = self.expression_stops_at_lbrace
+        self.expression_stops_at_lbrace = True
+        try:
+            iterable = self.parse_expression()
+        finally:
+            self.expression_stops_at_lbrace = previous
 
         self.eat("LBRACE")
         body = self.parse_block()

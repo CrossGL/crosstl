@@ -132,9 +132,11 @@ def test_assignment_ops_tokenization():
         a += 3
         a -= 2
         a *= 4
+        a **= 3
         a /= 2
         a //= 2
         a %= 3
+        a @= matrix
         a ^= 1
         a |= 2
         a &= 7
@@ -144,6 +146,8 @@ def test_assignment_ops_tokenization():
     try:
         tokens = tokenize_code(code)
         assert ("FLOOR_DIVIDE_EQUALS", "//=") in tokens
+        assert ("POWER_EQUALS", "**=") in tokens
+        assert ("AT_EQUALS", "@=") in tokens
     except SyntaxError:
         pytest.fail("Assignment operators tokenization not implemented.")
 

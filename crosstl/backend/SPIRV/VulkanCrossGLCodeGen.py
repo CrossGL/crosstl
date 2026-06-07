@@ -248,6 +248,24 @@ class VulkanToCrossGLConverter:
                             code += self.generate_stage_layout(layout)
                         code += self.generate_function(node)
                         code += "    }\n\n"
+                    elif shader_stage == "tessellation_control":
+                        code += "    // Tessellation Control Shader\n"
+                        code += "    tessellation_control {\n"
+                        for layout in self.spirv_tessellation_control_execution_layouts(
+                            node
+                        ):
+                            code += self.generate_stage_layout(layout)
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
+                    elif shader_stage == "tessellation_evaluation":
+                        code += "    // Tessellation Evaluation Shader\n"
+                        code += "    tessellation_evaluation {\n"
+                        for (
+                            layout
+                        ) in self.spirv_tessellation_evaluation_execution_layouts(node):
+                            code += self.generate_stage_layout(layout)
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
                     else:
                         code += self.generate_function(node)
                 else:
@@ -276,6 +294,8 @@ class VulkanToCrossGLConverter:
             "Vertex": "vertex",
             "Fragment": "fragment",
             "Geometry": "geometry",
+            "TessellationControl": "tessellation_control",
+            "TessellationEvaluation": "tessellation_evaluation",
             "GLCompute": "compute",
         }.get(execution_model)
 
@@ -366,6 +386,40 @@ class VulkanToCrossGLConverter:
         if output_qualifiers:
             layouts.append(LayoutNode(output_qualifiers, layout_type="out"))
         return layouts
+
+    def spirv_tessellation_control_execution_layouts(self, node):
+        qualifiers = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mode_name = mode.get("mode")
+            operands = mode.get("operands", [])
+            if mode_name == "OutputVertices" and operands:
+                qualifiers.append(("vertices", operands[0]))
+
+        if not qualifiers:
+            return []
+        return [LayoutNode(qualifiers, layout_type="out")]
+
+    def spirv_tessellation_evaluation_execution_layouts(self, node):
+        modes = {
+            "Triangles": "triangles",
+            "Quads": "quads",
+            "Isolines": "isolines",
+            "SpacingEqual": "equal_spacing",
+            "SpacingFractionalEven": "fractional_even_spacing",
+            "SpacingFractionalOdd": "fractional_odd_spacing",
+            "VertexOrderCw": "cw",
+            "VertexOrderCcw": "ccw",
+            "PointMode": "point_mode",
+        }
+        qualifiers = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mapped_name = modes.get(mode.get("mode"))
+            if mapped_name is not None:
+                qualifiers.append((mapped_name, None))
+
+        if not qualifiers:
+            return []
+        return [LayoutNode(qualifiers, layout_type="in")]
 
     def is_fragment_execution_layout(self, node):
         if not isinstance(node, LayoutNode):

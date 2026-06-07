@@ -4861,6 +4861,24 @@ def test_if_uppercase_condition_does_not_parse_body_as_struct_literal():
     assert isinstance(branch.if_body[0], AssignmentNode)
 
 
+def test_for_uppercase_iterable_does_not_parse_loop_body_as_struct_literal():
+    code = """
+    fn shader_loop() {
+        for gid in LAYOUT_RANGE {
+            eval_layouts(gid as u32, &mut out);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert loop.pattern == "gid"
+    assert loop.iterable == "LAYOUT_RANGE"
+    assert isinstance(loop.body[0], FunctionCallNode)
+
+
 def test_try_block_expression_parsing():
     code = """
     fn try_blocks(value: Result<i32, i32>, maybe: Option<i32>) -> Result<i32, i32> {

@@ -2088,6 +2088,9 @@ def test_assignment_ops_codegen():
         if input.in_position.y > 0.5:
             output.out_color *= 2.0
 
+        if input.in_position.y < 0.25:
+            output.out_color @= transform
+
         if input.in_position.z > 0.5:
             output.out_color /= 2.0
 
@@ -2099,6 +2102,7 @@ def test_assignment_ops_codegen():
         generated_code = generate_code(ast)
         print(generated_code)
         assert "+=" in generated_code or "-=" in generated_code
+        assert "output.out_color *= transform;" in generated_code
     except SyntaxError:
         pytest.fail("Assignment ops parsing or code generation not implemented.")
 

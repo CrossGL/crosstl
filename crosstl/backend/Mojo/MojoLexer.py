@@ -97,6 +97,7 @@ TOKENS = tuple(
         ("FLOOR_DIVIDE_EQUALS", r"//="),
         ("DIVIDE_EQUALS", r"/="),
         ("FLOOR_DIVIDE", r"//"),
+        ("POWER_EQUALS", r"\*\*="),
         ("POWER", r"\*\*"),
         ("ASSIGN_XOR", r"\^="),
         ("ASSIGN_OR", r"\|="),
@@ -115,6 +116,7 @@ TOKENS = tuple(
         ("EQUALS", r"="),
         ("WHITESPACE", r"\s+"),
         ("MOD", r"%"),
+        ("AT_EQUALS", r"@="),
         ("AT", r"@"),
     ]
 )

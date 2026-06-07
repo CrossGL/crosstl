@@ -1406,8 +1406,10 @@ def test_assignment_ops_parsing():
         a += 3
         a -= 2
         a *= 4
+        a **= 3
         a /= 2
         a %= 3
+        a @= matrix
         a ^= 1
         a |= 2
         a &= 7

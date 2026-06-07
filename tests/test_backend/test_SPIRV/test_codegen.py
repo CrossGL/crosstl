@@ -3927,6 +3927,21 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TESSELLATION_EVALUATION_EXECUTION_MODES_ASSEMBLY = """
+OpCapability Tessellation
+OpMemoryModel Logical GLSL450
+OpEntryPoint TessellationEvaluation %main "main"
+OpExecutionMode %main Triangles
+OpExecutionMode %main SpacingEqual
+OpExecutionMode %main VertexOrderCcw
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_CROSS_GEOMETRY_EMIT_PRIMITIVE_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
 ; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
@@ -6317,6 +6332,18 @@ def test_spirv_cross_geometry_emit_primitive_codegen_reparse():
     assert "EndPrimitive();" in generated_code
     assert "OpEmitVertex" not in generated_code
     assert "OpEndPrimitive" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tessellation_evaluation_execution_modes_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TESSELLATION_EVALUATION_EXECUTION_MODES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "tessellation_evaluation {" in generated_code
+    assert "layout(triangles, equal_spacing, ccw) in;" in generated_code
+    assert "fragment {" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

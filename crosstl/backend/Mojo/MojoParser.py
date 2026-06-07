@@ -1350,6 +1350,7 @@ class MojoParser:
                 "PLUS_EQUALS",
                 "MINUS_EQUALS",
                 "MULTIPLY_EQUALS",
+                "POWER_EQUALS",
                 "DIVIDE_EQUALS",
                 "FLOOR_DIVIDE_EQUALS",
                 "ASSIGN_XOR",
@@ -1358,6 +1359,7 @@ class MojoParser:
                 "ASSIGN_SHIFT_LEFT",
                 "ASSIGN_SHIFT_RIGHT",
                 "ASSIGN_MOD",
+                "AT_EQUALS",
             ]:
                 raise SyntaxError("Expected assignment after identifier tuple")
             op = self.current_token[1]
@@ -1853,6 +1855,7 @@ class MojoParser:
             "PLUS_EQUALS",
             "MINUS_EQUALS",
             "MULTIPLY_EQUALS",
+            "POWER_EQUALS",
             "DIVIDE_EQUALS",
             "FLOOR_DIVIDE_EQUALS",
             "ASSIGN_XOR",
@@ -1861,6 +1864,7 @@ class MojoParser:
             "ASSIGN_SHIFT_LEFT",
             "ASSIGN_SHIFT_RIGHT",
             "ASSIGN_MOD",
+            "AT_EQUALS",
             "WALRUS",
         ]:
             op = self.current_token[1]
