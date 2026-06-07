@@ -102,6 +102,7 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "includeDependenciesByResolvedFrom",
         "includeDependenciesBySourceBackend",
         "includeDependenciesBySourceBackendStatus",
+        "includeDependenciesByVariant",
         "skippedByReason",
         "skippedByExtension",
         "skippedBySourceOverride",
@@ -258,6 +259,7 @@ REPORT_INCLUDE_DEPENDENCY_FIELDS = frozenset(
         "resolvedHash",
         "resolvedFrom",
         "resolvedFromDefine",
+        "variant",
     )
 )
 REPORT_SKIPPED_FIELDS = frozenset(("path", "reason", "sourceOverride"))
@@ -959,6 +961,23 @@ def _include_dependency_counts_by_source_backend_status(
     return {
         backend: dict(sorted(row.items())) for backend, row in sorted(counts.items())
     }
+
+
+def _include_dependency_counts_by_variant(
+    units: Sequence[ProjectTranslationUnit],
+) -> dict[str, int]:
+    return _include_dependency_counts_by_field(
+        _include_dependency_records(units),
+        "variant",
+        frozenset(
+            variant
+            for unit in units
+            for dependency in unit.include_dependencies
+            if isinstance(dependency, Mapping)
+            for variant in (dependency.get("variant"),)
+            if _is_non_empty_string(variant)
+        ),
+    )
 
 
 def _artifact_counts_by_target(
@@ -1960,6 +1979,7 @@ def _scan_resolved_include_dependencies(
     location: SourceLocation,
     include_stack: tuple[str, ...],
     scanned_sources: set[str],
+    variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     if resolved_path in include_stack:
         return [], [
@@ -1979,6 +1999,7 @@ def _scan_resolved_include_dependencies(
         resolved_path,
         include_stack=(*include_stack, resolved_path),
         scanned_sources=scanned_sources,
+        variant=variant,
     )
 
 
@@ -1990,6 +2011,7 @@ def _scan_include_dependencies_for_source(
     *,
     include_stack: tuple[str, ...],
     scanned_sources: set[str],
+    variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = []
@@ -2042,6 +2064,8 @@ def _scan_include_dependencies_for_source(
                     "column": column,
                     "resolvedFromDefine": define_name,
                 }
+                if variant is not None:
+                    dependency["variant"] = variant
                 if source_relative_path != unit_relative_path:
                     dependency["source"] = source_relative_path
                 if resolved_path:
@@ -2073,6 +2097,7 @@ def _scan_include_dependencies_for_source(
                             location=location,
                             include_stack=include_stack,
                             scanned_sources=scanned_sources,
+                            variant=variant,
                         )
                     )
                     dependencies.extend(nested_dependencies)
@@ -2086,6 +2111,8 @@ def _scan_include_dependencies_for_source(
                 "line": line_number,
                 "column": column,
             }
+            if variant is not None:
+                dependency["variant"] = variant
             if source_relative_path != unit_relative_path:
                 dependency["source"] = source_relative_path
             dependencies.append(dependency)
@@ -2114,6 +2141,8 @@ def _scan_include_dependencies_for_source(
             "line": line_number,
             "column": column,
         }
+        if variant is not None:
+            dependency["variant"] = variant
         if source_relative_path != unit_relative_path:
             dependency["source"] = source_relative_path
         if resolved_path:
@@ -2142,6 +2171,7 @@ def _scan_include_dependencies_for_source(
                     location=location,
                     include_stack=include_stack,
                     scanned_sources=scanned_sources,
+                    variant=variant,
                 )
             )
             dependencies.extend(nested_dependencies)
@@ -2153,14 +2183,26 @@ def _scan_include_dependencies_for_source(
 def _scan_include_dependencies(
     config: ProjectConfig, unit_path: Path, relative_path: str
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
-    return _scan_include_dependencies_for_source(
-        config,
-        relative_path,
-        unit_path,
-        relative_path,
-        include_stack=(relative_path,),
-        scanned_sources=set(),
-    )
+    dependencies: list[dict[str, Any]] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    for variant, defines in _variant_jobs(config):
+        scan_config = (
+            replace(config, defines=defines) if variant is not None else config
+        )
+        variant_dependencies, variant_diagnostics = (
+            _scan_include_dependencies_for_source(
+                scan_config,
+                relative_path,
+                unit_path,
+                relative_path,
+                include_stack=(relative_path,),
+                scanned_sources=set(),
+                variant=variant,
+            )
+        )
+        dependencies.extend(variant_dependencies)
+        diagnostics.extend(variant_diagnostics)
+    return dependencies, diagnostics
 
 
 def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
@@ -2729,6 +2771,9 @@ class ProjectPortabilityReport:
                 ),
                 "includeDependenciesBySourceBackendStatus": (
                     _include_dependency_counts_by_source_backend_status(self.units)
+                ),
+                "includeDependenciesByVariant": _include_dependency_counts_by_variant(
+                    self.units
                 ),
                 "skippedByReason": _skipped_counts_by_reason(self.skipped),
                 "skippedByExtension": _skipped_counts_by_extension(self.skipped),
@@ -5367,7 +5412,7 @@ def _inspection_include_dependency_sample(
         value = dependency.get(field_name)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             sample[field_name] = value
-    for field_name in ("resolvedPath", "resolvedFrom", "resolvedFromDefine"):
+    for field_name in ("resolvedPath", "resolvedFrom", "resolvedFromDefine", "variant"):
         value = dependency.get(field_name)
         if _is_non_empty_string(value):
             sample[field_name] = value
@@ -5387,6 +5432,7 @@ def _inspection_include_dependency_summary(
     by_resolved_from = summary.get("includeDependenciesByResolvedFrom")
     by_source_backend = summary.get("includeDependenciesBySourceBackend")
     by_source_backend_status = summary.get("includeDependenciesBySourceBackendStatus")
+    by_variant = summary.get("includeDependenciesByVariant")
     if (
         not isinstance(dependency_count, int)
         or isinstance(dependency_count, bool)
@@ -5439,6 +5485,7 @@ def _inspection_include_dependency_summary(
         "byResolvedFrom": (
             dict(by_resolved_from) if isinstance(by_resolved_from, Mapping) else {}
         ),
+        "byVariant": dict(by_variant) if isinstance(by_variant, Mapping) else {},
         "bySourceBackend": (
             dict(by_source_backend) if isinstance(by_source_backend, Mapping) else {}
         ),
@@ -6209,6 +6256,22 @@ def _payload_include_dependency_counts_by_source_backend_status(
     }
 
 
+def _payload_include_dependency_counts_by_variant(
+    units: Sequence[Any],
+) -> dict[str, int]:
+    records = _payload_include_dependency_records(units)
+    return _include_dependency_counts_by_field(
+        records,
+        "variant",
+        frozenset(
+            variant
+            for dependency in records
+            for variant in (dependency.get("variant"),)
+            if _is_non_empty_string(variant)
+        ),
+    )
+
+
 def _payload_skipped_counts_by_reason(skipped: Sequence[Any]) -> dict[str, int]:
     records = [record for record in skipped if isinstance(record, Mapping)]
     return _skipped_counts_by_reason(records)
@@ -6859,6 +6922,7 @@ def _include_dependency_contract_reasons(
     dependency_index: int,
     dependency: Any,
     *,
+    declared_variants: frozenset[str] | None = None,
     require_closed_fields: bool = False,
 ) -> list[str]:
     prefix = f"units[{unit_index}].includeDependencies[{dependency_index}]"
@@ -6943,6 +7007,13 @@ def _include_dependency_contract_reasons(
                 f"{prefix}.resolvedFromDefine must be omitted for dynamic includes"
             )
 
+    variant = dependency.get("variant")
+    if "variant" in dependency:
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix}.variant must be a string")
+        elif declared_variants is not None and variant not in declared_variants:
+            reasons.append(f"{prefix}.variant must match a declared project variant")
+
     return reasons
 
 
@@ -6960,6 +7031,14 @@ def _project_config_for_include_validation(
     defines = project.get("defines", {})
     if not _valid_string_mapping(defines):
         defines = {}
+    raw_variants = project.get("variants", {})
+    variants = {}
+    if isinstance(raw_variants, Mapping):
+        variants = {
+            name: dict(variant_defines)
+            for name, variant_defines in raw_variants.items()
+            if _is_non_empty_string(name) and _valid_string_mapping(variant_defines)
+        }
     output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
     if not isinstance(output_dir, str):
         output_dir = DEFAULT_OUTPUT_DIR
@@ -6967,8 +7046,25 @@ def _project_config_for_include_validation(
         root=root_path,
         include_dirs=tuple(include_dirs),
         defines=dict(defines),
+        variants=variants,
         output_dir=output_dir,
     )
+
+
+def _include_validation_config_for_dependency(
+    include_config: ProjectConfig,
+    dependency: Mapping[str, Any],
+) -> ProjectConfig:
+    variant = dependency.get("variant")
+    if _is_non_empty_string(variant) and variant in include_config.variants:
+        return replace(
+            include_config,
+            defines={
+                **dict(include_config.defines),
+                **dict(include_config.variants[variant]),
+            },
+        )
+    return include_config
 
 
 def _current_include_dependency_contract_reasons(
@@ -6999,9 +7095,12 @@ def _current_include_dependency_contract_reasons(
     if kind == "dynamic":
         return []
 
+    dependency_config = _include_validation_config_for_dependency(
+        include_config, dependency
+    )
     unit_path = (root_path / source_path).resolve()
     expected_status, expected_path, expected_from = _resolve_include_dependency(
-        include_config,
+        dependency_config,
         unit_path,
         kind,
         include_value,
@@ -7014,7 +7113,7 @@ def _current_include_dependency_contract_reasons(
     resolved_from_define = dependency.get("resolvedFromDefine")
     if _is_non_empty_string(resolved_from_define):
         define_literal = _include_literal_from_define(
-            include_config, resolved_from_define
+            dependency_config, resolved_from_define
         )
         if define_literal is None:
             reasons.append(
@@ -7062,11 +7161,15 @@ def _unit_include_dependencies_contract_reasons(
 
     reasons = []
     include_config = _project_config_for_include_validation(project, root_path)
+    declared_variants = (
+        frozenset(include_config.variants) if include_config is not None else None
+    )
     for dependency_index, dependency in enumerate(dependencies):
         dependency_reasons = _include_dependency_contract_reasons(
             index,
             dependency_index,
             dependency,
+            declared_variants=declared_variants,
             require_closed_fields=require_closed_fields,
         )
         reasons.extend(dependency_reasons)
@@ -8960,6 +9063,14 @@ def _summary_contract_reasons(
                 "summary.includeDependenciesBySourceBackendStatus",
                 summary.get("includeDependenciesBySourceBackendStatus"),
                 _payload_include_dependency_counts_by_source_backend_status(units),
+                "unit include dependencies",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includeDependenciesByVariant",
+                summary.get("includeDependenciesByVariant"),
+                _payload_include_dependency_counts_by_variant(units),
                 "unit include dependencies",
             )
         )

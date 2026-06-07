@@ -1148,6 +1148,143 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
     ) in result.stdout
 
 
+def test_scan_project_records_variant_define_backed_include_resolution(tmp_path):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "debug.inc").write_text("vec4 debug_color();\n", encoding="utf-8")
+    (include_dir / "release.inc").write_text(
+        "vec4 release_color();\n",
+        encoding="utf-8",
+    )
+    (repo / "main.frag").write_text("#include PROJECT_HEADER\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes"]
+
+            [project.defines]
+            PROJECT_HEADER = "\\"base.inc\\""
+
+            [project.variants.debug]
+            PROJECT_HEADER = "\\"debug.inc\\""
+
+            [project.variants.release]
+            PROJECT_HEADER = "<release.inc>"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = scan_project(load_project_config(repo)).to_report(targets=["cgl"])
+    payload = report.to_json()
+    report_path = repo / "scan-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+
+    assert validation["success"] is True
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "debug.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "resolvedFromDefine": "PROJECT_HEADER",
+            "variant": "debug",
+            "resolvedPath": "debug.inc",
+            "resolvedHash": project_pipeline._source_hash(repo / "debug.inc"),
+            "resolvedFrom": "source",
+        },
+        {
+            "include": "release.inc",
+            "kind": "system",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "resolvedFromDefine": "PROJECT_HEADER",
+            "variant": "release",
+            "resolvedPath": "includes/release.inc",
+            "resolvedHash": project_pipeline._source_hash(include_dir / "release.inc"),
+            "resolvedFrom": "include-dir",
+        },
+    ]
+    assert payload["summary"]["includeDependencyCount"] == 2
+    assert payload["summary"]["includeDependenciesByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert payload["summary"]["includeDependenciesByKind"] == {
+        "local": 1,
+        "system": 1,
+    }
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {
+        "include-dir": 1,
+        "source": 1,
+    }
+    assert inspection["includeDependencies"]["byVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert inspection["includeDependencies"]["resolvedDependencies"] == [
+        {
+            "source": "main.frag",
+            "sourceBackend": "opengl",
+            "include": "debug.inc",
+            "status": "resolved",
+            "kind": "local",
+            "line": 1,
+            "column": 1,
+            "resolvedPath": "debug.inc",
+            "resolvedFrom": "source",
+            "resolvedFromDefine": "PROJECT_HEADER",
+            "variant": "debug",
+        },
+        {
+            "source": "main.frag",
+            "sourceBackend": "opengl",
+            "include": "release.inc",
+            "status": "resolved",
+            "kind": "system",
+            "line": 1,
+            "column": 1,
+            "resolvedPath": "includes/release.inc",
+            "resolvedFrom": "include-dir",
+            "resolvedFromDefine": "PROJECT_HEADER",
+            "variant": "release",
+        },
+    ]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Include dependencies by variant: debug=1, release=1" in result.stdout
+    assert (
+        "- main.frag:1:1 [opengl]: resolved local include debug.inc -> debug.inc "
+        "(variant debug, source, define PROJECT_HEADER)"
+    ) in result.stdout
+    assert (
+        "- main.frag:1:1 [opengl]: resolved system include release.inc -> "
+        "includes/release.inc (variant release, include-dir, define PROJECT_HEADER)"
+    ) in result.stdout
+
+
 def test_validate_project_report_rejects_malformed_include_dependency_records(
     tmp_path,
 ):
@@ -1226,6 +1363,41 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
         "summary.includeDependenciesBySourceBackendStatus must match unit include "
         "dependencies"
     ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_undeclared_include_dependency_variants(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "debug.inc").write_text("vec4 debug_color();\n", encoding="utf-8")
+    (repo / "main.frag").write_text("#include PROJECT_HEADER\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.variants.debug]
+            PROJECT_HEADER = "\\"debug.inc\\""
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    payload["units"][0]["includeDependencies"][0]["variant"] = "release"
+    payload["summary"]["includeDependenciesByVariant"] = {"release": 1}
+    report_path = repo / "forged-include-variant-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["diagnostics"][0]["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].variant must match a declared project "
+        "variant"
+    ) in validation["diagnostics"][0]["message"]
 
 
 def test_validate_project_report_rejects_stale_include_dependency_resolution(
@@ -8911,6 +9083,7 @@ def test_validate_project_report_rejects_missing_scan_summary_rollups(tmp_path):
         "includeDependenciesByResolvedFrom",
         "includeDependenciesBySourceBackend",
         "includeDependenciesBySourceBackendStatus",
+        "includeDependenciesByVariant",
         "skippedByExtension",
         "skippedBySourceOverride",
     ):
@@ -8933,6 +9106,9 @@ def test_validate_project_report_rejects_missing_scan_summary_rollups(tmp_path):
         diagnostic["message"]
     )
     assert "summary.includeDependenciesBySourceBackendStatus must be an object" in (
+        diagnostic["message"]
+    )
+    assert "summary.includeDependenciesByVariant must be an object" in (
         diagnostic["message"]
     )
     assert "summary.skippedByExtension must be an object" in diagnostic["message"]
@@ -11375,6 +11551,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byStatus": {},
         "byKind": {},
         "byResolvedFrom": {},
+        "byVariant": {},
         "bySourceBackend": {},
         "bySourceBackendStatus": {},
         "resolvedDependencyCount": 0,
@@ -12274,6 +12451,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         "byStatus": {"missing": 1, "resolved": 2},
         "byKind": {"local": 2, "system": 1},
         "byResolvedFrom": {"include-dir": 1, "source": 1},
+        "byVariant": {},
         "bySourceBackend": {"opengl": 3},
         "bySourceBackendStatus": {"opengl": {"missing": 1, "resolved": 2}},
         "resolvedDependencyCount": 2,

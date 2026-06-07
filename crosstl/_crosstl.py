@@ -1518,6 +1518,9 @@ def _format_include_dependency_issue_line(dependency):
 
 def _format_include_dependency_provenance_label(dependency):
     parts = []
+    variant = dependency.get("variant")
+    if isinstance(variant, str) and variant:
+        parts.append(f"variant {variant}")
     resolved_from = dependency.get("resolvedFrom")
     if isinstance(resolved_from, str) and resolved_from:
         parts.append(resolved_from)
@@ -2020,6 +2023,13 @@ def _format_project_report_inspection(payload):
     )
     if include_dependencies_by_resolved_from:
         lines.append(include_dependencies_by_resolved_from)
+    include_dependencies_by_variant = _format_count_rollup(
+        "Include dependencies by variant",
+        summary.get("includeDependenciesByVariant"),
+        include_zero=False,
+    )
+    if include_dependencies_by_variant:
+        lines.append(include_dependencies_by_variant)
     lines.extend(
         _format_resolved_include_dependency_lines(payload.get("includeDependencies"))
     )

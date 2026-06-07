@@ -401,7 +401,11 @@ def test_project_include_resolution_documents_status_reporting():
         assert "resolved and unresolved include dependency samples" in (
             backend_support["notes"]
         )
-        assert "source-backend labels and project-define provenance" in (
+        assert (
+            "source-backend labels, project-define provenance, and variant names"
+            in backend_support["notes"]
+        )
+        assert "project-define plus variant include provenance" in (
             backend_support["notes"]
         )
         assert "unresolved include dependency samples" in backend_support["notes"]
@@ -409,9 +413,10 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert "includeDependencies records" in backend_support["notes"]
-        assert "summary rollups including source-backend, source-backend status" in (
-            backend_support["notes"]
-        )
+        assert (
+            "summary rollups including source-backend, source-backend status, "
+            "resolution-source, and variant counts"
+        ) in backend_support["notes"]
         assert "missing include dependency summary rollups" in (
             backend_support["notes"]
         )

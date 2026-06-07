@@ -316,6 +316,9 @@ came from the source directory or a configured include directory. A directive
 that uses one project define, such as ``#include PROJECT_HEADER``, is resolved
 when that define's value is a quoted or angle-bracket include target; the
 dependency keeps ``resolvedFromDefine`` so the report remains actionable.
+When named variants are configured, include discovery evaluates those
+define-backed include targets with the same base-plus-variant define maps used
+for translation, and variant-scoped dependency records keep ``variant``.
 Resolved include files are scanned recursively for additional dependencies.
 Nested dependency records keep ``source`` when the directive came from a
 resolved include file rather than the root translation unit, so diagnostics and
@@ -328,7 +331,8 @@ from a project define, diagnostics identify that define.
 Report inspection samples both resolved include dependencies and unresolved
 include issues, including the source location, source backend, include kind,
 resolved path, and resolution source where available. Define-backed include
-samples also retain the project define name that supplied the include target.
+samples also retain the project define name that supplied the include target and
+the variant name when the dependency came from a named variant define map.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one
@@ -393,8 +397,8 @@ Project reports are JSON documents with:
   source-remap source backend, source-remap variant, include dependency kind,
   include dependency status, include dependency source backend, include
   dependency source-backend status, include dependency resolution source,
-  diagnostic code (``diagnosticsByCode``), and missing capability
-  (``missingCapabilityCounts``).
+  include dependency variant, diagnostic code (``diagnosticsByCode``), and
+  missing capability (``missingCapabilityCounts``).
 - ``units``: discovered translation units with repository-relative paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides. Units that contain ``#include`` directives also include
