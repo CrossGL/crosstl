@@ -421,7 +421,7 @@ def test_external_rocm_convolution_std_array_template_extent_codegen():
     assert host_filter.vtype == "const std::array<float, 5*5>"
     assert set(host_filter.qualifiers) == {"constexpr"}
     assert (
-        "var convolution_filter_5x5: std::array<float, 5*5> = "
+        "var convolution_filter_5x5: array<f32, 5*5> = "
         "{1.0f, 3.0f, 0.0f, (-2.0f), (-0.0f)};"
     ) in crossgl
     assert "ptr<std::array" not in crossgl
