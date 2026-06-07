@@ -841,6 +841,7 @@ class HipParser:
 
     def parse_explicit_template_instantiation(self):
         qualifiers = ["template"]
+        attributes = []
 
         while (
             self.match(
@@ -868,14 +869,14 @@ class HipParser:
         self.consume("RPAREN")
         self.skip_newlines()
         return_type = self.parse_trailing_return_type(return_type)
-        self.skip_post_function_qualifiers()
+        self.skip_post_function_qualifiers(attributes)
         return_type = self.parse_trailing_return_type(return_type)
 
         if self.match("SEMICOLON"):
             self.advance()
 
         self.user_function_names.add(name)
-        return FunctionNode(return_type, name, params, None, qualifiers)
+        return FunctionNode(return_type, name, params, None, qualifiers, attributes)
 
     def is_identifier_value(self, value):
         return self.match("IDENTIFIER") and self.current_token.value == value
@@ -1251,7 +1252,7 @@ class HipParser:
         self.consume("RPAREN")
         self.skip_newlines()
         return_type = self.parse_trailing_return_type(return_type)
-        self.skip_post_function_qualifiers()
+        self.skip_post_function_qualifiers(attributes)
         return_type = self.parse_trailing_return_type(return_type)
 
         body = None
@@ -1298,6 +1299,7 @@ class HipParser:
 
     def parse_simple_function(self):
         qualifiers = []
+        attributes = []
         self.skip_cpp_attributes()
         while (
             self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
@@ -1322,7 +1324,7 @@ class HipParser:
         self.consume("RPAREN")
         self.skip_newlines()
         return_type = self.parse_trailing_return_type(return_type)
-        self.skip_post_function_qualifiers()
+        self.skip_post_function_qualifiers(attributes)
         return_type = self.parse_trailing_return_type(return_type)
 
         body = None
@@ -1331,7 +1333,7 @@ class HipParser:
         elif self.match("SEMICOLON"):
             self.advance()
 
-        return FunctionNode(return_type, name, params, body, qualifiers)
+        return FunctionNode(return_type, name, params, body, qualifiers, attributes)
 
     def is_qualified_constructor_definition(self):
         index = self.skip_newlines_at_pos(self.pos)
@@ -1391,9 +1393,14 @@ class HipParser:
         self.skip_newlines()
         return self.parse_type()
 
-    def skip_post_function_qualifiers(self):
+    def skip_post_function_qualifiers(self, attributes=None):
+        attributes = attributes if attributes is not None else []
         while True:
             self.skip_newlines()
+            parsed_attributes = self.parse_type_attribute_prefixes()
+            if parsed_attributes:
+                attributes.extend(parsed_attributes)
+                continue
             if self.match("CONST", "VOLATILE"):
                 self.advance()
                 continue

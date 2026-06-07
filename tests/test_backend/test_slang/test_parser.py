@@ -143,6 +143,24 @@ def test_module_include_declarations_do_not_parse_as_globals():
     assert ast.global_vars == []
 
 
+def test_qualified_module_declaration_from_core_module_metadata():
+    # Source: official Slang standard-library core metadata emits
+    # SLANG_RAW("public module core;\n").
+    code = """
+    public module core;
+    typedef half float16_t;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.modules == ["core"]
+    assert ast.global_vars == []
+    assert [(node.original_type, node.new_type) for node in ast.typedefs] == [
+        ("half", "float16_t")
+    ]
+
+
 def test_identifier_include_path_normalizes_slang_file_lookup_semantics():
     # Slang modules docs: identifier-token file paths map dots to path
     # separators and underscores to hyphens, e.g. dir.file_name -> dir/file-name.

@@ -1143,6 +1143,31 @@ def test_function_effects_parse_from_modular_and_real_world_mojo():
     assert find_function(ast, "_sum2").body
 
 
+def test_typed_raises_effect_parses_from_official_function_docs():
+    # Reduced from https://mojolang.org/docs/reference/function-declarations/
+    # "Function effects" documents an optional error type after `raises`.
+    code = """
+    def parse_strict(text: String) raises ValueError -> Int:
+        pass
+
+    def use_validator(
+        validator: def(String) raises ValueError -> Int,
+        text: String,
+    ) raises ValueError -> Int:
+        return validator(text)
+    """
+    ast = parse_code(tokenize_code(code))
+    parse_strict = find_function(ast, "parse_strict")
+    use_validator = find_function(ast, "use_validator")
+
+    assert parse_strict.return_type == "Int"
+    assert use_validator.return_type == "Int"
+    assert [(param.name, param.vtype) for param in use_validator.params] == [
+        ("validator", "def(String) raises ValueError -> Int"),
+        ("text", "String"),
+    ]
+
+
 def test_async_nested_function_parse_from_modular_builtin_kernels():
     # Source: https://github.com/modular/modular
     # Commit: daa47bb846cc213723a54c51844ea4e923eb5e13

@@ -2782,6 +2782,49 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_SPEC_SPARSE_DREF_SAMPLE_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Reduced from OpImageSparseSampleDrefExplicitLod image operands and result
+; extraction rules.
+OpCapability Shader
+OpCapability SparseResidency
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %shadow_tex %coord %depth_out
+OpExecutionMode %main OriginUpperLeft
+OpName %shadow_tex "shadowTex"
+OpName %coord "coord"
+OpName %depth_out "depthOut"
+OpDecorate %shadow_tex DescriptorSet 0
+OpDecorate %shadow_tex Binding 0
+OpDecorate %coord Location 0
+OpDecorate %depth_out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%uint = OpTypeInt 32 0
+%v3float = OpTypeVector %float 3
+%image = OpTypeImage %float 2D 1 0 0 1 Unknown
+%sampled = OpTypeSampledImage %image
+%res_type = OpTypeStruct %uint %float
+%ptr_shadow = OpTypePointer UniformConstant %sampled
+%ptr_input_v3float = OpTypePointer Input %v3float
+%ptr_output_float = OpTypePointer Output %float
+%zero = OpConstant %float 0.0
+%shadow_tex = OpVariable %ptr_shadow UniformConstant
+%coord = OpVariable %ptr_input_v3float Input
+%depth_out = OpVariable %ptr_output_float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded_shadow = OpLoad %sampled %shadow_tex
+%loaded_coord = OpLoad %v3float %coord
+%depth = OpCompositeExtract %float %loaded_coord 2
+%sparse = OpImageSparseSampleDrefExplicitLod %res_type %loaded_shadow %loaded_coord %depth Lod %zero
+%texel = OpCompositeExtract %float %sparse 1
+OpStore %depth_out %texel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_BITCAST_SUCCESS_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
 ; Source commit: df032578c737d361b754fc569b70aa29b5f8c7d4
@@ -5118,6 +5161,22 @@ def test_spirv_cross_sparse_texture_resident_codegen_reparse():
     assert "texel = sparse[1];" not in generated_code
     assert "ret = resident;" not in generated_code
     assert "OpImageSparse" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_sparse_dref_sample_keeps_dref_helper_name_codegen_reparse():
+    tokens = tokenize_code(SPIRV_SPEC_SPARSE_DREF_SAMPLE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "sampler2DShadow shadowTex @set(0) @binding(0);" in generated_code
+    assert (
+        "depthOut = spirvSparseTexel("
+        "spirvImageSparseSampleDrefLod(shadowTex, coord, coord[2], 0.0));"
+        in generated_code
+    )
+    assert "spirvImageSparseSampleDrefCompare" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

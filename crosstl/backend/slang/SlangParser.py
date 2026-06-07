@@ -197,10 +197,12 @@ class SlangParser:
                 imports.append(self.parse_qualified_import())
             elif declaration_token == "INCLUDE":
                 includes.append(self.parse_qualified_include())
-            elif self.current_token[0] == "MODULE":
-                modules.append(self.parse_module_declaration())
-            elif self.current_token[0] == "IMPLEMENTING":
-                implementing_modules.append(self.parse_implementing_declaration())
+            elif declaration_token == "MODULE":
+                modules.append(self.parse_qualified_module_declaration())
+            elif declaration_token == "IMPLEMENTING":
+                implementing_modules.append(
+                    self.parse_qualified_implementing_declaration()
+                )
             elif self.is_glsl_precision_declaration_start():
                 self.parse_glsl_precision_declaration()
             elif self.current_token[0] == "EXPORT":
@@ -1230,11 +1232,19 @@ class SlangParser:
         self.eat("SEMICOLON")
         return module_path
 
+    def parse_qualified_module_declaration(self):
+        self.parse_qualifiers()
+        return self.parse_module_declaration()
+
     def parse_implementing_declaration(self):
         self.eat("IMPLEMENTING")
         module_path = self.parse_module_path()
         self.eat("SEMICOLON")
         return module_path
+
+    def parse_qualified_implementing_declaration(self):
+        self.parse_qualifiers()
+        return self.parse_implementing_declaration()
 
     def parse_module_path(
         self, allow_string=True, normalize_identifier_file_path=False
