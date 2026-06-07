@@ -1153,6 +1153,18 @@ def _format_artifact_provenance_line(artifact):
     intermediate = artifact.get("intermediate")
     if isinstance(intermediate, str) and intermediate:
         details.append(f"intermediate={intermediate}")
+    source_hash_preview = _format_hash_preview(
+        artifact.get("sourceHashAlgorithm"),
+        artifact.get("sourceHash"),
+    )
+    if source_hash_preview:
+        details.append(f"sourceHash={source_hash_preview}")
+    generated_hash_preview = _format_hash_preview(
+        artifact.get("generatedHashAlgorithm"),
+        artifact.get("generatedHash"),
+    )
+    if generated_hash_preview:
+        details.append(f"generatedHash={generated_hash_preview}")
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {path}{suffix}"

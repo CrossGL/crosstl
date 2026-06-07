@@ -6264,6 +6264,22 @@ def _inspection_artifact_provenance_artifact(
     }
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
+    source_hash = artifact.get("sourceHash")
+    if isinstance(source_hash, Mapping):
+        hash_algorithm = source_hash.get("algorithm")
+        hash_value = source_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["sourceHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["sourceHash"] = hash_value
+    generated_hash = artifact.get("generatedHash")
+    if isinstance(generated_hash, Mapping):
+        hash_algorithm = generated_hash.get("algorithm")
+        hash_value = generated_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["generatedHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["generatedHash"] = hash_value
     return {key: value for key, value in sample.items() if value is not None}
 
 

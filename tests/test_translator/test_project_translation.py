@@ -5701,6 +5701,14 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     provenance = payload["artifactProvenance"]
     direct_artifact = provenance["directArtifacts"][0]
     bridged_artifact = provenance["bridgedArtifacts"][0]
+    direct_source_hash = project_pipeline._source_hash(repo / "direct.cgl")
+    direct_generated_hash = project_pipeline._source_hash(
+        repo / "out" / "opengl" / "direct.glsl"
+    )
+    bridged_source_hash = project_pipeline._source_hash(repo / "shader.rs")
+    bridged_generated_hash = project_pipeline._source_hash(
+        repo / "out" / "opengl" / "shader.glsl"
+    )
 
     assert payload["success"] is True
     assert provenance["artifactCount"] == 2
@@ -5710,8 +5718,21 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     assert provenance["truncatedBridgedArtifactCount"] == 0
     assert direct_artifact["source"] == "direct.cgl"
     assert direct_artifact["intermediate"] == "none"
+    assert direct_artifact["sourceHashAlgorithm"] == direct_source_hash["algorithm"]
+    assert direct_artifact["sourceHash"] == direct_source_hash["value"]
+    assert (
+        direct_artifact["generatedHashAlgorithm"] == direct_generated_hash["algorithm"]
+    )
+    assert direct_artifact["generatedHash"] == direct_generated_hash["value"]
     assert bridged_artifact["source"] == "shader.rs"
     assert bridged_artifact["intermediate"] == "crossgl"
+    assert bridged_artifact["sourceHashAlgorithm"] == bridged_source_hash["algorithm"]
+    assert bridged_artifact["sourceHash"] == bridged_source_hash["value"]
+    assert (
+        bridged_artifact["generatedHashAlgorithm"]
+        == bridged_generated_hash["algorithm"]
+    )
+    assert bridged_artifact["generatedHash"] == bridged_generated_hash["value"]
 
     result = subprocess.run(
         [
@@ -5732,16 +5753,36 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     assert result.returncode == 0
     assert "Artifact provenance samples:" in result.stdout
     assert "Direct artifact provenance samples:" in result.stdout
+    direct_source_hash_preview = crosstl_cli._format_hash_preview(
+        direct_source_hash["algorithm"],
+        direct_source_hash["value"],
+    )
+    direct_generated_hash_preview = crosstl_cli._format_hash_preview(
+        direct_generated_hash["algorithm"],
+        direct_generated_hash["value"],
+    )
     assert (
         "- direct.cgl -> out/opengl/direct.glsl "
         "(sourceBackend=cgl, target=opengl, "
-        "pipeline=single-file-translate, intermediate=none)"
+        "pipeline=single-file-translate, intermediate=none, "
+        f"sourceHash={direct_source_hash_preview}, "
+        f"generatedHash={direct_generated_hash_preview})"
     ) in result.stdout
     assert "Bridged artifact provenance samples:" in result.stdout
+    bridged_source_hash_preview = crosstl_cli._format_hash_preview(
+        bridged_source_hash["algorithm"],
+        bridged_source_hash["value"],
+    )
+    bridged_generated_hash_preview = crosstl_cli._format_hash_preview(
+        bridged_generated_hash["algorithm"],
+        bridged_generated_hash["value"],
+    )
     assert (
         "- shader.rs -> out/opengl/shader.glsl "
         "(sourceBackend=rust, target=opengl, "
-        "pipeline=single-file-translate, intermediate=crossgl)"
+        "pipeline=single-file-translate, intermediate=crossgl, "
+        f"sourceHash={bridged_source_hash_preview}, "
+        f"generatedHash={bridged_generated_hash_preview})"
     ) in result.stdout
 
 
@@ -14764,6 +14805,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
 
     payload = inspect_project_report(report_path)
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
+    generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
@@ -14854,6 +14896,10 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "pipeline": "single-file-translate",
                 "intermediate": "none",
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
+                "generatedHashAlgorithm": generated_hash["algorithm"],
+                "generatedHash": generated_hash["value"],
             }
         ],
         "directArtifactCount": 1,
@@ -14866,6 +14912,10 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "pipeline": "single-file-translate",
                 "intermediate": "none",
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
+                "generatedHashAlgorithm": generated_hash["algorithm"],
+                "generatedHash": generated_hash["value"],
             }
         ],
         "bridgedArtifactCount": 0,
@@ -15438,6 +15488,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
+    generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
@@ -15529,6 +15580,10 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "pipeline": "single-file-translate",
                 "intermediate": "none",
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
+                "generatedHashAlgorithm": generated_hash["algorithm"],
+                "generatedHash": generated_hash["value"],
             }
         ],
         "directArtifactCount": 1,
@@ -15541,6 +15596,10 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "path": "out/cgl/simple.cgl",
                 "pipeline": "single-file-translate",
                 "intermediate": "none",
+                "sourceHashAlgorithm": source_hash["algorithm"],
+                "sourceHash": source_hash["value"],
+                "generatedHashAlgorithm": generated_hash["algorithm"],
+                "generatedHash": generated_hash["value"],
             }
         ],
         "bridgedArtifactCount": 0,
@@ -16337,10 +16396,15 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         in result.stdout
     )
     assert "Artifact provenance samples:" in result.stdout
+    generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
+    generated_hash_preview = (
+        f"{generated_hash['algorithm']}:{generated_hash['value'][:12]}..."
+    )
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
         "(sourceBackend=cgl, target=cgl, "
-        "pipeline=single-file-translate, intermediate=none)"
+        "pipeline=single-file-translate, intermediate=none, "
+        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview})"
     ) in result.stdout
     assert "Validation artifact samples:" in result.stdout
     assert (
