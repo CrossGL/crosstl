@@ -1429,6 +1429,41 @@ def test_struct_subscript_accessor_from_generated_conformance_sample_parse():
     assert isinstance(method.body[0].value, TernaryOpNode)
 
 
+def test_attributed_subscript_set_accessor_from_upstream_bug_sample_parse():
+    # Source: shader-slang/slang@5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+    # tests/bugs/gh-4971.slang
+    code = """
+    struct Test {
+        RWStructuredBuffer<int> val;
+        __subscript(int x, int y)->int
+        {
+            get { return val[x * 3 + y]; }
+            [nonmutating] set { val[x * 3 + y] = newValue; }
+        }
+    }
+    Test test;
+
+    [numthreads(1, 1, 1)]
+    void computeMain()
+    {
+        test[0,0] = 1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    method = ast.structs[0].methods[0]
+
+    assert method.name == "operator[]"
+    assert method.slang_name == "__subscript"
+    assert [param.name for param in method.params] == ["x", "y"]
+    assert list(method.property_accessors) == ["get", "set"]
+    assert isinstance(method.property_accessors["get"][0], ReturnNode)
+    assert isinstance(method.property_accessors["set"][0], AssignmentNode)
+    assert method.property_accessors["set"][0].left.array.name == "val"
+    assert method.property_accessors["set"][0].right.name == "newValue"
+
+
 def test_multi_index_subscript_expressions_from_official_operator_sample_parse():
     code = """
     int test(S value, int x, int y)

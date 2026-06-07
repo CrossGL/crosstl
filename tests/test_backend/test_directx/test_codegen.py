@@ -1364,6 +1364,41 @@ def test_codegen_vertex_fragment_roundtrip():
     assert entry_points, "Expected entry points for shader stages"
 
 
+def test_codegen_non_main_stage_entry_struct_interface_from_dxc_d12_sample():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/CodeGenHLSL/Samples/D12/d12_multithreading_ps.hlsl
+    output = generate_crossgl("""
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float2 uv : TEXCOORD0;
+        };
+
+        PSInput VSMain(float3 position : POSITION, float2 uv : TEXCOORD0) {
+            PSInput result;
+            result.position = float4(position, 1.0f);
+            result.uv = uv;
+            return result;
+        }
+
+        float4 main(PSInput input) : SV_TARGET {
+            return float4(input.uv, 0.0f, 1.0f);
+        }
+    """)
+
+    assert (
+        "PSInput VSMain(vec3 position @ Position, vec2 uv @ TexCoord0) @ stage_entry"
+        in output
+    )
+
+    shader_ast = parse_crossgl(output)
+    vertex_stage = shader_ast.stages[ShaderStage.VERTEX]
+    fragment_stage = shader_ast.stages[ShaderStage.FRAGMENT]
+
+    assert vertex_stage.entry_point.name == "VSMain"
+    assert vertex_stage.entry_point.return_type.name == "PSInput"
+    assert fragment_stage.entry_point.name == "main"
+
+
 def test_codegen_preserves_constants_and_names():
     output = generate_crossgl(CONSTANTS_HLSL)
     assert "baseColor" in output

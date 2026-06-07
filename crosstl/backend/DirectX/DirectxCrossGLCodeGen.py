@@ -2823,6 +2823,11 @@ class HLSLToCrossGLConverter:
                     func,
                     skip_attribute_names={"shader"},
                     entry_name=entry_name,
+                    stage_entry=(
+                        entry_name is None
+                        and func.name != "main"
+                        and stage_name != "fragment"
+                    ),
                 )
                 code += "    }\n\n"
             else:
@@ -2884,7 +2889,12 @@ class HLSLToCrossGLConverter:
         return code
 
     def generate_function(
-        self, func, indent=1, skip_attribute_names=None, entry_name=None
+        self,
+        func,
+        indent=1,
+        skip_attribute_names=None,
+        entry_name=None,
+        stage_entry=False,
     ):
         """Render one HLSL function node as a CrossGL function block."""
         code = self.format_attributes(
@@ -2906,12 +2916,16 @@ class HLSLToCrossGLConverter:
         )
         semantic = self.map_semantic(func.semantic)
         semantic = f" {semantic}" if semantic else ""
+        stage_entry_attribute = " @ stage_entry" if stage_entry else ""
         function_name = self.render_function_identifier(entry_name or func.name)
         return_type = (
             f"{self.format_precise_qualifier_prefix(func)}"
             f"{self.map_type(func.return_type)}{self.format_array_suffixes(func)}"
         )
-        code += f"{return_type} " f"{function_name}({params}){semantic} {{\n"
+        code += (
+            f"{return_type} "
+            f"{function_name}({params}){semantic}{stage_entry_attribute} {{\n"
+        )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    " * indent + "}\n\n"
         self.current_variable_types = previous_variable_types

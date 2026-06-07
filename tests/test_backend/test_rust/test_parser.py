@@ -4973,6 +4973,63 @@ def test_trait_parsing():
         pytest.fail(f"Trait parsing failed: {e}")
 
 
+def test_rust_gpu_associated_const_trait_and_impl_parsing_from_spirv_std():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/spirv-std/src/{scalar.rs,scalar_or_vector.rs}.
+    code = """
+    use core::num::NonZeroUsize;
+
+    pub unsafe trait Integer: Number {
+        const WIDTH: usize;
+        const SIGNED: bool;
+    }
+
+    pub unsafe trait ScalarOrVector {
+        type Scalar: Scalar;
+        const N: NonZeroUsize;
+    }
+
+    unsafe impl Integer for u32 {
+        const WIDTH: usize = 32;
+        const SIGNED: bool = false;
+    }
+    """
+
+    ast = parse_code(code)
+
+    integer = ast.traits[0]
+    scalar_or_vector = ast.traits[1]
+    impl_block = ast.impl_blocks[0]
+
+    assert integer.name == "Integer"
+    assert integer.visibility == "pub"
+    assert integer.is_unsafe is True
+    assert [const.name for const in integer.associated_consts] == ["WIDTH", "SIGNED"]
+    assert [const.vtype for const in integer.associated_consts] == ["usize", "bool"]
+    assert [const.value for const in integer.associated_consts] == [None, None]
+
+    assert scalar_or_vector.name == "ScalarOrVector"
+    assert scalar_or_vector.visibility == "pub"
+    assert scalar_or_vector.is_unsafe is True
+    assert scalar_or_vector.associated_types[0].name == "Scalar"
+    assert [const.name for const in scalar_or_vector.associated_consts] == ["N"]
+    assert scalar_or_vector.associated_consts[0].vtype == "NonZeroUsize"
+    assert scalar_or_vector.associated_consts[0].value is None
+
+    assert impl_block.trait_name == "Integer"
+    assert impl_block.struct_name == "u32"
+    assert impl_block.is_unsafe is True
+    assert [const.name for const in impl_block.associated_consts] == [
+        "WIDTH",
+        "SIGNED",
+    ]
+    assert [const.value for const in impl_block.associated_consts] == [
+        "32",
+        "false",
+    ]
+
+
 def test_trait_supertrait_bounds_parsing():
     code = """
     trait Shape: Copy + Clone {

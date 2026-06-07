@@ -201,9 +201,19 @@ class RustParser:
             elif self.current_token[0] == "ENUM":
                 e = self.parse_enum()
                 enums.append(e)
+            elif self.current_token[0] == "UNSAFE" and self.peek_token_type() == "IMPL":
+                self.eat("UNSAFE")
+                i = self.parse_impl_block(is_unsafe=True)
+                impl_blocks.append(i)
             elif self.current_token[0] == "IMPL":
                 i = self.parse_impl_block()
                 impl_blocks.append(i)
+            elif (
+                self.current_token[0] == "UNSAFE" and self.peek_token_type() == "TRAIT"
+            ):
+                self.eat("UNSAFE")
+                t = self.parse_trait(is_unsafe=True)
+                traits.append(t)
             elif self.current_token[0] == "TRAIT":
                 t = self.parse_trait()
                 traits.append(t)
@@ -243,6 +253,13 @@ class RustParser:
                 elif self.current_token[0] == "TRAIT":
                     t = self.parse_trait(visibility=visibility)
                     traits.append(t)
+                elif (
+                    self.current_token[0] == "UNSAFE"
+                    and self.peek_token_type() == "TRAIT"
+                ):
+                    self.eat("UNSAFE")
+                    t = self.parse_trait(visibility=visibility, is_unsafe=True)
+                    traits.append(t)
                 elif self.current_token[0] == "ENUM":
                     e = self.parse_enum(visibility=visibility)
                     enums.append(e)
@@ -273,12 +290,29 @@ class RustParser:
                     enums.append(e)
                 elif self.current_token[0] == "TYPE":
                     type_aliases.append(self.parse_type_alias(attributes=attrs))
+                elif self.current_token[0] == "TRAIT":
+                    t = self.parse_trait(attributes=attrs)
+                    traits.append(t)
                 elif self.current_token[0] == "IMPL":
                     i = self.parse_impl_block()
+                    impl_blocks.append(i)
+                elif (
+                    self.current_token[0] == "UNSAFE"
+                    and self.peek_token_type() == "IMPL"
+                ):
+                    self.eat("UNSAFE")
+                    i = self.parse_impl_block(is_unsafe=True)
                     impl_blocks.append(i)
                 elif self.current_token[0] == "FN":
                     f = self.parse_function(attributes=attrs)
                     functions.append(f)
+                elif (
+                    self.current_token[0] == "UNSAFE"
+                    and self.peek_token_type() == "TRAIT"
+                ):
+                    self.eat("UNSAFE")
+                    t = self.parse_trait(attributes=attrs, is_unsafe=True)
+                    traits.append(t)
                 elif self.current_starts_function():
                     f = self.parse_function_with_qualifiers(
                         attributes=attrs,
@@ -307,6 +341,23 @@ class RustParser:
                     elif self.current_token[0] == "ENUM":
                         e = self.parse_enum(attributes=attrs, visibility=visibility)
                         enums.append(e)
+                    elif self.current_token[0] == "TRAIT":
+                        t = self.parse_trait(
+                            attributes=attrs,
+                            visibility=visibility,
+                        )
+                        traits.append(t)
+                    elif (
+                        self.current_token[0] == "UNSAFE"
+                        and self.peek_token_type() == "TRAIT"
+                    ):
+                        self.eat("UNSAFE")
+                        t = self.parse_trait(
+                            attributes=attrs,
+                            visibility=visibility,
+                            is_unsafe=True,
+                        )
+                        traits.append(t)
                     elif self.current_token[0] == "TYPE":
                         type_aliases.append(
                             self.parse_type_alias(
@@ -1131,7 +1182,7 @@ class RustParser:
         self.eat("RBRACE")
         return fields
 
-    def parse_impl_block(self):
+    def parse_impl_block(self, is_unsafe=False):
         self.eat("IMPL")
 
         generics = []
@@ -1159,6 +1210,7 @@ class RustParser:
 
         functions = []
         type_aliases = []
+        associated_consts = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             item_attrs = []
             if self.current_token[0] == "POUND":
@@ -1169,6 +1221,10 @@ class RustParser:
                 functions.append(f)
             elif self.current_token[0] == "TYPE":
                 type_aliases.append(self.parse_type_alias(attributes=item_attrs))
+            elif self.current_token[0] == "CONST":
+                associated_consts.append(
+                    self.parse_associated_const(attributes=item_attrs)
+                )
             elif self.current_token[0] == "PUB":
                 visibility = self.parse_visibility()
                 if self.current_starts_function():
@@ -1182,6 +1238,13 @@ class RustParser:
                         self.parse_type_alias(
                             attributes=item_attrs,
                             visibility=visibility,
+                        )
+                    )
+                elif self.current_token[0] == "CONST":
+                    associated_consts.append(
+                        self.parse_associated_const(
+                            visibility=visibility,
+                            attributes=item_attrs,
                         )
                     )
                 else:
@@ -1203,9 +1266,11 @@ class RustParser:
             where_clauses,
             type_aliases,
             is_negative,
+            associated_consts,
+            is_unsafe,
         )
 
-    def parse_trait(self, visibility=None):
+    def parse_trait(self, visibility=None, attributes=None, is_unsafe=False):
         self.eat("TRAIT")
         name = self.parse_name_token("trait name")
 
@@ -1237,12 +1302,21 @@ class RustParser:
 
         functions = []
         associated_types = []
+        associated_consts = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            item_attrs = []
+            if self.current_token[0] == "POUND":
+                item_attrs = self.parse_attributes()
+
             if self.current_starts_function():
                 f = self.parse_trait_function()
                 functions.append(f)
             elif self.current_token[0] == "TYPE":
                 associated_types.append(self.parse_associated_type())
+            elif self.current_token[0] == "CONST":
+                associated_consts.append(
+                    self.parse_associated_const(attributes=item_attrs)
+                )
             else:
                 if self.current_token[0] == "EOF":
                     break
@@ -1258,6 +1332,9 @@ class RustParser:
             where_clauses,
             associated_types,
             supertraits,
+            associated_consts,
+            is_unsafe,
+            attributes=attributes or [],
         )
 
     def parse_generics(self):
@@ -1609,6 +1686,23 @@ class RustParser:
 
         self.eat("SEMICOLON")
         return AssociatedTypeNode(name, bounds, default_type, where_clauses)
+
+    def parse_associated_const(self, visibility=None, attributes=None):
+        self.eat("CONST")
+        name = self.parse_name_or_underscore("associated const name")
+        self.eat("COLON")
+        const_type = self.parse_type()
+
+        value = None
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            value = self.parse_expression()
+
+        self.eat("SEMICOLON")
+        node = ConstNode(name, const_type, value, visibility)
+        if attributes:
+            node.attributes = attributes
+        return node
 
     def parse_type_alias(self, visibility=None, attributes=None):
         self.eat("TYPE")

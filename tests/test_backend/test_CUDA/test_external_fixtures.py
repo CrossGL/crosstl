@@ -300,6 +300,10 @@ def test_cuda_programming_guide_one_component_vectors_codegen_reparse():
 
 
 def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/0_Introduction/simpleVoteIntrinsics/simpleVote_kernel.cuh
     source = """
     __global__ void VoteAnyKernel1(unsigned int *input,
                                    unsigned int *result,
@@ -324,8 +328,10 @@ def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "var tx: i32 = gl_LocalInvocationID.x;" in crossgl
-    assert "cuda warp intrinsic __any_sync(mask, input[tx])" in crossgl
-    assert "cuda warp intrinsic __all_sync(mask, input[tx])" in crossgl
+    assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in crossgl
+    assert "result[tx] = (WaveActiveAllTrue((input[tx] != 0)) ? 1 : 0);" in crossgl
+    assert "cuda warp intrinsic __any_sync(mask, input[tx])" not in crossgl
+    assert "cuda warp intrinsic __all_sync(mask, input[tx])" not in crossgl
     assert "__any_sync(mask, input[tx]);" not in crossgl
     assert "__all_sync(mask, input[tx]);" not in crossgl
 
