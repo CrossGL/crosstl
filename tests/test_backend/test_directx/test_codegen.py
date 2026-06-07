@@ -2443,6 +2443,10 @@ def test_codegen_cbuffer_member_layout_metadata_passthrough():
     assert roughness_offset.object.name == "c4"
     assert roughness_offset.member == "x"
 
+    regenerated_hlsl = TranslatorHLSLCodeGen().generate(shader_ast)
+    assert "row_major float4x4 transform : packoffset(c0);" in regenerated_hlsl
+    assert "float roughness : packoffset(c4.x);" in regenerated_hlsl
+
 
 def test_codegen_matrix_layout_qualifiers_from_hlsl_variable_syntax():
     # Source: Microsoft Learn HLSL variable syntax documents row_major and
@@ -2577,8 +2581,8 @@ def test_codegen_hlsl_tbuffer_roundtrips_with_texture_register():
     regenerated_hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(output))
 
     assert "tbuffer LookupData : register(t3, space2)" in regenerated_hlsl
-    assert "float4 values[4];" in regenerated_hlsl
-    assert "float scale;" in regenerated_hlsl
+    assert "float4 values[4] : packoffset(c0);" in regenerated_hlsl
+    assert "float scale : packoffset(c4.x);" in regenerated_hlsl
 
 
 def test_codegen_object_style_constant_and_texture_buffers_roundtrip():

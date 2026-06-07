@@ -4856,6 +4856,26 @@ def test_hlsl_cbuffer_binding_attributes_drive_registers():
     assert "MatrixType(" not in generated_code
 
 
+def test_hlsl_cbuffer_member_layout_attributes_roundtrip():
+    code = """
+    shader CBufferLayoutMetadata {
+        cbuffer Material @register(b0) {
+            @ row_major
+            @ packoffset(c0)
+            mat4 transform;
+            @ packoffset(c4.x)
+            float roughness;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Material : register(b0)" in generated_code
+    assert "row_major float4x4 transform : packoffset(c0);" in generated_code
+    assert "float roughness : packoffset(c4.x);" in generated_code
+
+
 def test_hlsl_cbuffer_register_overlap_raises():
     code = """
     shader CBufferOverlap {

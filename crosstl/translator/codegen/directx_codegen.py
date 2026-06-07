@@ -3019,56 +3019,65 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f"{buffer_keyword} {node.name}{register} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
-                    if isinstance(member, ArrayNode):
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        if member.size:
-                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
-                        else:
-                            code += (
-                                f"    {self.map_type(element_type)} {member.name}[1];\n"
-                            )
-                    else:
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(member.member_type)
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        declaration = format_c_style_array_declaration(
-                            member_type, member.name
-                        )
-                        code += f"    {declaration};\n"
+                    declaration = self.generate_hlsl_cbuffer_member_declaration(member)
+                    code += f"    {declaration};\n"
                 code += "};\n"
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # Generic cbuffer handling
                 code += f"{buffer_keyword} {node.name}{register} {{\n"
                 for member in node.members:
-                    if isinstance(member, ArrayNode):
-                        element_type = getattr(
-                            member, "element_type", getattr(member, "vtype", "float")
-                        )
-                        if member.size:
-                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
-                        else:
-                            code += (
-                                f"    {self.map_type(element_type)} {member.name}[1];\n"
-                            )
-                    else:
-                        if hasattr(member, "member_type"):
-                            member_type = self.map_type(member.member_type)
-                        else:
-                            member_type = self.map_type(
-                                getattr(member, "vtype", "float")
-                            )
-                        declaration = format_c_style_array_declaration(
-                            member_type, member.name
-                        )
-                        code += f"    {declaration};\n"
+                    declaration = self.generate_hlsl_cbuffer_member_declaration(member)
+                    code += f"    {declaration};\n"
                 code += "};\n"
         return code
+
+    def generate_hlsl_cbuffer_member_declaration(self, member):
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            member_type = self.map_type(element_type)
+            size = getattr(member, "size", None)
+            size_text = self.expression_to_string(size) if size is not None else "1"
+            declaration = f"{member_type} {member.name}[{size_text}]"
+        else:
+            if hasattr(member, "member_type"):
+                member_type = self.map_type(member.member_type)
+            else:
+                member_type = self.map_type(getattr(member, "vtype", "float"))
+            declaration = format_c_style_array_declaration(member_type, member.name)
+
+        layout_qualifier = self.hlsl_cbuffer_member_layout_qualifier(member)
+        if layout_qualifier:
+            declaration = f"{layout_qualifier} {declaration}"
+
+        packoffset = self.hlsl_cbuffer_member_packoffset(member)
+        if packoffset:
+            declaration = f"{declaration} : packoffset({packoffset})"
+        return declaration
+
+    def hlsl_cbuffer_member_layout_qualifier(self, member):
+        for qualifier in getattr(member, "qualifiers", []) or []:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in {"row_major", "column_major"}:
+                return qualifier_name
+
+        for attr in getattr(member, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name in {"row_major", "column_major"}:
+                return attr_name
+        return None
+
+    def hlsl_cbuffer_member_packoffset(self, member):
+        for attr in getattr(member, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name != "packoffset":
+                continue
+            arguments = getattr(attr, "arguments", None) or getattr(attr, "args", [])
+            if arguments:
+                return self.expression_to_string(arguments[0])
+        return None
 
     def generate_compute_numthreads(self, execution_config=None):
         x, y, z = compute_local_size(execution_config)
