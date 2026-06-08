@@ -3830,9 +3830,10 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
                     for path in config.root.glob(pattern)
                     if path.is_file() and _is_relative_to(path, absolute_root)
                 )
-            candidates.update(
-                path for path in absolute_root.glob(pattern) if path.is_file()
-            )
+            else:
+                candidates.update(
+                    path for path in absolute_root.glob(pattern) if path.is_file()
+                )
     return sorted(candidates)
 
 

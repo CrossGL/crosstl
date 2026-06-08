@@ -285,6 +285,10 @@ def test_project_repo_scan_documents_source_root_status():
         )
         assert "scan/report CLI source-root overrides" in (backend_support["notes"])
         assert "source override rollups" in (backend_support["notes"])
+        assert (
+            "repository-relative explicit include and source override patterns "
+            "from the repository root before source-root visibility filtering"
+        ) in backend_support["notes"]
         assert "validation rejects missing scan summary rollups" in (
             backend_support["notes"]
         )
@@ -308,6 +312,14 @@ def test_project_repo_scan_documents_source_root_status():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_source_roots_that_are_not_directories"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_accepts_repository_relative_include_patterns"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_applies_source_override_patterns_from_repository_root"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

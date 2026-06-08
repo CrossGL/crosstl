@@ -542,16 +542,51 @@ def test_scan_project_accepts_repository_relative_include_patterns(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     other_dir = repo / "other"
+    nested_other_dir = shader_dir / "other"
     shader_dir.mkdir(parents=True)
     other_dir.mkdir()
+    nested_other_dir.mkdir()
     (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (other_dir / "ignored.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (nested_other_dir / "leaked.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
             [project]
             source_roots = ["shaders"]
-            include = ["shaders/**/*.cgl", "other/**/*.cgl"]
+            include = ["shaders/main.cgl", "other/**/*.cgl"]
             exclude = []
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+
+    assert [unit.relative_path for unit in scan.units] == ["shaders/main.cgl"]
+    assert scan.skipped == []
+    assert {diagnostic.code for diagnostic in scan.diagnostics} == set()
+
+
+def test_scan_project_applies_source_override_patterns_from_repository_root(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    nested_other_dir = shader_dir / "other"
+    other_dir = repo / "other"
+    shader_dir.mkdir(parents=True)
+    nested_other_dir.mkdir()
+    other_dir.mkdir()
+    (shader_dir / "main.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (nested_other_dir / "leaked.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (other_dir / "ignored.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            exclude = []
+
+            [sources]
+            "other/**/*.shader" = "cgl"
             """).strip(),
         encoding="utf-8",
     )
