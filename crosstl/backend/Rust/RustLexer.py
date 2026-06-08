@@ -107,7 +107,7 @@ TOKENS = tuple(
         ("RAW_IDENTIFIER", r"r#[a-zA-Z_][a-zA-Z0-9_]*"),
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         ("STRING", r'"([^"\\]|\\(.|\n))*"'),
-        ("CHAR_LIT", r"'([^'\\]|\\.)'"),
+        ("CHAR_LIT", r"'(\\x[0-9a-fA-F]{2}|\\u\{[0-9a-fA-F_]{1,6}\}|[^'\\]|\\.)'"),
         ("LIFETIME", r"'[a-zA-Z_][a-zA-Z0-9_]*"),
         # Punctuation
         ("LBRACE", r"\{"),

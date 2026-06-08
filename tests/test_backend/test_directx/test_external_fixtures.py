@@ -1349,6 +1349,66 @@ EXTERNAL_FIXTURES = [
             "imageStore(output, did, FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1);",
         ),
     ),
+    ExternalFixture(
+        name="directx_shader_compiler_struct_method_body_trailing_semicolon",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/rayquery_init_expr.hlsl",
+        code=textwrap.dedent("""
+            void Fun() {
+              RayQuery<0> RayQ;
+            }
+
+            struct SomeStruct {
+              void DummyMethod() {};
+            };
+
+            [numthreads(1, 1, 1)]
+            void main() {
+              SomeStruct Payload;
+              Payload.DummyMethod();
+              RayQuery<0> RayQ0;
+              RayQuery<0> RayQ1 = RayQuery<0>();
+              RayQuery<0> RayQ2 = RayQ0;
+              Fun();
+            }
+        """).strip(),
+        contains=(
+            "struct SomeStruct {",
+            "void Fun()",
+            "rayQuery RayQ1 = RayQuery<0>();",
+            "Payload.DummyMethod();",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_operator_call_definition",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/func.noidentifier.hlsl",
+        code=textwrap.dedent("""
+            struct S
+            {
+                void operator()();
+            };
+
+            void S::operator()()
+            {
+            }
+
+            [numthreads(8,8,1)]
+            void main(uint32_t3 gl_GlobalInvocationID : SV_DispatchThreadID)
+            {
+              S s;
+              s();
+            }
+        """).strip(),
+        contains=(
+            "void S_operator_call()",
+            "@ numthreads(8, 8, 1)",
+            "void main(uvec3 gl_GlobalInvocationID @ gl_GlobalInvocationID)",
+            "s();",
+        ),
+    ),
 ]
 
 

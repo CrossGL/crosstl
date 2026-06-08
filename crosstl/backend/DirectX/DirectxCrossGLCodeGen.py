@@ -4184,7 +4184,19 @@ class HLSLToCrossGLConverter:
 
     def sanitize_scoped_identifier_name(self, name):
         """Convert HLSL scoped function declarations into CrossGL identifiers."""
-        return str(name).strip(":").replace("::", "_")
+        sanitized = str(name).strip(":")
+        sanitized = (
+            sanitized.replace("operator()", "operator_call")
+            .replace("operator[]", "operator_index")
+            .replace("operator ", "operator_")
+            .replace("::", "_")
+        )
+        sanitized = re.sub(r"\W+", "_", sanitized).strip("_")
+        if not sanitized:
+            return "operator_overload"
+        if sanitized[0].isdigit():
+            sanitized = f"_{sanitized}"
+        return sanitized
 
     def map_template_vector_or_matrix_type(self, base_type, generic_type):
         args = self.split_generic_arguments(generic_type)

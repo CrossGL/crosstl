@@ -309,6 +309,24 @@ def test_mlir_region_statement_parse_from_coroutine_stdlib():
     assert isinstance(function.body[1], CallNode)
 
 
+def test_mlir_op_expression_payload_specialization_parse_from_coroutine_intrinsic():
+    code = """
+    def _suspend_async():
+        __mlir_op.co_suspend["await_body".value]()
+    """
+    ast = parse_code(tokenize_code(code))
+    call = find_function(ast, "_suspend_async").body[0]
+
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, ArrayAccessNode)
+    assert isinstance(call.callee.array, MemberAccessNode)
+    assert call.callee.array.object.name == "__mlir_op"
+    assert call.callee.array.member == "co_suspend"
+    assert isinstance(call.callee.index, MemberAccessNode)
+    assert call.callee.index.object == '"await_body"'
+    assert call.callee.index.member == "value"
+
+
 def test_variadic_and_deinit_parameters_parse_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

@@ -1246,6 +1246,8 @@ class MojoToCrossGLConverter:
                 return f"{func_name}({args_str})"
             return f"{obj}.{method_name}({args_str})"
         elif isinstance(expr, CallNode):
+            if self.is_mlir_op_specialization_call(expr):
+                return self.generate_mlir_op_specialization_call(expr)
             callee = self.generate_expression(expr.callee)
             args = []
             if hasattr(expr, "args") and expr.args:
@@ -1268,6 +1270,8 @@ class MojoToCrossGLConverter:
             type_name = self.map_type(expr.type_name)
             return f"{type_name}({args_str})"
         elif isinstance(expr, ArrayAccessNode):
+            if self.should_elide_empty_postfix_access(expr):
+                return self.generate_expression(expr.array)
             if self.is_mlir_type_literal_access(expr):
                 return self.generate_mlir_type_literal_expression(expr)
             array = self.generate_expression(expr.array)
@@ -1293,6 +1297,38 @@ class MojoToCrossGLConverter:
             "__mlir_type",
             "__mlir_attr",
         }
+
+    def is_mlir_op_specialization_call(self, expr):
+        return isinstance(
+            expr.callee, ArrayAccessNode
+        ) and self.is_mlir_op_member_access(expr.callee.array)
+
+    def is_mlir_op_member_access(self, expr):
+        return (
+            isinstance(expr, MemberAccessNode)
+            and isinstance(expr.object, VariableNode)
+            and expr.object.name == "__mlir_op"
+        )
+
+    def generate_mlir_op_specialization_call(self, expr):
+        callee = expr.callee
+        op_name = self.map_identifier_name(callee.array.member)
+        payload = self.render_mlir_literal_payload(callee.index)
+        payload_name = self.sanitize_identifier(payload)
+        func_name = f"MLIR_Op_{op_name}_{payload_name}"
+        args = [self.generate_expression(arg) for arg in getattr(expr, "args", [])]
+        return f"{func_name}({', '.join(args)})"
+
+    def should_elide_empty_postfix_access(self, expr):
+        if not self.is_empty_array_access(expr):
+            return False
+
+        array = expr.array
+        if isinstance(array, MemberAccessNode):
+            return True
+        if isinstance(array, VariableNode) and array.name:
+            return array.name[0].isupper()
+        return False
 
     def generate_mlir_type_literal_expression(self, expr):
         payload = self.render_mlir_literal_payload(expr.index)

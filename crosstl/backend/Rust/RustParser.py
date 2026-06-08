@@ -659,9 +659,9 @@ class RustParser:
         if self.current_token[0] in {"RETURN", "BREAK", "CONTINUE"}:
             return self.parse_control_flow_expression()
         if self.current_token[0] in ["LIFETIME", "LOOP"]:
-            return self.parse_loop_expression()
+            return self.parse_postfix_suffix(self.parse_loop_expression())
         if self.current_token[0] == "MATCH":
-            return self.parse_match_expression()
+            return self.parse_postfix_suffix(self.parse_match_expression())
         return self.parse_expression()
 
     def parse_control_flow_expression(self):
@@ -1911,6 +1911,31 @@ class RustParser:
         last_segment = str(name).split("::")[-1]
         return bool(last_segment) and last_segment[0].isupper()
 
+    def should_parse_struct_initialization(self, name):
+        if self.current_token[0] != "LBRACE":
+            return False
+        if not self.is_struct_initialization_name(name):
+            return False
+        if not self.expression_stops_at_lbrace:
+            return True
+        return self.looks_like_struct_literal_brace()
+
+    def looks_like_struct_literal_brace(self):
+        first_index = self.current_index + 1
+        if first_index >= len(self.tokens):
+            return False
+
+        first_type = self.tokens[first_index][0]
+        if first_type == "RANGE":
+            return True
+        if first_type != "IDENTIFIER":
+            return False
+
+        second_index = first_index + 1
+        if second_index >= len(self.tokens):
+            return False
+        return self.tokens[second_index][0] == "COLON"
+
     def parse_function(
         self,
         attributes=None,
@@ -2365,13 +2390,18 @@ class RustParser:
         return self.parse_condition_chain_expression_operand()
 
     def parse_condition_chain_expression_operand(self):
-        left = self.parse_bitwise_or_expression()
+        previous = self.expression_stops_at_lbrace
+        self.expression_stops_at_lbrace = True
+        try:
+            left = self.parse_bitwise_or_expression()
 
-        while self.current_token[0] == "LOGICAL_OR":
-            op = self.current_token[1]
-            self.eat("LOGICAL_OR")
-            right = self.parse_bitwise_or_expression()
-            left = BinaryOpNode(left, op, right)
+            while self.current_token[0] == "LOGICAL_OR":
+                op = self.current_token[1]
+                self.eat("LOGICAL_OR")
+                right = self.parse_bitwise_or_expression()
+                left = BinaryOpNode(left, op, right)
+        finally:
+            self.expression_stops_at_lbrace = previous
 
         return left
 
@@ -3076,7 +3106,12 @@ class RustParser:
             self.eat("ARROW")
             return_type = self.parse_type()
 
-        body = self.parse_result_expression()
+        previous = self.expression_stops_at_lbrace
+        self.expression_stops_at_lbrace = False
+        try:
+            body = self.parse_result_expression()
+        finally:
+            self.expression_stops_at_lbrace = previous
         return ClosureNode(params, body, is_move, return_type, is_async)
 
     def find_closure_parameter_end(self):
@@ -3119,7 +3154,9 @@ class RustParser:
 
     def parse_postfix_expression(self):
         left = self.parse_primary_expression()
+        return self.parse_postfix_suffix(left)
 
+    def parse_postfix_suffix(self, left):
         while True:
             if self.current_token[0] == "DOT":
                 self.eat("DOT")
@@ -3281,12 +3318,7 @@ class RustParser:
             if self.current_token[0] == "DOUBLE_COLON":
                 return self.finish_path_or_call(name)
 
-            # Only if this identifier is likely a struct constructor (starts with uppercase)
-            if (
-                self.current_token[0] == "LBRACE"
-                and name[0].isupper()
-                and not self.expression_stops_at_lbrace
-            ):
+            if self.should_parse_struct_initialization(name):
                 return self.parse_struct_initialization(name)
 
             if (
@@ -3325,11 +3357,7 @@ class RustParser:
             if self.current_token[0] == "DOUBLE_COLON":
                 return self.finish_path_or_call(name)
 
-            if (
-                self.current_token[0] == "LBRACE"
-                and name in ["Vec2", "Vec3", "Vec4", "Mat2", "Mat3", "Mat4"]
-                and not self.expression_stops_at_lbrace
-            ):
+            if self.should_parse_struct_initialization(name):
                 return self.parse_struct_initialization(name)
 
             return name
@@ -3386,12 +3414,6 @@ class RustParser:
         elif self.current_token[0] == "SELF":
             name = self.current_token[1]
             self.eat("SELF")
-
-            if (
-                self.current_token[0] == "LBRACE"
-                and not self.expression_stops_at_lbrace
-            ):
-                return self.parse_struct_initialization(name)
 
             if self.current_token[0] == "DOUBLE_COLON":
                 return self.finish_path_or_call(name)
@@ -3651,11 +3673,9 @@ class RustParser:
 
     def finish_path_or_call(self, first_segment):
         path = self.parse_path_expression(first_segment)
-        if (
-            self.current_token[0] == "LBRACE"
-            and self.is_struct_initialization_name(path)
-            and not self.expression_stops_at_lbrace
-        ):
+        if self.current_token[
+            0
+        ] == "LBRACE" and self.should_parse_struct_initialization(path):
             return self.parse_struct_initialization(path)
         if self.current_token[0] == "LPAREN":
             return FunctionCallNode(path, self.parse_call_arguments())

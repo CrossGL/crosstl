@@ -5962,6 +5962,58 @@ def test_rust_gpu_ash_runner_nested_block_statement_parse():
     assert block.expression.name == "Ok"
 
 
+def test_if_let_dereference_conditions_stop_at_block_from_naga():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/interpolator.rs and src/proc/index.rs.
+    code = """
+    impl crate::Binding {
+        fn apply_default_interpolation(&mut self, ty: &crate::TypeInner) {
+            if let crate::Binding::Location {
+                location: _,
+                interpolation: ref mut interpolation @ None,
+                ref mut sampling,
+                second_blend_source: _,
+            } = *self {
+                match ty.scalar_kind() {
+                    Some(crate::ScalarKind::Float) => {
+                        *interpolation = Some(crate::Interpolation::Perspective);
+                    }
+                    Some(crate::ScalarKind::Sint | crate::ScalarKind::Uint) => {
+                        *sampling = None;
+                    }
+                    Some(_) | None => {}
+                }
+            }
+        }
+    }
+
+    impl GuardedIndex {
+        fn try_resolve_to_constant(&mut self, module: &crate::Module) {
+            if let GuardedIndex::Expression(expr) = *self {
+                if let Ok(value) = module.to_ctx().eval_expr_to_u32_from(expr) {
+                    *self = GuardedIndex::Known(value);
+                }
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    binding_if = ast.impl_blocks[0].methods[0].body[0]
+    guarded_if = ast.impl_blocks[1].methods[0].body[0]
+
+    assert isinstance(binding_if, IfNode)
+    assert isinstance(binding_if.condition, LetPatternConditionNode)
+    assert type(binding_if.condition.expression).__name__ == "DereferenceNode"
+    assert isinstance(binding_if.if_body[0], MatchNode)
+
+    assert isinstance(guarded_if, IfNode)
+    assert isinstance(guarded_if.condition, LetPatternConditionNode)
+    assert type(guarded_if.condition.expression).__name__ == "DereferenceNode"
+    assert isinstance(guarded_if.if_body[0], IfNode)
+
+
 def test_error_handling():
     invalid_codes = [
         "fn incomplete(",

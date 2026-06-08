@@ -6394,6 +6394,12 @@ class CudaToCrossGLConverter:
         if span_type is not None:
             return span_type
 
+        nested_scoped_template_type = (
+            self.convert_nested_scoped_template_type_to_crossgl(cuda_type)
+        )
+        if nested_scoped_template_type is not None:
+            return nested_scoped_template_type
+
         enable_if_type = self.convert_enable_if_type(cuda_type)
         if enable_if_type is not None:
             return enable_if_type
@@ -6439,6 +6445,41 @@ class CudaToCrossGLConverter:
         if normalized_type.startswith(prefix):
             return normalized_type[len(prefix) :]
         return None
+
+    def convert_nested_scoped_template_type_to_crossgl(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if not template_args or "::" not in str(cuda_type):
+            return None
+        if not any(
+            self.template_arg_contains_scoped_template(arg) for arg in template_args
+        ):
+            return None
+
+        return self.convert_scoped_template_type_to_crossgl_generic(
+            base_name, template_args
+        )
+
+    def convert_scoped_template_type_to_crossgl_generic(self, base_name, template_args):
+        converted_args = [
+            self.convert_scoped_template_argument_to_crossgl(arg)
+            for arg in template_args
+        ]
+        return (
+            f"{self.sanitize_crossgl_type_identifier(base_name)}"
+            f"<{', '.join(converted_args)}>"
+        )
+
+    def convert_scoped_template_argument_to_crossgl(self, type_name):
+        base_name, template_args = self.parse_cpp_template(type_name)
+        if template_args and "::" in base_name:
+            return self.convert_scoped_template_type_to_crossgl_generic(
+                base_name, template_args
+            )
+        return self.convert_cuda_type_to_crossgl(type_name)
+
+    def template_arg_contains_scoped_template(self, type_name):
+        base_name, template_args = self.parse_cpp_template(type_name)
+        return bool(template_args and "::" in base_name)
 
     def strip_dependent_template_disambiguators(self, type_name):
         return str(type_name).replace("::template ", "::")

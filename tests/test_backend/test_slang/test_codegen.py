@@ -1299,7 +1299,7 @@ def test_generic_enum_class_codegen_reparse_from_upstream_bug_test():
     cgl_translator.parse(generated_code)
 
 
-def test_reverse_codegen_rejects_interface_and_conformance_constructs():
+def test_reverse_codegen_rejects_extension_conformance_constructs():
     code = """
     interface IFoo {
         int foo();
@@ -1324,8 +1324,6 @@ def test_reverse_codegen_rejects_interface_and_conformance_constructs():
         generate_code(ast)
 
     message = str(exc.value)
-    assert "interface IFoo" in message
-    assert "struct MyType : IFoo" in message
     assert "extension MyType : IBar" in message
 
 

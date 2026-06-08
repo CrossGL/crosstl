@@ -1330,6 +1330,40 @@ def test_empty_index_in_type_expression_codegen_from_async_context_reparses_cros
     parse_crossgl(generated_code)
 
 
+def test_type_like_and_member_empty_postfix_codegen_from_archive_sweep_reparses_crossgl():
+    code = """
+    def main(self: Self):
+        var base = NVIDIASharedMemoryBasePtr[]
+        var source = self.src[]
+        var tile = iter[]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var base = NVIDIASharedMemoryBasePtr;" in generated_code
+    assert "var source = self.src;" in generated_code
+    assert "var tile = iter[];" in generated_code
+    assert "NVIDIASharedMemoryBasePtr[]" not in generated_code
+    assert "self.src[]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mlir_op_payload_specialization_codegen_from_coroutine_intrinsic_reparses_crossgl():
+    code = """
+    def _suspend_async():
+        __mlir_op.co_suspend["await_body".value]()
+        __mlir_op.`co.suspend`[_region="await_body".value]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "MLIR_Op_co_suspend_await_body_value();" in generated_code
+    assert "MLIR_Op_co_suspend_region_await_body_value();" in generated_code
+    assert "__mlir_op" not in generated_code
+    assert '["await_body".value]' not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

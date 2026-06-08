@@ -9521,8 +9521,8 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var table: std::vector<std::array<unsigned int, 4>>;" in result
-        assert "var rows: std::vector<std::vector<float>>;" in result
+        assert "var table: std_vector<std_array<u32, 4>>;" in result
+        assert "var rows: std_vector<std_vector<f32>>;" in result
         assert "var pointer: ptr<ptr<f32>> = new<ptr<f32>>(nullptr);" in result
         assert "var owned: ptr<f32> = new_array<f32>(n);" in result
         assert "std::unique_ptr" not in result
@@ -9552,7 +9552,7 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert "typedef ptr<f32> HostBuffer;" in result
-        assert "typedef std::vector<std::array<unsigned int, 4>> Table;" in result
+        assert "typedef std_vector<std_array<u32, 4>> Table;" in result
         assert "typedef ptr<f32> LocalBuffer;" in result
         assert "var h: HostBuffer = new_array<f32>(n);" in result
         assert "var hp: ptr<HostBuffer> = (&h);" in result

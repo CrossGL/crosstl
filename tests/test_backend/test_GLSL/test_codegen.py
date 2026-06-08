@@ -2053,6 +2053,62 @@ def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
     parse_crossgl(crossgl)
 
 
+def test_codegen_fallback_uniform_block_avoids_struct_name_collision_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.int16.frag, where an
+    # interface block named Uniforms collides with the fallback loose-uniform
+    # CrossGL cbuffer name.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(binding = 0) uniform Uniforms
+        {
+            uint index;
+        };
+
+        layout(std140, binding = 1) uniform Block
+        {
+            int value;
+        } block;
+
+        void main()
+        {
+            int local_value = int(index) + block.value;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct Uniforms" in crossgl
+    assert "cbuffer GlobalUniforms" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_image_rect_format_metadata_reparse_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.atomicFloat.comp. CrossGL
+    # preserves the rectangle image resource but cannot validate format
+    # attributes on image2DRect resource types yet.
+    code = textwrap.dedent("""
+        #version 450 core
+        #extension GL_EXT_shader_atomic_float : enable
+
+        layout(local_size_x = 1) in;
+        layout(r32f, binding = 4) coherent volatile uniform image2DRect fimage2DRect;
+
+        void main()
+        {
+            imageAtomicAdd(fimage2DRect, ivec2(0, 0), 2.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "image2DRect fimage2DRect" in crossgl
+    assert "@binding(4)" in crossgl
+    assert "@r32f" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_local_struct_with_mixed_array_declarators_from_khronos_webgl():
     code = textwrap.dedent("""
         precision mediump float;

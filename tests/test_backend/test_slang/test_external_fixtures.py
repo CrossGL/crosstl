@@ -951,6 +951,83 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["__subscript", "operator[]", "FunctionNode("],
     },
     {
+        "id": "slang_generated_interface_constructor_requirement_codegen",
+        "repo": "shader-slang/slang-types-interface-2026-06-05",
+        "path": (
+            "docs/generated/tests/conformance/types-interface/"
+            "interface-constructor-requirement.slang"
+        ),
+        "source": (
+            """
+            interface IInitializable
+            {
+                __init(int v);
+                int getValue();
+            }
+
+            struct InitStruct : IInitializable
+            {
+                int stored;
+
+                __init(int v)
+                {
+                    stored = v * 2;
+                }
+
+                int getValue() { return stored; }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct InitStruct {",
+            "int stored;",
+        ],
+        "not_contains": [
+            "interface IInitializable",
+            ": IInitializable",
+            "__init",
+        ],
+    },
+    {
+        "id": "slang_generated_interface_subscript_requirement_codegen",
+        "repo": "shader-slang/slang-types-interface-2026-06-05",
+        "path": (
+            "docs/generated/tests/conformance/types-interface/"
+            "interface-subscript-requirement.slang"
+        ),
+        "source": (
+            """
+            interface IIndexable
+            {
+                __subscript(uint i) -> int { get; set; }
+            }
+
+            struct FixedArray : IIndexable
+            {
+                int data[4];
+
+                __subscript(uint i) -> int
+                {
+                    get { return data[i]; }
+                    set { data[i] = newValue; }
+                }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct FixedArray {",
+            "int data[4];",
+        ],
+        "not_contains": [
+            "interface IIndexable",
+            ": IIndexable",
+            "__subscript",
+            "operator[]",
+        ],
+    },
+    {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",
         "repo": "shader-slang/slang-generated-2026",
         "path": (

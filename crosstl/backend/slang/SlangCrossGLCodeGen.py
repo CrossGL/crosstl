@@ -626,13 +626,7 @@ class SlangToCrossGLConverter:
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []
 
-        for interface in getattr(ast, "interfaces", []) or []:
-            constructs.append(f"interface {interface.name}")
-
         for struct in getattr(ast, "structs", []) or []:
-            conformances = getattr(struct, "conformances", []) or []
-            if conformances:
-                constructs.append(f"struct {struct.name} : {', '.join(conformances)}")
             constructs.extend(
                 self.format_typedef_generic_constraints(getattr(struct, "typedefs", []))
             )
@@ -656,16 +650,10 @@ class SlangToCrossGLConverter:
 
         for export in getattr(ast, "exports", []) or []:
             item = getattr(export, "item", None)
-            if isinstance(item, InterfaceNode):
-                constructs.append(f"interface {item.name}")
-            elif isinstance(item, ExtensionNode):
+            if isinstance(item, ExtensionNode):
                 conformances = getattr(item, "conformances", []) or []
                 suffix = f" : {', '.join(conformances)}" if conformances else ""
                 constructs.append(f"extension {item.extended_type}{suffix}")
-            elif isinstance(item, StructNode):
-                conformances = getattr(item, "conformances", []) or []
-                if conformances:
-                    constructs.append(f"struct {item.name} : {', '.join(conformances)}")
             elif isinstance(item, FunctionNode):
                 constructs.extend(self.format_function_generic_constraints(item))
 

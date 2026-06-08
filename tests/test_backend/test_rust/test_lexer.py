@@ -487,6 +487,24 @@ def test_byte_literals_tokenization():
         pytest.fail("Byte literals tokenization not implemented.")
 
 
+def test_unicode_char_literal_range_tokenization_from_naga_wgsl_lexer():
+    code = r"""
+    const fn is_comment_end(c: char) -> bool {
+        match c {
+            '\u{000a}'..='\u{000d}' | '\u{0085}' | '\u{2028}' => true,
+            _ => false,
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    char_literals = [token[1] for token in tokens if token[0] == "CHAR_LIT"]
+
+    assert r"'\u{000a}'" in char_literals
+    assert r"'\u{000d}'" in char_literals
+    assert r"'\u{2028}'" in char_literals
+
+
 def test_escaped_newline_byte_string_continuation_tokenization():
     code = 'fn main() { let message = b"hello \\\n    world"; }'
 

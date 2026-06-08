@@ -10682,6 +10682,138 @@ def test_reference_impl_prefix_codegen_reparse_from_naga_block():
     crosstl.translator.parse(result)
 
 
+def test_struct_literal_in_condition_codegen_reparse_from_naga_interface():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/valid/interface.rs MissingVertexOutputPosition check.
+    code = """
+    fn validate(result_built_ins: BuiltIns, ep: EntryPoint) -> Result<()> {
+        if ep.stage == crate::ShaderStage::Vertex
+            && !result_built_ins.contains(
+                &crate::BuiltIn::Position { invariant: false }
+            )
+        {
+            return Err(EntryPointError::MissingVertexOutputPosition.with_span());
+        }
+        Ok(())
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "crate::BuiltIn::Position { invariant: false }" in result
+    crosstl.translator.parse(result)
+
+
+def test_match_subject_closure_struct_literal_codegen_reparse_from_naga_cli():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # xtask/src/cli.rs Args::parse.
+    code = """
+    impl Args {
+        fn parse(args: Arguments) -> Self {
+            match Subcommand::parse(args).map(|subcommand| Self { subcommand }) {
+                Ok(this) => this,
+                Err(e) => exit(1),
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "lambda(subcommand, Self { subcommand: subcommand })" in result
+    crosstl.translator.parse(result)
+
+
+def test_match_expression_try_codegen_reparse_from_naga_glsl_parser():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/glsl/parser.rs parse_uint_constant.
+    code = """
+    fn parse_uint(res: Result<u32>, meta: Span) -> Result<(u32, Span)> {
+        let int = match res {
+            Ok(value) => Ok(value),
+            Err(_) => Err(Error { meta }),
+        }?;
+        Ok((int, meta))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto _rust_try_subject_" in result
+    assert "if (is_Err(_rust_try_subject_" in result
+    crosstl.translator.parse(result)
+
+
+def test_matches_macro_subject_codegen_reparse_from_naga_msl_and_wgsl():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/back/msl/writer.rs and src/front/wgsl/lower/mod.rs.
+    code = """
+    fn check(context: Context, right: Handle, ctx: LowerCtx, argument: Handle) -> bool {
+        let matrix = matches!(
+            context.resolve_type(right),
+            crate::TypeInner::Matrix { columns: _, rows: _ }
+        );
+        let scalar = matches!(
+            resolve_inner!(ctx, argument),
+            crate::TypeInner::Scalar { kind: crate::ScalarKind::Bool }
+        );
+        matrix && scalar
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "context.resolve_type(right)" in result
+    assert "resolve_inner!(ctx, argument)" in result
+    assert "FunctionCallNode" not in result
+    crosstl.translator.parse(result)
+
+
+def test_unicode_char_literal_range_codegen_reparse_from_naga_wgsl_lexer():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/wgsl/parse/lexer.rs is_comment_end.
+    code = r"""
+    const fn is_comment_end(c: char) -> bool {
+        match c {
+            '\u{000a}'..='\u{000d}' | '\u{2028}' => true,
+            _ => false,
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "(c >= 10) && (c <= 13)" in result
+    assert "(c == 8232)" in result
+    assert r"\u{" not in result
+    crosstl.translator.parse(result)
+
+
+def test_raw_pointer_generic_type_codegen_reparse_from_naga_msl_writer():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/back/msl/writer.rs Writer stack pointer sets.
+    code = """
+    struct Writer {
+        put_expression_stack_pointers: FastHashSet<*const ()>,
+        put_block_stack_pointers: FastHashSet<*mut ()>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "FastHashSet<ptr<void>> put_expression_stack_pointers;" in result
+    assert "FastHashSet<ptr<void>> put_block_stack_pointers;" in result
+    assert "*const" not in result
+    assert "*mut" not in result
+    crosstl.translator.parse(result)
+
+
 def test_error_handling():
     edge_cases = [
         "fn empty() {}",

@@ -983,6 +983,11 @@ class GLSLToCrossGLConverter:
             return False
         return str(type_name).startswith(("image", "iimage", "uimage"))
 
+    def supports_image_format_metadata(self, type_name):
+        if not self._is_image_resource_type(type_name):
+            return False
+        return str(type_name) not in {"image2DRect", "iimage2DRect", "uimage2DRect"}
+
     def _is_buffer_qualified(self, var):
         return "buffer" in self._qualifier_set(var)
 
@@ -1198,7 +1203,7 @@ class GLSLToCrossGLConverter:
         if var_type == "atomic_uint" and offset is not None:
             attributes.append(f"@offset({self.layout_value_to_string(offset)})")
 
-        if self._is_image_resource_type(resource_type):
+        if self.supports_image_format_metadata(resource_type):
             supported_formats = self.supported_image_formats()
             for key in layout:
                 format_name = str(key).lower()
@@ -1868,6 +1873,37 @@ class GLSLToCrossGLConverter:
     def crossgl_struct_name(self, node):
         return getattr(node, "crossgl_struct_name", getattr(node, "name", ""))
 
+    def fallback_uniform_block_name(self, node, structs, extra_used_names=None):
+        used_names = {"main"}
+        used_names.update(
+            name
+            for name in (self.crossgl_struct_name(struct) for struct in structs or [])
+            if name
+        )
+        for collection_name in (
+            "constant",
+            "functions",
+            "global_variables",
+            "io_variables",
+            "uniforms",
+        ):
+            for item in getattr(node, collection_name, []) or []:
+                name = getattr(item, "name", None)
+                if name:
+                    used_names.add(name)
+        used_names.update(name for name in extra_used_names or set() if name)
+
+        if "Uniforms" not in used_names:
+            return "Uniforms"
+
+        base_name = "GlobalUniforms"
+        candidate = base_name
+        index = 2
+        while candidate in used_names:
+            candidate = f"{base_name}_{index}"
+            index += 1
+        return candidate
+
     def is_builtin_interface_block_struct(self, node):
         if getattr(node, "name", None) not in self.BUILTIN_INTERFACE_BLOCK_NAMES:
             return False
@@ -2037,7 +2073,8 @@ class GLSLToCrossGLConverter:
         result += "shader main {\n"
 
         # Generate struct definitions
-        for struct in self.structs_for_crossgl_output(node.structs):
+        crossgl_structs = self.structs_for_crossgl_output(node.structs)
+        for struct in crossgl_structs:
             if struct.name in self.converted_ssbo_struct_names:
                 continue
             if self.is_push_constant_interface_block_struct(struct) or (
@@ -2140,7 +2177,19 @@ class GLSLToCrossGLConverter:
                 )
 
             if ordinary_data_uniforms:
-                result += self.indent_str + "cbuffer Uniforms {\n"
+                ordinary_block_name = self.fallback_uniform_block_name(
+                    node,
+                    crossgl_structs,
+                    {
+                        *push_constant_blocks,
+                        *descriptor_set_uniform_blocks,
+                        *(
+                            self.uniform_block_name(uniform)
+                            for uniform in arrayed_descriptor_set_uniform_blocks
+                        ),
+                    },
+                )
+                result += self.indent_str + f"cbuffer {ordinary_block_name} {{\n"
                 self.increase_indent()
                 for uniform in ordinary_data_uniforms:
                     var_type = self.convert_type(uniform.vtype)

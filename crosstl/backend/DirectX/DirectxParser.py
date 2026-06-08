@@ -415,9 +415,7 @@ class HLSLParser:
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_declarator_identifier()
-            if self.current_token_is_double_colon():
-                name = self.parse_scoped_name(name)
+            name = self.parse_function_declarator_name()
 
             if self.current_token[0] == "LPAREN":
                 func = self.parse_function(return_type, name, qualifiers, attributes)
@@ -1474,7 +1472,7 @@ class HLSLParser:
         self.synthetic_enum_count += 1
         return f"AnonymousEnum_{self.synthetic_enum_count}"
 
-    def parse_member_declarator_name(self):
+    def parse_operator_overload_name(self):
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "operator"
@@ -1497,7 +1495,37 @@ class HLSLParser:
             raise SyntaxError(
                 f"Expected overloaded operator name, got {self.current_token[0]}"
             )
+        raise SyntaxError(
+            f"Expected overloaded operator name, got {self.current_token[0]}"
+        )
+
+    def parse_member_declarator_name(self):
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "operator"
+        ):
+            return self.parse_operator_overload_name()
         return self.parse_declarator_identifier()
+
+    def parse_function_declarator_name(self):
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "operator"
+        ):
+            name = self.parse_operator_overload_name()
+        else:
+            name = self.parse_declarator_identifier()
+        while self.current_token_is_double_colon():
+            self.eat_double_colon()
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and self.current_token[1] == "operator"
+            ):
+                member = self.parse_operator_overload_name()
+            else:
+                member = self.parse_identifier()
+            name = f"{name}::{member}"
+        return name
 
     def parse_enum(self):
         self.eat("ENUM")
@@ -1699,6 +1727,8 @@ class HLSLParser:
             is_prototype = True
         else:
             body = self.parse_block()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
 
         function = FunctionNode(
             return_type="",
@@ -1863,6 +1893,8 @@ class HLSLParser:
             is_prototype = True
         else:
             body = self.parse_block()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
 
         qualifier = self.infer_function_qualifier(
             name, attributes, params, semantic, body
@@ -2331,7 +2363,7 @@ class HLSLParser:
         return_type = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes.extend(self.parse_attribute_list())
-        name = self.parse_declarator_identifier()
+        name = self.parse_function_declarator_name()
         return self.parse_function(return_type, name, qualifiers, attributes)
 
     def attach_attributes(self, node, attributes):

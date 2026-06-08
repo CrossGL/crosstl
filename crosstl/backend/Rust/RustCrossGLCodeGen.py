@@ -22,6 +22,10 @@ RUST_STRING_RE = re.compile(r'^"((?:[^"\\]|\\(.|\n))*)"$', re.DOTALL)
 RUST_BYTE_STRING_RE = re.compile(r'^b"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_C_STRING_RE = re.compile(r'^c"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)
+RUST_CHAR_RE = re.compile(
+    r"^'(\\x[0-9a-fA-F]{2}|\\u\{[0-9a-fA-F_]{1,6}\}|[^'\\]|\\.)'$",
+    re.DOTALL,
+)
 
 TRANSPARENT_BLOCK_NODE_TYPES = (AsyncBlockNode, UnsafeBlockNode, ConstBlockNode)
 BLOCK_EXPRESSION_NODE_TYPES = (BlockNode,) + TRANSPARENT_BLOCK_NODE_TYPES
@@ -7356,6 +7360,8 @@ class RustToCrossGLConverter:
             return self.generate_expression(subject)
         if isinstance(subject, ArrayNode):
             return self.generate_expression(subject)
+        if not isinstance(subject, str):
+            return self.generate_expression(subject)
         return str(subject)
 
     def generate_tuple_element_accessor(self, subject, index):
@@ -9682,7 +9688,18 @@ class RustToCrossGLConverter:
         if byte_char:
             return self.normalize_byte_char_literal(byte_char.group(1))
 
+        char = RUST_CHAR_RE.match(value)
+        if char:
+            return self.normalize_char_literal(char.group(1))
+
         return self.normalize_numeric_literal(value)
+
+    def normalize_char_literal(self, body):
+        if body.startswith("\\x"):
+            return str(int(body[2:], 16))
+        if body.startswith("\\u{") and body.endswith("}"):
+            return str(int(body[3:-1].replace("_", ""), 16))
+        return f"'{body}'"
 
     def normalize_numeric_literal(self, value):
         match = RUST_NUMERIC_LITERAL_RE.match(value)
@@ -9947,19 +9964,26 @@ class RustToCrossGLConverter:
 
         base_name, args = generic
         normalized_args = [
-            self.normalize_lifetime_generic_argument(arg) for arg in args
+            self.normalize_unmapped_generic_argument(arg) for arg in args
         ]
         if normalized_args == args:
             return None
         return f"{base_name}<{', '.join(normalized_args)}>"
 
+    def normalize_unmapped_generic_argument(self, arg):
+        normalized = self.normalize_lifetime_generic_argument(arg)
+        raw_pointer_type = self.strip_raw_pointer_type(normalized)
+        if raw_pointer_type != normalized:
+            return f"ptr<{self.map_type(raw_pointer_type)}>"
+        return normalized
+
     def strip_raw_pointer_type(self, rust_type):
         if not isinstance(rust_type, str):
             return rust_type
 
-        for prefix in ("*const ", "*mut "):
-            if rust_type.startswith(prefix):
-                return rust_type[len(prefix) :].strip()
+        match = re.match(r"^\*(?:const|mut)\s*(.+)$", rust_type)
+        if match:
+            return match.group(1).strip()
 
         return rust_type
 

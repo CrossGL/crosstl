@@ -253,6 +253,24 @@ def test_cuda_samples_eglstream_elaborated_struct_types_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_nested_scoped_template_return_type_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/streamOrderedAllocationP2P/streamOrderedAllocationP2P.cu
+    source = """
+    std::multimap<std::pair<int, int>, int> getIdenticalGPUs() {
+        return identicalGpus;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "std_multimap<std_pair<i32, i32>, i32> getIdenticalGPUs()" in crossgl
+    assert "std::pair" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_interval_buffer_parameter_keyword_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples
