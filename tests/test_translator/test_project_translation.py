@@ -7751,6 +7751,44 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     )
 
 
+def test_validate_project_report_rejects_duplicate_selected_variants(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "duplicate-selected-variants-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "variants": {
+                        "debug": {"MODE": "debug"},
+                        "release": {"MODE": "release"},
+                    },
+                    "variantCount": 2,
+                    "variantDefineCounts": {"debug": 1, "release": 1},
+                    "selectedVariants": ["debug", "debug"],
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.selectedVariants must not contain duplicate entries" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_blank_project_config_list_entries(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -16089,15 +16127,13 @@ def test_inspect_project_report_emits_closed_inspection_report_schema(tmp_path):
 
     payload = inspect_project_report(report_path)
 
-    assert set(payload) <= project_pipeline.REPORT_INSPECTION_FIELDS
-    assert (project_pipeline.REPORT_INSPECTION_FIELDS - {"externalCorpus"}) == set(
-        payload
-    )
+    assert set(payload) == project_pipeline.REPORT_INSPECTION_FIELDS
     assert payload["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     assert payload["kind"] == project_pipeline.REPORT_INSPECTION_KIND
     assert payload["sourceReport"] == str(report_path)
     assert isinstance(payload["generatedAt"], int)
     assert payload["report"]["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    assert payload["externalCorpus"] == {"available": False}
 
 
 def test_inspect_project_report_samples_migration_actions(tmp_path):
@@ -17860,6 +17896,7 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
 
     payload = inspect_project_report(report_path)
 
+    assert payload["externalCorpus"]["available"] is True
     assert payload["externalCorpus"]["missingEntries"] == [
         {
             "id": "repo/missing",
@@ -17979,6 +18016,7 @@ def test_project_cli_inspect_report_applies_external_corpus_sample_limit(tmp_pat
 
     payload = inspect_project_report(report_path, max_external_corpus_entries=2)
 
+    assert payload["externalCorpus"]["available"] is True
     assert payload["externalCorpus"]["missingEntryCount"] == 3
     assert payload["externalCorpus"]["truncatedMissingEntryCount"] == 1
     assert [entry["id"] for entry in payload["externalCorpus"]["missingEntries"]] == [
@@ -18012,6 +18050,7 @@ def test_project_cli_inspect_report_applies_external_corpus_sample_limit(tmp_pat
 
     cli_payload = json.loads(result.stdout)
     assert result.returncode == 0
+    assert cli_payload["externalCorpus"]["available"] is True
     assert len(cli_payload["externalCorpus"]["missingEntries"]) == 1
     assert cli_payload["externalCorpus"]["truncatedMissingEntryCount"] == 2
     assert len(cli_payload["externalCorpus"]["undiscoveredPresentEntries"]) == 1

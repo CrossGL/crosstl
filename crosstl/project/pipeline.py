@@ -5542,6 +5542,7 @@ def inspect_project_report(
         "includeDependencies": {"available": False},
         "includePathProcessing": {"available": False},
         "artifactMatrix": {"available": False},
+        "externalCorpus": {"available": False},
         "diagnosticCount": len(diagnostics),
         "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
         "failedArtifactCount": 0,
@@ -5835,6 +5836,7 @@ def inspect_project_report(
             )
         )
         payload["externalCorpus"] = {
+            "available": True,
             "status": external_corpus.get("status"),
             "summary": (
                 dict(external_summary) if isinstance(external_summary, Mapping) else {}
@@ -9402,6 +9404,10 @@ def _project_metadata_contract_reasons(
             and isinstance(selected_variants, list)
             and variants_is_mapping
         ):
+            if len(set(selected_variants)) != len(selected_variants):
+                reasons.append(
+                    "project.selectedVariants must not contain duplicate entries"
+                )
             unknown_selected_variants = [
                 name for name in selected_variants if name not in variants
             ]

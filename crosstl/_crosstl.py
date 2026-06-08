@@ -2794,7 +2794,10 @@ def _format_project_report_inspection(payload):
         )
 
     external_corpus = payload.get("externalCorpus")
-    if isinstance(external_corpus, Mapping):
+    if (
+        isinstance(external_corpus, Mapping)
+        and external_corpus.get("available") is not False
+    ):
         external_summary = external_corpus.get("summary", {})
         if isinstance(external_summary, Mapping):
             invalid_count = external_summary.get("invalidEntryCount", 0)

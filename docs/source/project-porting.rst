@@ -263,7 +263,7 @@ Inspection sample-limit options accept non-negative integer counts and default
 to ``20`` for each sampled report section.
 The JSON inspection report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift while optional report sections
-remain data-dependent.
+remain present with ``available: false`` until their source report data exists.
 Migration action inspection is bounded and records truncation counts for large
 reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for
