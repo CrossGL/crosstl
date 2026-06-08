@@ -17295,12 +17295,26 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
                         "path": "missing.hlsl",
                         "sourceBackend": "directx",
                         "targets": ["cgl", "opengl"],
+                        "repository": "https://github.com/CrossGL/external-corpus",
+                        "commit": "0123456789abcdef0123456789abcdef01234567",
+                        "sourceUrl": (
+                            "https://github.com/CrossGL/external-corpus/"
+                            "blob/0123456789abcdef0123456789abcdef01234567/"
+                            "missing.hlsl"
+                        ),
                     },
                     {
                         "id": "repo/undiscovered",
                         "path": "fixtures/undiscovered.cgl",
                         "sourceBackend": "cgl",
                         "targets": ["cgl"],
+                        "repository": "https://github.com/CrossGL/external-corpus",
+                        "commit": "fedcba9876543210fedcba9876543210fedcba98",
+                        "sourceUrl": (
+                            "https://github.com/CrossGL/external-corpus/"
+                            "blob/fedcba9876543210fedcba9876543210fedcba98/"
+                            "fixtures/undiscovered.cgl"
+                        ),
                     },
                     {
                         "id": "repo/outside",
@@ -17350,6 +17364,12 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
             "path": "missing.hlsl",
             "sourceBackend": "directx",
             "targets": ["cgl", "opengl"],
+            "repository": "https://github.com/CrossGL/external-corpus",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "sourceUrl": (
+                "https://github.com/CrossGL/external-corpus/"
+                "blob/0123456789abcdef0123456789abcdef01234567/missing.hlsl"
+            ),
         }
     ]
     assert payload["externalCorpus"]["undiscoveredPresentEntries"] == [
@@ -17358,6 +17378,13 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
             "path": "fixtures/undiscovered.cgl",
             "sourceBackend": "cgl",
             "targets": ["cgl"],
+            "repository": "https://github.com/CrossGL/external-corpus",
+            "commit": "fedcba9876543210fedcba9876543210fedcba98",
+            "sourceUrl": (
+                "https://github.com/CrossGL/external-corpus/"
+                "blob/fedcba9876543210fedcba9876543210fedcba98/"
+                "fixtures/undiscovered.cgl"
+            ),
         }
     ]
     assert payload["externalCorpus"]["truncatedMissingEntryCount"] == 0
@@ -17373,11 +17400,20 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     ) in result.stdout
     assert (
         "External corpus missing entries: "
-        "missing.hlsl (repo/missing; directx; targets=cgl,opengl)"
+        "missing.hlsl (repo/missing; directx; targets=cgl,opengl; "
+        "repository=https://github.com/CrossGL/external-corpus; "
+        "commit=0123456789abcdef0123456789abcdef01234567; "
+        "sourceUrl=https://github.com/CrossGL/external-corpus/"
+        "blob/0123456789abcdef0123456789abcdef01234567/missing.hlsl)"
     ) in result.stdout
     assert (
         "External corpus undiscovered present entries: "
-        "fixtures/undiscovered.cgl (repo/undiscovered; cgl; targets=cgl)"
+        "fixtures/undiscovered.cgl (repo/undiscovered; cgl; targets=cgl; "
+        "repository=https://github.com/CrossGL/external-corpus; "
+        "commit=fedcba9876543210fedcba9876543210fedcba98; "
+        "sourceUrl=https://github.com/CrossGL/external-corpus/"
+        "blob/fedcba9876543210fedcba9876543210fedcba98/"
+        "fixtures/undiscovered.cgl)"
     ) in result.stdout
     assert "External corpus sources: cgl=2, directx=1" in result.stdout
     assert "External corpus targets: cgl=3, opengl=1" in result.stdout

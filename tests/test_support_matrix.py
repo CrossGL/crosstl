@@ -1707,6 +1707,9 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         assert "sampled missing and present-but-undiscovered entries" in (
             backend_support["notes"]
         )
+        assert "retained repository, commit, and source URL provenance metadata" in (
+            backend_support["notes"]
+        )
         assert "configurable inspection sample limits" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

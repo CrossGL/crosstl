@@ -5221,7 +5221,14 @@ def _validation_diagnostics(
 
 def _inspection_external_corpus_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
-    for field_name in ("id", "path", "sourceBackend"):
+    for field_name in (
+        "id",
+        "path",
+        "sourceBackend",
+        "repository",
+        "commit",
+        "sourceUrl",
+    ):
         value = entry.get(field_name)
         if isinstance(value, str):
             payload[field_name] = value

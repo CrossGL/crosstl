@@ -1998,6 +1998,15 @@ def _format_external_corpus_entry(entry):
         target_names = [target for target in targets if isinstance(target, str)]
         if target_names:
             details.append("targets=" + ",".join(target_names))
+    repository = entry.get("repository")
+    if isinstance(repository, str) and repository:
+        details.append(f"repository={repository}")
+    commit = entry.get("commit")
+    if isinstance(commit, str) and commit:
+        details.append(f"commit={commit}")
+    source_url = entry.get("sourceUrl")
+    if isinstance(source_url, str) and source_url:
+        details.append(f"sourceUrl={source_url}")
     if not details:
         return path
     return f"{path} ({'; '.join(details)})"

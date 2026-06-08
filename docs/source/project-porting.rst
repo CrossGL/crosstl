@@ -244,8 +244,8 @@ truncation counts, failed validation metadata on artifact provenance samples,
 include-directory status counts, inactive source-root and include-directory
 record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
-present-but-undiscovered external corpus entries with configurable sample
-limits, and migration actions.
+present-but-undiscovered external corpus entries with retained provenance
+metadata and configurable sample limits, and migration actions.
 Inspection sample-limit options accept non-negative integer counts and default
 to ``20`` for each sampled report section.
 The JSON inspection report uses schema version 1 with a fixed top-level field
@@ -427,7 +427,9 @@ Malformed manifest entries are reported as configuration diagnostics and
 skipped from retained corpus entries. Duplicate manifest paths or explicit
 entry ids are also reported and skipped so generated reports do not inflate
 corpus coverage. The summary still records how many manifest entries were
-skipped.
+skipped. Inspection samples for missing and present-but-undiscovered entries
+retain repository, commit, and source URL metadata when the manifest provides
+those provenance fields.
 
 Project reports include configured define and variant names and values, and
 artifact records include the applied define map used for that translation
