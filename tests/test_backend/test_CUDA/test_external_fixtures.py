@@ -123,6 +123,11 @@ EXTERNAL_SAMPLES = [
         "commit": "2b575f125fd37fdbd6dafdd84cd6c97a025321a1",
         "paths": ["include/RAJA/policy/cuda/intrinsics.hpp"],
     },
+    {
+        "repo": "https://github.com/cupy/cupy",
+        "commit": "ba594a4aebbfda022ba20575a161b88d9d54665a",
+        "paths": ["cupy/_core/include/cupy/carray.cuh"],
+    },
 ]
 
 
@@ -263,6 +268,32 @@ def test_cuda_native_saxpy_round_trip_regenerates_native_cuda(tmp_path):
     assert not re.search(r"\bu32\b", regenerated_cuda)
 
     compile_cuda_if_nvcc_available(regenerated_cuda, tmp_path)
+
+
+def test_cupy_carray_post_return_device_struct_methods_are_skipped():
+    # Upstream source:
+    # repo: https://github.com/cupy/cupy
+    # commit: ba594a4aebbfda022ba20575a161b88d9d54665a
+    # path: cupy/_core/include/cupy/carray.cuh
+    source = """
+    class CIndexer {
+      static unsigned int __device__ _log2(unsigned int x) {
+        return __popc(x - 1);
+      }
+      static unsigned long long int __device__ _log2(unsigned long long int x) {
+        return __popcll(x - 1);
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "CIndexer"
+    assert ast.structs[0].members == []
+    assert "struct CIndexer" in crossgl
+    assert "_log2" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_eglstream_elaborated_struct_types_codegen_reparse():

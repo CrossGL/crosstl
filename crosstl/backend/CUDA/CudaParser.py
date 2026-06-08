@@ -2132,6 +2132,7 @@ class CudaParser:
 
         while name_index < len(self.tokens) and (
             self.tokens[name_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+            or self.tokens[name_index][0] in self.POST_RETURN_FUNCTION_SPECIFIER_TOKENS
             or self.is_function_identifier_specifier_at_index(name_index)
         ):
             if self.tokens[name_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:

@@ -1821,6 +1821,30 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     crosstl.translator.parse(result)
 
 
+def test_bevy_inferred_array_repeat_length_codegen_from_gpu_preprocessing():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # 67f441da62424f83a1bb6e3f5145034e0583d495,
+    # crates/bevy_render/src/batching/gpu_preprocessing.rs
+    # GpuBinUnpackingMetadata::default.
+    code = """
+    pub struct GpuBinUnpackingMetadata {
+        pad: [u32; 1],
+    }
+
+    impl Default for GpuBinUnpackingMetadata {
+        fn default() -> GpuBinUnpackingMetadata {
+            GpuBinUnpackingMetadata { pad: [0; _] }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint pad[1];" in result
+    assert "return GpuBinUnpackingMetadata { pad: {0} };" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_mouse_shader_perp_dot_method_codegen_from_upstream_example():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

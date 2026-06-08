@@ -440,6 +440,42 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_LAYOUT_NESTED_CBUFFER_MEMBER_GLOBAL_COLLISION_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/spv.layoutNested.vert.out
+; Reduced from a uniform-block member named "s" plus a Private global named "s".
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main"
+OpName %S "S"
+OpMemberName %S 0 "a"
+OpName %Block140 "Block140"
+OpMemberName %Block140 0 "s"
+OpName %inst140 "inst140"
+OpName %private_s "s"
+OpDecorate %Block140 Block
+OpMemberDecorate %Block140 0 Offset 0
+OpDecorate %inst140 DescriptorSet 0
+OpDecorate %inst140 Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%v3uint = OpTypeVector %uint 3
+%S = OpTypeStruct %v3uint
+%Block140 = OpTypeStruct %S
+%ptr_uniform_block = OpTypePointer Uniform %Block140
+%ptr_private_s = OpTypePointer Private %S
+%inst140 = OpVariable %ptr_uniform_block Uniform
+%private_s = OpVariable %ptr_private_s Private
+%main = OpFunction %void None %fn
+%label = OpLabel
+%loaded = OpLoad %S %private_s
+OpStore %private_s %loaded
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_LEGACY_NUMERIC_ID_DISASSEMBLY_ASSEMBLY = """
 spv.1.4.OpEntryPoint.frag
 // Source repo: https://github.com/KhronosGroup/glslang
@@ -5704,6 +5740,21 @@ def test_glslang_private_global_variables_codegen_reparse():
     assert "outColor = privateColor;" in generated_code
     assert "outColor = loaded;" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_layout_nested_member_private_global_collision_codegen_reparse():
+    tokens = tokenize_code(
+        SPIRV_GLSLANG_LAYOUT_NESTED_CBUFFER_MEMBER_GLOBAL_COLLISION_ASSEMBLY
+    )
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer Block140 @set(0) @binding(0) {" in generated_code
+    assert "S s;" in generated_code
+    assert "S s_private_s;" in generated_code
+    assert "s_private_s = s_private_s;" in generated_code
+    assert "S s;\n    // Vertex Shader" not in generated_code
 
 
 def test_glslang_legacy_numeric_id_disassembly_codegen_reparse():

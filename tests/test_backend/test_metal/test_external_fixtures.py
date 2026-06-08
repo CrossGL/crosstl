@@ -76,6 +76,35 @@ UNIXZII_GPU_PARTICLE_GIST = (
 UNIXZII_GPU_PARTICLE_VERSION = "GitHub Gist, last active 2024-03-30"
 
 
+def _dawn_deep_tint_array_initializer_source(depth=60):
+    def nested_type(level):
+        type_name = "int"
+        for _ in range(level):
+            type_name = f"tint_array<{type_name}, 1>"
+        return type_name
+
+    def nested_value(level):
+        value = "-6"
+        for index in range(level):
+            type_name = nested_type(index + 1)
+            value = f"{type_name}{{{value}}}"
+        return value
+
+    return f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template<typename T, size_t N>
+        struct tint_array {{
+            T elements[N];
+        }};
+
+        kernel void f() {{
+            thread {nested_type(depth)} arr = {nested_value(depth)};
+        }}
+    """
+
+
 EXTERNAL_FIXTURES = [
     {
         "name": "apple_msl_spec_multiline_barycentric_attribute",
@@ -756,6 +785,14 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
+    },
+    {
+        "name": "dawn_tint_deep_braced_tint_array_initializer",
+        "repo_url": DAWN_REPO,
+        "commit": DAWN_COMMIT,
+        "source_path": "test/tint/bug/chromium/1449474.wgsl.expected.msl",
+        "roundtrip": True,
+        "source": _dawn_deep_tint_array_initializer_source(),
     },
     {
         "name": "mlx_axpby_template_static_cast_buffer_store",

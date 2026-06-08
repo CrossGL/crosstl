@@ -1,7 +1,18 @@
 """Parser for Metal source AST construction."""
 
+import sys
+
 from .MetalAst import *
 from .MetalLexer import *
+
+MIN_METAL_PARSE_RECURSION_LIMIT = 10000
+
+
+def ensure_metal_parse_recursion_limit():
+    # Dawn/Tint generated MSL can contain deeply nested braced constructor chains.
+    if sys.getrecursionlimit() < MIN_METAL_PARSE_RECURSION_LIMIT:
+        sys.setrecursionlimit(MIN_METAL_PARSE_RECURSION_LIMIT)
+
 
 # Token groups for parsing
 QUALIFIER_TOKENS = {
@@ -326,6 +337,7 @@ class MetalParser:
         return ("EOF", None)
 
     def parse(self):
+        ensure_metal_parse_recursion_limit()
         shader = self.parse_shader()
         self.eat("EOF")
         return shader

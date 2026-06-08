@@ -183,6 +183,7 @@ class VulkanToCrossGLConverter:
         self.storage_buffer_name_signatures = {}
         self.emitted_storage_buffer_type_names = set()
         self.used_global_declaration_names = set()
+        self.renamed_spirv_global_names = {}
 
     def get_indent(self):
         return "    " * self.indentation
@@ -195,6 +196,7 @@ class VulkanToCrossGLConverter:
             self.storage_buffer_name_signatures
         )
         self.used_global_declaration_names = set(self.storage_buffer_name_signatures)
+        self.renamed_spirv_global_names = {}
         code = "shader main {\n"
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
@@ -226,9 +228,9 @@ class VulkanToCrossGLConverter:
             elif isinstance(node, UniformNode):
                 code += self.generate_uniform(node)
             elif isinstance(node, VariableNode):
-                code += f"    {self.generate_variable_declaration(node)};\n"
+                code += f"    {self.generate_global_variable_declaration(node)};\n"
             elif isinstance(node, AssignmentNode):
-                code += f"    {self.generate_assignment(node)};\n"
+                code += f"    {self.generate_global_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
                 shader_stage = self.function_shader_stage(node)
                 if shader_stage is not None or node.name == "main":
@@ -594,6 +596,11 @@ class VulkanToCrossGLConverter:
     def declaration_base_name(self, name):
         return str(name or "").split("[", 1)[0]
 
+    def declaration_array_suffix(self, name):
+        text = str(name or "")
+        bracket_index = text.find("[")
+        return "" if bracket_index < 0 else text[bracket_index:]
+
     def reserve_global_declaration_name(self, name):
         base_name = self.declaration_base_name(name)
         if base_name:
@@ -616,6 +623,38 @@ class VulkanToCrossGLConverter:
         self.used_global_declaration_names.add(candidate)
         return candidate
 
+    def unique_global_variable_name(self, preferred_name, suffix_source):
+        unique_base = self.unique_global_declaration_name(
+            self.declaration_base_name(preferred_name), suffix_source
+        )
+        return f"{unique_base}{self.declaration_array_suffix(preferred_name)}"
+
+    def generate_global_variable_declaration(self, node, extra_attributes=None):
+        original_name = node.name
+        generated_name = self.unique_global_variable_name(
+            original_name, getattr(node, "spirv_id", original_name)
+        )
+        self.record_spirv_global_name(node, generated_name)
+        return self.generate_variable_declaration(
+            node, extra_attributes=extra_attributes, override_name=generated_name
+        )
+
+    def generate_global_assignment(self, node):
+        lhs_node = self.assignment_left(node)
+        if isinstance(lhs_node, VariableNode) and self.variable_type(lhs_node):
+            rhs = self.generate_expression(self.assignment_right(node))
+            operator = getattr(node, "operator", "=")
+            lhs = self.generate_global_variable_declaration(lhs_node)
+            return f"{lhs} {operator} {rhs}"
+        return self.generate_assignment(node)
+
+    def record_spirv_global_name(self, node, generated_name):
+        spirv_id = getattr(node, "spirv_id", None)
+        if spirv_id and generated_name != node.name:
+            self.renamed_spirv_global_names[spirv_id] = self.declaration_base_name(
+                generated_name
+            )
+
     def generate_layout(self, node):
         code = ""
         if (getattr(node, "layout_type", None) or "").lower() == "const":
@@ -634,6 +673,7 @@ class VulkanToCrossGLConverter:
                 code += f"    cbuffer {block_name}{attributes} {{\n"
                 for field_type, field_name in node.struct_fields:
                     code += f"        {self.map_type(field_type)} {field_name};\n"
+                    self.reserve_global_declaration_name(field_name)
                 code += "    }\n\n"
             else:
                 code += (
@@ -1135,14 +1175,16 @@ class VulkanToCrossGLConverter:
 
         return f"{lhs} {operator} {rhs}"
 
-    def generate_variable_declaration(self, node, extra_attributes=None):
+    def generate_variable_declaration(
+        self, node, extra_attributes=None, override_name=None
+    ):
         type_name, ray_attributes = self.ray_storage_qualified_type_parts(
             self.variable_type(node)
         )
         attributes = self.ray_storage_attribute_suffix(
             [*ray_attributes, *(extra_attributes or [])]
         )
-        return f"{self.map_type(type_name)} {node.name}{attributes}"
+        return f"{self.map_type(type_name)} {override_name or node.name}{attributes}"
 
     def ray_storage_qualified_type_parts(self, type_name):
         parts = str(type_name or "").split()
@@ -1205,7 +1247,7 @@ class VulkanToCrossGLConverter:
         elif isinstance(expr, int) or isinstance(expr, float):
             return str(expr)
         elif isinstance(expr, VariableNode):
-            return f"{expr.name}"
+            return self.generated_variable_expression_name(expr)
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -1267,6 +1309,12 @@ class VulkanToCrossGLConverter:
         if isinstance(expr, (AssignmentNode, UnaryOpNode)):
             return f"({rendered})"
         return rendered
+
+    def generated_variable_expression_name(self, expr):
+        spirv_id = getattr(expr, "spirv_id", None)
+        if spirv_id in self.renamed_spirv_global_names:
+            return self.renamed_spirv_global_names[spirv_id]
+        return expr.name
 
     def expression_base_name(self, expr):
         if isinstance(expr, str):

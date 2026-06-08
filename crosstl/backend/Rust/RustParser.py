@@ -3442,6 +3442,9 @@ class RustParser:
             value = self.current_token[1]
             self.eat("CHAR_LIT")
             return value
+        elif self.current_token[0] == "UNDERSCORE":
+            self.eat("UNDERSCORE")
+            return "_"
         elif self.current_token[0] == "TRUE":
             self.eat("TRUE")
             return "true"

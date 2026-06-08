@@ -1373,6 +1373,7 @@ class VulkanParser:
                 expressions[result_id] = VariableNode(
                     "",
                     self.spirv_assembly_value_name(result_id, names, decorations),
+                    spirv_id=result_id,
                 )
                 if operands:
                     expression_type_ids[result_id] = operands[0]
@@ -1384,7 +1385,9 @@ class VulkanParser:
                 variable_name = self.spirv_assembly_value_name(
                     result_id, names, decorations
                 )
-                expressions[result_id] = VariableNode("", variable_name)
+                expressions[result_id] = VariableNode(
+                    "", variable_name, spirv_id=result_id
+                )
                 expression_type_ids[result_id] = operands[0]
                 if storage_class == "Function":
                     variable_type, array_suffix = self.spirv_type_name_and_suffix(
@@ -5277,6 +5280,7 @@ class VulkanParser:
                         operand, variables_by_id, types
                     ),
                 ),
+                spirv_id=operand,
             )
             return self.spirv_maybe_non_uniform_expression(
                 operand, expression, decorations
