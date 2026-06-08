@@ -150,6 +150,7 @@ class HLSLToCrossGLConverter:
             "TextureCubeArray": "samplerCubeArray",
             "Texture2DMS": "sampler2DMS",
             "Texture2DMSArray": "sampler2DMSArray",
+            "SubpassInput": "sampler2d",
             "FeedbackTexture2D": "feedbackTexture2D",
             "FeedbackTexture2DArray": "feedbackTexture2DArray",
             # RW Texture Types (for compute shaders)
@@ -900,6 +901,23 @@ class HLSLToCrossGLConverter:
 
     def resource_method_descriptor(self, member, arg_count=None, resource_type=None):
         member = self.templated_method_base(member)
+        if (
+            member == "SubpassLoad"
+            and self.raw_type_base(resource_type) == "SubpassInput"
+        ):
+            return {
+                "member": member,
+                "function": "subpassLoad",
+                "texture_function": "subpassLoad",
+                "buffer_function": None,
+                "component": None,
+                "usage": "regular",
+                "buffer_when_max_args": None,
+                "resource": "subpass_input",
+                "resource_type": resource_type,
+                "operation": "subpass_load",
+            }
+
         texture_descriptor = self.texture_method_descriptor(
             member, arg_count, resource_type
         )
@@ -1519,6 +1537,20 @@ class HLSLToCrossGLConverter:
             else:
                 lines += "    " * indent + f"{prefix}{attr_name}\n"
         return lines
+
+    def format_subpass_input_attributes(self, attributes, indent):
+        normalized_attributes = []
+        for attr in attributes or []:
+            attr_name = str(getattr(attr, "name", ""))
+            if attr_name in {"vk::input_attachment_index", "vk::binding"}:
+                attr_name = attr_name.rsplit("::", 1)[1]
+            normalized_attributes.append(
+                AttributeNode(
+                    attr_name,
+                    getattr(attr, "args", getattr(attr, "arguments", [])),
+                )
+            )
+        return self.format_attributes(normalized_attributes, indent)
 
     def format_binding_attributes(self, node, indent):
         lines = ""
@@ -3029,7 +3061,12 @@ class HLSLToCrossGLConverter:
         )
         if id(node) in self.legacy_sampler_declaration_ids:
             return ""
-        code = self.format_attributes(getattr(node, "attributes", []), 1)
+        if self.raw_type_base(getattr(node, "vtype", None)) == "SubpassInput":
+            code = self.format_subpass_input_attributes(
+                getattr(node, "attributes", []), 1
+            )
+        else:
+            code = self.format_attributes(getattr(node, "attributes", []), 1)
         code += self.format_resource_qualifier_attributes(node, 1)
         code += self.format_binding_attributes(node, 1)
         code += self.format_matrix_layout_attributes(node, 1)

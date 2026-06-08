@@ -603,6 +603,8 @@ class MojoToCrossGLConverter:
             for p in func.params:
                 if p is named_result:
                     continue
+                if self.is_receiver_parameter(p):
+                    continue
                 if not p.vtype:
                     continue
                 param_name = self.map_identifier_name(p.name)
@@ -672,6 +674,12 @@ class MojoToCrossGLConverter:
         if len(candidates) != 1:
             return None
         return candidates[0]
+
+    def is_receiver_parameter(self, param):
+        return (
+            getattr(param, "name", None) == "self"
+            and getattr(param, "parameter_convention", None) is not None
+        )
 
     def current_named_result(self):
         if not self.named_result_stack:

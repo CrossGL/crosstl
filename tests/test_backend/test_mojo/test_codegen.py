@@ -121,6 +121,27 @@ def test_function_parameter_convention_codegen_drops_mojo_conventions():
     assert "self" not in generated_code
 
 
+def test_typed_out_self_parameter_codegen_drops_receiver_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/src/layout/layout_tensor.mojo LayoutTensor.__init__.
+    code = """
+    struct LayoutTensor:
+        @always_inline("builtin")
+        @implicit
+        def __init__(other: LayoutTensor, out self: type_of(other).Immut):
+            self.ptr = other.ptr
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'void __init__(LayoutTensor other) @ always_inline("builtin") @ implicit'
+        in generated_code
+    )
+    assert "type_of(other).Immut self" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_named_result_codegen_from_official_functions_docs():
     # Reduced from https://mojolang.org/docs/manual/functions/#named-results
     # where `out name_tag: NameTag` is documented as the caller-visible result.

@@ -604,6 +604,25 @@ def test_underscore_parameter_name_parsing():
     assert ast.functions[0].params[0].vtype == "u32"
 
 
+def test_cuda_std_tuple_pattern_impl_parameter_parsing():
+    code = """
+    impl From<(u32, u32)> for GridSize {
+        fn from((x, y): (u32, u32)) -> GridSize {
+            GridSize::xy(x, y)
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    method = ast.impl_blocks[0].functions[0]
+    param = method.params[0]
+
+    assert param.name == "_rust_pattern_param_0"
+    assert param.vtype == "(u32, u32)"
+    assert isinstance(param.pattern, TupleNode)
+    assert param.pattern.elements == ["x", "y"]
+
+
 def test_tuple_struct_and_variant_visibility_parsing():
     code = """
     #[repr(transparent)]

@@ -9241,6 +9241,24 @@ def test_closure_pattern_parameter_conversion():
         pytest.fail(f"Closure pattern parameter conversion failed: {e}")
 
 
+def test_function_tuple_pattern_parameter_conversion_from_cuda_std():
+    code = """
+    fn from((x, y): (u32, u32)) -> u32 {
+        return x + y;
+    }
+    """
+
+    try:
+        result = parse_and_generate(code)
+        assert "Tuple<uint, uint> _rust_pattern_param_0" in result
+        assert "auto x = _rust_tuple_0(_rust_pattern_param_0);" in result
+        assert "auto y = _rust_tuple_1(_rust_pattern_param_0);" in result
+        assert "return (x + y);" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Function tuple pattern parameter conversion failed: {e}")
+
+
 def test_closure_explicit_result_try_conversion():
     code = """
     fn outer(value: Result<i32, i32>) -> Option<i32> {

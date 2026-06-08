@@ -168,6 +168,7 @@ class RustParser:
         self.current_index = 0
         self.current_token = tokens[0] if tokens else None
         self.expression_stops_at_lbrace = False
+        self.pattern_parameter_counter = 0
 
     def current_starts_block_expression(self):
         if self.current_token[0] == "CONST":
@@ -1978,35 +1979,14 @@ class RustParser:
                 while self.current_token[0] == "POUND":
                     param_attrs.extend(self.parse_attributes())
 
-                is_mutable = False
-                if self.current_token[0] == "MUT":
-                    is_mutable = True
-                    self.eat("MUT")
-                    if self.current_token[0] == "SELF":
-                        params.append(VariableNode("Self", "self", is_mutable=True))
-                        self.eat("SELF")
-                        if self.current_token[0] == "COMMA":
-                            self.eat("COMMA")
-                        continue
-
-                if self.current_token[0] == "UNDERSCORE":
-                    self.eat("UNDERSCORE")
-                    if self.current_token[0] == "IDENTIFIER":
-                        param_name = f"_{self.current_token[1]}"
-                        self.eat("IDENTIFIER")
-                    else:
-                        param_name = "_"
-                elif self.current_token[0] == "IDENTIFIER":
-                    param_name = self.current_token[1]
-                    self.eat("IDENTIFIER")
-                else:
-                    raise SyntaxError(
-                        f"Expected IDENTIFIER, got {self.current_token[0]}"
-                    )
+                pattern, is_mutable = self.parse_parameter_pattern()
                 self.eat("COLON")
                 param_type = self.parse_type()
 
+                param_name = self.parameter_name_from_pattern(pattern)
                 param = VariableNode(param_type, param_name, is_mutable)
+                if not isinstance(pattern, str):
+                    param.pattern = pattern
                 if param_attrs:
                     param.attributes = param_attrs
                 params.append(param)
@@ -2018,6 +1998,41 @@ class RustParser:
 
         self.eat("RPAREN")
         return params
+
+    def parse_parameter_pattern(self):
+        is_mutable = False
+        if self.current_token[0] == "MUT":
+            is_mutable = True
+            self.eat("MUT")
+            if self.current_token[0] == "SELF":
+                return "self", is_mutable
+            return self.parse_parameter_binding_name(), is_mutable
+
+        return self.parse_single_match_pattern(), is_mutable
+
+    def parse_parameter_binding_name(self):
+        if self.current_token[0] == "UNDERSCORE":
+            self.eat("UNDERSCORE")
+            if self.current_token[0] == "IDENTIFIER":
+                name = f"_{self.current_token[1]}"
+                self.eat("IDENTIFIER")
+                return name
+            return "_"
+
+        if self.current_token[0] == "IDENTIFIER":
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            return name
+
+        raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+
+    def parameter_name_from_pattern(self, pattern):
+        if isinstance(pattern, str):
+            return pattern
+
+        name = f"_rust_pattern_param_{self.pattern_parameter_counter}"
+        self.pattern_parameter_counter += 1
+        return name
 
     def current_starts_receiver_parameter(self):
         if self.current_token[0] in {"SELF", "AMPERSAND"}:

@@ -145,6 +145,15 @@ class MojoParser:
             return self.tokens[index]
         return ("EOF", None)
 
+    def peek_non_layout_token(self, offset=1):
+        index = self.pos + offset
+        while index < len(self.tokens):
+            token = self.tokens[index]
+            if token[0] not in {"NEWLINE", "INDENT", "DEDENT"}:
+                return token
+            index += 1
+        return ("EOF", None)
+
     def parse(self):
         module = self.parse_module()
         self.eat("EOF")
@@ -1117,7 +1126,7 @@ class MojoParser:
         if self.current_token[0] not in {"MULTIPLY", "DIVIDE"}:
             return False
 
-        next_token = self.peek_token()[0]
+        next_token = self.peek_non_layout_token()[0]
         if next_token not in {"COMMA", "RPAREN"}:
             return False
 
@@ -1150,7 +1159,7 @@ class MojoParser:
 
     def is_parameter_convention_followed_by_parameter(self):
         next_token = self.peek_token()
-        if next_token[0] in self.TYPE_START_TOKENS:
+        if next_token[0] in self.TYPE_START_TOKENS | self.IDENTIFIER_NAME_TOKENS:
             return True
         if next_token[0] == "LBRACKET":
             return self.is_bracketed_parameter_convention_followed_by_parameter()
@@ -1323,6 +1332,7 @@ class MojoParser:
             "VAR",
             "COMPTIME",
             "ALIAS",
+            "LPAREN",
         ]:
             return self.parse_variable_declaration_or_assignment()
 
@@ -1449,10 +1459,28 @@ class MojoParser:
             return VariableNode(vtype, name, attributes=attributes)
 
         statement = self.parse_assignment()
+        if self.current_token[0] == "COLON" and self.is_typed_assignment_target(
+            statement
+        ):
+            statement = self.parse_typed_assignment_tail(statement)
         if self.current_token[0] == "COMMA":
             statement = self.parse_tuple_assignment_tail(statement)
         self.consume_statement_terminator()
         return statement
+
+    def is_typed_assignment_target(self, target):
+        return isinstance(target, (ArrayAccessNode, MemberAccessNode, VariableNode))
+
+    def parse_typed_assignment_tail(self, target):
+        self.eat("COLON")
+        target_type = self.parse_type()
+        if self.current_token[0] != "EQUALS":
+            raise SyntaxError("Expected assignment after typed assignment target")
+        self.eat("EQUALS")
+        value = self.parse_expression_list_value()
+        assignment = AssignmentNode(target, value, "=")
+        assignment.target_type = target_type
+        return assignment
 
     def parse_tuple_assignment_tail(self, first_target):
         targets = [first_target]
@@ -1475,6 +1503,18 @@ class MojoParser:
         target = self.parse_logical_or()
         if convention:
             target.target_convention = convention
+        return target
+
+    def parse_binding_convention_target_expression(self):
+        convention = self.parse_parameter_convention()
+        if not convention:
+            raise SyntaxError(
+                f"Expected binding convention, got {self.current_token[0]}"
+            )
+
+        name = self.parse_identifier_name("binding target")
+        target = VariableNode("", name)
+        target.target_convention = convention
         return target
 
     def is_ref_binding_declaration_start(self):
@@ -2222,6 +2262,8 @@ class MojoParser:
         return left
 
     def parse_primary(self):
+        if self.is_binding_convention_target_expression_start():
+            return self.parse_binding_convention_target_expression()
         if self.current_token[0] in self.IDENTIFIER_NAME_TOKENS:
             return self.parse_function_call_or_identifier()
         elif self.current_token[0] == "NUMBER":
@@ -2302,6 +2344,13 @@ class MojoParser:
             raise SyntaxError(
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
+
+    def is_binding_convention_target_expression_start(self):
+        return self.current_token[0] == "VAR" or (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.PARAMETER_CONVENTION_IDENTIFIERS
+            and self.is_parameter_convention_followed_by_parameter()
+        )
 
     def is_ellipsis_expression(self):
         return (

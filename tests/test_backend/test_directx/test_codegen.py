@@ -2523,6 +2523,33 @@ def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
     assert "sampler2D texture2;" in output
 
 
+def test_codegen_subpass_input_globals_reparse_crossgl():
+    hlsl = textwrap.dedent("""
+        [[vk::input_attachment_index(0)]][[vk::binding(0)]] SubpassInput in_color_r;
+        [[vk::input_attachment_index(1)]][[vk::binding(1)]] SubpassInput in_color_g;
+        [[vk::input_attachment_index(2)]][[vk::binding(2)]] SubpassInput in_color_b;
+
+        float4 main() : SV_TARGET0
+        {
+            float4 color_r = in_color_r.SubpassLoad();
+            float4 color_g = in_color_g.SubpassLoad();
+            float4 color_b = in_color_b.SubpassLoad();
+
+            return color_r + color_g + color_b;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+    reparsed = parse_crossgl(output)
+
+    assert "@ input_attachment_index(0)" in output
+    assert "@ binding(0)" in output
+    assert "sampler2d in_color_r;" in output
+    assert "vec4 color_r = subpassLoad(in_color_r);" in output
+    assert reparsed.global_variables[0].name == "in_color_r"
+    assert reparsed.global_variables[0].attributes[0].name == "input_attachment_index"
+
+
 def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [[vk::push_constant]]

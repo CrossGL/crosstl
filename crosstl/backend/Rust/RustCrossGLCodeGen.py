@@ -1274,6 +1274,9 @@ class RustToCrossGLConverter:
         )
         if byte_addressable_type is not None:
             return byte_addressable_type
+        tuple_type = self.map_tuple_type(type_name)
+        if tuple_type is not None:
+            return tuple_type
         return self.normalize_receiver_type(type_name, struct_name)
 
     def infer_value_type(self, expression):
@@ -2239,9 +2242,15 @@ class RustToCrossGLConverter:
                 indent=indent + 1,
                 allow_implicit_final_return=True,
             )
+            pattern_binding_code = self.generate_function_parameter_pattern_bindings(
+                func.params,
+                name_aliases,
+                indent + 1,
+            )
             helper_code = "".join(self.current_closure_helpers)
             code += helper_code
             code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
+            code += pattern_binding_code
             code += body_code
             code += f"{indent_str}}}\n\n"
         finally:
@@ -2291,6 +2300,11 @@ class RustToCrossGLConverter:
                 indent=3,
                 allow_implicit_final_return=True,
             )
+            pattern_binding_code = self.generate_function_parameter_pattern_bindings(
+                func.params,
+                name_aliases,
+                3,
+            )
             helper_code = "".join(self.current_closure_helpers)
         finally:
             self.current_function_return_type = previous_return_type
@@ -2303,9 +2317,23 @@ class RustToCrossGLConverter:
         code = helper_code
         code += f"    {stage_header} {{\n"
         code += f"        {return_type} main({params_str}){numthreads_suffix} {{\n"
+        code += pattern_binding_code
         code += body_code
         code += "        }\n"
         code += "    }\n\n"
+        return code
+
+    def generate_function_parameter_pattern_bindings(
+        self, params, name_aliases, indent
+    ):
+        code = ""
+        for param in params:
+            pattern = getattr(param, "pattern", None)
+            if pattern is None:
+                continue
+
+            subject = name_aliases.get(param.name, param.name)
+            code += self.generate_match_pattern_bindings(subject, pattern, indent)
         return code
 
     def function_returns_value(self):
@@ -9775,13 +9803,19 @@ class RustToCrossGLConverter:
         return rust_type
 
     def map_function_return_type(self, rust_type):
-        tuple_elements = self.split_tuple_type(rust_type)
-        if tuple_elements is not None:
-            if not tuple_elements:
-                return "void"
-            mapped_elements = [self.map_type(element) for element in tuple_elements]
-            return f"Tuple<{', '.join(mapped_elements)}>"
+        tuple_type = self.map_tuple_type(rust_type)
+        if tuple_type is not None:
+            return tuple_type
         return self.map_type(rust_type)
+
+    def map_tuple_type(self, rust_type):
+        tuple_elements = self.split_tuple_type(rust_type)
+        if tuple_elements is None:
+            return None
+        if not tuple_elements:
+            return "void"
+        mapped_elements = [self.map_type(element) for element in tuple_elements]
+        return f"Tuple<{', '.join(mapped_elements)}>"
 
     def format_unmapped_crossgl_type(self, rust_type):
         if not isinstance(rust_type, str) or "::" not in rust_type:

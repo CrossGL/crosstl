@@ -2719,6 +2719,77 @@ def test_empty_tuple_expression_parse_from_variadic_and_unsafe_union():
     assert unsafe_union.args[0].right.elements == []
 
 
+def test_binding_convention_assignment_targets_parse_from_mojo_reference():
+    code = """
+    def main():
+        ref a = var b = var c = "Hello"
+        (var list) = values
+        (var codepoint), (ref expected_utf8) = elements
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    ref_binding = function.body[0]
+    list_assignment = function.body[1]
+    tuple_assignment = function.body[2]
+
+    assert isinstance(ref_binding, VariableDeclarationNode)
+    assert getattr(ref_binding, "binding_convention", None) == "ref"
+    assert isinstance(ref_binding.initial_value, AssignmentNode)
+    assert ref_binding.initial_value.left.name == "b"
+    assert getattr(ref_binding.initial_value.left, "target_convention", None) == "var"
+    nested_assignment = ref_binding.initial_value.right
+    assert isinstance(nested_assignment, AssignmentNode)
+    assert nested_assignment.left.name == "c"
+    assert getattr(nested_assignment.left, "target_convention", None) == "var"
+
+    assert isinstance(list_assignment, AssignmentNode)
+    assert list_assignment.left.name == "list"
+    assert getattr(list_assignment.left, "target_convention", None) == "var"
+
+    assert isinstance(tuple_assignment, AssignmentNode)
+    assert isinstance(tuple_assignment.left, TupleNode)
+    codepoint, expected_utf8 = tuple_assignment.left.elements
+    assert codepoint.name == "codepoint"
+    assert getattr(codepoint, "target_convention", None) == "var"
+    assert expected_utf8.name == "expected_utf8"
+    assert getattr(expected_utf8, "target_convention", None) == "ref"
+
+
+def test_var_default_parameter_parse_from_stdlib_collections():
+    code = """
+    struct Counter:
+        def pop(mut self, value: Self.V, var default: Int) -> Int:
+            return self._data.pop(value, default)
+    """
+    ast = parse_code(tokenize_code(code))
+    struct = find_struct(ast, "Counter")
+    method = struct.methods[0]
+    default_param = method.params[2]
+
+    assert default_param.name == "default"
+    assert default_param.vtype == "Int"
+    assert getattr(default_param, "parameter_convention", None) == "var"
+
+
+def test_typed_member_assignment_parse_from_platform_stat_structs():
+    code = """
+    struct Stat:
+        def __init__(out self):
+            self.unused: InlineArray[Int64, 2] = [0, 0]
+    """
+    ast = parse_code(tokenize_code(code))
+    struct = find_struct(ast, "Stat")
+    assignment = struct.methods[0].body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, MemberAccessNode)
+    assert assignment.left.object.name == "self"
+    assert assignment.left.member == "unused"
+    assert getattr(assignment, "target_type", None) == "InlineArray[Int64, 2]"
+    assert isinstance(assignment.right, ListLiteralNode)
+    assert assignment.right.elements == ["0", "0"]
+
+
 def test_parenthesized_tuple_var_declaration_parse_from_modular_sm90_matmul():
     # Reduced from https://github.com/modular/modular.git commit
     # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
