@@ -2116,6 +2116,30 @@ def _format_report_generated_at(report):
     return f"Report generated at: {generated_at}"
 
 
+def _format_inspection_schema_version(payload):
+    if not isinstance(payload, Mapping):
+        return None
+
+    schema_version = payload.get("schemaVersion")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 0
+    ):
+        return None
+    return f"Inspection schema version: {schema_version}"
+
+
+def _format_source_report_kind(report):
+    if not isinstance(report, Mapping):
+        return None
+
+    kind = report.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return None
+    return f"Source report kind: {kind}"
+
+
 def _format_report_generator(report):
     if not isinstance(report, Mapping):
         return None
@@ -2189,57 +2213,32 @@ def _format_project_report_inspection(payload):
     target_names = (
         [str(target) for target in targets] if isinstance(targets, list) else []
     )
-    lines = [
-        f"Project report: {payload.get('sourceReport')}",
-        f"Status: {'ok' if payload.get('success') else 'failed'}",
-        "Targets: " + (", ".join(target_names) if target_names else "(none)"),
-        (
-            "Units: "
-            f"{summary.get('unitCount', 0)}; artifacts: "
-            f"{summary.get('artifactCount', 0)} "
-            f"({summary.get('translatedCount', 0)} translated, "
-            f"{summary.get('failedCount', 0)} failed)"
-        ),
-        (
-            "Diagnostics: "
-            f"{diagnostic_counts.get('error', 0)} errors, "
-            f"{diagnostic_counts.get('warning', 0)} warnings, "
-            f"{diagnostic_counts.get('note', 0)} notes"
-        ),
-    ]
-    report_status = _format_report_status(report, validation_diagnostic_codes)
-    if report_status:
-        lines.insert(2, report_status)
-    report_metadata_insert_index = 1
-    report_metadata_count = 0
-    for report_metadata_line in (
+    lines = [f"Project report: {payload.get('sourceReport')}"]
+    for header_line in (
+        _format_inspection_schema_version(payload),
+        _format_source_report_kind(report),
+        _format_project_config_path(project),
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
         _format_report_generated_at(report),
         _format_report_generator(report),
     ):
-        if report_metadata_line:
-            lines.insert(report_metadata_insert_index, report_metadata_line)
-            report_metadata_insert_index += 1
-            report_metadata_count += 1
-    project_insert_index = 3 + report_metadata_count
-    project_config_counts = _format_project_config_counts(project)
-    if project_config_counts:
-        lines.insert(project_insert_index, project_config_counts)
-        project_insert_index += 1
-    project_source_overrides = _format_project_source_overrides(project)
-    if project_source_overrides:
-        lines.insert(project_insert_index, project_source_overrides)
-        project_insert_index += 1
-    project_variant_names = _format_project_variant_names(project)
-    if project_variant_names:
-        lines.insert(project_insert_index, project_variant_names)
-        project_insert_index += 1
-    project_selected_variants = _format_project_selected_variants(project)
-    if project_selected_variants:
-        lines.insert(project_insert_index, project_selected_variants)
-        project_insert_index += 1
-    project_variant_define_counts = _format_project_variant_define_counts(project)
-    if project_variant_define_counts:
-        lines.insert(project_insert_index, project_variant_define_counts)
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    report_status = _format_report_status(report, validation_diagnostic_codes)
+    if report_status:
+        lines.append(report_status)
+    lines.append("Targets: " + (", ".join(target_names) if target_names else "(none)"))
+    for project_line in (
+        _format_project_config_counts(project),
+        _format_project_source_overrides(project),
+        _format_project_variant_names(project),
+        _format_project_selected_variants(project),
+        _format_project_variant_define_counts(project),
+    ):
+        if project_line:
+            lines.append(project_line)
     project_status_lines = []
     source_root_status = _format_count_rollup(
         "Source roots by status",
@@ -2267,18 +2266,24 @@ def _format_project_report_inspection(payload):
     )
     if include_dir_issues:
         project_status_lines.append(include_dir_issues)
-    project_status_insert_index = 4 + report_metadata_count
-    for offset, line in enumerate(project_status_lines):
-        lines.insert(project_status_insert_index + offset, line)
-    project_path_insert_index = 1
-    for project_path_line in (
-        _format_project_config_path(project),
-        _format_project_root_path(project),
-        _format_project_output_dir(project),
-    ):
-        if project_path_line:
-            lines.insert(project_path_insert_index, project_path_line)
-            project_path_insert_index += 1
+    lines.extend(project_status_lines)
+    lines.extend(
+        [
+            (
+                "Units: "
+                f"{summary.get('unitCount', 0)}; artifacts: "
+                f"{summary.get('artifactCount', 0)} "
+                f"({summary.get('translatedCount', 0)} translated, "
+                f"{summary.get('failedCount', 0)} failed)"
+            ),
+            (
+                "Diagnostics: "
+                f"{diagnostic_counts.get('error', 0)} errors, "
+                f"{diagnostic_counts.get('warning', 0)} warnings, "
+                f"{diagnostic_counts.get('note', 0)} notes"
+            ),
+        ]
+    )
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)

@@ -16602,6 +16602,8 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         in result.stdout
     )
     generator = payload["report"]["generator"]
+    assert f"Inspection schema version: {payload['schemaVersion']}" in result.stdout
+    assert f"Source report kind: {payload['report']['kind']}" in result.stdout
     assert f"Report generated at: {payload['report']['generatedAt']}" in result.stdout
     assert (
         "Report generator: CrossTL "
