@@ -6631,6 +6631,9 @@ def test_translate_project_records_missing_external_corpus_manifest(tmp_path):
 
     assert validation["success"] is True
     assert payload["project"]["config"] == str(config_path.resolve())
+    assert payload["project"]["configHash"] == project_pipeline._source_hash(
+        config_path
+    )
     assert payload["project"]["externalCorpusManifest"] == "missing-corpus.json"
     assert payload["externalCorpus"] == {
         "schemaVersion": 1,
@@ -7573,6 +7576,7 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
                 "project": {
                     "root": str(repo),
                     "config": [],
+                    "configHash": [],
                     "sourceRoots": "shaders",
                     "sourceRootCount": "1",
                     "includePatterns": ["*.cgl", 1],
@@ -7605,6 +7609,10 @@ def test_validate_project_report_rejects_malformed_project_config_metadata(tmp_p
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "project.config must be a string or null" in diagnostic["message"]
+    assert (
+        "project.configHash must be an object when project.config is set"
+        in diagnostic["message"]
+    )
     assert "project.sourceRoots must be a list of strings" in diagnostic["message"]
     assert "project.includePatterns must be a list of strings" in (
         diagnostic["message"]
@@ -7721,6 +7729,41 @@ def test_validate_project_report_rejects_invalid_project_config_paths(tmp_path):
         diagnostic = validation["diagnostics"][0]
         assert diagnostic["code"] == "project.validate.invalid-report"
         assert expected_message in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_stale_project_config_hash(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    config_path = repo / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "generated"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report_path = repo / "stale-config-hash-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.configHash must match the current config file" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_unexpected_generated_metadata_fields(
@@ -16348,7 +16391,15 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     )
 
     assert result.returncode == 0
-    assert f"Config file: {repo / 'crosstl.toml'}" in result.stdout
+    config_hash = project_pipeline._source_hash(repo / "crosstl.toml")
+    config_hash_preview = crosstl_cli._format_hash_preview(
+        config_hash["algorithm"],
+        config_hash["value"],
+    )
+    assert (
+        f"Config file: {repo / 'crosstl.toml'} (hash={config_hash_preview})"
+        in result.stdout
+    )
     assert (
         "Project config: sourceRoots=1, includePatterns=0, excludePatterns="
         f"{len(project_pipeline.DEFAULT_EXCLUDE_PATTERNS)}, sourceOverrides=1, "

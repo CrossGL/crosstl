@@ -1523,9 +1523,14 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert "scan-scope count consistency" in backend_support["notes"]
+        assert "config hash freshness" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_altered_migration_non_goals"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_project_config_hash"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

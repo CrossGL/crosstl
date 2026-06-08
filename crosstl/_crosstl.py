@@ -878,10 +878,18 @@ def _format_project_config_path(project):
         return None
 
     config_path = project.get("config")
+    config_hash = project.get("configHash")
+    hash_preview = None
+    if isinstance(config_hash, Mapping):
+        hash_preview = _format_hash_preview(
+            config_hash.get("algorithm"),
+            config_hash.get("value"),
+        )
+    suffix = f" (hash={hash_preview})" if hash_preview else ""
     if config_path is None:
         return "Config file: (none)"
     if isinstance(config_path, str):
-        return f"Config file: {config_path or '(empty)'}"
+        return f"Config file: {config_path or '(empty)'}{suffix}"
     return None
 
 

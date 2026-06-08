@@ -78,6 +78,7 @@ REPORT_PROJECT_FIELDS = frozenset(
     (
         "root",
         "config",
+        "configHash",
         "sourceRoots",
         "sourceRootCount",
         "sourceRootStatus",
@@ -2891,6 +2892,12 @@ class ProjectConfig:
         return self.root / output
 
 
+def _project_config_hash(config: ProjectConfig) -> dict[str, str] | None:
+    if config.config_path is None or not config.config_path.is_file():
+        return None
+    return _source_hash(config.config_path)
+
+
 @dataclass(frozen=True)
 class SourceLocation:
     """Compiler-compatible source span used by project diagnostics."""
@@ -3334,6 +3341,7 @@ class ProjectPortabilityReport:
                 "config": (
                     str(self.config.config_path) if self.config.config_path else None
                 ),
+                "configHash": _project_config_hash(self.config),
                 "sourceRoots": list(self.config.source_roots),
                 "sourceRootCount": len(self.config.source_roots),
                 "sourceRootStatus": source_root_status,
@@ -5921,6 +5929,9 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     }
     if "config" in project:
         summary["config"] = project.get("config")
+    config_hash = project.get("configHash")
+    if isinstance(config_hash, Mapping):
+        summary["configHash"] = dict(config_hash)
     for field_name in (
         "sourceRootCount",
         "sourceRootStatus",
@@ -8974,6 +8985,39 @@ def _project_metadata_contract_reasons(
                     reasons.append("project.config must exist")
                 elif not resolved_config_path.is_file():
                     reasons.append("project.config must be a file")
+
+    if "configHash" in project:
+        config_hash = project.get("configHash")
+        config_path = project.get("config")
+        if config_path is None:
+            if config_hash is not None:
+                reasons.append(
+                    "project.configHash must be null when project.config is null"
+                )
+        elif not isinstance(config_hash, Mapping):
+            reasons.append(
+                "project.configHash must be an object when project.config is set"
+            )
+        else:
+            hash_reasons = _hash_contract_reasons(
+                "project.configHash",
+                config_hash,
+                require_closed_fields=require_full_metadata,
+            )
+            reasons.extend(hash_reasons)
+            if (
+                not hash_reasons
+                and isinstance(config_path, str)
+                and config_path.strip()
+            ):
+                config_file = Path(config_path)
+                if config_file.is_file() and not _hash_matches_report(
+                    _source_hash(config_file),
+                    config_hash,
+                ):
+                    reasons.append(
+                        "project.configHash must match the current config file"
+                    )
 
     for field_name in (
         "sourceRoots",

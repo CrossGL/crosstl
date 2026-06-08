@@ -445,8 +445,8 @@ Project reports are JSON documents with:
 
 - top-level metadata: report schema version, report kind, generation timestamp,
   and generator name/pipeline/package-version fields.
-- ``project`` metadata: root, config path, source roots, source-root status
-  records and status counts, include/exclude
+- ``project`` metadata: root, config path, optional config hash, source roots,
+  source-root status records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
   variant maps, per-variant define counts, and counts for source roots,
@@ -586,8 +586,8 @@ Project reports are JSON documents with:
   failed-artifact text with
   non-OK hash, source-map, and source-remap statuses, bounded validation artifact
   and validation toolchain-run inspection samples, source-root and
-  include-directory status record and count consistency checks, unit source
-  hash shape and current-file
+  include-directory status record and count consistency checks, config hash
+  shape and current-file checks, unit source hash shape and current-file
   checks, full-report artifact matrix coverage and artifact define map checks,
   artifact define-processing metadata and status/source-backend/variant rollup
   checks,
