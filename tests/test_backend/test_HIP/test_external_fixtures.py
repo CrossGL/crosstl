@@ -7,6 +7,7 @@ from crosstl.backend.HIP.HipAst import (
     IfNode,
     KernelLaunchNode,
     KernelNode,
+    SwitchNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -323,6 +324,33 @@ def test_external_hip_tests_thread_block_tile_shuffle_codegen_reparse():
         "cooperative_groups thread_block_tile.shfl_up not directly supported"
         not in crossgl
     )
+
+
+def test_external_hip_tests_parenthesized_scoped_enum_case_codegen_reparse():
+    # Upstream: ROCm/hip-tests@8889ba5c7a89a85d5262dadcfbde17589a53ccfb,
+    # catch/unit/cooperativeGrps/hipCGThreadBlockTileTypeShfl_old.cc.
+    source = """
+    enum class TiledGroupShflTests { shflDown, shflXor };
+
+    __global__ void kernel(TiledGroupShflTests shfl_test, int* out) {
+        switch (shfl_test) {
+            case (TiledGroupShflTests::shflDown):
+                out[0] = 1;
+                break;
+            case (TiledGroupShflTests::shflXor):
+                out[0] = 2;
+                break;
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    switch = ast.statements[1].body[0]
+
+    assert isinstance(switch, SwitchNode)
+    assert switch.cases[0].value == "TiledGroupShflTests::shflDown"
+    assert "case TiledGroupShflTests::shflDown:" in crossgl
+    assert "case TiledGroupShflTests::shflXor:" in crossgl
 
 
 def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():

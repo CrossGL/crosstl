@@ -1428,6 +1428,9 @@ class RustParser:
             self.eat("RBRACKET")
             return self.format_array_type(element_type, size)
 
+        if self.current_token[0] == "LESS_THAN":
+            return self.parse_qualified_path_type()
+
         type_parts = []
         if self.current_token[0] == "DOUBLE_COLON":
             type_parts.append("::")
@@ -1564,6 +1567,34 @@ class RustParser:
         arguments = self.collect_token_text_until({"GREATER_THAN"})
         self.eat("GREATER_THAN")
         return f"<{arguments}>"
+
+    def parse_qualified_path_type(self):
+        self.eat("LESS_THAN")
+        qualified_type = self.collect_token_text_until({"AS", "GREATER_THAN"})
+
+        trait = None
+        if self.current_token[0] == "AS":
+            self.eat("AS")
+            trait = self.collect_token_text_until({"GREATER_THAN"})
+
+        self.eat("GREATER_THAN")
+        self.eat("DOUBLE_COLON")
+
+        type_parts = [f"<{qualified_type}{f' as {trait}' if trait else ''}>::"]
+        type_parts.append(self.parse_name_token("qualified path item"))
+        while True:
+            if self.current_token[0] == "DOUBLE_COLON":
+                type_parts.append("::")
+                self.eat("DOUBLE_COLON")
+                type_parts.append(self.parse_name_token("qualified path item"))
+            elif self.current_token[0] == "LESS_THAN":
+                type_parts.append(self.parse_generic_argument_suffix())
+            elif self.current_token[0] == "EXCLAMATION":
+                type_parts.append(self.parse_type_macro_suffix())
+            else:
+                break
+
+        return "".join(type_parts)
 
     def parse_type_macro_suffix(self):
         self.eat("EXCLAMATION")

@@ -4890,6 +4890,31 @@ def test_local_unsafe_extern_block_parsing_from_rust_cuda_thread_intrinsic():
     assert unsafe_block.block.expression.name == "__nvvm_warp_size"
 
 
+def test_associated_type_projection_alias_parsing_from_rust_cuda_gpu_rand():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/gpu_rand/src/default.rs DefaultRand SeedableRng impl.
+    code = """
+    struct Xoroshiro128StarStar;
+    struct DefaultRand;
+
+    trait SeedableRng {
+        type Seed;
+    }
+
+    impl SeedableRng for DefaultRand {
+        type Seed = <Xoroshiro128StarStar as SeedableRng>::Seed;
+    }
+    """
+
+    ast = parse_code(code)
+    alias = ast.impl_blocks[0].type_aliases[0]
+
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "Seed"
+    assert alias.alias_type == "<Xoroshiro128StarStar as SeedableRng>::Seed"
+
+
 def test_const_function_and_block_parsing():
     code = """
     pub const SCALE: i32 = 2;

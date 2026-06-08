@@ -2693,3 +2693,32 @@ def test_cuda_samples_dxtc_rintf_color_quantization_codegen_reparse():
     assert "v.y = round((clamp(v.y, 0.0f, 1.0f) * 63.0f));" in crossgl
     assert "v.z = round((clamp(v.z, 0.0f, 1.0f) * 31.0f));" in crossgl
     assert "rintf" not in crossgl
+
+
+def test_cuda_samples_tile_spmv_trailing_unsigned_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/9_CUDA_Tile/tileSpMV/tileSpMV.cu
+    source = """
+    struct SellMatrix {};
+
+    static SellMatrix generateRandom(int num_rows, int num_cols,
+                                     int avg_nnz_per_row, unsigned seed) {
+      return SellMatrix();
+    }
+    """
+
+    ast = parse_cuda(source)
+    params = ast.functions[0].params
+    crossgl = cuda_to_crossgl(source)
+
+    assert [(param.vtype, param.name) for param in params] == [
+        ("int", "num_rows"),
+        ("int", "num_cols"),
+        ("int", "avg_nnz_per_row"),
+        ("unsigned int", "seed"),
+    ]
+    assert "u32 seed" in crossgl
+    assert "unsigned seed _unused_param" not in crossgl
+    assert_crossgl_reparse(crossgl)

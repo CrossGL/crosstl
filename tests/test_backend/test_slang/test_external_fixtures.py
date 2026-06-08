@@ -28,6 +28,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
     },
+    "shader-slang/slang-main-2026-06-08-generic-subscript": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
     "shader-slang/slang-property-2026-06-04": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
@@ -1124,6 +1128,55 @@ EXTERNAL_FIXTURES = [
             'printf("%g\\n%g\\n", v[0], v[1]);',
         ],
         "not_contains": ["__subscript", "operator[]", "FunctionNode("],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: docs/generated/tests/conformance/generics/
+        # generic-subscript-functional.slang
+        "id": "slang_generated_generic_subscript_accessor",
+        "repo": "shader-slang/slang-main-2026-06-08-generic-subscript",
+        "path": (
+            "docs/generated/tests/conformance/generics/"
+            "generic-subscript-functional.slang"
+        ),
+        "source": (
+            """
+            struct TestStruct
+            {
+                float arr[5];
+
+                __subscript<T>(T i) -> float
+                    where T : IInteger
+                {
+                    get { return arr[i.toInt()]; }
+                    set { arr[i.toInt()] = newValue; }
+                }
+            }
+
+            void main()
+            {
+                TestStruct ts;
+                ts.arr[2] = 20.0;
+                uint idx = 2;
+                float v0 = ts[int(2)];
+                float v1 = ts[idx];
+                printf("%g %g\\n", v0, v1);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct TestStruct {",
+            "float arr[5];",
+            "TestStruct ts;",
+            "ts.arr[2] = 20.0;",
+            "uint idx = 2;",
+            "float v0 = ts[int(2)];",
+            "float v1 = ts[idx];",
+            'printf("%g %g\\n", v0, v1);',
+        ],
+        "not_contains": ["__subscript", "operator[]", "where T"],
     },
     {
         "id": "slang_generated_interface_constructor_requirement_codegen",

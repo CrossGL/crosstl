@@ -1488,6 +1488,44 @@ def test_struct_subscript_accessor_from_generated_conformance_sample_parse():
     assert isinstance(method.body[0].value, TernaryOpNode)
 
 
+def test_generic_subscript_accessor_from_generated_conformance_sample_parse():
+    # Source: shader-slang/slang@e2bb86bad99385790cb7d24655fc9d090346a4ca
+    # docs/generated/tests/conformance/generics/generic-subscript-functional.slang
+    code = """
+    struct TestStruct
+    {
+        float arr[5];
+
+        __subscript<T>(T i) -> float
+            where T : IInteger
+        {
+            get { return arr[i.toInt()]; }
+            set { arr[i.toInt()] = newValue; }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    method = ast.structs[0].methods[0]
+
+    assert method.name == "operator[]"
+    assert method.slang_name == "__subscript"
+    assert method.generic_parameters == "<T>"
+    assert method.is_generic is True
+    assert [
+        (
+            constraint.parameter,
+            constraint.relation,
+            constraint.constraint_type,
+        )
+        for constraint in method.generic_constraints
+    ] == [("T", ":", "IInteger")]
+    assert [param.vtype for param in method.params] == ["T"]
+    assert [param.name for param in method.params] == ["i"]
+    assert list(method.property_accessors) == ["get", "set"]
+
+
 def test_attributed_subscript_set_accessor_from_upstream_bug_sample_parse():
     # Source: shader-slang/slang@5230a81f2fe68afe5cb8d04a1b09d56476f6b960
     # tests/bugs/gh-4971.slang

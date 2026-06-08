@@ -185,6 +185,32 @@ class OpenCLParser(HipParser):
 
         return OpenCLProgramNode(statements)
 
+    def parse_expression_statement(self):
+        expressions = [self.parse_expression()]
+        self.skip_newlines()
+
+        while self.match("COMMA"):
+            self.advance()
+            self.skip_newlines()
+            expressions.append(self.parse_expression())
+            self.skip_newlines()
+
+        if self.match("SEMICOLON"):
+            self.advance()
+            return expressions if len(expressions) > 1 else expressions[0]
+
+        expr = expressions[0]
+        if len(expressions) == 1 and self.is_optional_semicolon_macro_statement(expr):
+            self.skip_newlines()
+            if self.match("SEMICOLON"):
+                self.advance()
+            return expr
+
+        self.skip_newlines()
+        self.consume("SEMICOLON")
+
+        return expressions if len(expressions) > 1 else expressions[0]
+
     def is_function_qualifier_token_at_pos(self, index):
         if index >= len(self.tokens):
             return False

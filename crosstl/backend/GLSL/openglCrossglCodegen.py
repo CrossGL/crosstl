@@ -645,6 +645,8 @@ class GLSLToCrossGLConverter:
         self.converted_ssbo_struct_names = set()
         self.interface_block_struct_names = set()
         self.flattened_uniform_block_instances = {}
+        self.flattened_uniform_block_member_renames = {}
+        self.emitted_cbuffer_member_names = set()
         self.task_payload_shared_names = set()
         self.variable_type_scopes = []
         self.function_name_renames = {}
@@ -1623,7 +1625,43 @@ class GLSLToCrossGLConverter:
     def layout_has_key(self, layout, name):
         return any(str(key).lower() == name for key in layout or {})
 
-    def record_flattened_uniform_block_instance(self, block_name, uniforms, fields):
+    def cbuffer_field_output_names(self, block_name, uniforms, fields):
+        output_names = {}
+        block_seen = set()
+        for field in fields:
+            field_name = getattr(field, "name", None)
+            if field_name is None:
+                continue
+            field_name = str(field_name)
+            output_name = field_name
+            if (
+                output_name in self.emitted_cbuffer_member_names
+                or output_name in block_seen
+            ):
+                output_name = self.unique_cbuffer_member_name(block_name, field_name)
+            block_seen.add(output_name)
+            self.emitted_cbuffer_member_names.add(output_name)
+            output_names[field_name] = output_name
+
+        self.record_flattened_uniform_block_instance(
+            block_name, uniforms, fields, output_names
+        )
+        return output_names
+
+    def unique_cbuffer_member_name(self, block_name, field_name):
+        safe_block_name = re.sub(r"\W+", "_", str(block_name or "Block")).strip("_")
+        safe_block_name = safe_block_name or "Block"
+        base_name = f"{safe_block_name}_{field_name}"
+        candidate = base_name
+        suffix = 1
+        while candidate in self.emitted_cbuffer_member_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def record_flattened_uniform_block_instance(
+        self, block_name, uniforms, fields, field_output_names=None
+    ):
         field_names = {getattr(field, "name", None) for field in fields}
         field_names.discard(None)
         if not field_names:
@@ -1643,16 +1681,25 @@ class GLSLToCrossGLConverter:
         for instance_name in instance_names:
             if instance_name:
                 self.flattened_uniform_block_instances[instance_name] = field_names
+                renames = {
+                    original: output
+                    for original, output in (field_output_names or {}).items()
+                    if original != output
+                }
+                if renames:
+                    self.flattened_uniform_block_member_renames[instance_name] = renames
 
     def generate_push_constant_block(self, block_name, uniforms):
         fields = self.uniform_block_fields(block_name, uniforms)
-        self.record_flattened_uniform_block_instance(block_name, uniforms, fields)
+        field_output_names = self.cbuffer_field_output_names(
+            block_name, uniforms, fields
+        )
 
         result = f"cbuffer {block_name} @push_constant {{\n"
         self.increase_indent()
         for field in fields:
             var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = getattr(field, "name", "")
+            var_name = field_output_names.get(getattr(field, "name", ""), "")
             array_suffix = self.array_suffix(field)
             result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
         self.decrease_indent()
@@ -1715,7 +1762,9 @@ class GLSLToCrossGLConverter:
 
     def generate_descriptor_set_uniform_block(self, block_name, uniforms):
         fields = self.uniform_block_fields(block_name, uniforms)
-        self.record_flattened_uniform_block_instance(block_name, uniforms, fields)
+        field_output_names = self.cbuffer_field_output_names(
+            block_name, uniforms, fields
+        )
 
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, uniforms
@@ -1727,7 +1776,7 @@ class GLSLToCrossGLConverter:
         self.increase_indent()
         for field in fields:
             var_type = self.convert_type(getattr(field, "vtype", ""))
-            var_name = getattr(field, "name", "")
+            var_name = field_output_names.get(getattr(field, "name", ""), "")
             array_suffix = self.array_suffix(field)
             result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
         self.decrease_indent()
@@ -1953,6 +2002,9 @@ class GLSLToCrossGLConverter:
         self.inputs = []
         self.outputs = []
         self.local_vars = []
+        self.flattened_uniform_block_instances = {}
+        self.flattened_uniform_block_member_renames = {}
+        self.emitted_cbuffer_member_names = set()
         self.task_payload_shared_names = {
             var.name
             for var in getattr(node, "global_variables", []) or []
@@ -3208,7 +3260,8 @@ class GLSLToCrossGLConverter:
         fields = self.flattened_uniform_block_instances.get(instance_name)
         if fields is None or node.member not in fields:
             return None
-        return node.member
+        renames = self.flattened_uniform_block_member_renames.get(instance_name, {})
+        return renames.get(node.member, node.member)
 
     def generate_array_access(self, node):
         structured_access = self.structured_buffer_access_parts(node)

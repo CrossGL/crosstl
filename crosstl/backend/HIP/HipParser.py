@@ -4557,7 +4557,8 @@ class HipParser:
             type_end is not None
             and type_end + 1 < len(self.tokens)
             and self.tokens[type_end].type == "RPAREN"
-            and self.tokens[type_end + 1].type in {"COMMA", "RPAREN", "SEMICOLON"}
+            and self.tokens[type_end + 1].type
+            in {"COLON", "COMMA", "RPAREN", "SEMICOLON"}
         ):
             return False
         if self.is_unknown_identifier_cast_followed_by_ambiguous_unary(

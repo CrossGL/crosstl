@@ -26,6 +26,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "321ec599414e138be0232e24ab0d322eac073deb",
         "path": "data/kernels/basic.cl",
     },
+    "darktable_blendop_comma_assignment_statement": {
+        "url": "https://github.com/darktable-org/darktable",
+        "commit": "f2565512667db3d4a7142ba3d3248a02f7be917d",
+        "path": "data/kernels/blendop.cl",
+    },
 }
 
 
@@ -135,3 +140,29 @@ def test_external_darktable_qualified_vector_constructor_codegen_reparse():
     assert first_decl.value.name == "float4"
     assert "vec4<f32>(" in crossgl
     assert "const float4(" not in crossgl
+
+
+def test_external_darktable_comma_assignment_statement_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "darktable_blendop_comma_assignment_statement"
+    ]
+    assert source_info["commit"] == "f2565512667db3d4a7142ba3d3248a02f7be917d"
+    assert source_info["path"] == "data/kernels/blendop.cl"
+
+    source = """
+    kernel void blendif_scale(global float *scaled,
+                              global const float4 *input) {
+        float4 pixel = input[0];
+        scaled[0] = pixel.x / 100.0f,
+        scaled[1] = pixel.y / 256.0f;
+        scaled[2] = pixel.z / 256.0f;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    body = ast.statements[0].body
+
+    assert len(body) == 4
+    assert "scaled[0] = (pixel.x / 100.0f);" in crossgl
+    assert "scaled[1] = (pixel.y / 256.0f);" in crossgl
+    assert "scaled[0] = pixel.x / 100.0f, scaled[1]" not in crossgl

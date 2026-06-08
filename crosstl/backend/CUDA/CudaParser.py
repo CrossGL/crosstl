@@ -990,6 +990,7 @@ class CudaParser:
             "LPAREN",
             "LBRACE",
             "COMMA",
+            "RPAREN",
         }
 
     def is_global_qualified_name_start_at_index(self, index):

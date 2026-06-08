@@ -1126,6 +1126,37 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: godotengine/godot
+    # Commit: a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # Path: servers/rendering/renderer_rd/shaders/cluster_render.glsl
+    # Reduced from duplicate padding member names across distinct uniform blocks.
+    ExternalFixture(
+        name="godot-rd-cluster-render-duplicate-cbuffer-padding-members",
+        repo="https://github.com/godotengine/godot",
+        commit="a4f5e8cddf68487bdc358bc2ccf745d98363139b",
+        path="servers/rendering/renderer_rd/shaders/cluster_render.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #[vertex]
+
+            #version 450
+
+            layout(push_constant, std430) uniform Params {
+                uint base_index;
+                uint pad0;
+            } params;
+
+            layout(set = 0, binding = 1, std140) uniform State {
+                mat4 projection;
+                uint pad0;
+            } state;
+
+            void main() {
+                uint local = params.base_index + state.pad0;
+                gl_Position = state.projection * vec4(float(local));
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="filament-surface-instancing-highp-object-uniforms",
         repo="https://github.com/google/filament",
@@ -1980,6 +2011,22 @@ def test_parse_godot_escaped_mode_define_fixture():
     assert "USE_RGBA_SHADOWS" not in crossgl
     assert "VertexOutput main(VertexInput input)" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_godot_duplicate_cbuffer_padding_members_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-rd-cluster-render-duplicate-cbuffer-padding-members"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "uint pad0;" in crossgl
+    assert "uint State_pad0;" in crossgl
+    assert "uint local = (base_index + State_pad0);" in crossgl
+    assert "base_index + pad0" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_parse_godot_canvas_occlusion_filters_inactive_stage_sections():

@@ -264,6 +264,26 @@ EFFECT_BLOCK_KEYWORDS = {
     "technique11",
 }
 
+STATEMENT_START_TOKENS = {
+    "RETURN",
+    "IF",
+    "FOR",
+    "WHILE",
+    "DO",
+    "SWITCH",
+    "BREAK",
+    "CONTINUE",
+    "DISCARD",
+    "LBRACE",
+}
+
+UNEXPANDED_STATEMENT_ATTRIBUTE_MACROS = {
+    "UNITY_BRANCH": "branch",
+    "UNITY_FLATTEN": "flatten",
+    "UNITY_LOOP": "loop",
+    "UNITY_UNROLL": "unroll",
+}
+
 SCALAR_CONSTRUCTOR_TOKENS = {
     "FLOAT",
     "HALF",
@@ -2271,6 +2291,8 @@ class HLSLParser:
             return None
 
         attributes = self.parse_attribute_list()
+        attributes.extend(self.parse_unexpanded_statement_modifier_macros())
+        attributes.extend(self.parse_attribute_list())
 
         if self.current_token[0] == "RETURN":
             self.eat("RETURN")
@@ -2426,6 +2448,19 @@ class HLSLParser:
         self.eat("IDENTIFIER")
         self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
         return True
+
+    def parse_unexpanded_statement_modifier_macros(self):
+        attributes = []
+        while (
+            self.is_macro_like_identifier(self.current_token)
+            and self.peek()[0] in STATEMENT_START_TOKENS
+        ):
+            macro_name = str(self.current_token[1])
+            attribute_name = UNEXPANDED_STATEMENT_ATTRIBUTE_MACROS.get(macro_name)
+            if attribute_name:
+                attributes.append(AttributeNode(attribute_name))
+            self.eat("IDENTIFIER")
+        return attributes
 
     def parse_local_function_prototype(self, attributes=None):
         qualifiers = self.parse_qualifiers()

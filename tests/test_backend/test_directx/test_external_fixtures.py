@@ -1473,6 +1473,33 @@ EXTERNAL_FIXTURES = [
             "vec4 frag(v2f i) @ gl_FragColor",
         ),
     ),
+    ExternalFixture(
+        name="unity_builtin_cubeblur_unexpanded_unroll_statement_modifier",
+        repo=UNITY_BUILT_IN_SHADERS_REPO,
+        commit=UNITY_BUILT_IN_SHADERS_COMMIT,
+        path="DefaultResourcesExtra/Cubemaps/CubeBlur.shader",
+        code=textwrap.dedent("""
+            struct v2f {
+                half4 uvw : TEXCOORD0;
+            };
+
+            half4 frag_loop(v2f i) : SV_Target
+            {
+                half3 rgb = half3(0.0, 0.0, 0.0);
+                UNITY_UNROLL for (int ix = 0; ix < 2; ix++)
+                {
+                    rgb += i.uvw.rgb;
+                }
+                return half4(rgb, 1.0);
+            }
+        """).strip(),
+        contains=(
+            "f16vec4 uvw @ TexCoord0;",
+            "for (int ix = 0; ix < 2; ix++)",
+            "rgb += i.uvw.rgb;",
+            "return f16vec4(rgb, 1.0);",
+        ),
+    ),
 ]
 
 

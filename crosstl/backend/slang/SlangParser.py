@@ -1743,17 +1743,26 @@ class SlangParser:
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
-        return (
-            current_pos + 1 < len(self.tokens)
-            and self.tokens[current_pos] == ("IDENTIFIER", "__subscript")
-            and self.tokens[current_pos + 1][0] == "LPAREN"
-        )
+        if current_pos + 1 >= len(self.tokens) or self.tokens[current_pos] != (
+            "IDENTIFIER",
+            "__subscript",
+        ):
+            return False
+
+        next_pos = current_pos + 1
+        if self.tokens[next_pos][0] == "LESS_THAN":
+            next_pos = self.skip_generic_type_suffix_tokens(next_pos)
+        return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "LPAREN"
 
     def parse_subscript_declaration(self, attributes=None, allow_signature=False):
         attributes = attributes or []
         qualifiers, is_generic = self.parse_declaration_prefixes()
         slang_name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
+            is_generic = True
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
@@ -1783,6 +1792,7 @@ class SlangParser:
             body,
             qualifiers=qualifiers,
             is_generic=is_generic,
+            generic_parameters=generic_parameters,
             generic_constraints=generic_constraints,
             is_declaration=is_declaration,
             attributes=attributes,
