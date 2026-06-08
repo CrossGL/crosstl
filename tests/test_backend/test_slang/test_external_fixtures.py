@@ -146,6 +146,46 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Path: tests/cooperative-matrix/
+        # mat-mul-add-spirv-matrix-operands.slang
+        "id": "slang_cooperative_matrix_generic_prefix_typealias",
+        "repo": "shader-slang/slang-current",
+        "path": "tests/cooperative-matrix/mat-mul-add-spirv-matrix-operands.slang",
+        "source": (
+            """
+            using namespace linalg;
+
+            __generic<T : __BuiltinArithmeticType>
+            typealias CoopMatAType =
+                CoopMat<T, MemoryScope.Subgroup, 16, 16,
+                        CoopMatMatrixUse::MatrixA>;
+
+            RWStructuredBuffer<uint32_t> outputBuffer;
+
+            [numthreads(32, 1, 1)]
+            void computeMain()
+            {
+                coopMatMulAdd<uint32_t, false>(
+                    CoopMatAType<uint16_t>(2),
+                    CoopMatAType<uint32_t>(3),
+                    CoopMatAType<uint16_t>(4)
+                ).Store<CoopMatMatrixLayout::RowMajor>(outputBuffer, 0, 16);
+            }
+        """
+        ),
+        "crossgl": False,
+        "contains": [
+            (
+                "typedef CoopMat<T, MemoryScope.Subgroup, 16, 16, "
+                "CoopMatMatrixUse::MatrixA> CoopMatAType<T>;"
+            ),
+            "coopMatMulAdd<uint32_t, false>",
+            ".Store<CoopMatMatrixLayout::RowMajor>",
+        ],
+        "not_contains": ["__generic", "__BuiltinArithmeticType"],
+    },
+    {
         "id": "slang_empty_switch_unlabeled_statement",
         "repo": "shader-slang/slang",
         "path": "tests/bugs/empty-switch.slang",

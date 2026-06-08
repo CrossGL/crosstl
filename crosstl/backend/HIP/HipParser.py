@@ -879,6 +879,8 @@ class HipParser:
             if self.match("SEMICOLON"):
                 self.advance()
             return ContinueNode()
+        if self.match("GOTO"):
+            return self.parse_goto_statement()
         if self.match("SYNCTHREADS", "SYNCWARP"):
             return self.parse_sync_statement()
         if self.match("ASM"):
@@ -887,6 +889,8 @@ class HipParser:
             return self.parse_hip_dynamic_shared_macro()
         if self.match("LBRACE"):
             return self.parse_block()
+        if self.is_label_statement_start():
+            return self.parse_label_statement()
         if self.is_identifier_value("throw"):
             return self.parse_throw_statement()
         if self.is_identifier_value("delete"):
@@ -1033,6 +1037,12 @@ class HipParser:
         alias_type = base_type
         if allow_prefix:
             alias_type = self.parse_declarator_prefix(alias_type)
+
+        function_pointer_name = self.parse_function_pointer_parameter_declarator()
+        if function_pointer_name is not None:
+            alias_type += " (*)"
+            self.type_aliases.add(function_pointer_name)
+            return TypeAliasNode(alias_type, function_pointer_name)
 
         name = self.consume("IDENTIFIER").value
         alias_type += self.parse_array_suffix()
@@ -1271,6 +1281,31 @@ class HipParser:
         if self.match("SEMICOLON"):
             self.advance()
         return DeleteNode(expression, is_array)
+
+    def is_label_statement_start(self):
+        return self.match("IDENTIFIER") and self.peek() and self.peek().type == "COLON"
+
+    def parse_label_statement(self):
+        self.consume("IDENTIFIER")
+        self.consume("COLON")
+        self.skip_newlines()
+
+        if not self.current_token or self.match("RBRACE"):
+            return None
+        return self.parse_statement()
+
+    def parse_goto_statement(self):
+        self.consume("GOTO")
+
+        if self.is_declarator_name_token():
+            self.advance()
+        else:
+            while self.current_token and not self.match("SEMICOLON", "RBRACE"):
+                self.advance()
+
+        if self.match("SEMICOLON"):
+            self.advance()
+        return None
 
     def parse_throw_statement(self):
         self.advance()
@@ -2206,6 +2241,7 @@ class HipParser:
         type_prefixes = []
         saw_integral_sign = False
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         self.parse_type_attribute_prefixes()
 
@@ -2228,6 +2264,7 @@ class HipParser:
 
         self.pos = saved_pos
         self.current_token = saved_token
+        self.skip_newlines()
         self.skip_cpp_attributes()
         self.parse_type_attribute_prefixes()
         base_type = self.parse_type()
@@ -2828,7 +2865,7 @@ class HipParser:
                     else init_declarations[0]
                 )
             else:
-                init = self.parse_expression()
+                init = self.parse_for_update_expression()
         self.consume("SEMICOLON")
         self.skip_newlines()
 
@@ -4407,11 +4444,14 @@ class HipParser:
 
     def is_cast_type_sequence(self, start, end):
         index = start
+        saw_integral_sign = False
         while index < end and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS:
+            if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             index += 1
 
         if index >= end:
-            return False
+            return saw_integral_sign
 
         token = self.tokens[index]
         if token.type in self.ELABORATED_TYPE_TOKENS:
@@ -4922,6 +4962,17 @@ class HipParser:
 
         token_type = self.tokens[index].type
         if token_type in {"ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS}:
+            return True
+
+        if token_type in {
+            "SEMICOLON",
+            "ASSIGN",
+            "LBRACKET",
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+            "RPAREN",
+        }:
             return True
 
         if token_type != "IDENTIFIER":

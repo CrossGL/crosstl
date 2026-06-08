@@ -480,6 +480,8 @@ STAGE_LAYOUT_DIRECTION_REQUIREMENTS = {
     "outputcontrolpoints": "out",
 }
 
+REPEATABLE_STAGE_LAYOUT_ENTRY_NAMES = frozenset({"stream"})
+
 STAGE_LAYOUT_EXCLUSIVE_ENTRY_GROUPS = (
     frozenset(
         {
@@ -1256,6 +1258,8 @@ def validate_stage_layout_metadata(stage):
 
             entry_value = _stage_layout_entry_value(entry)
             key = (direction, entry_name)
+            if entry_name in REPEATABLE_STAGE_LAYOUT_ENTRY_NAMES:
+                continue
             previous_value = entries_by_direction.setdefault(key, entry_value)
             if previous_value != entry_value:
                 raise ValueError(

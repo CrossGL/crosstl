@@ -1150,6 +1150,41 @@ class TestCudaParser:
         assert block.members[3].vtype == "unsigned int"
         assert ast.structs[1].name == "Segmentation"
 
+    def test_public_cuda_samples_friend_function_definition_skips_complete_body(self):
+        code = """
+        template<class T>
+        class matrix4 {
+        public:
+            T _array[16];
+
+            friend matrix4 inverse(const matrix4 &m)
+            {
+                matrix4 minv;
+                T r1[8], r2[8], r3[8], r4[8];
+                T *s[4], *tmprow;
+                s[0] = &r1[0];
+                s[1] = &r2[0];
+                if (s[0][0] == 0.0) {
+                    return minv;
+                }
+                return minv;
+            }
+
+            T trailing;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "matrix4"
+        assert [member.name for member in ast.structs[0].members] == [
+            "_array",
+            "trailing",
+        ]
+
     def test_public_cccl_macro_prefixed_friend_operator_struct_method_parse(self):
         code = """
         template <typename T>

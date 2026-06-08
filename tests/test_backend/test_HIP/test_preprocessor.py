@@ -44,6 +44,41 @@ def test_preprocessor_include_with_search_path(tmp_path):
     assert "SCALE_VALUE" not in values
 
 
+def test_preprocessor_ignores_stb_style_documented_self_include(tmp_path):
+    include_file = tmp_path / "stb_image.h"
+    include_file.write_text(
+        """
+        /* Reduced from ROCm/rocm-examples Applications/optical_flow/stb_image.h.
+           Usage docs include:
+              #define STB_IMAGE_IMPLEMENTATION
+              #include "stb_image.h"
+        */
+        #ifndef STBI_INCLUDE_STB_IMAGE_H
+        #define STBI_INCLUDE_STB_IMAGE_H
+        #define STBIDEF extern
+        STBIDEF int stbi_info(char const *filename, int *x, int *y, int *comp);
+        #endif
+        """,
+        encoding="utf-8",
+    )
+
+    tokens = HipLexer(
+        """
+        #include "stb_image.h"
+        __global__ void optical_flow_kernel(int* out) { out[0] = 1; }
+        """,
+        include_paths=[str(tmp_path)],
+    ).tokenize()
+
+    ast = HipParser(tokens).parse()
+    names = [
+        statement.name
+        for statement in ast.statements
+        if statement.__class__.__name__ in {"FunctionNode", "KernelNode"}
+    ]
+    assert names == ["stbi_info", "optical_flow_kernel"]
+
+
 def test_preprocessor_preserves_unresolved_system_includes():
     tokens = HipLexer("""
         #include <hip/hip_runtime.h>

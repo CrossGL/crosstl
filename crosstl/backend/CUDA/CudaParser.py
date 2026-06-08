@@ -1929,7 +1929,10 @@ class CudaParser:
                 self.skip_until_semicolon()
                 continue
             if self.is_identifier_value("friend"):
-                self.skip_until_semicolon()
+                if self.is_struct_method_start():
+                    self.skip_struct_method()
+                else:
+                    self.skip_until_semicolon()
                 continue
             if self.is_templated_type_alias_start():
                 self.parse_template_declaration()

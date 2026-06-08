@@ -2973,6 +2973,31 @@ def test_duplicate_matching_stage_layout_metadata_values_are_allowed():
     assert len(compute_stage.layout_qualifiers) == 2
 
 
+def test_repeated_geometry_stream_stage_layouts_are_preserved():
+    code = """
+    shader RepeatedGeometryStreamLayouts {
+        geometry {
+            layout(points, stream = 0) out;
+            layout(stream = 1) out;
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    geometry_stage = ast.stages[ShaderStage.GEOMETRY]
+
+    assert len(geometry_stage.layout_qualifiers) == 2
+    assert [entry.name for entry in geometry_stage.layout_qualifiers[0].entries] == [
+        "points",
+        "stream",
+    ]
+    assert geometry_stage.layout_qualifiers[1].entries[0].name == "stream"
+    assert geometry_stage.layout_qualifiers[1].entries[0].arguments[0].value == 1
+
+
 def test_matching_layout_and_function_threadgroup_size_metadata_values_are_allowed():
     code = """
     shader MatchingThreadgroupSize {

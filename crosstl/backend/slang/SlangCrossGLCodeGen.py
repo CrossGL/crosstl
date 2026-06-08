@@ -633,14 +633,26 @@ class SlangToCrossGLConverter:
             conformances = getattr(struct, "conformances", []) or []
             if conformances:
                 constructs.append(f"struct {struct.name} : {', '.join(conformances)}")
+            constructs.extend(
+                self.format_typedef_generic_constraints(getattr(struct, "typedefs", []))
+            )
 
         for extension in getattr(ast, "extensions", []) or []:
             conformances = getattr(extension, "conformances", []) or []
             suffix = f" : {', '.join(conformances)}" if conformances else ""
             constructs.append(f"extension {extension.extended_type}{suffix}")
+            constructs.extend(
+                self.format_typedef_generic_constraints(
+                    getattr(extension, "typedefs", [])
+                )
+            )
 
         for function in getattr(ast, "functions", []) or []:
             constructs.extend(self.format_function_generic_constraints(function))
+
+        constructs.extend(
+            self.format_typedef_generic_constraints(getattr(ast, "typedefs", []))
+        )
 
         for export in getattr(ast, "exports", []) or []:
             item = getattr(export, "item", None)
@@ -663,6 +675,19 @@ class SlangToCrossGLConverter:
                 "Reverse Slang to CrossGL does not support "
                 f"interface/conformance constructs: {details}"
             )
+
+    def format_typedef_generic_constraints(self, typedefs):
+        constraints = []
+        for typedef in typedefs or []:
+            for constraint in getattr(typedef, "generic_constraints", []) or []:
+                if self.is_erased_generic_constraint(constraint):
+                    continue
+                relation = getattr(constraint, "relation", ":")
+                constraints.append(
+                    f"typealias {typedef.new_type} where "
+                    f"{constraint.parameter} {relation} {constraint.constraint_type}"
+                )
+        return constraints
 
     def format_function_generic_constraints(self, function):
         constraints = []

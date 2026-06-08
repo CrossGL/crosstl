@@ -25,11 +25,52 @@ class HipPreprocessor(HLSLPreprocessor):
         )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
+        code = self._mask_comments(code)
         processed = super().preprocess(code, file_path=file_path)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
 
+    def _mask_comments(self, code: str) -> str:
+        result = []
+        i = 0
+
+        while i < len(code):
+            ch = code[i]
+            if ch in "\"'":
+                literal, consumed = self._read_string(code, i)
+                result.append(literal)
+                i += consumed
+                continue
+            if code.startswith("//", i):
+                end = code.find("\n", i)
+                if end == -1:
+                    result.append(" " * (len(code) - i))
+                    break
+                result.append(" " * (end - i))
+                result.append("\n")
+                i = end + 1
+                continue
+            if code.startswith("/*", i):
+                end = code.find("*/", i + 2)
+                comment = code[i:] if end == -1 else code[i : end + 2]
+                result.append(
+                    "".join(
+                        "\n" if comment_ch == "\n" else " " for comment_ch in comment
+                    )
+                )
+                i += len(comment)
+                continue
+            result.append(ch)
+            i += 1
+
+        return "".join(result)
+
     def _handle_include(self, rest: str, file_path: Optional[str]):
         included = super()._handle_include(rest, file_path)
+        if isinstance(included, tuple):
+            included_text, included_path = included
+            return self._mask_comments(included_text), included_path
+        if included is not None:
+            return self._mask_comments(included)
         if included is not None or self.strict:
             return included
         include_target = rest.strip()

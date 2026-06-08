@@ -2687,6 +2687,21 @@ class TestHipParser:
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
 
+    def test_public_rocm_optical_flow_function_pointer_typedef_parsing(self):
+        code = """
+        typedef stbi_uc *(*resample_row_func)(stbi_uc *out,
+                                              stbi_uc *in0,
+                                              stbi_uc *in1,
+                                              int w,
+                                              int hs);
+        """
+        ast = self.parse_code(code)
+
+        alias = ast.statements[0]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "resample_row_func"
+        assert alias.alias_type == "stbi_uc * (*)"
+
     def test_public_rocm_device_query_namespace_block_parsing(self):
         code = """
         namespace
@@ -2995,6 +3010,29 @@ class TestHipParser:
         assert isinstance(loop.update[1], UnaryOpNode)
         assert loop.update[1].op == "--"
         assert loop.update[1].operand == "j"
+
+    def test_multi_expression_for_initializer_parsing(self):
+        code = """
+        void host(int n, int *val, int *out, int out_stride) {
+            int i;
+            int *v;
+            int *o;
+            for (i = 0, v = val, o = out; i < n; ++i, v += 8, o += out_stride) {
+                sink(o[i]);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        loop = ast.statements[0].body[3]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.init, list)
+        assert len(loop.init) == 3
+        assert [init.left for init in loop.init] == ["i", "v", "o"]
+        assert [init.operator for init in loop.init] == ["=", "=", "="]
 
     def test_range_based_for_loop_parsing(self):
         code = """
@@ -3461,6 +3499,65 @@ class TestHipParser:
         assert branch.condition == "std::is_same_v<T, float>"
         assert isinstance(branch.else_body, IfNode)
         assert branch.else_body.condition == "T::value"
+
+    def test_public_rocm_optical_flow_static_const_declaration_split_parsing(self):
+        code = """
+        static
+        const char *stbi__g_failure_reason;
+
+        extern const char *stbi_failure_reason(void) {
+            return stbi__g_failure_reason;
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0]
+        function = ast.statements[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "const char *"
+        assert declaration.name == "stbi__g_failure_reason"
+        assert declaration.qualifiers == ["static"]
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "const char *"
+        assert function.name == "stbi_failure_reason"
+
+    def test_public_rocm_optical_flow_unsigned_cast_parsing(self):
+        code = """
+        void host(int r) {
+            if ((unsigned)r > 255) {
+                r = 255;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        branch = ast.statements[0].body[0]
+        assert isinstance(branch, IfNode)
+        assert isinstance(branch.condition, BinaryOpNode)
+        assert branch.condition.op == ">"
+        assert isinstance(branch.condition.left, CastNode)
+        assert branch.condition.left.target_type == "unsigned int"
+        assert branch.condition.left.expression == "r"
+
+    def test_public_rocm_optical_flow_goto_and_label_parse(self):
+        code = """
+        void host(int flag) {
+            if (flag) {
+                goto errorEnd;
+            }
+            flag = 0;
+        errorEnd:
+            return;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[0], IfNode)
+        assert body[0].if_body == []
+        assert isinstance(body[1], AssignmentNode)
+        assert isinstance(body[2], ReturnNode)
 
     def test_public_rocm_scoped_using_declarations_are_skipped(self):
         code = """

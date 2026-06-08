@@ -1632,6 +1632,40 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
     parse_crossgl(output)
 
 
+def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
+    # microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenDXIL/hlsl/objects/HitObject/hitobject-array-byval.hlsl
+    hlsl = textwrap.dedent("""
+        RWBuffer<uint> output : register(u0, space0);
+
+        void MakeNop(MOD dx::HitObject obj[2]) {
+          obj[0] = dx::HitObject::MakeNop();
+          obj[1] = dx::HitObject::MakeNop();
+        }
+
+        [shader("raygeneration")]
+        void RayGen()
+        {
+          RayDesc ray;
+          dx::HitObject obj[2] = {
+            dx::HitObject::MakeMiss(0, 0, ray),
+            dx::HitObject::MakeMiss(0, 0, ray)
+          };
+
+          MakeNop(obj);
+          output[0] = obj[0].IsNop();
+          output[1] = obj[1].IsNop();
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "MOD" not in output
+    assert "void MakeNop(dx_HitObject obj[2])" in output
+    assert "dx_HitObject obj[2]" in output
+    parse_crossgl(output)
+
+
 def test_codegen_template_style_64_bit_integer_vectors_preserve_width():
     hlsl = textwrap.dedent("""
         vector<uint64_t, 4> MakeOffsets(vector<int64_t, 2> delta) {

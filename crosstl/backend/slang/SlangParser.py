@@ -225,7 +225,14 @@ class SlangParser:
                 self.skip_semicolon_terminated_declaration()
             elif declaration_token == "ENUM":
                 enums.append(self.parse_enum())
-            elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
+            elif (
+                declaration_token
+                in {
+                    "TYPEDEF",
+                    "TYPEALIAS",
+                }
+                or self.is_generic_prefixed_typedef_declaration_start()
+            ):
                 typedefs.append(self.parse_typedef())
             elif self.is_namespace_declaration_start():
                 global_variables.extend(self.parse_namespace_declaration())
@@ -671,6 +678,15 @@ class SlangParser:
         if current_pos >= len(self.tokens):
             return "EOF"
         return self.tokens[current_pos][0]
+
+    def is_generic_prefixed_typedef_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return current_pos < len(self.tokens) and self.tokens[current_pos][0] in {
+            "TYPEDEF",
+            "TYPEALIAS",
+        }
 
     def parse_qualifiers(self):
         qualifiers = []
@@ -1514,7 +1530,14 @@ class SlangParser:
                 self.eat("SEMICOLON")
                 continue
             declaration_token = self.peek_declaration_token_type()
-            if declaration_token in {"TYPEDEF", "TYPEALIAS"}:
+            if (
+                declaration_token
+                in {
+                    "TYPEDEF",
+                    "TYPEALIAS",
+                }
+                or self.is_generic_prefixed_typedef_declaration_start()
+            ):
                 typedefs.append(self.parse_typedef())
                 continue
             if declaration_token == "ENUM":
@@ -2066,7 +2089,9 @@ class SlangParser:
         return enum
 
     def parse_typedef(self):
-        qualifiers = self.parse_qualifiers()
+        qualifiers, prefix_generic_parameters, generic_constraints = (
+            self.parse_typedef_prefixes()
+        )
         if self.current_token[0] == "TYPEDEF":
             self.eat("TYPEDEF")
             original_type = self.parse_type_name(allow_array_suffix=True)
@@ -2079,13 +2104,121 @@ class SlangParser:
             self.eat("IDENTIFIER")
             if self.current_token[0] == "LESS_THAN":
                 new_type += self.parse_generic_type_suffix()
+            elif prefix_generic_parameters:
+                new_type += prefix_generic_parameters
             self.eat("EQUALS")
             original_type = self.parse_type_name(allow_array_suffix=True)
             original_type += self.parse_pointer_suffix()
         self.eat("SEMICOLON")
         node = TypedefNode(original_type, new_type)
         node.qualifiers = qualifiers
+        node.generic_constraints = generic_constraints
         return node
+
+    def parse_typedef_prefixes(self):
+        qualifiers = []
+        generic_parameters = None
+        generic_constraints = []
+        while (
+            self.current_token[0] == "GENERIC"
+            or self.is_layout_qualifier_at(self.pos)
+            or self.is_declaration_annotation_at(self.pos)
+            or self.is_qualifier_token_at(self.pos)
+        ):
+            if self.current_token[0] == "GENERIC":
+                self.eat("GENERIC")
+                if self.current_token[0] == "LESS_THAN":
+                    generic_parameters, generic_constraints = (
+                        self.parse_generic_parameter_prefix()
+                    )
+            elif self.is_layout_qualifier_at(self.pos):
+                qualifiers.append(self.parse_layout_qualifier())
+            elif self.is_declaration_annotation_at(self.pos):
+                self.parse_declaration_annotation()
+            else:
+                qualifiers.append(self.current_token[1])
+                self.eat(self.current_token[0])
+        return qualifiers, generic_parameters, generic_constraints
+
+    def parse_generic_parameter_prefix(self):
+        parameters = []
+        constraints = []
+        current_parameter = []
+        self.eat("LESS_THAN")
+        depth = 1
+        while depth > 0:
+            token_type, token_value = self.current_token
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated generic parameter prefix")
+            if token_type == "LESS_THAN":
+                depth += 1
+                current_parameter.append((token_type, token_value))
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.append_generic_parameter_prefix(
+                        parameters, constraints, current_parameter
+                    )
+                    self.eat("GREATER_THAN")
+                    break
+                current_parameter.append((token_type, token_value))
+            elif token_type == "COMMA" and depth == 1:
+                self.append_generic_parameter_prefix(
+                    parameters, constraints, current_parameter
+                )
+                current_parameter = []
+            else:
+                current_parameter.append((token_type, token_value))
+            self.eat(token_type)
+        if not parameters:
+            return None, constraints
+        return f"<{', '.join(parameters)}>", constraints
+
+    def append_generic_parameter_prefix(self, parameters, constraints, tokens):
+        parameter = self.generic_parameter_prefix_name(tokens)
+        if parameter:
+            parameters.append(parameter)
+        constraint = self.generic_parameter_prefix_constraint(parameter, tokens)
+        if constraint:
+            constraints.append(constraint)
+
+    def generic_parameter_prefix_name(self, tokens):
+        significant = [
+            (token_type, token_value)
+            for token_type, token_value in tokens
+            if token_type not in {"COMMENT_SINGLE", "COMMENT_MULTI"}
+        ]
+        if not significant:
+            return None
+        first_type, first_value = significant[0]
+        if (
+            first_type in self.TYPE_NAME_TOKENS
+            and len(significant) > 1
+            and significant[1][0] == "IDENTIFIER"
+        ):
+            return significant[1][1]
+        if first_type == "IDENTIFIER" and first_value in {"let", "type", "typename"}:
+            if len(significant) > 1 and significant[1][0] == "IDENTIFIER":
+                return significant[1][1]
+        if first_type == "IDENTIFIER":
+            return first_value
+        return None
+
+    def generic_parameter_prefix_constraint(self, parameter, tokens):
+        if not parameter:
+            return None
+        for index, (token_type, _) in enumerate(tokens):
+            if token_type != "COLON":
+                continue
+            constraint_parts = []
+            for constraint_type, constraint_value in tokens[index + 1 :]:
+                if constraint_type in {"COMMENT_SINGLE", "COMMENT_MULTI"}:
+                    continue
+                constraint_parts.append(str(constraint_value))
+            if not constraint_parts:
+                return None
+            return GenericConstraintNode(parameter, "".join(constraint_parts))
+        return None
 
     def parse_associated_type(self):
         qualifiers = self.parse_qualifiers()

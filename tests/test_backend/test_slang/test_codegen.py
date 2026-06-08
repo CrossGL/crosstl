@@ -1376,6 +1376,22 @@ def test_reverse_codegen_rejects_generic_where_conformance_constraint():
         generate_code(ast)
 
 
+def test_reverse_codegen_rejects_typealias_generic_conformance_constraint():
+    code = """
+    __generic<T : IFoo>
+    typealias FooAlias = Array<T, 4>;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="typealias FooAlias<T> where T : IFoo",
+    ):
+        generate_code(ast)
+
+
 def test_for_array_assignment_update_codegen():
     code = """
     void main(){

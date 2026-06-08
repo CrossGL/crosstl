@@ -2136,6 +2136,10 @@ class HLSLParser:
             before_index = self.current_index
             qualifiers.extend(self.parse_qualifiers())
 
+            while self.is_unexpanded_parameter_modifier_macro_at(self.current_index):
+                self.eat("IDENTIFIER")
+                qualifiers.extend(self.parse_qualifiers())
+
             if (
                 self.current_token[0] == "IDENTIFIER"
                 and self.current_token[1] in primitive_qualifiers
@@ -2158,6 +2162,23 @@ class HLSLParser:
             if self.current_index == before_index:
                 break
         return qualifiers
+
+    def is_unexpanded_parameter_modifier_macro_at(self, index):
+        if index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_type != "IDENTIFIER":
+            return False
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", str(token_value)):
+            return False
+
+        type_start = index + 1
+        while type_start < len(self.tokens) and self.is_qualifier_token_at(type_start):
+            type_start += 1
+
+        type_end = self.skip_type_name_at(type_start)
+        return type_end is not None and self.is_declarator_identifier_token_at(type_end)
 
     def is_parameter_role_token_at(self, index, roles):
         if index >= len(self.tokens):

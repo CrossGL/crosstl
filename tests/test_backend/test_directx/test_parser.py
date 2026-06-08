@@ -1620,6 +1620,24 @@ def test_parse_nested_template_arguments_closed_by_shift_right_token_from_dxc():
     assert ast.functions[0].params[0].vtype == "Wrapper<vector<float, 4>>"
 
 
+def test_parse_hitobject_array_byval_parameter_modifier_macro_from_dxc():
+    # microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenDXIL/hlsl/objects/HitObject/hitobject-array-byval.hlsl
+    ast = parse_code("""
+    void MakeNop(MOD dx::HitObject obj[2]) {
+      obj[0] = dx::HitObject::MakeNop();
+      obj[1] = dx::HitObject::MakeNop();
+    }
+    """)
+
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "dx::HitObject"
+    assert param.name == "obj"
+    assert param.array_sizes == [2]
+    assert param.qualifiers == []
+
+
 def test_parse_struct_template_methods_from_dxc_spirv_resource_array():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenSPIRV/use.rvalue.for.member-expr.of.array-subscript.hlsl

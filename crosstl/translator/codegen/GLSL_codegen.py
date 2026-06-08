@@ -4007,11 +4007,37 @@ class GLSLCodeGen:
         output_layout = []
         if output_primitive:
             output_layout.append(output_primitive)
+        output_layout.extend(
+            self.glsl_stage_stream_layout_parts(
+                stage_layout_qualifiers, "out", skip_first=True
+            )
+        )
         if max_vertices is not None:
             output_layout.append(f"max_vertices = {max_vertices}")
         if output_layout:
             code += f"layout({', '.join(output_layout)}) out;\n"
+        for stream_layout in self.glsl_stage_stream_layout_parts(
+            stage_layout_qualifiers, "out", skip_first=False
+        )[1:]:
+            code += f"layout({stream_layout}) out;\n"
         return code
+
+    def glsl_stage_stream_layout_parts(
+        self, stage_layout_qualifiers=None, direction=None, skip_first=False
+    ):
+        stream_parts = []
+        for attr in self.glsl_stage_attributes(
+            None, "stream", stage_layout_qualifiers, direction
+        ):
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                continue
+            stream_parts.append(
+                f"stream = {self.glsl_attribute_argument_source(arguments[0])}"
+            )
+        if skip_first:
+            return stream_parts[:1]
+        return stream_parts
 
     def glsl_stage_positive_int_layout_argument(
         self,
@@ -15733,6 +15759,7 @@ class GLSLCodeGen:
             "point_mode",
             "points",
             "quads",
+            "stream",
             "triangles",
             "triangles_adjacency",
             "triangle_strip",
