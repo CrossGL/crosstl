@@ -401,6 +401,7 @@ def _add_project_variant_args(parser, *, action_label):
     parser.add_argument(
         "--variant",
         action="append",
+        type=_non_empty_project_arg("--variant"),
         help=f"Named project variant to {action_label}; repeatable",
     )
 
@@ -3150,6 +3151,7 @@ def _build_parser():
     translate_project_parser.add_argument(
         "--variant",
         action="append",
+        type=_non_empty_project_arg("--variant"),
         help="Named project variant to translate; repeatable",
     )
     translate_project_parser.add_argument(

@@ -15941,6 +15941,32 @@ def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):
     ) in result.stderr
 
 
+@pytest.mark.parametrize("command", ("scan", "report", "translate-project"))
+def test_project_cli_rejects_empty_variant_override(tmp_path, command):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            command,
+            str(repo),
+            "--variant",
+            " ",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "argument --variant: --variant entries must be non-empty" in result.stderr
+
+
 def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     outside_dir = tmp_path / "outside"
