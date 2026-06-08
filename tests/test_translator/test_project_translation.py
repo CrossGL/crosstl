@@ -16428,8 +16428,19 @@ def test_project_cli_inspect_report_text_marks_invalid_reports(tmp_path):
     assert "project.validate.invalid-report" in result.stdout
 
     payload = inspect_project_report(report_path)
+    assert set(payload) == project_pipeline.REPORT_INSPECTION_FIELDS
     assert payload["report"]["available"] is True
     assert payload["report"]["valid"] is False
+    assert payload["migration"] == {
+        "scope": None,
+        "nonGoals": [],
+        "actionCount": 0,
+        "actionsByKind": {},
+        "actionsBySeverity": {},
+        "actionsByTarget": {},
+        "truncatedActionCount": 0,
+        "actions": [],
+    }
 
 
 def test_inspect_project_report_summarizes_generated_report(tmp_path):

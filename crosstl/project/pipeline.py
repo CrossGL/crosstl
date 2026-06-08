@@ -5531,6 +5531,19 @@ def _inspection_migration_action(action: Any) -> dict[str, Any] | None:
     return payload
 
 
+def _empty_inspection_migration_summary() -> dict[str, Any]:
+    return {
+        "scope": None,
+        "nonGoals": [],
+        "actionCount": 0,
+        "actionsByKind": {},
+        "actionsBySeverity": {},
+        "actionsByTarget": {},
+        "truncatedActionCount": 0,
+        "actions": [],
+    }
+
+
 def inspect_project_report(
     report_path: str | os.PathLike[str],
     *,
@@ -5630,6 +5643,7 @@ def inspect_project_report(
         "includeDependencies": {"available": False},
         "includePathProcessing": {"available": False},
         "artifactMatrix": {"available": False},
+        "migration": _empty_inspection_migration_summary(),
         "externalCorpus": {"available": False},
         "diagnosticCount": len(diagnostics),
         "truncatedDiagnosticCount": max(0, len(diagnostics) - diagnostic_limit),
