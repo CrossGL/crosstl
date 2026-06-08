@@ -634,11 +634,15 @@ class HLSLParser:
             qualifiers = self.parse_qualifiers()
             alias_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
+            attributes = []
+            if self.current_token[0] == "LBRACKET" and self.peek()[0] == "LBRACKET":
+                attributes = self.parse_attribute_list()
             array_sizes = self.parse_array_suffixes()
             self.eat("SEMICOLON")
 
             alias = TypeAliasNode(alias_type, name)
             alias.qualifiers = qualifiers
+            alias.attributes = attributes
             alias.array_sizes = array_sizes
             return alias
 

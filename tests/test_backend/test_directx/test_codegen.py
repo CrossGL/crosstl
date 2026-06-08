@@ -6441,6 +6441,36 @@ def test_codegen_linalg_post_type_attributes_from_dxc_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
+    # Source: microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenDXIL/hlsl/linalg/matrix-target-type-in-struct.hlsl
+    code = textwrap.dedent("""
+        using MyHandleT = __builtin_LinAlgMatrix [[__LinAlgMatrix_Attributes(9, 4, 4, 0, 1)]];
+
+        class MyMatrix {
+          MyHandleT handle;
+
+          static MyMatrix Splat(float Val) {
+            MyMatrix Result;
+            __builtin_LinAlg_FillMatrix(Result.handle, Val);
+            return Result;
+          }
+        };
+
+        [numthreads(4, 4, 4)]
+        void main() {
+          MyMatrix MatA = MyMatrix::Splat(1.0f);
+        }
+        """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "type MyHandleT = __builtin_LinAlgMatrix;" in output
+    assert "@ numthreads(4, 4, 4)" in output
+    assert "MyMatrix MatA = MyMatrix::Splat(1.0);" in output
+    parse_crossgl(output)
+
+
 def test_codegen_invalid_hlsl_raises():
     code = "float4 main() : SV_Target0 { float x = 1.0 return float4(x, 0, 0, 1); }"
     with pytest.raises(SyntaxError):

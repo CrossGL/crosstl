@@ -266,6 +266,22 @@ def test_typealias_codegen():
     assert "typedef vec4 Color;" in generated_code
 
 
+def test_generic_typealias_codegen_from_slang_neural_modules():
+    # Source: shader-slang/slang source/standard-modules/neural/hash-function.slang
+    # declares internal typealias uvec<int Dim> = Array<uint32_t, Dim>;
+    code = """
+    implementing neural;
+
+    internal typealias uvec<int Dim> = Array<uint32_t, Dim>;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "typedef Array<uint32_t, Dim> uvec<intDim>;" in generated_code
+
+
 def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     code = """
     public struct AdamState

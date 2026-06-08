@@ -1106,6 +1106,48 @@ def test_comptime_if_elif_survives_multiline_generic_return_parse():
     assert isinstance(branch.else_body[0].else_body[0], IfNode)
 
 
+def test_multiline_generic_call_return_keeps_following_functions_top_level():
+    # Reduced from Modular max/kernels/src/_cublas/cublas.mojo generated wrappers.
+    code = """
+    def _get_dylib_function[
+        func_name: StaticString, result_type: TrivialRegisterPassable
+    ]() raises -> result_type:
+        return _ffi_get_dylib_function[
+            CUDA_CUBLAS_LIBRARY(),
+            func_name,
+            result_type,
+        ]()
+
+
+    def cublasScopy(handle: cublasHandle_t) raises -> Result:
+        return _get_dylib_function[
+            "cublasScopy_v2_64",
+            def(
+                type_of(handle),
+            ) thin -> Result,
+        ]()(handle)
+
+
+    def cublasDgemv(handle: cublasHandle_t) raises -> Result:
+        return _get_dylib_function[
+            "cublasDgemv_v2_64",
+            def(
+                type_of(handle),
+            ) thin -> Result,
+        ]()(handle)
+    """
+    ast = parse_code(tokenize_code(code))
+    top_level_functions = [
+        node.name for node in ast.functions if isinstance(node, FunctionNode)
+    ]
+
+    assert top_level_functions == [
+        "_get_dylib_function",
+        "cublasScopy",
+        "cublasDgemv",
+    ]
+
+
 def test_comptime_if_elif_survives_multiline_call_statement_parse():
     code = """
     def store[width: Int](data: InlineArray[Scalar[dtype], width], tmem_addr: UInt32):

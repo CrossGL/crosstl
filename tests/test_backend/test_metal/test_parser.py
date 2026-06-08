@@ -207,6 +207,81 @@ def test_parse_unbraced_do_while_body_from_msl_cxx14_statement_grammar():
     assert isinstance(body[1].body[0], AssignmentNode)
 
 
+def test_parse_templated_call_assignment_lhs_from_pytorch_mps_binary_kernel():
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Path: aten/src/ATen/native/mps/kernels/BinaryKernel.metal
+    code = """
+    template<typename T>
+    device T& ref_at_offs(device T* ptr, long off);
+
+    template<typename T>
+    T val_at_offs(device T* ptr, long off);
+
+    kernel void lerp_kernel(device float* out_ptr [[buffer(0)]],
+                            device float* self_ptr [[buffer(1)]],
+                            long out_off,
+                            long self_off) {
+        ref_at_offs<float>(out_ptr, long(out_off)) =
+            val_at_offs<float>(self_ptr, long(self_off));
+    }
+    """
+    ast = parse_ok(code)
+    assignment = ast.functions[0].body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, FunctionCallNode)
+    assert assignment.left.name == "ref_at_offs<float>"
+
+
+def test_parse_indexed_reinterpret_cast_assignment_from_pytorch_mps_quantized():
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Path: aten/src/ATen/native/mps/kernels/Quantized.metal
+    code = """
+    struct vecT { float value; };
+
+    kernel void int4pack_mm(device char* output_data [[buffer(0)]],
+                            uint m,
+                            uint n,
+                            uint N,
+                            float result) {
+        reinterpret_cast<device vecT*>(output_data + m * N)[n / 4] =
+            vecT(result);
+    }
+    """
+    ast = parse_ok(code)
+    assignment = ast.functions[0].body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, ArrayAccessNode)
+
+
+def test_parse_global_scoped_metal_array_declaration_from_pytorch_mps_scatter():
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Path: aten/src/ATen/native/mps/kernels/ScatterGather.metal
+    code = """
+    constant uint max_ndim = 16;
+
+    template<typename T>
+    void pos_from_thread_index(long tid, thread T* pos, constant T* sizes);
+
+    kernel void scatter(long thread_index,
+                        long tid_offset,
+                        constant long* index_sizes [[buffer(0)]]) {
+        long tid = long(thread_index) + tid_offset;
+        ::metal::array<long, max_ndim> pos;
+        pos_from_thread_index<long>(tid, &pos[0], index_sizes);
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[1].vtype == "metal::array<long,max_ndim>"
+    assert body[1].name == "pos"
+
+
 def test_parse_resource_bindings_and_address_spaces():
     code = """
     #include <metal_stdlib>

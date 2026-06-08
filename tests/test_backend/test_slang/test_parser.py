@@ -1246,6 +1246,32 @@ def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
     ]
 
 
+def test_generic_typealias_declaration_from_slang_neural_modules():
+    # Source: shader-slang/slang source/standard-modules/neural/hash-function.slang
+    # and source/standard-modules/neural/WaveMatrix.slang declare generic
+    # aliases before the `=` target type.
+    code = """
+    implementing neural;
+
+    internal typealias uvec<int Dim> = Array<uint32_t, Dim>;
+    internal typealias MatrixA<int Rows, int Cols> =
+        WaveMatrix<half, linalg.CoopMatMatrixUse.MatrixA, Rows, Cols>;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.implementing_modules == ["neural"]
+    assert [(node.original_type, node.new_type) for node in ast.typedefs] == [
+        ("Array<uint32_t, Dim>", "uvec<intDim>"),
+        (
+            "WaveMatrix<half, linalg.CoopMatMatrixUse.MatrixA, Rows, Cols>",
+            "MatrixA<intRows, intCols>",
+        ),
+    ]
+    assert ast.typedefs[0].qualifiers == ["internal"]
+
+
 def test_local_typealias_declaration_parses_in_function_body():
     code = """
     bool testVector(uint4 mask)

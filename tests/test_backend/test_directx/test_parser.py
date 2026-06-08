@@ -3458,6 +3458,39 @@ def test_parse_linalg_post_type_attributes_from_dxc():
     assert local.attributes[0].name == "__LinAlgMatrix_Attributes"
 
 
+def test_parse_linalg_using_alias_post_type_attributes_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenDXIL/hlsl/linalg/matrix-target-type-in-struct.hlsl
+    code = textwrap.dedent("""
+        using MyHandleT = __builtin_LinAlgMatrix [[__LinAlgMatrix_Attributes(9, 4, 4, 0, 1)]];
+
+        class MyMatrix {
+          MyHandleT handle;
+
+          static MyMatrix Splat(float Val) {
+            MyMatrix Result;
+            __builtin_LinAlg_FillMatrix(Result.handle, Val);
+            return Result;
+          }
+        };
+
+        [numthreads(4, 4, 4)]
+        void main() {
+          MyMatrix MatA = MyMatrix::Splat(1.0f);
+        }
+        """)
+
+    ast = parse_code(code)
+
+    alias = ast.typedefs[0]
+    local = ast.functions[0].body[0]
+    assert alias.name == "MyHandleT"
+    assert alias.alias_type == "__builtin_LinAlgMatrix"
+    assert alias.attributes[0].name == "__LinAlgMatrix_Attributes"
+    assert [arg for arg in alias.attributes[0].args] == [9, 4, 4, 0, 1]
+    assert local.name == "MatA"
+
+
 @pytest.mark.parametrize(
     "code",
     [

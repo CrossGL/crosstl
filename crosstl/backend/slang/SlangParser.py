@@ -2077,6 +2077,8 @@ class SlangParser:
             self.eat("TYPEALIAS")
             new_type = self.current_token[1]
             self.eat("IDENTIFIER")
+            if self.current_token[0] == "LESS_THAN":
+                new_type += self.parse_generic_type_suffix()
             self.eat("EQUALS")
             original_type = self.parse_type_name(allow_array_suffix=True)
             original_type += self.parse_pointer_suffix()

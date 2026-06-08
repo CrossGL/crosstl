@@ -2431,8 +2431,12 @@ class MetalParser:
         token_type, token_value = self.tokens[idx]
         if self.is_scoped_call_expression_start_at(idx):
             return False
+        if self.is_templated_call_expression_start_at(idx):
+            return False
         if self.is_known_local_variable_name(token_value):
             return False
+        if self.is_scoped_type_declaration_start_at(idx):
+            return True
         if token_type == "ALIGNAS":
             return True
         if token_type == "STRUCT":
@@ -2474,6 +2478,62 @@ class MetalParser:
                 return token_value in self.known_types
             return True
         return False
+
+    def is_templated_call_expression_start_at(self, idx):
+        if idx + 1 >= len(self.tokens) or self.tokens[idx][0] != "IDENTIFIER":
+            return False
+        if self.tokens[idx + 1][0] != "LESS_THAN":
+            return False
+        end = self.skip_template_argument_list_at(idx + 1)
+        return end < len(self.tokens) and self.tokens[end][0] == "LPAREN"
+
+    def is_scoped_type_declaration_start_at(self, idx):
+        if idx >= len(self.tokens):
+            return False
+        if self.tokens[idx][0] not in {"SCOPE", "METAL"} and not (
+            self.tokens[idx][0] == "IDENTIFIER"
+            and idx + 1 < len(self.tokens)
+            and self.tokens[idx + 1][0] == "SCOPE"
+        ):
+            return False
+
+        idx = self.skip_scoped_type_name_at(idx)
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+        while idx < len(self.tokens) and self.tokens[idx][0] in {
+            "MULTIPLY",
+            "BITWISE_AND",
+        }:
+            idx += 1
+        return idx < len(self.tokens) and self.tokens[idx][0] in {
+            "IDENTIFIER",
+            "LBRACKET",
+        }
+
+    def skip_scoped_type_name_at(self, idx):
+        if idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
+            idx += 1
+        if idx >= len(self.tokens):
+            return idx
+        if (
+            self.tokens[idx][0] not in TYPE_TOKENS
+            and self.tokens[idx][0] not in STAGE_TOKENS
+            and self.tokens[idx][0] != "METAL"
+        ):
+            return idx
+        idx += 1
+        while idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
+            idx += 1
+            if idx >= len(self.tokens):
+                return idx
+            if (
+                self.tokens[idx][0] not in TYPE_TOKENS
+                and self.tokens[idx][0] not in STAGE_TOKENS
+                and self.tokens[idx][0] != "METAL"
+            ):
+                return idx
+            idx += 1
+        return idx
 
     def is_known_local_variable_name(self, name):
         return any(name in scope for scope in reversed(self.local_variable_scopes))

@@ -3032,11 +3032,8 @@ class MojoParser:
                 if self.current_token[0] != "RBRACKET":
                     suffix += ", "
             elif token_type == "INDENT":
-                self.pending_expression_layout_dedents += 1
                 self.eat("INDENT")
             elif token_type == "DEDENT":
-                if self.pending_expression_layout_dedents:
-                    self.pending_expression_layout_dedents -= 1
                 self.eat("DEDENT")
             elif token_type in {"IF", "ELSE"}:
                 suffix = suffix.rstrip() + f" {token_value} "
@@ -3073,11 +3070,8 @@ class MojoParser:
                 if self.current_token[0] != "RPAREN":
                     suffix += ", "
             elif token_type == "INDENT":
-                self.pending_expression_layout_dedents += 1
                 self.eat("INDENT")
             elif token_type == "DEDENT":
-                if self.pending_expression_layout_dedents:
-                    self.pending_expression_layout_dedents -= 1
                 self.eat("DEDENT")
             elif token_type == "NEWLINE":
                 self.eat(token_type)
@@ -3111,11 +3105,8 @@ class MojoParser:
                 if self.current_token[0] != "RBRACE":
                     suffix += ", "
             elif token_type == "INDENT":
-                self.pending_expression_layout_dedents += 1
                 self.eat("INDENT")
             elif token_type == "DEDENT":
-                if self.pending_expression_layout_dedents:
-                    self.pending_expression_layout_dedents -= 1
                 self.eat("DEDENT")
             elif token_type == "NEWLINE":
                 self.eat(token_type)
