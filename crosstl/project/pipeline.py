@@ -155,9 +155,11 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "sourceRemapsByVariant",
         "defineProcessingByStatus",
         "defineProcessingBySourceBackend",
+        "defineProcessingByTarget",
         "defineProcessingByVariant",
         "includePathProcessingByStatus",
         "includePathProcessingBySourceBackend",
+        "includePathProcessingByTarget",
         "includePathProcessingByVariant",
     )
 )
@@ -1487,6 +1489,26 @@ def _define_processing_counts_by_source_backend(
     return {source: dict(sorted(row.items())) for source, row in sorted(counts.items())}
 
 
+def _define_processing_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        target = artifact.get("target")
+        key = target if _is_non_empty_string(target) else "unknown"
+        define_processing = artifact.get("defineProcessing")
+        status = (
+            define_processing.get("status")
+            if isinstance(define_processing, Mapping)
+            else "unknown"
+        )
+        if not isinstance(status, str) or status not in DEFINE_PROCESSING_STATUSES:
+            status = "unknown"
+        row = counts.setdefault(key, {})
+        row[status] = row.get(status, 0) + 1
+    return {target: dict(sorted(row.items())) for target, row in sorted(counts.items())}
+
+
 def _define_processing_counts_by_variant(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, int]]:
@@ -1518,6 +1540,7 @@ def _define_processing_rollups(
         "defineProcessingBySourceBackend": _define_processing_counts_by_source_backend(
             artifacts
         ),
+        "defineProcessingByTarget": _define_processing_counts_by_target(artifacts),
         "defineProcessingByVariant": _define_processing_counts_by_variant(artifacts),
     }
 
@@ -1564,6 +1587,29 @@ def _include_path_processing_counts_by_source_backend(
     return {source: dict(sorted(row.items())) for source, row in sorted(counts.items())}
 
 
+def _include_path_processing_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        target = artifact.get("target")
+        key = target if _is_non_empty_string(target) else "unknown"
+        include_path_processing = artifact.get("includePathProcessing")
+        status = (
+            include_path_processing.get("status")
+            if isinstance(include_path_processing, Mapping)
+            else "unknown"
+        )
+        if (
+            not isinstance(status, str)
+            or status not in INCLUDE_PATH_PROCESSING_STATUSES
+        ):
+            status = "unknown"
+        row = counts.setdefault(key, {})
+        row[status] = row.get(status, 0) + 1
+    return {target: dict(sorted(row.items())) for target, row in sorted(counts.items())}
+
+
 def _include_path_processing_counts_by_variant(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, int]]:
@@ -1599,6 +1645,9 @@ def _include_path_processing_rollups(
         ),
         "includePathProcessingBySourceBackend": (
             _include_path_processing_counts_by_source_backend(artifacts)
+        ),
+        "includePathProcessingByTarget": _include_path_processing_counts_by_target(
+            artifacts
         ),
         "includePathProcessingByVariant": _include_path_processing_counts_by_variant(
             artifacts
@@ -6134,6 +6183,7 @@ def _inspection_define_processing_summary(
 
     by_status = summary.get("defineProcessingByStatus")
     by_source_backend = summary.get("defineProcessingBySourceBackend")
+    by_target = summary.get("defineProcessingByTarget")
     by_variant = summary.get("defineProcessingByVariant")
     if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
         return {"available": False}
@@ -6158,6 +6208,15 @@ def _inspection_define_processing_summary(
             for source_backend, counts in by_source_backend.items()
             if isinstance(source_backend, str) and isinstance(counts, Mapping)
         },
+        "byTarget": (
+            {
+                target: dict(counts)
+                for target, counts in by_target.items()
+                if isinstance(target, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(by_target, Mapping)
+            else {}
+        ),
         "byVariant": (
             {
                 variant: dict(counts)
@@ -6238,6 +6297,7 @@ def _inspection_include_path_processing_summary(
 
     by_status = summary.get("includePathProcessingByStatus")
     by_source_backend = summary.get("includePathProcessingBySourceBackend")
+    by_target = summary.get("includePathProcessingByTarget")
     by_variant = summary.get("includePathProcessingByVariant")
     if not isinstance(by_status, Mapping) or not isinstance(by_source_backend, Mapping):
         return {"available": False}
@@ -6262,6 +6322,15 @@ def _inspection_include_path_processing_summary(
             for source_backend, counts in by_source_backend.items()
             if isinstance(source_backend, str) and isinstance(counts, Mapping)
         },
+        "byTarget": (
+            {
+                target: dict(counts)
+                for target, counts in by_target.items()
+                if isinstance(target, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(by_target, Mapping)
+            else {}
+        ),
         "byVariant": (
             {
                 variant: dict(counts)
@@ -10658,6 +10727,14 @@ def _summary_contract_reasons(
         )
         reasons.extend(
             _mapping_field_contract_reasons(
+                "summary.defineProcessingByTarget",
+                summary.get("defineProcessingByTarget"),
+                define_processing_rollups["defineProcessingByTarget"],
+                "artifact define processing",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
                 "summary.defineProcessingByVariant",
                 summary.get("defineProcessingByVariant"),
                 define_processing_rollups["defineProcessingByVariant"],
@@ -10680,6 +10757,14 @@ def _summary_contract_reasons(
                 "summary.includePathProcessingBySourceBackend",
                 summary.get("includePathProcessingBySourceBackend"),
                 include_path_processing_rollups["includePathProcessingBySourceBackend"],
+                "artifact include path processing",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.includePathProcessingByTarget",
+                summary.get("includePathProcessingByTarget"),
+                include_path_processing_rollups["includePathProcessingByTarget"],
                 "artifact include path processing",
             )
         )

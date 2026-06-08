@@ -2203,6 +2203,13 @@ def _format_project_report_inspection(payload):
     )
     if define_processing_by_source_backend:
         lines.append(define_processing_by_source_backend)
+    define_processing_by_target = _format_nested_count_rollup(
+        "Define processing by target",
+        summary.get("defineProcessingByTarget"),
+        include_zero=False,
+    )
+    if define_processing_by_target:
+        lines.append(define_processing_by_target)
     define_processing_by_variant = _format_nested_count_rollup(
         "Define processing by variant",
         summary.get("defineProcessingByVariant"),
@@ -2228,6 +2235,13 @@ def _format_project_report_inspection(payload):
     )
     if include_path_processing_by_source_backend:
         lines.append(include_path_processing_by_source_backend)
+    include_path_processing_by_target = _format_nested_count_rollup(
+        "Include path processing by target",
+        summary.get("includePathProcessingByTarget"),
+        include_zero=False,
+    )
+    if include_path_processing_by_target:
+        lines.append(include_path_processing_by_target)
     include_path_processing_by_variant = _format_nested_count_rollup(
         "Include path processing by variant",
         summary.get("includePathProcessingByVariant"),

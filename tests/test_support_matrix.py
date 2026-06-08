@@ -497,17 +497,17 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert (
-            "include-path processing rollups by status, source backend, and variant"
-            in backend_support["notes"]
+            "include-path processing rollups by status, target, source backend, "
+            "and variant" in backend_support["notes"]
         )
         assert "forged artifact include-path processing metadata" in (
             backend_support["notes"]
         )
         assert (
-            "include-path processing summary rollup mismatches including variant rollups"
-            in backend_support["notes"]
+            "include-path processing summary rollup mismatches including target "
+            "and variant rollups" in backend_support["notes"]
         )
-        assert "missing include-path processing variant rollups" in (
+        assert "missing include-path processing target and variant rollups" in (
             backend_support["notes"]
         )
         assert (
@@ -720,7 +720,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         )
         assert "report CLI variant metadata" in backend_support["notes"]
         assert (
-            "define-processing status, source-backend, and variant rollups"
+            "define-processing status, target, source-backend, and variant rollups"
             in backend_support["notes"]
         )
         assert "sampled define-processing artifact metadata" in (
@@ -746,10 +746,12 @@ def test_project_macro_variants_document_artifact_define_maps():
             backend_support["notes"]
         )
         assert (
-            "define-processing summary rollup mismatches including variant rollups"
-            in backend_support["notes"]
+            "define-processing summary rollup mismatches including target and "
+            "variant rollups" in backend_support["notes"]
         )
-        assert "missing define-processing variant rollups" in (backend_support["notes"])
+        assert "missing define-processing target and variant rollups" in (
+            backend_support["notes"]
+        )
         assert "object-like define expansion" in backend_support["notes"]
         assert "#if/#ifdef/#ifndef/#elif/#else/#endif branch selection" in (
             backend_support["notes"]

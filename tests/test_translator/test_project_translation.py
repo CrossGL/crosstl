@@ -3041,6 +3041,9 @@ def test_translate_project_applies_include_dirs_and_defines(tmp_path):
     assert payload["summary"]["includePathProcessingBySourceBackend"] == {
         "opengl": {"forwarded": 1}
     }
+    assert payload["summary"]["includePathProcessingByTarget"] == {
+        "cgl": {"forwarded": 1}
+    }
     assert "project_color" in output.read_text(encoding="utf-8")
 
 
@@ -3127,10 +3130,14 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
     assert payload["summary"]["includePathProcessingBySourceBackend"] == {
         "cgl": {"forwarded": 1}
     }
+    assert payload["summary"]["includePathProcessingByTarget"] == {
+        "opengl": {"forwarded": 1}
+    }
     assert inspection["includePathProcessing"] == {
         "available": True,
         "byStatus": {"forwarded": 1},
         "bySourceBackend": {"cgl": {"forwarded": 1}},
+        "byTarget": {"opengl": {"forwarded": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -3299,6 +3306,9 @@ def test_translate_project_records_include_forwarding_for_all_source_frontends(
     assert (
         payload["summary"]["includePathProcessingBySourceBackend"] == expected_by_source
     )
+    assert payload["summary"]["includePathProcessingByTarget"] == {
+        "cgl": expected_by_status
+    }
     assert payload["diagnosticCounts"] == {
         "note": 0,
         "warning": len(unsupported_sources),
@@ -3425,6 +3435,7 @@ def test_translate_project_records_define_forwarding_for_all_source_frontends(
     assert payload["summary"]["translatedCount"] == len(source_names)
     assert payload["summary"]["defineProcessingByStatus"] == expected_by_status
     assert payload["summary"]["defineProcessingBySourceBackend"] == expected_by_source
+    assert payload["summary"]["defineProcessingByTarget"] == {"cgl": expected_by_status}
     assert payload["summary"]["defineProcessingByVariant"] == {}
     assert payload["diagnosticCounts"] == {
         "note": 0,
@@ -3585,14 +3596,21 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     assert payload["summary"]["defineProcessingBySourceBackend"] == {
         "cgl": {"forwarded": 2}
     }
+    assert payload["summary"]["defineProcessingByTarget"] == {
+        "opengl": {"forwarded": 2}
+    }
     assert payload["summary"]["defineProcessingByVariant"] == {
         "debug": {"forwarded": 1},
         "release": {"forwarded": 1},
+    }
+    assert payload["summary"]["includePathProcessingByTarget"] == {
+        "opengl": {"not-requested": 2}
     }
     assert payload["summary"]["includePathProcessingByVariant"] == {
         "debug": {"not-requested": 1},
         "release": {"not-requested": 1},
     }
+    assert inspection["defineProcessing"]["byTarget"] == {"opengl": {"forwarded": 2}}
     assert inspection["defineProcessing"]["byVariant"] == {
         "debug": {"forwarded": 1},
         "release": {"forwarded": 1},
@@ -3634,8 +3652,12 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "debug": {"not-requested": 1},
         "release": {"not-requested": 1},
     }
+    assert inspection["includePathProcessing"]["byTarget"] == {
+        "opengl": {"not-requested": 2}
+    }
     assert result.returncode == 0
     assert "Define processing by source backend: cgl=(forwarded=2)" in result.stdout
+    assert "Define processing by target: opengl=(forwarded=2)" in result.stdout
     assert (
         "Define processing by variant: debug=(forwarded=1), release=(forwarded=1)"
     ) in result.stdout
@@ -3656,6 +3678,9 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "Include path processing by variant: "
         "debug=(not-requested=1), release=(not-requested=1)"
     ) in result.stdout
+    assert (
+        "Include path processing by target: opengl=(not-requested=2)" in result.stdout
+    )
     assert (
         "Include path processing by source backend: cgl=(not-requested=2)"
         in result.stdout
@@ -3797,8 +3822,14 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
     assert payload["summary"]["defineProcessingByVariant"] == {
         "debug": {"forwarded": 1}
     }
+    assert payload["summary"]["defineProcessingByTarget"] == {
+        "opengl": {"forwarded": 1}
+    }
     assert payload["summary"]["includePathProcessingByVariant"] == {
         "debug": {"not-requested": 1}
+    }
+    assert payload["summary"]["includePathProcessingByTarget"] == {
+        "opengl": {"not-requested": 1}
     }
     assert payload["artifactMatrix"]["variantCount"] == 1
     assert payload["artifactMatrix"]["statusBySourceBackend"] == {
@@ -4645,11 +4676,15 @@ def test_translate_project_records_define_processing_without_frontend_support(
     assert payload["summary"]["defineProcessingBySourceBackend"] == {
         "rust": {"not-supported": 1}
     }
+    assert payload["summary"]["defineProcessingByTarget"] == {
+        "cgl": {"not-supported": 1}
+    }
     assert payload["summary"]["defineProcessingByVariant"] == {}
     assert inspection["defineProcessing"] == {
         "available": True,
         "byStatus": {"not-supported": 1},
         "bySourceBackend": {"rust": {"not-supported": 1}},
+        "byTarget": {"cgl": {"not-supported": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -4687,6 +4722,7 @@ def test_translate_project_records_define_processing_without_frontend_support(
     assert (
         "Define processing by source backend: rust=(not-supported=1)" in result.stdout
     )
+    assert "Define processing by target: cgl=(not-supported=1)" in result.stdout
     assert "Define processing issues:" in result.stdout
     assert (
         "- shader.rs -> cgl at translated/cgl/shader.cgl: "
@@ -5444,6 +5480,7 @@ def test_validate_project_report_rejects_define_processing_summary_mismatches(
     payload = report.to_json()
     payload["summary"]["defineProcessingByStatus"] = {"forwarded": 1}
     payload["summary"]["defineProcessingBySourceBackend"] = {"cgl": {"forwarded": 1}}
+    payload["summary"]["defineProcessingByTarget"] = {"metal": {"forwarded": 1}}
     payload["summary"]["defineProcessingByVariant"] = {"debug": {"forwarded": 1}}
     report_path = repo / "out" / "portability-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5462,6 +5499,10 @@ def test_validate_project_report_rejects_define_processing_summary_mismatches(
         "summary.defineProcessingBySourceBackend must match "
         "artifact define processing"
     ) in diagnostic["message"]
+    assert (
+        "summary.defineProcessingByTarget must match artifact define processing"
+        in diagnostic["message"]
+    )
     assert (
         "summary.defineProcessingByVariant must match artifact define processing"
         in diagnostic["message"]
@@ -5520,6 +5561,7 @@ def test_validate_project_report_rejects_include_path_processing_summary_mismatc
     payload["summary"]["includePathProcessingBySourceBackend"] = {
         "cgl": {"forwarded": 1}
     }
+    payload["summary"]["includePathProcessingByTarget"] = {"metal": {"forwarded": 1}}
     payload["summary"]["includePathProcessingByVariant"] = {"debug": {"forwarded": 1}}
     report_path = repo / "out" / "portability-report.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5536,6 +5578,10 @@ def test_validate_project_report_rejects_include_path_processing_summary_mismatc
     ) in diagnostic["message"]
     assert (
         "summary.includePathProcessingBySourceBackend must match "
+        "artifact include path processing"
+    ) in diagnostic["message"]
+    assert (
+        "summary.includePathProcessingByTarget must match "
         "artifact include path processing"
     ) in diagnostic["message"]
     assert (
@@ -12374,7 +12420,9 @@ def test_validate_project_report_rejects_missing_processing_variant_rollups(tmp_
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     report = translate_project(repo, targets=["cgl"], output_dir="out")
     payload = report.to_json()
+    payload["summary"].pop("defineProcessingByTarget")
     payload["summary"].pop("defineProcessingByVariant")
+    payload["summary"].pop("includePathProcessingByTarget")
     payload["summary"].pop("includePathProcessingByVariant")
     report_path = repo / "out" / "missing-processing-variant-rollups-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -12385,7 +12433,13 @@ def test_validate_project_report_rejects_missing_processing_variant_rollups(tmp_
     assert validation["validation"] == {"toolchains": [], "artifacts": []}
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "summary.defineProcessingByTarget must be an object" in (
+        diagnostic["message"]
+    )
     assert "summary.defineProcessingByVariant must be an object" in (
+        diagnostic["message"]
+    )
+    assert "summary.includePathProcessingByTarget must be an object" in (
         diagnostic["message"]
     )
     assert "summary.includePathProcessingByVariant must be an object" in (
@@ -15616,6 +15670,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byTarget": {"cgl": {"not-requested": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -15658,6 +15713,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byTarget": {"cgl": {"not-requested": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -16308,6 +16364,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byTarget": {"cgl": {"not-requested": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -16331,6 +16388,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "available": True,
         "byStatus": {"not-requested": 1},
         "bySourceBackend": {"cgl": {"not-requested": 1}},
+        "byTarget": {"cgl": {"not-requested": 1}},
         "byVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -17084,6 +17142,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Source remaps: 1" in result.stdout
     assert "Define processing: not-requested=1" in result.stdout
     assert "Define processing by source backend: cgl=(not-requested=1)" in result.stdout
+    assert "Define processing by target: cgl=(not-requested=1)" in result.stdout
     assert "Define processing artifacts:" in result.stdout
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
@@ -17095,6 +17154,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "Include path processing by source backend: cgl=(not-requested=1)"
         in result.stdout
     )
+    assert "Include path processing by target: cgl=(not-requested=1)" in result.stdout
     assert "Include path processing artifacts:" in result.stdout
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "

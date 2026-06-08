@@ -336,9 +336,10 @@ files shadow configured project or selected variant define names. The
 diagnostics identify the source location and define name without reporting
 configured define values.
 Summary, inspection payloads, and text reports also include define-processing
-rollups by source backend and by named variant when variants are configured, so
-frontend-specific and variant-specific preprocessing gaps are visible without
-reading every artifact record. Report inspection also includes sampled artifact
+rollups by target, source backend, and named variant when variants are
+configured, so target-specific, frontend-specific, and variant-specific
+preprocessing gaps are visible without reading every artifact record. Report
+inspection also includes sampled artifact
 define-processing metadata with status, frontend support, and define counts,
 but not define values, so artifact-level preprocessing state can be triaged
 without exposing configuration values.
@@ -348,13 +349,13 @@ not be consumed by the selected source frontend. Include-path processing
 warnings are also emitted when active include paths cannot be forwarded, so
 the report diagnostics identify affected source frontends without failing the
 batch translation.
-summaries and text reports also roll up by source backend and by named variant
-when variants are configured. Report inspection includes sampled artifacts
-whose active include paths could not be forwarded, so the affected source,
-target, and frontend are visible without reading every artifact record. It also
-includes sampled artifact include-path processing metadata with status,
-frontend support, and include path counts, so artifact-level include forwarding
-state can be triaged from the report summary.
+Summary, inspection payloads, and text reports also roll up by target, source
+backend, and named variant when variants are configured. Report inspection
+includes sampled artifacts whose active include paths could not be forwarded, so
+the affected source, target, and frontend are visible without reading every
+artifact record. It also includes sampled artifact include-path processing
+metadata with status, frontend support, and include path counts, so
+artifact-level include forwarding state can be triaged from the report summary.
 During scan, project reports also record ``#include`` directives discovered in
 translation units. Each dependency record keeps the include target, local,
 system, or dynamic kind, line and column, and a status of ``resolved``,
@@ -594,10 +595,10 @@ Project reports are JSON documents with:
   include-directory status record and count consistency checks, config hash
   shape and current-file checks, unit source hash shape and current-file
   checks, full-report artifact matrix coverage and artifact define map checks,
-  artifact define-processing metadata and status/source-backend/variant rollup
-  checks,
-  artifact include-path processing metadata and status/source-backend/variant
+  artifact define-processing metadata and status/target/source-backend/variant
   rollup checks,
+  artifact include-path processing metadata and
+  status/target/source-backend/variant rollup checks,
   artifact matrix emitted/translated/failed/missing/extra/completion count and
   target/variant rollup checks,
   full-report source-map granularity, target, source-backend, and variant
