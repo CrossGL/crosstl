@@ -1379,6 +1379,121 @@ def test_scan_project_evaluates_integer_comparison_include_conditions(tmp_path):
     assert payload["summary"]["includeDependencyCount"] == 1
 
 
+def test_scan_project_reports_configured_define_shadowing(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #define MODE 2
+            #if defined(DEBUG_MODE)
+            #undef DEBUG_MODE
+            #endif
+            #define LOCAL_ONLY 1
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            MODE = "1"
+
+            [project.variants.debug]
+            DEBUG_MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.define-shadowed": 2
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.defines": 2}
+    diagnostics = payload["diagnostics"]
+    assert [diagnostic["code"] for diagnostic in diagnostics] == [
+        "project.scan.define-shadowed",
+        "project.scan.define-shadowed",
+    ]
+    assert (
+        "redefines configured define 'MODE' (project define)"
+        in diagnostics[0]["message"]
+    )
+    assert "undefines configured define 'DEBUG_MODE' (variant define: debug)" in (
+        diagnostics[1]["message"]
+    )
+    assert "LOCAL_ONLY" not in json.dumps(diagnostics)
+    assert diagnostics[0]["location"] == {
+        "file": "shaders/main.frag",
+        "line": 2,
+        "column": 1,
+        "offset": 0,
+        "length": 0,
+        "endLine": 2,
+        "endColumn": 1,
+        "endOffset": 0,
+    }
+    assert diagnostics[1]["location"] == {
+        "file": "shaders/main.frag",
+        "line": 4,
+        "column": 1,
+        "offset": 0,
+        "length": 0,
+        "endLine": 4,
+        "endColumn": 1,
+        "endOffset": 0,
+    }
+
+
+def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if defined(DEBUG_MODE)
+            #undef DEBUG_MODE
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.variants.debug]
+            DEBUG_MODE = "1"
+
+            [project.variants.release]
+            RELEASE_MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo), variants=["release"])
+        .to_report(targets=["cgl"])
+        .to_json()
+    )
+
+    assert payload["project"]["selectedVariants"] == ["release"]
+    assert payload["project"]["variants"] == {"release": {"RELEASE_MODE": "1"}}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {}
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+
+
 def test_scan_project_keeps_includes_for_unsupported_conditional_expressions(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

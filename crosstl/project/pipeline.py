@@ -508,6 +508,9 @@ INCLUDE_LITERAL_RE = re.compile(r'^(?P<open>["<])(?P<path>[^">]+)(?P<close>[">])
 INCLUDE_CONDITION_TOKEN_RE = re.compile(
     r"defined|&&|\|\||==|!=|<=|>=|<|>|!|\(|\)|[+-]?[0-9]+|" r"[A-Za-z_][A-Za-z0-9_]*|\S"
 )
+DEFINE_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*(?P<directive>define|undef)\s+" r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+)
 REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -2212,6 +2215,111 @@ def _include_condition_value(
     return _include_if_expression_value(config, expression)
 
 
+def _configured_define_names(config: ProjectConfig) -> set[str]:
+    names = set(config.defines)
+    for defines in config.variants.values():
+        names.update(defines)
+    return names
+
+
+def _configured_define_origin_label(config: ProjectConfig, name: str) -> str:
+    origins = []
+    if name in config.defines:
+        origins.append("project define")
+    variants = sorted(
+        variant for variant, defines in config.variants.items() if name in defines
+    )
+    if variants:
+        label = "variant define" if len(variants) == 1 else "variant defines"
+        origins.append(f"{label}: {', '.join(variants)}")
+    return "; ".join(origins) or "configured define"
+
+
+def _define_shadowing_diagnostic(
+    *,
+    config: ProjectConfig,
+    relative_path: str,
+    line_number: int,
+    column: int,
+    directive: str,
+    name: str,
+) -> ProjectDiagnostic:
+    verb = "redefines" if directive == "define" else "undefines"
+    origin = _configured_define_origin_label(config, name)
+    return ProjectDiagnostic(
+        severity="warning",
+        code="project.scan.define-shadowed",
+        message=(
+            f"Preprocessor directive in {relative_path}:{line_number} {verb} "
+            f"configured define '{name}' ({origin}); project define "
+            "preprocessing may not match source-local macro state."
+        ),
+        location=SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        ),
+        missing_capabilities=["macro.defines"],
+    )
+
+
+def _scan_define_shadowing_diagnostics(
+    config: ProjectConfig, source_path: Path, relative_path: str
+) -> list[ProjectDiagnostic]:
+    configured_names = _configured_define_names(config)
+    if not configured_names:
+        return []
+
+    try:
+        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    diagnostics: list[ProjectDiagnostic] = []
+    seen: set[tuple[int, str, str]] = set()
+    for variant, defines in _variant_jobs(config):
+        scan_config = (
+            replace(config, defines=defines) if variant is not None else config
+        )
+        conditional_stack: list[_IncludeConditionalFrame] = []
+        for line_number, line in enumerate(lines, start=1):
+            conditional = INCLUDE_CONDITIONAL_DIRECTIVE_RE.match(line)
+            if conditional:
+                _apply_include_conditional_directive(
+                    scan_config,
+                    conditional_stack,
+                    conditional.group("directive"),
+                    conditional.group("body"),
+                )
+                continue
+            if not _include_conditionals_active(conditional_stack):
+                continue
+            define_directive = DEFINE_DIRECTIVE_RE.match(line)
+            if not define_directive:
+                continue
+            directive = define_directive.group("directive")
+            name = define_directive.group("name")
+            if name not in scan_config.defines:
+                continue
+            key = (line_number, directive, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            diagnostics.append(
+                _define_shadowing_diagnostic(
+                    config=config,
+                    relative_path=relative_path,
+                    line_number=line_number,
+                    column=max(1, line.find("#") + 1),
+                    directive=directive,
+                    name=name,
+                )
+            )
+    return diagnostics
+
+
 def _include_conditionals_active(stack: Sequence[_IncludeConditionalFrame]) -> bool:
     return all(frame.branch_active for frame in stack)
 
@@ -3438,6 +3546,9 @@ def scan_project(
             )
             continue
 
+        diagnostics.extend(
+            _scan_define_shadowing_diagnostics(config, path, relative_path)
+        )
         include_dependencies, include_diagnostics = _scan_include_dependencies(
             config, path, relative_path
         )
