@@ -147,6 +147,7 @@ class SlangParser:
     EXPRESSION_TYPE_OPERAND_TOKENS = (
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"GENERIC", "VOID"}
     )
+    EXPRESSION_PACK_MARKER_IDENTIFIERS = {"expand", "each"}
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -3287,6 +3288,12 @@ class SlangParser:
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
         if self.current_token == ("IDENTIFIER", "no_diff"):
+            self.eat("IDENTIFIER")
+            return self.parse_unary()
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.EXPRESSION_PACK_MARKER_IDENTIFIERS
+        ):
             self.eat("IDENTIFIER")
             return self.parse_unary()
         if self.current_token[0] == "LPAREN" and self.is_c_style_cast_start():

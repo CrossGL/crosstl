@@ -802,6 +802,38 @@ def test_primary_graphics_vector_result_types_are_preserved():
     assert "float3 lit = bend(normal, tangent, 0.5);" in metal
 
 
+def test_global_constant_array_declarators_preserve_c_style_suffixes():
+    shader = """
+    shader GaussianKernelConstants {
+        const float gaussianKernel[5] = {0.0625, 0.25, 0.375, 0.25, 0.0625};
+
+        float kernelWeight(int index) {
+            return gaussianKernel[index];
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    hlsl = HLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+    slang = codegen.get_codegen("slang").generate(ast)
+
+    for backend, generated in (
+        ("directx", hlsl),
+        ("opengl", glsl),
+        ("metal", metal),
+        ("slang", slang),
+    ):
+        _assert_codegen_output_is_usable(backend, generated)
+        assert "float[5] gaussianKernel" not in generated
+
+    assert re.search(r"static const float gaussianKernel\[5\]\s*=", hlsl)
+    assert re.search(r"const float gaussianKernel\[5\]\s*=", glsl)
+    assert re.search(r"constant float gaussianKernel\[5\]\s*=", metal)
+    assert re.search(r"static const float gaussianKernel\[5\]\s*=", slang)
+
+
 def test_primary_graphics_texture_helper_calls_survive_shadowed_identifier_names():
     shader = """
     shader TextureHelperShadowedIdentifiers {

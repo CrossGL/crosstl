@@ -32,6 +32,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
     },
+    "shader-slang/slang-main-2026-06-08-type-param-pack": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
     "shader-slang/slang-gh-4104-2026-06-08": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
@@ -1181,6 +1185,49 @@ EXTERNAL_FIXTURES = [
             'printf("%g %g\\n", v0, v1);',
         ],
         "not_contains": ["__subscript", "operator[]", "where T"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: docs/generated/tests/conformance/generics/
+        # type-param-pack-expand-functional.slang
+        "id": "slang_generated_type_param_pack_expand_markers",
+        "repo": "shader-slang/slang-main-2026-06-08-type-param-pack",
+        "path": (
+            "docs/generated/tests/conformance/generics/"
+            "type-param-pack-expand-functional.slang"
+        ),
+        "source": (
+            """
+            void sumHelper(inout int acc, int term) { acc += term; }
+
+            int sumInts<each T>(expand each T terms)
+            {
+                int acc = 0;
+                expand sumHelper(acc, each terms);
+                return acc;
+            }
+
+            RWStructuredBuffer<int> outputBuffer;
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 id : SV_DispatchThreadID)
+            {
+                outputBuffer[0] = sumInts(1, 2, 3);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "int sumInts(T terms)",
+            "sumHelper(acc, terms);",
+            "outputBuffer[0] = sumInts(1, 2, 3);",
+        ],
+        "not_contains": [
+            "expand sumHelper",
+            "each terms",
+            "Expected SEMICOLON",
+        ],
     },
     {
         "id": "slang_generated_interface_constructor_requirement_codegen",

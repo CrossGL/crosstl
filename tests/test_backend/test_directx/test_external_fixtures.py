@@ -44,6 +44,9 @@ DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT = (
 )
 DIRECTX_SHADER_COMPILER_NAMESPACE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
+DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -215,6 +218,30 @@ EXTERNAL_FIXTURES = [
             "groupshared vec4 SharedArr[64];",
             "void fn_(vec4 Arr[64], float F)",
             "fn_(SharedArr, 6.0);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_geometry_inputpatch_parameter",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT,
+        path="tools/clang/test/CodeGenHLSL/lib_entries2.hlsl",
+        code=textwrap.dedent("""
+            struct GSOut {
+              float4 pos : SV_Position;
+            };
+
+            [shader("geometry")]
+            [maxvertexcount(3)]
+            [instance(24)]
+            void gs_main(InputPatch<GSOut, 2> points, inout PointStream<GSOut> stream) {
+              stream.Append(points[0]);
+              stream.RestartStrip();
+            }
+        """).strip(),
+        contains=(
+            "geometry {",
+            "void gs_main(GSOut points[2], inout pointStream stream) @ stage_entry",
+            "buffer_append(stream, points[0]);",
         ),
     ),
     ExternalFixture(

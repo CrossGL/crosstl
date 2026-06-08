@@ -36,6 +36,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "f2565512667db3d4a7142ba3d3248a02f7be917d",
         "path": "data/kernels/channelmixer.cl",
     },
+    "khronos_opencl_sdk_reduce_shared_parameter_name": {
+        "url": "https://github.com/KhronosGroup/OpenCL-SDK",
+        "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
+        "path": "samples/core/reduce/reduce.cl",
+    },
 }
 
 
@@ -206,3 +211,28 @@ def test_external_darktable_channelmixer_statement_expression_codegen_reparse():
     assert "switch (kind)" in crossgl
     assert "case 0:" in crossgl
     assert "out[0] = 1.0f;" in crossgl
+
+
+def test_external_khronos_opencl_sdk_shared_parameter_name_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "khronos_opencl_sdk_reduce_shared_parameter_name"
+    ]
+    assert source_info["commit"] == "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f"
+    assert source_info["path"] == "samples/core/reduce/reduce.cl"
+
+    source = """
+    int read_local(local int *shared, size_t count, size_t i) {
+        return i < count ? shared[i] : 0;
+    }
+
+    kernel void reduce(global int *front, local int *shared) {
+        size_t lid = get_local_id(0);
+        shared[lid] = read_local(shared, 1, lid) + front[lid];
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "ptr<i32> shared_" in crossgl
+    assert "shared_[i]" in crossgl
+    assert "shared: array<i32>" not in crossgl

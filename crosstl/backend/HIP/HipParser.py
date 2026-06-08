@@ -1165,9 +1165,20 @@ class HipParser:
             return TypeAliasNode(alias_type, function_pointer_name)
 
         name = self.consume("IDENTIFIER").value
+        self.skip_newlines()
+        if self.match("LPAREN"):
+            self.consume_function_type_parameter_list()
+            self.type_aliases.add(name)
+            return TypeAliasNode(alias_type, name)
+
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def consume_function_type_parameter_list(self):
+        self.consume("LPAREN")
+        self.parse_parameter_list()
+        self.consume("RPAREN")
 
     def parse_typedef_struct_alias(self):
         self.consume("STRUCT")

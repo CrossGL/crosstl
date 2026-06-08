@@ -8,6 +8,7 @@ from crosstl.backend.HIP.HipAst import (
     KernelLaunchNode,
     KernelNode,
     SwitchNode,
+    TypeAliasNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -52,6 +53,14 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/ROCm/rocm-examples",
         "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
         "paths": ["HIP-Basic/runtime_compilation/main.hip"],
+    },
+    "rocm_examples_stb_image_write": {
+        "url": "https://github.com/ROCm/rocm-examples",
+        "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
+        "paths": [
+            "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/"
+            "stb_image_write.h"
+        ],
     },
     "hip_examples": {
         "url": "https://github.com/ROCm/HIP-Examples",
@@ -515,6 +524,30 @@ def test_external_rocm_stb_image_trailing_aligned_attribute_codegen_reparse():
     assert "temp[0] = 1;" in crossgl
     assert "__attribute__" not in crossgl
     assert "aligned" not in crossgl
+
+
+def test_external_rocm_stb_image_write_function_type_typedef_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
+    # HIP-Doc/Tutorials/Programming-Patterns/image_convolution/stb_image_write.h.
+    source = """
+    typedef void stbi_write_func(void *context, void *data, int size);
+
+    extern int stbi_write_png_to_func(stbi_write_func *func,
+                                      void *context,
+                                      int w,
+                                      int h);
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    alias = ast.statements[0]
+    function = ast.statements[1]
+
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "stbi_write_func"
+    assert alias.alias_type == "void"
+    assert function.params[0]["type"] == "stbi_write_func *"
+    assert "typedef void stbi_write_func;" in crossgl
+    assert "i32 stbi_write_png_to_func(ptr<stbi_write_func> func" in crossgl
 
 
 def test_external_hip_examples_function_pointer_parameter_codegen_reparse():

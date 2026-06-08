@@ -1800,10 +1800,13 @@ class HLSLToCrossGLConverter:
             prefixes.append(primitive_qualifier)
         parameter_name = parameter.name or f"_param{parameter_index}"
         parameter_name = self.render_identifier(parameter_name)
-        parameter_text = (
-            f"{self.map_variable_type(parameter)} {parameter_name}"
-            f"{self.format_array_suffixes(parameter)}"
+        parameter_type, parameter_array_suffix = self.geometry_patch_parameter_shape(
+            parameter, function_qualifier
         )
+        if parameter_type is None:
+            parameter_type = self.map_variable_type(parameter)
+            parameter_array_suffix = self.format_array_suffixes(parameter)
+        parameter_text = f"{parameter_type} {parameter_name}{parameter_array_suffix}"
         semantic = self.map_semantic(
             self.infer_ray_parameter_semantic(
                 function_qualifier, parameter, parameter_index
@@ -1820,6 +1823,28 @@ class HLSLToCrossGLConverter:
             )
         prefixes.append(parameter_text)
         return " ".join(prefixes)
+
+    def geometry_patch_parameter_shape(self, parameter, function_qualifier):
+        """Lower HLSL geometry InputPatch<T, N> parameters to CrossGL arrays."""
+        if function_qualifier != "geometry":
+            return None, ""
+
+        type_name = str(getattr(parameter, "vtype", "")).strip()
+        if self.raw_type_base(type_name) != "InputPatch":
+            return None, ""
+        if "<" not in type_name or not type_name.endswith(">"):
+            return None, ""
+
+        generic_type = type_name.split("<", 1)[1][:-1].strip()
+        args = self.split_generic_arguments(generic_type)
+        if len(args) != 2:
+            return None, ""
+
+        element_type = self.map_type(args[0])
+        patch_count = self.parse_template_dimension(args[1])
+        if patch_count is None:
+            return None, ""
+        return element_type, f"[{patch_count}]"
 
     def record_variable_type(self, node, type_map=None, array_dim_map=None):
         name = getattr(node, "name", None)

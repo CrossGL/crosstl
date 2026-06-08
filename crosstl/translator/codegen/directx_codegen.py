@@ -2904,7 +2904,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
-            code += f"static const {self.map_type(const_type)} {name} = {value_code};\n"
+            declaration = format_c_style_array_declaration(
+                self.map_type(const_type), name
+            )
+            code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
 

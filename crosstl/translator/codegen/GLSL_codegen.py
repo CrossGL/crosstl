@@ -3598,10 +3598,10 @@ class GLSLCodeGen:
             value = getattr(node, "value", None)
             value_code = self.generate_constant_expression(value)
             layout = self.glsl_constant_layout_prefix(node)
-            code += (
-                f"{layout}const {self.map_type(const_type)} {name} = "
-                f"{value_code};\n"
+            declaration = format_c_style_array_declaration(
+                self.map_type(const_type), name
             )
+            code += f"{layout}const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
 

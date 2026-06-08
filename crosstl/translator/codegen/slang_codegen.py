@@ -1740,10 +1740,10 @@ class SlangCodeGen:
             )
             self.register_variable_type(name, const_type_name, node)
             value_code = self.generate_constant_expression(getattr(node, "value", None))
-            code += (
-                f"static const {self.convert_type(const_type_name)} "
-                f"{name} = {value_code};\n"
+            declaration = format_c_style_array_declaration(
+                self.convert_type(const_type_name), name
             )
+            code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
 

@@ -17,6 +17,10 @@ from .OpenCLAst import OpenCLProgramNode
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
+    CROSSGL_RESERVED_IDENTIFIERS = {
+        *HipToCrossGLConverter.CROSSGL_RESERVED_IDENTIFIERS,
+        "shared",
+    }
     OPENCL_ADDRESS_SPACE_QUALIFIERS = {
         "__global__",
         "global",
