@@ -1202,6 +1202,72 @@ def test_scan_project_records_variant_conditional_include_dependencies(tmp_path)
     }
 
 
+def test_scan_project_limits_named_variants_to_selected(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (shader_dir / "debug.inc").write_text("vec4 debug_color();\n", encoding="utf-8")
+    (include_dir / "release.inc").write_text(
+        "vec4 release_color();\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if defined(DEBUG_HEADER)
+            #include DEBUG_HEADER
+            #elif defined(RELEASE_HEADER)
+            #include RELEASE_HEADER
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+
+            [project.variants.debug]
+            DEBUG_HEADER = '"debug.inc"'
+
+            [project.variants.release]
+            RELEASE_HEADER = "<release.inc>"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo), variants=["debug", "debug"])
+        .to_report(targets=["cgl"])
+        .to_json()
+    )
+
+    assert payload["project"]["variants"] == {"debug": {"DEBUG_HEADER": '"debug.inc"'}}
+    assert payload["project"]["variantCount"] == 1
+    assert payload["project"]["variantDefineCounts"] == {"debug": 1}
+    assert payload["project"]["selectedVariants"] == ["debug"]
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "debug.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 3,
+            "column": 1,
+            "resolvedFromDefine": "DEBUG_HEADER",
+            "variant": "debug",
+            "resolvedPath": "shaders/debug.inc",
+            "resolvedHash": project_pipeline._source_hash(shader_dir / "debug.inc"),
+            "resolvedFrom": "source",
+        }
+    ]
+    assert payload["summary"]["includeDependenciesByVariant"] == {"debug": 1}
+    assert payload["summary"]["artifactCount"] == 0
+
+
 def test_scan_project_honors_ifndef_else_in_nested_include_dependencies(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -13828,6 +13894,61 @@ def test_project_cli_report_records_variant_metadata(tmp_path):
     assert payload["summary"]["artifactCount"] == 0
 
 
+def test_project_cli_report_limits_named_variants_to_selected(tmp_path):
+    repo = tmp_path / "repo"
+    output = tmp_path / "portability-report.json"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+
+            [project.defines]
+            MODE = "base"
+
+            [project.variants.debug]
+            MODE = "debug"
+
+            [project.variants.release]
+            MODE = "release"
+            ENABLE_FAST_PATH = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            str(repo),
+            "--variant",
+            "release",
+            "--variant",
+            "release",
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert result.stdout == f"Wrote {output}\n"
+    assert payload["project"]["variants"] == {
+        "release": {"ENABLE_FAST_PATH": "1", "MODE": "release"}
+    }
+    assert payload["project"]["variantCount"] == 1
+    assert payload["project"]["variantDefineCounts"] == {"release": 2}
+    assert payload["project"]["selectedVariants"] == ["release"]
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 0
+
+
 def test_project_cli_report_applies_source_backend_overrides(tmp_path):
     repo = tmp_path / "repo"
     output = tmp_path / "portability-report.json"
@@ -14957,6 +15078,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "resolvedDependencyCount": 0,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [],
+        "systemDependencyCount": 0,
+        "truncatedSystemDependencyCount": 0,
+        "systemDependencies": [],
         "unresolvedDependencyCount": 0,
         "truncatedUnresolvedDependencyCount": 0,
         "unresolvedDependencies": [],
@@ -16030,6 +16154,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
             #version 450
             #include <shared.inc>
             #include PROJECT_HEADER
+            #include <cuda_runtime.h>
             #include "missing.inc"
             void main() {}
             """).strip(),
@@ -16075,12 +16200,15 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     generated_hash_preview = (
         f"{generated_hash['algorithm']}:{generated_hash['value'][:12]}..."
     )
-    assert "Include dependencies by status: resolved=2, missing=1" in result.stdout
-    assert "Include dependencies by kind: local=2, system=1" in result.stdout
-    assert "Include dependencies by source backend: opengl=3" in result.stdout
+    assert (
+        "Include dependencies by status: resolved=2, missing=1, system=1"
+        in result.stdout
+    )
+    assert "Include dependencies by kind: local=2, system=2" in result.stdout
+    assert "Include dependencies by source backend: opengl=4" in result.stdout
     assert (
         "Include dependencies by source backend status: "
-        "opengl=(resolved=2, missing=1)"
+        "opengl=(resolved=2, missing=1, system=1)"
     ) in result.stdout
     assert (
         "Include dependencies by resolution source: include-dir=1, source=1"
@@ -16097,22 +16225,27 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
         f"generated.inc (source, define PROJECT_HEADER, "
         f"unitHash={unit_hash_preview}, hash={generated_hash_preview})"
     ) in result.stdout
+    assert "System include dependencies:" in result.stdout
+    assert (
+        "- main.frag:4:1 [opengl]: system include cuda_runtime.h "
+        f"(unitHash={unit_hash_preview})"
+    ) in result.stdout
     assert "Include dependency issues:" in result.stdout
     assert (
-        "- main.frag:4:1 [opengl]: missing local include missing.inc "
+        "- main.frag:5:1 [opengl]: missing local include missing.inc "
         f"(unitHash={unit_hash_preview})"
     ) in result.stdout
 
     payload = inspect_project_report(report_path)
     assert payload["includeDependencies"] == {
         "available": True,
-        "dependencyCount": 3,
-        "byStatus": {"missing": 1, "resolved": 2},
-        "byKind": {"local": 2, "system": 1},
+        "dependencyCount": 4,
+        "byStatus": {"missing": 1, "resolved": 2, "system": 1},
+        "byKind": {"local": 2, "system": 2},
         "byResolvedFrom": {"include-dir": 1, "source": 1},
         "byVariant": {},
-        "bySourceBackend": {"opengl": 3},
-        "bySourceBackendStatus": {"opengl": {"missing": 1, "resolved": 2}},
+        "bySourceBackend": {"opengl": 4},
+        "bySourceBackendStatus": {"opengl": {"missing": 1, "resolved": 2, "system": 1}},
         "resolvedDependencyCount": 2,
         "truncatedResolvedDependencyCount": 0,
         "resolvedDependencies": [
@@ -16148,6 +16281,21 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "resolvedHash": generated_hash["value"],
             },
         ],
+        "systemDependencyCount": 1,
+        "truncatedSystemDependencyCount": 0,
+        "systemDependencies": [
+            {
+                "source": "main.frag",
+                "sourceBackend": "opengl",
+                "include": "cuda_runtime.h",
+                "status": "system",
+                "kind": "system",
+                "line": 4,
+                "column": 1,
+                "unitSourceHashAlgorithm": unit_hash["algorithm"],
+                "unitSourceHash": unit_hash["value"],
+            }
+        ],
         "unresolvedDependencyCount": 1,
         "truncatedUnresolvedDependencyCount": 0,
         "unresolvedDependencies": [
@@ -16157,7 +16305,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "include": "missing.inc",
                 "status": "missing",
                 "kind": "local",
-                "line": 4,
+                "line": 5,
                 "column": 1,
                 "unitSourceHashAlgorithm": unit_hash["algorithm"],
                 "unitSourceHash": unit_hash["value"],

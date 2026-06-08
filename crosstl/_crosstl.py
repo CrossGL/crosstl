@@ -349,11 +349,22 @@ def _add_project_scan_args(parser):
     _add_project_override_args(parser)
 
 
+def _add_project_variant_args(parser, *, action_label):
+    parser.add_argument(
+        "--variant",
+        action="append",
+        help=f"Named project variant to {action_label}; repeatable",
+    )
+
+
 def _run_project_scan(args):
     from .project import scan_project
 
     config = _load_project_config_from_args(args)
-    report = scan_project(config).to_report(targets=_parse_project_targets(args.target))
+    report = scan_project(
+        config,
+        variants=getattr(args, "variant", None),
+    ).to_report(targets=_parse_project_targets(args.target))
     payload = report.to_json()
     _write_json_payload(payload, args.output)
     return 1 if payload["summary"]["diagnosticCounts"]["error"] else 0
@@ -1849,6 +1860,55 @@ def _format_resolved_include_dependency_lines(include_dependencies):
     return lines
 
 
+def _format_system_include_dependency_line(dependency):
+    if not isinstance(dependency, Mapping):
+        return None
+
+    include = dependency.get("include")
+    if not isinstance(include, str) or not include:
+        return None
+
+    source = dependency.get("source")
+    location = source if isinstance(source, str) and source else "(unknown)"
+    line = dependency.get("line")
+    column = dependency.get("column")
+    if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+        location += f":{line}"
+        if isinstance(column, int) and not isinstance(column, bool) and column > 0:
+            location += f":{column}"
+    source_backend = dependency.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        location += f" [{source_backend}]"
+
+    provenance_label = _format_include_dependency_provenance_label(dependency)
+    return f"- {location}: system include {include}{provenance_label}"
+
+
+def _format_system_include_dependency_lines(include_dependencies):
+    if not isinstance(include_dependencies, Mapping):
+        return []
+    dependencies = include_dependencies.get("systemDependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        return []
+
+    lines = ["System include dependencies:"]
+    for dependency in dependencies:
+        line = _format_system_include_dependency_line(dependency)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = include_dependencies.get("truncatedSystemDependencyCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_dependency_issue_lines(include_dependencies):
     if not isinstance(include_dependencies, Mapping):
         return []
@@ -2298,6 +2358,9 @@ def _format_project_report_inspection(payload):
         _format_resolved_include_dependency_lines(payload.get("includeDependencies"))
     )
     lines.extend(
+        _format_system_include_dependency_lines(payload.get("includeDependencies"))
+    )
+    lines.extend(
         _format_include_dependency_issue_lines(payload.get("includeDependencies"))
     )
     skipped_by_reason = _format_count_rollup(
@@ -2722,6 +2785,7 @@ def _build_parser():
         action="append",
         help="Target backend to include in the scan report; repeatable",
     )
+    _add_project_variant_args(scan_parser, action_label="scan")
     scan_parser.add_argument("--output", "-o", help="Write JSON report to this path")
     scan_parser.set_defaults(func=_run_project_scan)
 
@@ -2884,6 +2948,7 @@ def _build_parser():
         action="append",
         help="Target backend to include in the report; repeatable",
     )
+    _add_project_variant_args(report_parser, action_label="report")
     report_parser.add_argument("--output", "-o", help="Write JSON report to this path")
     report_parser.set_defaults(func=_run_project_scan)
     return parser

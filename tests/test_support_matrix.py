@@ -514,9 +514,9 @@ def test_project_include_resolution_documents_status_reporting():
             "include dependency status, kind, source-backend, "
             "source-backend status, resolution-source"
         ) in backend_support["notes"]
-        assert "resolved and unresolved include dependency samples" in (
-            backend_support["notes"]
-        )
+        assert "resolved include dependency samples" in backend_support["notes"]
+        assert "unresolved include dependency samples" in backend_support["notes"]
+        assert "system include dependency samples" in backend_support["notes"]
         assert (
             "source-backend labels, project-define provenance, variant names"
             in backend_support["notes"]
@@ -538,7 +538,6 @@ def test_project_include_resolution_documents_status_reporting():
         assert "project-define plus variant include provenance" in (
             backend_support["notes"]
         )
-        assert "unresolved include dependency samples" in backend_support["notes"]
         assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
         )
@@ -578,6 +577,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_records_variant_conditional_include_dependencies"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_limits_named_variants_to_selected"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -702,7 +705,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         )
         assert "with define names and without define values" in backend_support["notes"]
         assert "scoped runs for selected declared variants" in backend_support["notes"]
-        assert "de-duplicates repeated selections before artifact planning" in (
+        assert "de-duplicates repeated selections before scan or artifact planning" in (
             backend_support["notes"]
         )
         assert "sanitizes unsafe variant names into stable output path segments" in (
@@ -777,6 +780,10 @@ def test_project_macro_variants_document_artifact_define_maps():
             "test_project_cli_report_records_variant_metadata"
         ) in backend_support["evidence"]
         assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_report_limits_named_variants_to_selected"
+        ) in backend_support["evidence"]
+        assert (
             "tests/test_translator/test_lexer.py::def "
             "test_define_preprocessing_selects_active_branch_and_expands_macros"
         ) in backend_support["evidence"]
@@ -808,6 +815,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_limits_named_variants_to_selected"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_limits_named_variants_to_selected"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

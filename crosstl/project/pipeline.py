@@ -3304,13 +3304,18 @@ def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
     return sorted(candidates)
 
 
-def scan_project(config_or_root: ProjectConfig | str | os.PathLike[str]) -> ProjectScan:
+def scan_project(
+    config_or_root: ProjectConfig | str | os.PathLike[str],
+    *,
+    variants: Sequence[str] | str | None = None,
+) -> ProjectScan:
     """Discover supported shader/GPU source files in a repository."""
     config = (
         config_or_root
         if isinstance(config_or_root, ProjectConfig)
         else load_project_config(config_or_root)
     )
+    config = _config_with_selected_variants(config, variants)
     units: list[ProjectTranslationUnit] = []
     skipped: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = _configuration_diagnostics(config)
@@ -5986,6 +5991,7 @@ def _inspection_include_dependency_summary(
         return {"available": False}
 
     resolved_dependencies = []
+    system_dependencies = []
     unresolved_dependencies = []
     for unit in _record_sequence(units):
         if not isinstance(unit, Mapping):
@@ -6006,6 +6012,16 @@ def _inspection_include_dependency_summary(
                 )
                 if sample:
                     resolved_dependencies.append(sample)
+                continue
+            if status == "system":
+                sample = _inspection_include_dependency_sample(
+                    unit.get("path"),
+                    unit.get("sourceBackend"),
+                    unit.get("sourceHash"),
+                    dependency,
+                )
+                if sample:
+                    system_dependencies.append(sample)
                 continue
             if status not in {
                 "dynamic",
@@ -6049,6 +6065,12 @@ def _inspection_include_dependency_summary(
             len(resolved_dependencies) - sample_limit,
         ),
         "resolvedDependencies": resolved_dependencies[:sample_limit],
+        "systemDependencyCount": len(system_dependencies),
+        "truncatedSystemDependencyCount": max(
+            0,
+            len(system_dependencies) - sample_limit,
+        ),
+        "systemDependencies": system_dependencies[:sample_limit],
         "unresolvedDependencyCount": len(unresolved_dependencies),
         "truncatedUnresolvedDependencyCount": max(
             0,
