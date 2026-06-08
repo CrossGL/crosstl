@@ -8267,6 +8267,10 @@ def _include_dependency_contract_reasons(
             reasons.append(f"{prefix}.variant must be a string")
         elif declared_variants is not None and variant not in declared_variants:
             reasons.append(f"{prefix}.variant must match a declared project variant")
+    elif require_closed_fields and declared_variants:
+        reasons.append(
+            f"{prefix}.variant must be recorded when project.variants is non-empty"
+        )
 
     return reasons
 

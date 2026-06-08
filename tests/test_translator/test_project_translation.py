@@ -2456,6 +2456,41 @@ def test_validate_project_report_rejects_undeclared_include_dependency_variants(
     ) in validation["diagnostics"][0]["message"]
 
 
+def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "debug.inc").write_text("vec4 debug_color();\n", encoding="utf-8")
+    (repo / "main.frag").write_text("#include PROJECT_HEADER\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.variants.debug]
+            PROJECT_HEADER = "\\"debug.inc\\""
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    payload["units"][0]["includeDependencies"][0].pop("variant")
+    payload["summary"]["includeDependenciesByVariant"] = {}
+    report_path = repo / "missing-include-variant-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["diagnostics"][0]["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].variant must be recorded when "
+        "project.variants is non-empty"
+    ) in validation["diagnostics"][0]["message"]
+
+
 def test_validate_project_report_rejects_stale_include_dependency_resolution(
     tmp_path,
 ):

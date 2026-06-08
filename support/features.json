@@ -4618,6 +4618,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -4676,6 +4677,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -4734,6 +4736,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -4792,6 +4795,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -4850,6 +4854,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -4908,6 +4913,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -4966,6 +4972,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -5024,6 +5031,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -5082,6 +5090,7 @@
             "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
             "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
@@ -5152,7 +5161,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "opengl": {
@@ -5201,7 +5211,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "metal": {
@@ -5250,7 +5261,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "vulkan": {
@@ -5299,7 +5311,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "cuda": {
@@ -5348,7 +5361,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "hip": {
@@ -5397,7 +5411,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "mojo": {
@@ -5446,7 +5461,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "rust": {
@@ -5495,7 +5511,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         },
         "slang": {
@@ -5544,7 +5561,8 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
             "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants"
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared"
           ]
         }
       }
