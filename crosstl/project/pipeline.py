@@ -1989,6 +1989,46 @@ def _strip_include_line_comment(value: str) -> str:
     return value.split("//", 1)[0].strip()
 
 
+def _mask_preprocessor_block_comments(lines: Sequence[str]) -> list[str]:
+    masked: list[str] = []
+    in_block_comment = False
+    for line in lines:
+        chars = list(line)
+        index = 0
+        while index < len(chars):
+            if in_block_comment:
+                end = line.find("*/", index)
+                if end == -1:
+                    for offset in range(index, len(chars)):
+                        chars[offset] = " "
+                    index = len(chars)
+                    continue
+                for offset in range(index, end + 2):
+                    chars[offset] = " "
+                in_block_comment = False
+                index = end + 2
+                continue
+
+            start = line.find("/*", index)
+            line_comment = line.find("//", index)
+            if line_comment != -1 and (start == -1 or line_comment < start):
+                break
+            if start == -1:
+                break
+            end = line.find("*/", start + 2)
+            if end == -1:
+                for offset in range(start, len(chars)):
+                    chars[offset] = " "
+                in_block_comment = True
+                index = len(chars)
+                continue
+            for offset in range(start, end + 2):
+                chars[offset] = " "
+            index = end + 2
+        masked.append("".join(chars))
+    return masked
+
+
 def _include_literal(value: str) -> tuple[str, str] | None:
     match = INCLUDE_LITERAL_RE.match(value)
     if not match:
@@ -2537,10 +2577,11 @@ def _scan_include_dependencies_for_source(
         )
         return dependencies, diagnostics
 
+    scan_lines = _mask_preprocessor_block_comments(lines)
     diagnostics.extend(
         _scan_define_shadowing_lines(
             config,
-            lines,
+            scan_lines,
             source_relative_path,
             seen=define_shadowing_seen,
             diagnostic_config=diagnostic_config,
@@ -2548,7 +2589,7 @@ def _scan_include_dependencies_for_source(
     )
 
     conditional_stack: list[_IncludeConditionalFrame] = []
-    for line_number, line in enumerate(lines, start=1):
+    for line_number, line in enumerate(scan_lines, start=1):
         conditional = INCLUDE_CONDITIONAL_DIRECTIVE_RE.match(line)
         if conditional:
             _apply_include_conditional_directive(

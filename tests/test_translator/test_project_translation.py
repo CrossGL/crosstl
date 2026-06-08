@@ -1078,6 +1078,62 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
     assert payload["summary"]["missingCapabilityCounts"] == {"include.resolution": 3}
 
 
+def test_scan_project_ignores_block_commented_preprocessor_directives(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "active.inc").write_text("vec4 active_color();\n", encoding="utf-8")
+    (shader_dir / "prefixed.inc").write_text(
+        "vec4 prefixed_color();\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            /*
+            #include "disabled.inc"
+            #define MODE 2
+            #undef DEBUG_MODE
+            */
+            #if defined(USE_SHARED) // /* line comment does not start a block
+            #include "active.inc" /* trailing comment */
+            #endif
+            /* leading comment */ #include "prefixed.inc"
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            MODE = "1"
+            USE_SHARED = "1"
+
+            [project.variants.debug]
+            DEBUG_MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert [
+        (dependency["include"], dependency["status"], dependency["line"])
+        for dependency in payload["units"][0]["includeDependencies"]
+    ] == [
+        ("active.inc", "resolved", 8),
+        ("prefixed.inc", "resolved", 10),
+    ]
+    assert payload["summary"]["includeDependencyCount"] == 2
+    assert payload["summary"]["includeDependenciesByStatus"] == {"resolved": 2}
+
+
 def test_scan_project_skips_inactive_ifdef_include_dependencies(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

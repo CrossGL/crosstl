@@ -464,12 +464,14 @@ Project reports are JSON documents with:
   paths,
   source backend names, path-derived extensions, source hashes, and source
   overrides. Units that contain ``#include`` directives also include
-  ``includeDependencies`` records for project-level include triage. Resolved
-  include dependencies record repository-relative include paths, resolution
-  source, and SHA-256 hashes so report validation can detect include file
-  content drift after scan. Full report validation also re-scans current source
-  files and rejects missing or extra include dependency records. Recursive include
-  scans stop at include cycles and
+  ``includeDependencies`` records for project-level include triage. Include scans
+  ignore directives inside C-style block comments while still recognizing active
+  directives after same-line block comments. Resolved include dependencies
+  record repository-relative include paths, resolution source, and SHA-256
+  hashes so report validation can detect include file content drift after scan.
+  Full report validation also re-scans current source files and rejects missing
+  or extra include dependency records. Recursive include scans stop at include
+  cycles and
   emit ``project.scan.include-cycle`` diagnostics with ``include.resolution``
   missing-capability rollups while preserving the dependency that closes the
   cycle for triage.
@@ -559,7 +561,8 @@ Project reports are JSON documents with:
   diagnostic contract. Project-level include and define forwarding limitations
   are warnings, not translation failures. Scan-time ``#define`` and ``#undef``
   directives in translation units or resolved include files that shadow active
-  project or selected variant define names are also reported as warnings.
+  project or selected variant define names are also reported as warnings;
+  directives inside C-style block comments are ignored.
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata, target normalization, and config

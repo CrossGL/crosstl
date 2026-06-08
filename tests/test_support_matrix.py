@@ -542,6 +542,10 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert "includeDependencies records" in backend_support["notes"]
+        assert "ignores block-commented preprocessor directives" in (
+            backend_support["notes"]
+        )
+        assert "directives after same-line block comments" in (backend_support["notes"])
         assert (
             "simple #if, #ifdef, #ifndef, #elif, #else, and #endif branches"
             in backend_support["notes"]
@@ -596,6 +600,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_evaluates_integer_comparison_include_conditions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_ignores_block_commented_preprocessor_directives"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -700,6 +708,7 @@ def test_project_macro_variants_document_artifact_define_maps():
             "active #define or #undef directives in translation units or resolved "
             "include files shadow configured project or selected variant define names"
         ) in backend_support["notes"]
+        assert "ignoring block-commented directives" in backend_support["notes"]
         assert (
             "inspection summaries and text output expose variant names, "
             "selected-variant summaries for scoped runs, and per-variant "
@@ -772,6 +781,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_include_define_shadowing"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_ignores_block_commented_preprocessor_directives"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -873,7 +886,7 @@ def test_project_diagnostics_document_location_path_checks():
         assert "translation-time warnings surfaced in report summaries" in (
             backend_support["notes"]
         )
-        assert "scan-time translation-unit and include-file #define/#undef" in (
+        assert "comment-aware scan-time translation-unit and include-file" in (
             backend_support["notes"]
         )
         assert "non-repository-relative diagnostic locations" in (
@@ -940,6 +953,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_include_define_shadowing"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_ignores_block_commented_preprocessor_directives"
         ) in backend_support["evidence"]
 
 
