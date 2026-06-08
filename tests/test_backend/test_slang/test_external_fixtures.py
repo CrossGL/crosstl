@@ -24,6 +24,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "71e78588f73609a1d8d472629b3f3542a74e9199",
     },
+    "shader-slang/slang-main-2026-06-08-anonymous-struct": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
     "shader-slang/slang-property-2026-06-04": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
@@ -470,6 +474,40 @@ EXTERNAL_FIXTURES = [
             "outputBuffer[0] = dpx.d;",
         ],
         "not_contains": ["__func_extension", "__apply(cube)"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: docs/generated/tests/conformance/types-struct/
+        # struct-anonymous.slang
+        "id": "slang_generated_function_local_anonymous_struct_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-08-anonymous-struct",
+        "path": "docs/generated/tests/conformance/types-struct/struct-anonymous.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            [numthreads(1,1,1)]
+            void computeMain()
+            {
+                struct { int a; int b; } obj;
+                obj.a = 42;
+                obj.b = 15;
+                outputBuffer[0] = obj.a;
+                outputBuffer[1] = obj.b;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct SLANG_anonymous_0 {",
+            "int a;",
+            "int b;",
+            "SLANG_anonymous_0 obj;",
+            "outputBuffer[0] = obj.a;",
+            "outputBuffer[1] = obj.b;",
+        ],
+        "not_contains": ["struct {", "Unexpected token in expression: STRUCT"],
     },
     {
         "id": "slang_generated_defer_scope_exit",

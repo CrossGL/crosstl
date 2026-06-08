@@ -50,6 +50,8 @@ FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SD
 FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
 WICKED_ENGINE_REPO = "https://github.com/turanszkij/WickedEngine"
 WICKED_ENGINE_COMMIT = "9df7a530aed53cc59b345f751939e513170ddf3c"
+UNITY_BUILT_IN_SHADERS_REPO = "https://github.com/TwoTailsGames/Unity-Built-in-Shaders"
+UNITY_BUILT_IN_SHADERS_COMMIT = "6a63f93bc1f20ce6cd47f981c7494e8328915621"
 
 
 EXTERNAL_FIXTURES = [
@@ -1435,6 +1437,42 @@ EXTERNAL_FIXTURES = [
             "default:",
         ),
     ),
+    ExternalFixture(
+        name="unity_builtin_shaderlab_shadowcaster_unexpanded_statement_macros",
+        repo=UNITY_BUILT_IN_SHADERS_REPO,
+        commit=UNITY_BUILT_IN_SHADERS_COMMIT,
+        path="DefaultResourcesExtra/AlphaTest-VertexLit.shader",
+        code=textwrap.dedent("""
+            struct v2f {
+                V2F_SHADOW_CASTER;
+                float2 uv : TEXCOORD1;
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
+
+            float4 _MainTex_ST;
+
+            v2f vert(appdata_base v)
+            {
+                v2f o;
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                TRANSFER_SHADOW_CASTER_NORMALOFFSET(o)
+                o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);
+                return o;
+            }
+
+            float4 frag(v2f i) : SV_Target
+            {
+                SHADOW_CASTER_FRAGMENT(i)
+            }
+        """).strip(),
+        contains=(
+            "vec2 uv @ TexCoord1;",
+            "UNITY_SETUP_INSTANCE_ID(v);",
+            "o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);",
+            "vec4 frag(v2f i) @ gl_FragColor",
+        ),
+    ),
 ]
 
 
@@ -1459,7 +1497,8 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(fixture.commit) == 40 for fixture in EXTERNAL_FIXTURES)
     assert all(
-        fixture.path.endswith((".hlsl", ".hlsli")) for fixture in EXTERNAL_FIXTURES
+        fixture.path.endswith((".hlsl", ".hlsli", ".shader"))
+        for fixture in EXTERNAL_FIXTURES
     )
 
 

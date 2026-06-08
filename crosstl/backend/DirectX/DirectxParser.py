@@ -2329,6 +2329,9 @@ class HLSLParser:
             self.parse_class_declaration()
             return None
 
+        if self.skip_unexpanded_statement_macro():
+            return None
+
         if self.looks_like_function_prototype():
             self.parse_local_function_prototype(attributes)
             return None
@@ -2382,6 +2385,47 @@ class HLSLParser:
             return False
 
         return self.tokens[idx][0] == "SEMICOLON"
+
+    def skip_unexpanded_statement_macro(self):
+        if not self.is_macro_like_identifier(self.current_token):
+            return False
+        if self.peek()[0] != "LPAREN":
+            return False
+
+        end_index = self.skip_parenthesized_list_at(self.current_index + 1)
+        if end_index is None or end_index >= len(self.tokens):
+            return False
+        if self.tokens[end_index][0] == "SEMICOLON":
+            return False
+        if self.tokens[end_index][0] in {
+            "COMMA",
+            "RPAREN",
+            "RBRACKET",
+            "PLUS",
+            "MINUS",
+            "MULTIPLY",
+            "DIVIDE",
+            "MOD",
+            "BITWISE_AND",
+            "BITWISE_OR",
+            "BITWISE_XOR",
+            "SHIFT_LEFT",
+            "SHIFT_RIGHT",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "EQUAL",
+            "NOT_EQUAL",
+            "LOGICAL_AND",
+            "LOGICAL_OR",
+            *ASSIGNMENT_TOKENS,
+        }:
+            return False
+
+        self.eat("IDENTIFIER")
+        self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
+        return True
 
     def parse_local_function_prototype(self, attributes=None):
         qualifiers = self.parse_qualifiers()

@@ -287,6 +287,29 @@ def test_cuda_samples_eglstream_elaborated_struct_types_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_line_of_sight_anonymous_enum_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/4_CUDA_Libraries/lineOfSight/lineOfSight.cu
+    source = """
+    typedef unsigned char Bool;
+    enum { False = 0, True = 1 };
+
+    __global__ void computeVisibilities_kernel(Bool *visibilities) {
+        visibilities[threadIdx.x] = True;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "enum anonymous_enum_0 {" in crossgl
+    assert "False = 0," in crossgl
+    assert "True = 1," in crossgl
+    assert "enum  {" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_nested_scoped_template_return_type_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

@@ -775,12 +775,15 @@ class VulkanParser:
         constant_types = {}
         spec_constant_ids = []
         extended_instruction_imports = {}
+        capabilities = []
         variables = []
         entry_points = []
         execution_modes = {}
 
         for result_id, opcode, operands, _line_number in instructions:
-            if opcode == "OpName" and len(operands) >= 2:
+            if opcode == "OpCapability" and operands:
+                capabilities.append(operands[0])
+            elif opcode == "OpName" and len(operands) >= 2:
                 names[operands[0]] = (
                     self.spirv_identifier_name(operands[1], operands[0])
                     if operands[1]
@@ -1086,6 +1089,9 @@ class VulkanParser:
             and not structs
             and not functions
             and not self.spirv_assembly_has_metadata_only_surface(types)
+            and not self.spirv_assembly_has_linkage_metadata_surface(
+                capabilities, types, extended_instruction_imports
+            )
         ):
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
@@ -1100,6 +1106,7 @@ class VulkanParser:
             spirv_decorations=decorations,
             spirv_member_decorations=member_decorations,
             spirv_member_names=member_names,
+            spirv_capabilities=capabilities,
             spirv_types=types,
             spirv_constants=constants,
             spirv_constant_types=constant_types,
@@ -1123,6 +1130,13 @@ class VulkanParser:
         return any(
             type_info.get("kind") in metadata_type_kinds for type_info in types.values()
         )
+
+    def spirv_assembly_has_linkage_metadata_surface(
+        self, capabilities, types, extended_instruction_imports
+    ):
+        if "Linkage" not in capabilities:
+            return False
+        return bool(types or extended_instruction_imports)
 
     def spirv_assembly_functions(
         self,

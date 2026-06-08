@@ -23,7 +23,6 @@ class MojoToCrossGLConverter:
         "simd": "simd",
     }
     MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
-    REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
     MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`((?:[^`\\]|\\.)*)`$")
     MLIR_DOT_TYPE_EXPRESSION_PATTERN = re.compile(r"__mlir_type\.`((?:[^`\\]|\\.)*)`")
     MLIR_BRACKET_TYPE_EXPRESSION_PATTERN = re.compile(
@@ -1490,7 +1489,11 @@ class MojoToCrossGLConverter:
         mojo_type = self.normalize_mlir_type_expressions(mojo_type)
         mojo_type = self.normalize_mlir_attr_type_expressions(mojo_type)
         mojo_type = self.normalize_post_generic_type_member_access(mojo_type)
+        mojo_type = self.normalize_type_level_empty_calls(mojo_type)
         return self.normalize_inline_if_type_expressions(mojo_type)
+
+    def normalize_type_level_empty_calls(self, mojo_type):
+        return re.sub(r"(?<=\])\(\)(?=\[)", "", mojo_type)
 
     def normalize_specialization_binding_arrows(self, mojo_type):
         pattern = re.compile(
@@ -1801,9 +1804,18 @@ class MojoToCrossGLConverter:
     def strip_reference_type(self, mojo_type):
         if not isinstance(mojo_type, str):
             return mojo_type
-        match = self.REFERENCE_TYPE_PATTERN.match(mojo_type)
-        if match:
-            return match.group(1)
+        if not mojo_type.startswith("ref["):
+            return mojo_type
+
+        depth = 0
+        for index, char in enumerate(mojo_type):
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    suffix = mojo_type[index + 1 :].lstrip()
+                    return suffix or mojo_type
         return mojo_type
 
     def map_matrix_type(self, mojo_type):
@@ -1912,9 +1924,6 @@ class MojoToCrossGLConverter:
             return value
 
         _, quote, body = literal_parts
-        if quote == '"':
-            return f'"{body}"'
-
         return f'"{self.escape_double_quoted_string_body(body, quote)}"'
 
     def split_string_literal(self, value):

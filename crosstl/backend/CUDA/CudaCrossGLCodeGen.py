@@ -247,6 +247,7 @@ class CudaToCrossGLConverter:
         self.namespace_aliases = {}
         self.cuda_record_names = set()
         self.global_resource_binding_count = 0
+        self.anonymous_enum_count = 0
 
     def generate(self, ast_node):
         self.output = []
@@ -271,6 +272,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
+        self.anonymous_enum_count = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -3966,7 +3968,7 @@ class CudaToCrossGLConverter:
         self.emit("};")
 
     def visit_EnumNode(self, node):
-        name = node.name or ""
+        name = node.name or self.next_anonymous_enum_name()
         underlying = getattr(node, "underlying_type", None)
         suffix = (
             f" : {self.convert_cuda_type_to_crossgl(underlying)}" if underlying else ""
@@ -3991,6 +3993,11 @@ class CudaToCrossGLConverter:
 
         self.indent_level -= 1
         self.emit("};")
+
+    def next_anonymous_enum_name(self):
+        name = f"anonymous_enum_{self.anonymous_enum_count}"
+        self.anonymous_enum_count += 1
+        return name
 
     def visit_FunctionNode(self, node):
         """Render a CUDA function node as a CrossGL function."""

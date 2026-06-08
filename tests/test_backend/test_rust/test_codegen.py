@@ -1871,6 +1871,60 @@ def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_const_fold_macro_expression_codegen_reparse_from_upstream():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu.git commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/difftests/tests/lang/core/ops/const_fold_int/const-fold-cpu/src/lib.rs.
+    code = """
+    macro_rules! interesting_patterns {
+        ($op_name:ident) => {
+            [$op_name!(0u32), $op_name!(1u32)]
+        };
+    }
+
+    pub const INTERESTING_PATTERNS: [u32; 2] = interesting_patterns!(identity);
+
+    pub type EvalResult = [[u32; 2]; 2];
+
+    enum Variants {
+        ConstFold,
+        DynamicValues,
+    }
+
+    impl Variants {
+        pub fn eval(&self, input_patterns: &[u32; 2]) -> EvalResult {
+            match self {
+                Variants::ConstFold => [
+                    interesting_patterns!(op_u),
+                    interesting_patterns!(op_i),
+                ],
+                Variants::DynamicValues => [
+                    [
+                        op_u!(input_patterns[0]),
+                        op_u!(input_patterns[1]),
+                    ],
+                    [
+                        op_i!(input_patterns[0]),
+                        op_i!(input_patterns[1]),
+                    ],
+                ],
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "const uint INTERESTING_PATTERNS[2] = interesting_patterns(identity);" in (
+        result
+    )
+    assert "return {interesting_patterns(op_u), interesting_patterns(op_i)};" in result
+    assert "op_u(input_patterns[0])" in result
+    assert "interesting_patterns!(" not in result
+    assert "op_u!(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

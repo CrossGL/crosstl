@@ -1004,6 +1004,26 @@ def test_positional_marker_in_alias_generic_codegen_reparses_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_complex_reference_origin_return_type_codegen_from_modular_reflection():
+    # Reduced from modular/modular commit 30d351c58441f196471c59211dad6e9ad91c1235,
+    # mojo/stdlib/std/builtin/variadics.mojo and std/reflection/reflect.mojo.
+    code = """
+    def __getitem__[self_origin: Origin](self, idx: Int) -> ref[origin_of(Self.origin, self_origin).unsafe_mut_cast[Self.elt_is_mutable]()] Self.element_type:
+        pass
+
+    def field_ref[idx: Int](s: Self.T) -> _field_types_of[Self.T]()[idx]:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Self.element_type __getitem__(int idx)" in generated_code
+    assert "_field_types_of[Self.T][idx] field_ref(Self.T s)" in generated_code
+    assert "ref[origin_of" not in generated_code
+    assert "_field_types_of[Self.T]()[idx]" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_variadic_pack_type_argument_codegen_reparses_crossgl():
     # Reduced from modularml/mojo stdlib elementwise and tuple helpers.
     code = """
@@ -1083,6 +1103,27 @@ def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_exam
         'print("Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)");'
         in generated_code
     )
+
+
+def test_adjacent_string_with_embedded_quotes_codegen_from_modular_reflection():
+    # Reduced from modular/modular commit 30d351c58441f196471c59211dad6e9ad91c1235,
+    # mojo/stdlib/test/reflection/test_type_info.mojo.
+    code = """
+    def main():
+        assert_equal(
+            name,
+            (
+                "test_type_info.Foo[SIMD[DType.float32, 4], "
+                '[1, 2, 3, 4] : SIMD[DType.float32, 4], True, None, {"hello\\\\0", 5}]'
+            ),
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert r"{\"hello\\0\", 5}" in generated_code
+    assert '{"hello\\0", 5}' not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_prefixed_adjacent_string_literals_in_call_codegen_from_modular_trace_gemv():

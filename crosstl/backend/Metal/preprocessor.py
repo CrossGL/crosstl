@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional, Set
 
-from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
+from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
 
@@ -22,6 +22,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             defines=defines,
             strict=strict,
             max_expansion_depth=max_expansion_depth,
+        )
+        self.macros.setdefault(
+            "TARGET_OS_SIMULATOR",
+            Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
         )
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:

@@ -542,13 +542,16 @@ class SlangToCrossGLConverter:
             if isinstance(getattr(exp, "item", None), FunctionNode)
         ]
         functions = [*getattr(ast, "functions", []), *exported_functions]
+        local_structs = self.collect_function_local_structs(functions)
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
         self.function_name_map = self.collect_function_name_map(functions)
         resource_types = self.collect_sampleable_resource_types(ast)
         storage_image_types = self.collect_storage_image_resource_types(ast)
-        self.struct_member_types = self.collect_struct_member_types(ast)
-        self.struct_member_name_maps = self.collect_struct_member_name_maps(ast)
+        self.struct_member_types = self.collect_struct_member_types(ast, local_structs)
+        self.struct_member_name_maps = self.collect_struct_member_name_maps(
+            ast, local_structs
+        )
         self.identifier_rename_scopes = [{}]
         self.identifier_used_name_scopes = [set()]
         self.generated_temp_index = 0
@@ -586,7 +589,7 @@ class SlangToCrossGLConverter:
                         value = self.generate_expression(member_value)
                         code += f"        {member_name} = {value},\n"
                 code += "    }\n"
-        for node in ast.structs:
+        for node in [*ast.structs, *local_structs]:
             if self.is_forward_struct_declaration(node):
                 continue
             if isinstance(node, StructNode):
@@ -781,9 +784,11 @@ class SlangToCrossGLConverter:
             generic_parameters = getattr(node, "generic_parameters", None) or ""
         return f"{self.format_identifier(node.name)}{generic_parameters}"
 
-    def collect_struct_member_name_maps(self, ast):
+    def collect_struct_member_name_maps(self, ast, local_structs=None):
         maps = {}
         for struct in getattr(ast, "structs", []) or []:
+            self.collect_struct_member_name_map_from_node(struct, maps)
+        for struct in local_structs or []:
             self.collect_struct_member_name_map_from_node(struct, maps)
         for cbuffer in getattr(ast, "cbuffers", []) or []:
             self.collect_struct_member_name_map_from_node(cbuffer, maps)
@@ -1016,6 +1021,10 @@ class SlangToCrossGLConverter:
         for stmt in body:
             if isinstance(stmt, DeferNode):
                 deferred_statements.append(stmt.body)
+                continue
+            if isinstance(stmt, StructNode) and getattr(
+                stmt, "is_local_declaration", False
+            ):
                 continue
             expanded_statement = self.generate_resource_get_dimensions_statement(
                 stmt, indent, is_main
@@ -1852,9 +1861,11 @@ class SlangToCrossGLConverter:
         for block in getattr(ast, "cbuffers", []) or []:
             yield from getattr(block, "instances", []) or []
 
-    def collect_struct_member_types(self, ast):
+    def collect_struct_member_types(self, ast, local_structs=None):
         structs = {}
         for struct in getattr(ast, "structs", []) or []:
+            self.collect_struct_member_types_from_node(struct, structs)
+        for struct in local_structs or []:
             self.collect_struct_member_types_from_node(struct, structs)
         for cbuffer in getattr(ast, "cbuffers", []) or []:
             if isinstance(cbuffer, StructNode):
@@ -1877,6 +1888,46 @@ class SlangToCrossGLConverter:
 
         for nested in getattr(struct, "structs", []) or []:
             self.collect_struct_member_types_from_node(nested, structs)
+
+    def collect_function_local_structs(self, functions):
+        structs = []
+        seen = set()
+
+        def visit_statement(statement):
+            if isinstance(statement, StructNode):
+                if getattr(statement, "is_local_declaration", False):
+                    marker = id(statement)
+                    if marker not in seen:
+                        seen.add(marker)
+                        structs.append(statement)
+                return
+            if isinstance(statement, IfNode):
+                visit_statements(statement.if_body)
+                visit_statements(statement.else_body or [])
+            elif isinstance(statement, ForNode):
+                visit_statements(statement.body)
+            elif isinstance(statement, WhileNode):
+                visit_statements(statement.body)
+            elif isinstance(statement, DoWhileNode):
+                visit_statements(statement.body)
+            elif isinstance(statement, SwitchNode):
+                for case in getattr(statement, "ordered_cases", []) or []:
+                    visit_statements(case.body)
+                visit_statements(getattr(statement, "unlabeled_statements", []) or [])
+            elif isinstance(statement, DeferNode):
+                visit_statements(statement.body)
+
+        def visit_statements(statements):
+            if not statements:
+                return
+            if not isinstance(statements, list):
+                statements = [statements]
+            for statement in statements:
+                visit_statement(statement)
+
+        for function in functions or []:
+            visit_statements(getattr(function, "body", []) or [])
+        return structs
 
     def push_variable_type_scope(self, params):
         scope = {}

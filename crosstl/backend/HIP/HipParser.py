@@ -1,5 +1,6 @@
 """HIP Parser for converting HIP tokens to AST"""
 
+import re
 from typing import List
 
 from .HipAst import (
@@ -193,6 +194,15 @@ class HipParser:
         "consteval",
         "noexcept",
         "__noexcept",
+    }
+    CATCH_TEST_BLOCK_MACRO_NAMES = {
+        "HIP_TEST_CASE",
+        "HIP_TEMPLATE_TEST_CASE",
+        "TEST_CASE",
+        "TEMPLATE_LIST_TEST_CASE",
+        "TEMPLATE_PRODUCT_TEST_CASE",
+        "TEMPLATE_TEST_CASE",
+        "TEMPLATE_TEST_CASE_SIG",
     }
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
@@ -701,6 +711,114 @@ class HipParser:
             is_dynamic_shared_memory=True,
         )
 
+    def is_catch_test_block_macro(self):
+        if self.block_depth != 0:
+            return False
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.CATCH_TEST_BLOCK_MACRO_NAMES
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        index = self.skip_balanced_group_at_pos(index, "LPAREN", "RPAREN")
+        if index is None:
+            return False
+        index = self.skip_newlines_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type == "LBRACE"
+
+    def parse_catch_test_block_macro(self):
+        macro_name = self.consume("IDENTIFIER").value
+        args = self.consume_raw_macro_arguments()
+        self.skip_newlines()
+        body = self.parse_block()
+        test_name = self.catch_test_function_name(macro_name, args)
+        return FunctionNode("void", test_name, [], body, qualifiers=[macro_name])
+
+    def consume_raw_macro_arguments(self):
+        self.consume("LPAREN")
+        args = [[]]
+        depth = 1
+
+        while self.current_token and depth > 0:
+            token = self.current_token
+
+            if token.type == "LPAREN":
+                depth += 1
+                args[-1].append(token)
+                self.advance()
+                continue
+
+            if token.type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.advance()
+                    break
+                args[-1].append(token)
+                self.advance()
+                continue
+
+            if token.type == "COMMA" and depth == 1:
+                args.append([])
+                self.advance()
+                continue
+
+            args[-1].append(token)
+            self.advance()
+
+        if depth != 0:
+            self.error("Unterminated macro argument list")
+
+        return args
+
+    def catch_test_function_name(self, macro_name, args):
+        if args and args[0]:
+            raw_name = self.macro_argument_text(args[0])
+        else:
+            raw_name = macro_name.lower()
+
+        raw_name = raw_name.strip()
+        if (
+            len(raw_name) >= 2
+            and raw_name[0] == raw_name[-1]
+            and raw_name[0]
+            in {
+                '"',
+                "'",
+            }
+        ):
+            raw_name = raw_name[1:-1]
+
+        name = re.sub(r"[^A-Za-z0-9_]+", "_", raw_name).strip("_")
+        if not name:
+            name = macro_name.lower()
+        if name[0].isdigit():
+            name = f"test_{name}"
+        return name
+
+    def macro_argument_text(self, tokens):
+        return " ".join(token.value for token in tokens if token.type != "NEWLINE")
+
+    def skip_balanced_group_at_pos(self, index, open_type, close_type):
+        if index >= len(self.tokens) or self.tokens[index].type != open_type:
+            return None
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == open_type:
+                depth += 1
+            elif token_type == close_type:
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+
+        return None
+
     def parse_flat_builtin_node(self):
         token = self.current_token
         builtin_name = self.FLAT_BUILTIN_TOKEN_MAP[token.type]
@@ -887,6 +1005,8 @@ class HipParser:
             return self.parse_asm_statement()
         if self.is_hip_dynamic_shared_macro():
             return self.parse_hip_dynamic_shared_macro()
+        if self.is_catch_test_block_macro():
+            return self.parse_catch_test_block_macro()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_label_statement_start():

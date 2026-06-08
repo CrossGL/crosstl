@@ -152,6 +152,7 @@ class SlangParser:
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
+        self.anonymous_struct_counter = 0
         self.skip_comments()
 
     def skip_comments(self):
@@ -2602,6 +2603,8 @@ class SlangParser:
             return self.parse_block()
         if self.is_labeled_statement_start():
             return self.parse_labeled_statement()
+        if self.is_anonymous_struct_variable_declaration_start():
+            return self.parse_anonymous_struct_variable_declaration()
         if self.current_token[0] in {"TYPEDEF", "TYPEALIAS"}:
             return self.parse_typedef()
         if self.current_token == ("IDENTIFIER", "defer"):
@@ -2770,6 +2773,60 @@ class SlangParser:
         next_pos = self.skip_type_array_suffix_tokens(next_pos)
         next_pos = self.skip_pointer_declarator_tokens(next_pos)
         return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "IDENTIFIER"
+
+    def is_anonymous_struct_variable_declaration_start(self):
+        return (
+            self.current_token[0] == "STRUCT"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "LBRACE"
+        )
+
+    def parse_anonymous_struct_variable_declaration(self):
+        self.eat("STRUCT")
+        struct_name = self.next_anonymous_struct_name()
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated anonymous struct declaration")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+            members.extend(self.parse_struct_field_members())
+        self.eat("RBRACE")
+
+        declarations = []
+        while True:
+            name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            variable = VariableNode(
+                struct_name,
+                name,
+                array_sizes=self.parse_array_suffixes(),
+            )
+            if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                declarations.append(
+                    AssignmentNode(variable, self.parse_expression(), op)
+                )
+            else:
+                declarations.append(variable)
+
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        self.eat("SEMICOLON")
+        struct = StructNode(struct_name, members)
+        struct.is_anonymous = True
+        struct.is_local_declaration = True
+        return [struct, *declarations]
+
+    def next_anonymous_struct_name(self):
+        name = f"SLANG_anonymous_{self.anonymous_struct_counter}"
+        self.anonymous_struct_counter += 1
+        return name
 
     def parse_variable_declaration_or_assignment(self):
         qualifiers = self.parse_qualifiers()

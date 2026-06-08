@@ -544,6 +544,50 @@ def test_external_hip_one_component_vectors_codegen_reparse():
     assert "count.x" not in crossgl
 
 
+def test_external_hip_tests_catch_test_case_block_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/deviceLib/funnelshift.cc.
+    source = """
+    #define NUM_TESTS 65
+
+    __global__ void funnelshift_kernel(unsigned int* l_out) {
+        for(int i = 0; i < NUM_TESTS; i++) {
+            l_out[i] = __funnelshift_l(0xdeadbeef, 0xfacefeed, i);
+        }
+    }
+
+    HIP_TEST_CASE(Unit_funnelshift) {
+        unsigned int* host_l_output;
+        unsigned int* device_l_output;
+
+        host_l_output = (unsigned int*)calloc(NUM_TESTS, sizeof(unsigned int));
+        HIP_CHECK(hipMalloc((void**)&device_l_output,
+                            NUM_TESTS * sizeof(unsigned int)));
+        hipLaunchKernelGGL(funnelshift_kernel,
+                           dim3(1),
+                           dim3(1),
+                           0,
+                           0,
+                           device_l_output);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    test_case = ast.statements[1]
+
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "Unit_funnelshift"
+    assert test_case.qualifiers == ["HIP_TEST_CASE"]
+    assert isinstance(test_case.body[0], VariableNode)
+    assert test_case.body[0].vtype == "unsigned int *"
+    assert "void Unit_funnelshift()" in crossgl
+    assert "var host_l_output: ptr<u32>;" in crossgl
+    assert (
+        "// Kernel launch: funnelshift_kernel<<<vec3<u32>(1, 1, 1), "
+        "vec3<u32>(1, 1, 1), 0, 0>>>()"
+    ) in crossgl
+
+
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     source = """
     __global__ void matrix_transpose_kernel(float* out,

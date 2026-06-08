@@ -147,6 +147,18 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NAGA_LINKAGE_METADATA_ONLY_ASSEMBLY = """
+; Source repo: https://github.com/gfx-rs/naga
+; Source commit: d0f28c0b1a3c772e55e68db1c47eff5131cb6732
+; Source path: tests/out/spv/runtime-array-in-unused-struct.spvasm
+; The rspirv-generated output contains only linkage/type/import metadata.
+OpCapability Shader
+OpCapability Linkage
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+%2 = OpTypeVoid
+"""
+
 SPIRV_NON_MAIN_VERTEX_ENTRY_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -7629,6 +7641,16 @@ def test_translate_api_rejects_unsupported_spirv_assembly_with_clear_error(tmp_p
 
     with pytest.raises(SyntaxError, match="only partially supported"):
         crosstl.translate(str(shader_path), backend="cgl", format_output=False)
+
+
+def test_naga_linkage_metadata_only_assembly_codegen_reparse():
+    tokens = tokenize_code(SPIRV_NAGA_LINKAGE_METADATA_ONLY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert ast.spirv_capabilities == ["Shader", "Linkage"]
+    assert generated_code == "shader main {\n}\n"
 
 
 def test_translate_api_accepts_linkage_pointer_type_only_spirv_assembly(tmp_path):

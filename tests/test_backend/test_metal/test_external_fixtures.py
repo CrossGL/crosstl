@@ -1784,6 +1784,40 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "metalpetal_target_conditionals_import_default",
+        "repo_url": METALPETAL_REPO,
+        "commit": METALPETAL_COMMIT,
+        "source_path": "Frameworks/MetalPetal/Shaders/Shaders.metal",
+        "roundtrip": True,
+        "contains": [
+            "#include <TargetConditionals.h>",
+            "vec4 passthrough(vec4 currentColor @gl_FragColor)",
+        ],
+        "not_contains": ["mti_haveColorArguments"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <TargetConditionals.h>
+
+            #ifndef TARGET_OS_SIMULATOR
+            #error TARGET_OS_SIMULATOR not defined. Check <TargetConditionals.h>
+            #endif
+
+            #if __HAVE_COLOR_ARGUMENTS__ && !TARGET_OS_SIMULATOR
+            kernel void mti_haveColorArguments() {}
+            #endif
+
+            using namespace metal;
+
+            namespace metalpetal {
+                fragment float4 passthrough(float4 currentColor [[color(0)]]) {
+                    return currentColor;
+                }
+            }
+        """
+        ),
+    },
+    {
         "name": "unixzii_gpu_particle_parenthesized_unary_position",
         "repo_url": UNIXZII_GPU_PARTICLE_GIST,
         "commit": UNIXZII_GPU_PARTICLE_VERSION,

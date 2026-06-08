@@ -47,6 +47,7 @@ class RustToCrossGLConverter:
         "include_str",
         "option_env",
     }
+    SOURCE_VALUE_MACROS = GLOBAL_INITIALIZER_MACROS | {"include_wgsl"}
     SCALAR_ZERO_ARG_METHOD_MAP = {
         "abs": "abs",
         "floor": "floor",
@@ -753,6 +754,7 @@ class RustToCrossGLConverter:
         self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
+        self.reparseable_macro_expression_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
         self.local_callable_scopes = []
@@ -823,6 +825,7 @@ class RustToCrossGLConverter:
         self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
+        self.reparseable_macro_expression_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
         self.local_callable_scopes = []
@@ -2486,7 +2489,8 @@ class RustToCrossGLConverter:
                         code += prelude
                         code += f"{indent_str}return {value};\n"
                     elif stmt.value:
-                        code += f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                        value = self.generate_reparseable_expression(stmt.value)
+                        code += f"{indent_str}return {value};\n"
                     else:
                         code += f"{indent_str}return;\n"
                 elif isinstance(stmt, IfNode):
@@ -2663,7 +2667,7 @@ class RustToCrossGLConverter:
             type_str = ""
 
         if stmt.value:
-            value_str = self.generate_expression(stmt.value)
+            value_str = self.generate_reparseable_expression(stmt.value)
             target_name = self.declare_local_alias(stmt.name)
             if isinstance(stmt.value, ClosureNode):
                 self.add_local_callable(stmt.name, target_name)
@@ -3700,7 +3704,10 @@ class RustToCrossGLConverter:
                 return prelude + f"{indent_str}{value};\n"
             return prelude
 
-        value = self.generate_expression(expression)
+        if result_target is self.return_result_target or result_target:
+            value = self.generate_reparseable_expression(expression)
+        else:
+            value = self.generate_expression(expression)
         if result_target is self.return_result_target:
             return f"{indent_str}return {value};\n"
         if result_target:
@@ -5423,7 +5430,7 @@ class RustToCrossGLConverter:
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
-        right = self.generate_expression(node.right)
+        right = self.generate_reparseable_expression(node.right)
         return f"{left} {node.operator} {right}"
 
     def generate_if_statement(self, node, indent, loop_contexts=None):
@@ -8810,6 +8817,11 @@ class RustToCrossGLConverter:
 
             if isinstance(expr.name, str) and expr.name.endswith("!"):
                 func_name = self.map_function(expr.name)
+                if (
+                    self.reparseable_macro_expression_depth
+                    and not self.should_preserve_value_macro_bang(func_name)
+                ):
+                    func_name = func_name[:-1]
                 args = ", ".join(self.generate_macro_argument(arg) for arg in expr.args)
                 return f"{func_name}({args})"
 
@@ -8937,7 +8949,21 @@ class RustToCrossGLConverter:
     def generate_global_initializer(self, value):
         if self.is_reparseable_global_macro(value):
             return self.generate_reparseable_global_macro(value)
-        return self.generate_expression(value)
+        return self.generate_reparseable_expression(value)
+
+    def generate_reparseable_expression(self, expr):
+        self.reparseable_macro_expression_depth += 1
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.reparseable_macro_expression_depth -= 1
+
+    def should_preserve_value_macro_bang(self, func_name):
+        if not isinstance(func_name, str) or not func_name.endswith("!"):
+            return False
+
+        base_name = func_name[:-1].rsplit("::", 1)[-1]
+        return base_name in self.SOURCE_VALUE_MACROS
 
     def is_reparseable_global_macro(self, value):
         if not isinstance(value, FunctionCallNode) or not isinstance(value.name, str):

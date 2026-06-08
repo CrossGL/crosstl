@@ -21,6 +21,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/darktable-org/darktable",
         "path": "data/kernels/noise_generator.h",
     },
+    "darktable_basic_qualified_vector_constructor": {
+        "url": "https://github.com/darktable-org/darktable",
+        "commit": "321ec599414e138be0232e24ab0d322eac073deb",
+        "path": "data/kernels/basic.cl",
+    },
 }
 
 
@@ -105,3 +110,28 @@ def test_external_darktable_hex_float_literal_codegen_reparse():
     _ast, crossgl = assert_crossgl_reparses(source)
 
     assert "0x1.0p-24f" in crossgl
+
+
+def test_external_darktable_qualified_vector_constructor_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "darktable_basic_qualified_vector_constructor"
+    ]
+    assert source_info["commit"] == "321ec599414e138be0232e24ab0d322eac073deb"
+    assert source_info["path"] == "data/kernels/basic.cl"
+
+    source = """
+    kernel void rawprepare_4f_sample(global float *out,
+                                     global const float *black,
+                                     global const float *div) {
+        const float4 black4 = (const float4)(black[0], black[1], black[2], black[3]);
+        const float4 div4 = (const float4)(div[0], div[1], div[2], div[3]);
+        out[0] = black4.x / div4.x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    first_decl = ast.statements[0].body[0]
+    assert first_decl.value.name == "float4"
+    assert "vec4<f32>(" in crossgl
+    assert "const float4(" not in crossgl

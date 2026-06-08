@@ -115,6 +115,24 @@ class OpenCLParser(HipParser):
         "image2d_array_depth_t",
         "image3d_t",
     }
+    OPENCL_VECTOR_CONSTRUCTOR_QUALIFIERS = {
+        "const",
+        "volatile",
+        "__restrict__",
+        "restrict",
+        "__global__",
+        "__shared__",
+        "__local",
+        "__local__",
+        "__constant",
+        "__constant__",
+        "__private",
+        "__private__",
+        "global",
+        "local",
+        "constant",
+        "private",
+    }
     NON_CAST_FOLLOW_TOKENS = {
         "ASSIGN",
         "PLUS_ASSIGN",
@@ -392,17 +410,30 @@ class OpenCLParser(HipParser):
             token.value
             for token in self.tokens[type_start:type_end]
             if token.type != "NEWLINE"
+            and token.type
+            not in {*self.TYPE_QUALIFIER_TOKENS, *self.POSTFIX_TYPE_QUALIFIER_TOKENS}
         ]
         return len(parts) == 1 and self.is_opencl_vector_type_name(parts[0])
 
     def parse_opencl_vector_constructor_cast(self):
         self.consume("LPAREN")
         target_type = self.parse_type()
+        target_type = self.unqualified_opencl_vector_constructor_type(target_type)
         self.consume("RPAREN")
         self.consume("LPAREN")
         args = self.parse_argument_list()
         self.consume("RPAREN")
         return FunctionCallNode(target_type, args)
+
+    def unqualified_opencl_vector_constructor_type(self, type_name):
+        parts = [
+            part
+            for part in str(type_name).split()
+            if part not in self.OPENCL_VECTOR_CONSTRUCTOR_QUALIFIERS
+        ]
+        if len(parts) == 1 and self.is_opencl_vector_type_name(parts[0]):
+            return parts[0]
+        return type_name
 
     def is_opencl_vector_type_name(self, type_name):
         return bool(

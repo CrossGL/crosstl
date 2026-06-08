@@ -6,6 +6,8 @@ from typing import Dict, List, Optional, Tuple
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
+
 
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
@@ -165,6 +167,10 @@ class GLSLPreprocessor:
                 i = self._skip_block_comment(code, i)
                 continue
             if ch == "#":
+                marker_end = self._skip_hash_bracketed_marker_line(code, i)
+                if marker_end is not None:
+                    i = marker_end
+                    continue
                 directive = self._read_directive(code, i)
                 if directive == "version":
                     return i
@@ -186,8 +192,36 @@ class GLSLPreprocessor:
             if code.startswith("/*", i):
                 i = self._skip_block_comment(code, i)
                 continue
+            marker_end = self._skip_hash_bracketed_marker_line(code, i)
+            if marker_end is not None:
+                i = marker_end
+                continue
             return True
         return False
+
+    def _skip_hash_bracketed_marker_line(self, code: str, start: int) -> Optional[int]:
+        match = HASH_BRACKETED_MARKER_RE.match(code, start)
+        if not match:
+            return None
+
+        i = match.end()
+        while i < len(code) and code[i] in " \t\r\f\v":
+            i += 1
+        if i >= len(code):
+            return i
+        if code[i] == "\n":
+            return i + 1
+        if code.startswith("//", i):
+            return self._skip_line_comment(code, i)
+        if code.startswith("/*", i):
+            after_comment = self._skip_block_comment(code, i)
+            while after_comment < len(code) and code[after_comment] in " \t\r\f\v":
+                after_comment += 1
+            if after_comment >= len(code):
+                return after_comment
+            if code[after_comment] == "\n":
+                return after_comment + 1
+        return None
 
     def _read_directive(self, code: str, start: int) -> str:
         match = re.match(r"#\s*([A-Za-z_][A-Za-z0-9_]*)", code[start:])

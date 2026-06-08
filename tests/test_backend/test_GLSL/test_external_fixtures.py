@@ -1026,6 +1026,49 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: godotengine/godot
+    # Commit: a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # Path: servers/rendering/renderer_rd/shaders/blit.glsl
+    # Reduced from Godot's hash-bracketed stage sections, where #[vertex]
+    # appears before that section's #version directive.
+    ExternalFixture(
+        name="godot-rd-blit-hash-stage-marker-before-version",
+        repo="https://github.com/godotengine/godot",
+        commit="a4f5e8cddf68487bdc358bc2ccf745d98363139b",
+        path="servers/rendering/renderer_rd/shaders/blit.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #[vertex]
+
+            #version 450
+
+            layout(push_constant, std140) uniform Pos {
+                vec4 src_rect;
+            } data;
+
+            layout(location = 0) out vec2 uv;
+
+            void main() {
+                uv = data.src_rect.xy;
+                gl_Position = vec4(uv, 0.0, 1.0);
+            }
+
+            #[fragment]
+
+            #version 450
+
+            layout(push_constant, std140) uniform Pos {
+                vec4 src_rect;
+            } data;
+
+            layout(location = 0) in vec2 uv;
+            layout(location = 0) out vec4 color;
+
+            void main() {
+                color = vec4(uv, 0.0, 1.0);
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="godot-betsy-bc1-hash-section-preamble",
         repo="https://github.com/godotengine/godot",
@@ -1861,6 +1904,28 @@ def test_parse_godot_bracketed_stage_marker_fixture():
     assert vertex.qualifiers == ["in", "highp"]
     assert uv.layout == {"location": "4"}
     assert [function.name for function in ast.functions] == ["main"]
+
+
+def test_codegen_godot_hash_stage_marker_before_version_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-rd-blit-hash-stage-marker-before-version"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+
+    assert ast.preprocessor == ["#version 450"]
+    assert [function.name for function in ast.functions] == ["main"]
+    assert [var.name for var in ast.io_variables] == ["uv"]
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "vertex {" in crossgl
+    assert "fragment {" not in crossgl
+    assert "color" not in crossgl
+    assert "output.uv = src_rect.xy;" in crossgl
+    parse_crossgl(crossgl)
 
 
 def test_parse_godot_hash_section_preamble_fixture():

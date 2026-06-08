@@ -85,6 +85,25 @@ def test_unresolved_system_include_is_preserved():
     assert "using" in values
 
 
+def test_target_conditionals_simulator_macro_defaults_to_device_import():
+    code = """
+    #include <TargetConditionals.h>
+    #ifndef TARGET_OS_SIMULATOR
+    #error TARGET_OS_SIMULATOR not defined. Check <TargetConditionals.h>
+    #endif
+    #if TARGET_OS_SIMULATOR
+    int simulator_only = ;
+    #else
+    int device_import = 1;
+    #endif
+    """
+
+    values = token_values(code)
+
+    assert "device_import" in values
+    assert "simulator_only" not in values
+
+
 def test_strict_missing_include_raises(tmp_path):
     code = '#include "missing.metal"\nint value = 1;'
 
