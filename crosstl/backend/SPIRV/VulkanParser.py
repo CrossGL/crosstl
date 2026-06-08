@@ -10,6 +10,7 @@ from .VulkanLexer import *
 class VulkanParser:
     """Parse Vulkan/SPIR-V style tokens into the Vulkan backend AST."""
 
+    MAX_SPIRV_MATERIALIZED_EXPRESSION_COMPLEXITY = 160
     SWIZZLE_COMPONENT_SETS = (set("xyzw"), set("rgba"), set("stpq"))
     GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS = {
         "line",
@@ -1261,6 +1262,19 @@ class VulkanParser:
         used_result_ids = self.spirv_assembly_used_result_ids(raw_instructions)
         current_label = None
 
+        def record_expression(result_id, result_type_id, expression):
+            expressions[result_id] = self.spirv_maybe_materialize_assembly_expression(
+                result_id,
+                result_type_id,
+                expression,
+                statements,
+                names,
+                decorations,
+                types,
+                constants,
+            )
+            expression_type_ids[result_id] = result_type_id
+
         for result_id, opcode, operands, _line_number in raw_instructions:
             if result_id and opcode == "OpLabel":
                 current_label = result_id
@@ -1328,51 +1342,60 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpImage" and len(operands) >= 2:
-                expressions[result_id] = self.spirv_assembly_operand_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpSampledImage" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
-                    self.spirv_type_name(operands[0], types) or operands[0],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.spirv_type_name(operands[0], types) or operands[0],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode.startswith("OpImageSample") and len(operands) >= 3:
-                expressions[result_id] = self.spirv_assembly_image_sample_expression(
-                    opcode,
-                    operands[1],
-                    operands[2],
-                    operands[3:],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_image_sample_expression(
+                        opcode,
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -1814,7 +1837,9 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpCompositeConstruct" and operands:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_composite_construct_expression(
                         operands[0],
                         operands[1:],
@@ -1823,13 +1848,14 @@ class VulkanParser:
                         decorations,
                         constants,
                         types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpCompositeExtract" and len(operands) >= 2:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_composite_extract_expression(
                         operands[1],
                         operands[2:],
@@ -1841,9 +1867,8 @@ class VulkanParser:
                         types,
                         constants,
                         constant_types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpVectorExtractDynamic" and len(operands) >= 3:
@@ -1867,7 +1892,9 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpVectorInsertDynamic" and len(operands) >= 4:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_vector_insert_dynamic_expression(
                         operands[0],
                         operands[1],
@@ -1878,13 +1905,14 @@ class VulkanParser:
                         decorations,
                         constants,
                         types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpCompositeInsert" and len(operands) >= 3:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_composite_insert_expression(
                         operands[0],
                         operands[1],
@@ -1895,25 +1923,27 @@ class VulkanParser:
                         decorations,
                         constants,
                         types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpVectorShuffle" and len(operands) >= 4:
-                expressions[result_id] = self.spirv_assembly_vector_shuffle_expression(
+                record_expression(
+                    result_id,
                     operands[0],
-                    operands[1],
-                    operands[2],
-                    operands[3:],
-                    expressions,
-                    expression_type_ids,
-                    names,
-                    decorations,
-                    constants,
-                    types,
+                    self.spirv_assembly_vector_shuffle_expression(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        expression_type_ids,
+                        names,
+                        decorations,
+                        constants,
+                        types,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpExtInst" and len(operands) >= 3:
@@ -1936,8 +1966,7 @@ class VulkanParser:
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
                 else:
-                    expressions[result_id] = call
-                expression_type_ids[result_id] = operands[0]
+                    record_expression(result_id, operands[0], call)
                 continue
 
             if result_id and opcode in {
@@ -2079,43 +2108,49 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpSelect" and len(operands) >= 4:
-                expressions[result_id] = TernaryOpNode(
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.spirv_assembly_operand_expression(
-                        operands[2],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.spirv_assembly_operand_expression(
-                        operands[3],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    TernaryOpNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[3],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpPhi" and len(operands) >= 3:
-                expressions[result_id] = self.spirv_assembly_phi_expression(
-                    operands,
-                    current_label,
-                    phi_contexts,
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_phi_expression(
+                        operands,
+                        current_label,
+                        phi_contexts,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
@@ -2124,20 +2159,23 @@ class VulkanParser:
                 and operation in self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS
                 and len(operands) >= 3
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[1:]
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[1:]
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2145,20 +2183,23 @@ class VulkanParser:
                 and operation in self.SPIRV_CORE_FUNCTIONS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_CORE_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[1:]
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_CORE_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[1:]
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2166,19 +2207,22 @@ class VulkanParser:
                 and operation in self.SPIRV_DERIVATIVE_FUNCTIONS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2186,19 +2230,22 @@ class VulkanParser:
                 and operation in self.SPIRV_UNARY_FUNCTIONS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_UNARY_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_UNARY_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2206,24 +2253,27 @@ class VulkanParser:
                 and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
                 and len(operands) >= 3
             ):
-                expressions[result_id] = BinaryOpNode(
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
-                    self.spirv_assembly_operand_expression(
-                        operands[2],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    BinaryOpNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2231,17 +2281,20 @@ class VulkanParser:
                 and operation in self.SPIRV_SPEC_CONSTANT_UNARY_OPS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = UnaryOpNode(
-                    self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    UnaryOpNode(
+                        self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
@@ -2263,8 +2316,7 @@ class VulkanParser:
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
                 else:
-                    expressions[result_id] = call
-                expression_type_ids[result_id] = operands[0]
+                    record_expression(result_id, operands[0], call)
                 continue
 
             if opcode == "OpAtomicStore" and len(operands) >= 4:
@@ -2953,6 +3005,89 @@ class VulkanParser:
             for operand in operands
             if isinstance(operand, str) and operand.startswith("%")
         }
+
+    def spirv_maybe_materialize_assembly_expression(
+        self,
+        result_id,
+        result_type_id,
+        expression,
+        statements,
+        names,
+        decorations,
+        types,
+        constants,
+    ):
+        if not result_id or not result_type_id:
+            return expression
+        if (
+            self.spirv_expression_complexity(
+                expression, self.MAX_SPIRV_MATERIALIZED_EXPRESSION_COMPLEXITY
+            )
+            <= self.MAX_SPIRV_MATERIALIZED_EXPRESSION_COMPLEXITY
+        ):
+            return expression
+
+        type_info = types.get(result_type_id, {})
+        if type_info.get("kind") in {"pointer", "function"}:
+            return expression
+        variable_type, array_suffix = self.spirv_type_name_and_suffix(
+            result_type_id, types, constants, names=names
+        )
+        if not variable_type or variable_type == "void":
+            return expression
+
+        variable_name = self.spirv_assembly_value_name(
+            result_id, names, decorations, prefix="value"
+        )
+        statements.append(
+            AssignmentNode(
+                VariableNode(
+                    variable_type,
+                    f"{variable_name}{array_suffix}",
+                    spirv_id=result_id,
+                    spirv_type_id=result_type_id,
+                ),
+                expression,
+            )
+        )
+        return VariableNode("", variable_name, spirv_id=result_id)
+
+    def spirv_expression_complexity(self, expression, limit):
+        budget = limit + 1
+
+        def count(node):
+            nonlocal budget
+            if budget <= 0:
+                return 0
+            budget -= 1
+            if node is None or isinstance(node, (str, int, float, VariableNode)):
+                return 1
+            if isinstance(node, AssignmentNode):
+                return 1 + count(node.left) + count(node.right)
+            if isinstance(node, BinaryOpNode):
+                return 1 + count(node.left) + count(node.right)
+            if isinstance(node, UnaryOpNode):
+                return 1 + count(node.operand)
+            if isinstance(node, TernaryOpNode):
+                return (
+                    1
+                    + count(node.condition)
+                    + count(node.true_expr)
+                    + count(node.false_expr)
+                )
+            if isinstance(node, FunctionCallNode):
+                return 1 + sum(count(arg) for arg in node.args)
+            if isinstance(node, MethodCallNode):
+                return 1 + count(node.object) + sum(count(arg) for arg in node.args)
+            if isinstance(node, MemberAccessNode):
+                return 1 + count(node.object)
+            if isinstance(node, ArrayAccessNode):
+                return 1 + count(node.array) + count(node.index)
+            if isinstance(node, InitializerListNode):
+                return 1 + sum(count(element) for element in node.elements)
+            return 1
+
+        return count(expression)
 
     def spirv_assembly_phi_contexts(self, raw_instructions):
         contexts = {}

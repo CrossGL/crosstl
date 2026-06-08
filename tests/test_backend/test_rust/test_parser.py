@@ -5254,6 +5254,27 @@ def test_trait_supertrait_bounds_parsing():
     assert ast.traits[0].methods[0].name == "distance"
 
 
+def test_trait_alias_parsing_from_rust_gpu_invalid_target_compiletest():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Path: tests/compiletests/ui/spirv-attr/invalid-target.rs
+    code = """
+    #![feature(trait_alias)]
+
+    #[spirv_recursive_for_testing(vertex, uniform, descriptor_set = 0)]
+    trait _TraitAlias<T> = Copy + Into<T>;
+    """
+    ast = parse_code(code)
+    trait = ast.traits[0]
+
+    assert trait.name == "_TraitAlias"
+    assert trait.generics == ["T"]
+    assert trait.supertraits == ["Copy", "Into<T>"]
+    assert trait.methods == []
+    assert trait.is_alias is True
+    assert trait.attributes[0].name == "spirv_recursive_for_testing"
+
+
 def test_struct_initialization_field_shorthand_parsing():
     code = """
     fn make_stroke(shape: Shape, thickness: f32) -> Stroke {

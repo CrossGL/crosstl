@@ -237,3 +237,31 @@ class TestCudaLexer:
         assert len(strings) == 1
         assert strings[0].startswith('R"(')
         assert "#version 330 core" in strings[0]
+
+    def test_preprocess_disabled_splices_multiline_macro_definition(self):
+        # Upstream pattern:
+        # repo: https://github.com/NVIDIA/cuda-samples
+        # path: cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/inc/cudasharedmem.h
+        code = r"""
+        #define BUILD_SHAREDMEMORY_TYPE(t, n)   \
+            template <> struct SharedMemory<t>  \
+            {                                   \
+                __device__ t &operator[](int i) \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return n[i];                \
+                }                               \
+            }
+
+        BUILD_SHAREDMEMORY_TYPE(int, s_int);
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+
+        defines = [
+            value for token_type, value in tokens if token_type == "PREPROCESSOR"
+        ]
+
+        assert len(defines) == 1
+        assert "template <> struct SharedMemory<t>" in defines[0]
+        assert ("IDENTIFIER", "BUILD_SHAREDMEMORY_TYPE") in tokens

@@ -178,6 +178,33 @@ def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar()
     assert "layout(location = 0) in vec3 position;" in glsl
 
 
+def test_codegen_unary_rhs_after_newline_from_crt_royale_roundtrip():
+    # Reduced from libretro/glsl-shaders crt-royale-geometry-aa-last-pass.glsl,
+    # which has a parenthesized return expression with "+\n -term".
+    code = textwrap.dedent("""
+        #version 130
+
+        float curve_weight(float x)
+        {
+            return (
+                0.0264727330997042 * min(x, 6.83134964622778) +
+                -0.0597255978950933 * min(7.41043194481873, x)
+            );
+        }
+
+        void main()
+        {
+            gl_Position = vec4(curve_weight(1.0));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "-0.0597255978950933" in crossgl
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "-0.0597255978950933" in glsl
+
+
 def test_codegen_fragment_roundtrip():
     output = assert_roundtrip(FRAGMENT_GLSL, "fragment", ShaderStage.FRAGMENT)
     lowered = output.lower()

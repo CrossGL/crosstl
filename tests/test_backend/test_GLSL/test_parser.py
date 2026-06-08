@@ -11,6 +11,7 @@ from crosstl.backend.GLSL.OpenglAst import (
     InitializerListNode,
     ReturnNode,
     StructNode,
+    UnaryOpNode,
     VariableNode,
 )
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
@@ -131,6 +132,40 @@ def test_parse_function_header_with_newline_before_parameter_list_from_glsl_gram
     assert [function.name for function in ast.functions] == ["build_color", "main"]
     assert ast.functions[0].params[0].name == "color"
     assert ast.functions[1].qualifiers == ["vertex"]
+
+
+def test_parse_unary_rhs_after_newline_from_crt_royale():
+    # Reduced from libretro/glsl-shaders crt-royale-geometry-aa-last-pass.glsl,
+    # which splits a signed additive term after a line break.
+    code = textwrap.dedent("""
+        #version 130
+
+        float curve_weight(float x)
+        {
+            return (
+                0.0264727330997042 * min(x, 6.83134964622778) +
+                -0.0597255978950933 * min(7.41043194481873, x)
+            );
+        }
+
+        void main()
+        {
+            gl_Position = vec4(curve_weight(1.0));
+        }
+        """)
+
+    ast = parse_ok(code, "vertex")
+    curve_weight = next(
+        function for function in ast.functions if function.name == "curve_weight"
+    )
+    returned = curve_weight.body[0]
+
+    assert isinstance(returned, ReturnNode)
+    assert isinstance(returned.value, BinaryOpNode)
+    assert returned.value.op == "+"
+    assert isinstance(returned.value.right, BinaryOpNode)
+    assert isinstance(returned.value.right.left, UnaryOpNode)
+    assert returned.value.right.left.op == "-"
 
 
 def test_parse_layout_qualifier_with_newline_before_parens_from_glsl_grammar():

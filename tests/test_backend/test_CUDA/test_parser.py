@@ -4602,3 +4602,46 @@ class TestCudaParser:
 
         with pytest.raises(SyntaxError, match="duplicate default"):
             parser.parse()
+
+    def test_cuda_samples_shared_memory_macro_header_parse_without_preprocess(self):
+        # Upstream pattern:
+        # repo: https://github.com/NVIDIA/cuda-samples
+        # path: cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/inc/cudasharedmem.h
+        code = r"""
+        template <typename T> struct SharedMemory
+        {
+            virtual __device__ T &operator*() = 0;
+            virtual __device__ T &operator[](int i) = 0;
+        };
+
+        #define BUILD_SHAREDMEMORY_TYPE(t, n)   \
+            template <> struct SharedMemory<t>  \
+            {                                   \
+                __device__ t &operator*()       \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return *n;                  \
+                }                               \
+                __device__ t &operator[](int i) \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return n[i];                \
+                }                               \
+            }
+
+        BUILD_SHAREDMEMORY_TYPE(int, s_int);
+
+        __global__ void use_shared(int* out) {
+            out[0] = 1;
+        }
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert isinstance(ast.includes[0], PreprocessorNode)
+        assert ast.includes[0].directive == "define"
+        assert "template <> struct SharedMemory<t>" in ast.includes[0].content
+        assert ast.structs[0].name == "SharedMemory"
+        assert ast.kernels[0].name == "use_shared"

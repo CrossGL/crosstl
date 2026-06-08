@@ -506,10 +506,16 @@ class CudaLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
+        else:
+            code = self._join_line_continuations(code)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
         self.reserved_keywords = KEYWORDS
+
+    @staticmethod
+    def _join_line_continuations(code: str) -> str:
+        return re.sub(r"\\(?:\r\n|\r|\n)", "", code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
         return list(self.token_generator())

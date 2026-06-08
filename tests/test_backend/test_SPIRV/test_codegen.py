@@ -35,6 +35,44 @@ def parse_code(tokens: List):
     return parser.parse()
 
 
+def spirv_cross_vector_shuffle_growth_assembly(iterations: int = 36) -> str:
+    """Reduced from SPIRV-Cross shaders/asm/frag/vector-shuffle-oom.asm.frag."""
+    lines = """
+; Reduced from SPIRV-Cross shaders/asm/frag/vector-shuffle-oom.asm.frag.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %out_value "outValue"
+OpDecorate %input_value Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%base = OpConstantComposite %v4float %zero %one %zero %one
+%input_value = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%value_0 = OpLoad %v4float %input_value
+""".strip().splitlines()
+    previous = "%value_0"
+    for index in range(1, iterations + 1):
+        mixed = f"%mixed_{index}"
+        added = f"%added_{index}"
+        lines.append(f"{mixed} = OpVectorShuffle %v4float {previous} %base 4 5 6 3")
+        lines.append(f"{added} = OpFAdd %v4float {mixed} {previous}")
+        previous = added
+    lines.extend([f"OpStore %out_value {previous}", "OpReturn", "OpFunctionEnd"])
+    return "\n".join(lines)
+
+
 FRAGMENT_SHADER = """
 void main() {
     vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
@@ -6309,6 +6347,20 @@ def test_spirv_assembly_vector_shuffle_swizzle_body_codegen():
     assert "float3 color @output @location(0);" in generated_code
     assert "color = value.xyz;" in generated_code
     assert "color = rgb;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_vector_shuffle_growth_codegen_reparse():
+    tokens = tokenize_code(spirv_cross_vector_shuffle_growth_assembly())
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 inputValue @input @location(0);" in generated_code
+    assert "float4 outValue @output @location(0);" in generated_code
+    assert "float4 added_" in generated_code
+    assert re.search(r"outValue = added_\d+;", generated_code)
+    assert len(generated_code) < 20000
     assert "Unhandled statement type" not in generated_code
 
 

@@ -2356,6 +2356,7 @@ class GLSLParser:
         return expr
 
     def parse_unary(self):
+        self.skip_newlines()
         if self.is_c_style_cast_start():
             return self.parse_c_style_cast()
         if self.current_token[0] in ("PLUS", "MINUS", "LOGICAL_NOT", "BITWISE_NOT"):

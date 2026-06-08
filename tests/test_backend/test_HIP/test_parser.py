@@ -4007,3 +4007,32 @@ class TestHipParser:
 
         with pytest.raises(SyntaxError, match="duplicate default"):
             parser.parse()
+
+    def test_public_rocm_conditional_alias_comparison_does_not_leak(self):
+        code = """
+        template <typename InDataType, typename WeiDataType>
+        void host(S s) {
+            using ComputeType = std::conditional_t<
+                sizeof(InDataType) < sizeof(WeiDataType),
+                InDataType,
+                WeiDataType>;
+            if (s.log_level_ > 0) {
+                sink();
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        assert isinstance(body[0], TypeAliasNode)
+        assert body[0].name == "ComputeType"
+        assert body[0].alias_type == (
+            "std::conditional_t<sizeof(InDataType)<sizeof(WeiDataType), "
+            "InDataType, WeiDataType>"
+        )
+        assert isinstance(body[1], IfNode)
+        assert isinstance(body[1].condition, BinaryOpNode)
+        assert body[1].condition.op == ">"

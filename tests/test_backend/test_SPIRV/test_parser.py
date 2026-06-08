@@ -48,6 +48,44 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
+def spirv_cross_vector_shuffle_growth_assembly(iterations: int = 36) -> str:
+    """Reduced from SPIRV-Cross shaders/asm/frag/vector-shuffle-oom.asm.frag."""
+    lines = """
+; Reduced from SPIRV-Cross shaders/asm/frag/vector-shuffle-oom.asm.frag.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %out_value "outValue"
+OpDecorate %input_value Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%base = OpConstantComposite %v4float %zero %one %zero %one
+%input_value = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%value_0 = OpLoad %v4float %input_value
+""".strip().splitlines()
+    previous = "%value_0"
+    for index in range(1, iterations + 1):
+        mixed = f"%mixed_{index}"
+        added = f"%added_{index}"
+        lines.append(f"{mixed} = OpVectorShuffle %v4float {previous} %base 4 5 6 3")
+        lines.append(f"{added} = OpFAdd %v4float {mixed} {previous}")
+        previous = added
+    lines.extend([f"OpStore %out_value {previous}", "OpReturn", "OpFunctionEnd"])
+    return "\n".join(lines)
+
+
 def test_parse_debug_printf_string_literal_argument_from_vulkan_samples():
     code = """
     #extension GL_EXT_debug_printf : enable
@@ -2947,6 +2985,26 @@ def test_spirv_assembly_function_parameters_parse():
     assert "OpFunctionParameter" in [
         opcode for _rid, opcode, _ops, _line in function.spirv_instructions
     ]
+
+
+def test_spirv_cross_vector_shuffle_growth_materializes_temporaries_parse():
+    tokens = tokenize_code(spirv_cross_vector_shuffle_growth_assembly())
+    ast = parse_code(tokens)
+
+    main = ast.functions[0]
+    temp_assignments = [
+        statement
+        for statement in main.body
+        if isinstance(statement, AssignmentNode)
+        and isinstance(statement.left, VariableNode)
+        and statement.left.name.startswith("added_")
+    ]
+
+    assert temp_assignments
+    assert temp_assignments[0].left.vtype == "vec4"
+    assert isinstance(main.body[-2], AssignmentNode)
+    assert isinstance(main.body[-2].right, VariableNode)
+    assert main.body[-2].right.name == temp_assignments[-1].left.name
 
 
 def test_spirv_assembly_empty_parameter_names_fall_back_to_ids():

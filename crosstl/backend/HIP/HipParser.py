@@ -3578,7 +3578,7 @@ class HipParser:
         while depth > 0:
             token_type = self.current_token.type
             token_value = self.current_token.value
-            if token_type == "LT":
+            if token_type == "LT" and self.is_nested_template_lt_at_pos(self.pos):
                 depth += 1
                 parts.append(token_value)
                 self.consume("LT")
@@ -3608,6 +3608,30 @@ class HipParser:
                 self.consume(token_type)
 
         return f"<{self.format_template_parts(parts)}>"
+
+    def is_nested_template_lt_at_pos(self, index):
+        previous_index = index - 1
+        while previous_index >= 0 and self.tokens[previous_index].type == "NEWLINE":
+            previous_index -= 1
+
+        if previous_index < 0:
+            return True
+
+        previous_type = self.tokens[previous_index].type
+        previous_value = self.tokens[previous_index].value
+        if previous_type == "IDENTIFIER" and previous_value == "sizeof":
+            return False
+        return previous_type in {
+            "IDENTIFIER",
+            *self.BUILTIN_TYPE_TOKENS,
+            *self.VECTOR_TYPE_TOKENS,
+            *self.RESOURCE_TYPE_TOKENS,
+            *self.ELABORATED_TYPE_TOKENS,
+            "TYPENAME",
+            "GT",
+            "RSHIFT",
+            "KERNEL_LAUNCH_END",
+        }
 
     def format_template_parts(self, parts):
         formatted = []
@@ -4977,7 +5001,9 @@ class HipParser:
 
         while index < len(self.tokens):
             token_type = self.tokens[index].type
-            if token_type == "LT":
+            if token_type == "LT" and (
+                depth == 0 or self.is_nested_template_lt_at_pos(index)
+            ):
                 depth += 1
             elif token_type == "GT":
                 depth -= 1

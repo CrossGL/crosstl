@@ -1280,6 +1280,32 @@ class RustParser:
         if self.current_token[0] == "LESS_THAN":
             generics = self.parse_generics()
 
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            alias_bounds = []
+            while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+                bound = self.collect_token_text_until({"PLUS", "SEMICOLON"})
+                if bound:
+                    alias_bounds.append(bound)
+                if self.current_token[0] == "PLUS":
+                    self.eat("PLUS")
+                    continue
+                break
+            self.eat("SEMICOLON")
+            return TraitNode(
+                name,
+                [],
+                generics,
+                visibility,
+                [],
+                [],
+                alias_bounds,
+                [],
+                is_unsafe,
+                attributes=attributes or [],
+                is_alias=True,
+            )
+
         supertraits = []
         if self.current_token[0] == "COLON":
             self.eat("COLON")

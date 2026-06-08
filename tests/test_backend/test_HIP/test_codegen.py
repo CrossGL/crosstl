@@ -17189,3 +17189,31 @@ class TestHipCodeGen:
         assert "default:" in result
         assert "case 1:" in result
         assert result.index("default:") < result.index("case 1:")
+
+    def test_public_rocm_conditional_alias_comparison_codegen_reparse(self):
+        code = """
+        template <typename InDataType, typename WeiDataType>
+        void host(S s) {
+            using ComputeType = std::conditional_t<
+                sizeof(InDataType) < sizeof(WeiDataType),
+                InDataType,
+                WeiDataType>;
+            if (s.log_level_ > 0) {
+                sink();
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert (
+            "typedef std::conditional_t<sizeof(InDataType)<sizeof(WeiDataType), "
+            "InDataType, WeiDataType> ComputeType;"
+        ) in result
+        assert "if ((s.log_level_ > 0)) {" in result
