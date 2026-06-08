@@ -551,12 +551,13 @@ def test_documented_numeric_literal_forms_codegen_from_mojo_reference():
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "let grouped = 1_000_000;" in generated_code
-    assert "let relaxed = 1__000_;" in generated_code
+    assert "let grouped = 1000000;" in generated_code
+    assert "let relaxed = 1000;" in generated_code
     assert "let fraction_only = .5;" in generated_code
     assert "let trailing_point = 2.;" in generated_code
-    assert "let grouped_float = 1_000.000_5;" in generated_code
+    assert "let grouped_float = 1000.0005;" in generated_code
     assert "let exponent_only = 1E10;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_function_capturing_raises_effects_codegen_are_dropped():
@@ -734,6 +735,22 @@ def test_braced_set_and_initializer_list_codegen_from_current_mojo_docs():
     assert "var primes = {2, 3, 5};" in generated_code
     assert "Point point = {x = 1.0, y = 2.0};" in generated_code
     assert "Unhandled expression: BracedLiteralNode" not in generated_code
+
+
+def test_braced_type_initializer_suffix_codegen_reparses_crossgl():
+    # Reduced from ksandvik/mojo-examples examples/nbody.mojo Planet.__init__.
+    code = """
+    struct Planet:
+        var pos: Int
+
+    fn make_planet(pos: Int) -> Planet:
+        return Planet { pos: pos }
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "return Planet(pos = pos);" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
@@ -2200,6 +2217,22 @@ def test_for_in_descending_range_codegen_uses_greater_than_condition():
     assert (
         "for (int j = 4; ((step > 0) ? (j < 0) : (j > 0)); j += step)" in generated_code
     )
+
+
+def test_for_in_negative_dynamic_step_range_codegen_reparses_crossgl():
+    # Reduced from modular/max/kernels structured_kernels/config.mojo.
+    code = """
+    fn main(step: Int):
+        for i in range(8, 0, -step):
+            sink(i)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 8; (((-step) > 0) ? (i < 0) : (i > 0)); i += (-step))" in (
+        generated_code
+    )
+    parse_crossgl(generated_code)
 
 
 def test_for_in_target_conventions_codegen_from_modular_control_flow_docs():

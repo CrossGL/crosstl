@@ -92,3 +92,55 @@ def test_volatile_global_unsigned_pointer_cast_parses():
     assignment = ast.statements[0].body[0]
     assert assignment.right.operation == "atomic_cmpxchg"
     assert assignment.right.args[0].target_type == "volatile __global__ unsigned int *"
+
+
+def test_macro_style_casts_in_ternary_branches_parse():
+    ast = parse_code("""
+        kernel void identity_kernel(global T *out) {
+            unsigned idx = get_global_id(0);
+            unsigned idy = get_global_id(1);
+            T val = (idx == idy) ? (T)(ONE) : (T)(ZERO);
+            out[idx] = val;
+        }
+        """)
+
+    value = ast.statements[0].body[2].value
+    assert value.true_expr.target_type == "T"
+    assert value.false_expr.target_type == "T"
+
+
+def test_macro_expanded_parenthesized_lvalue_assignment_parses():
+    ast = parse_code("""
+        kernel void expanded_lvalue(local T *scratch) {
+            int tid_y = get_local_id(1);
+            int tid_x = get_local_id(0);
+            (scratch[(tid_y) * 81 + (0) * 9 + (tid_x * 2)]) = 0.0f;
+        }
+        """)
+
+    assignment = ast.statements[0].body[2]
+    assert assignment.operator == "="
+
+
+def test_public_inline_function_specifier_macros_parse():
+    ast = parse_code("""
+        __inline unsigned popcount(unsigned x) { return x; }
+        INLINE_FUNC void helper(const __global real *src, LOCAL_PTR real *dst) {
+            dst[0] = src[0];
+        }
+        """)
+
+    assert [stmt.name for stmt in ast.statements] == ["popcount", "helper"]
+
+
+def test_line_break_after_binary_operator_parses():
+    ast = parse_code("""
+        kernel void line_broken(global float *out, global const float *center) {
+            float value = (center[0] - center[1] -
+                           center[2] + center[3]);
+            out[0] = value;
+        }
+        """)
+
+    value = ast.statements[0].body[0].value
+    assert value.op == "+"

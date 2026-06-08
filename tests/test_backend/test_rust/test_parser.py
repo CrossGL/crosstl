@@ -113,6 +113,88 @@ def test_raw_identifier_parsing_normalizes_keyword_names():
     assert function.body[0] == "match"
 
 
+def test_absolute_use_and_type_paths_parse_from_generated_webgpu_bindings():
+    code = """
+    pub use ::wgc::naga;
+
+    pub struct Binding<'a> {
+        strings: &'a [::js_sys::JsString],
+        value: ::std::primitive::u32,
+    }
+    """
+
+    ast = parse_code(code)
+    struct = ast.structs[0]
+
+    assert ast.use_statements[0].path == "::wgc::naga"
+    assert [member.vtype for member in struct.members] == [
+        "&::js_sys::JsString[]",
+        "::std::primitive::u32",
+    ]
+
+
+def test_if_expression_continues_through_bitwise_operator_chain():
+    code = """
+    fn usage(supports_storage_resources: bool) -> wgpu::BufferUsages {
+        let usage = if supports_storage_resources {
+            wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::UNIFORM
+        } | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+        usage
+    }
+    """
+
+    ast = parse_code(code)
+    usage = ast.functions[0].body[0]
+
+    assert isinstance(usage, LetNode)
+    assert isinstance(usage.value, BinaryOpNode)
+    assert usage.value.op == "|"
+
+
+def test_raw_borrow_and_nested_reference_closure_patterns_parse():
+    code = """
+    fn raw(reference: &mut T) -> Self {
+        unsafe { Self::new(NonNull::new_unchecked(&raw mut *reference)) }
+    }
+
+    fn find(handle: u32) {
+        let _ = ep_results.iter().find(|&&(_, ty)| ty == handle);
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert len(ast.functions) == 2
+    raw_call = ast.functions[0].body[0].block.expression.args[0].args[0]
+    closure = ast.functions[1].body[0].value.args[0]
+    assert isinstance(raw_call, ReferenceNode)
+    assert isinstance(closure, ClosureNode)
+    assert isinstance(closure.params[0].pattern, ReferenceNode)
+
+
+def test_for_loop_accepts_destructuring_path_patterns():
+    code = """
+    fn validate(cases: &[crate::SwitchCase]) {
+        for &crate::SwitchCase {
+            value: _,
+            ref body,
+            fall_through: _,
+        } in cases {
+            validate_block(body)?;
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.pattern, ReferenceNode)
+    assert isinstance(loop.pattern.expression, MatchStructPatternNode)
+
+
 def test_primitive_named_impl_methods_parse_from_rust_gpu_metadata():
     code = """
     pub struct TestMetadata {

@@ -9827,6 +9827,10 @@ class RustToCrossGLConverter:
         if crossgl_type is not None:
             return crossgl_type
 
+        generic_type = self.format_unmapped_generic_type(rust_type)
+        if generic_type is not None:
+            return generic_type
+
         return rust_type
 
     def map_function_return_type(self, rust_type):
@@ -9858,6 +9862,19 @@ class RustToCrossGLConverter:
             )
 
         return self.crossgl_type_path_identifier(rust_type)
+
+    def format_unmapped_generic_type(self, rust_type):
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        normalized_args = [
+            self.normalize_lifetime_generic_argument(arg) for arg in args
+        ]
+        if normalized_args == args:
+            return None
+        return f"{base_name}<{', '.join(normalized_args)}>"
 
     def strip_raw_pointer_type(self, rust_type):
         if not isinstance(rust_type, str):

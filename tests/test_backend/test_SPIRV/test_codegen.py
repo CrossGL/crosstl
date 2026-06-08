@@ -290,6 +290,78 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_VULKAN_SAMPLES_DUPLICATE_STRUCT_NAMES_ASSEMBLY = """
+; Reduced from KhronosGroup/Vulkan-Samples shaders/base.frag.spv disassembly.
+; glslang can emit distinct OpTypeStruct ids with the same debug name and
+; identical members; CrossGL should receive only one struct declaration.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpExecutionMode %main OriginUpperLeft
+OpName %LightA "Light"
+OpMemberName %LightA 0 "position"
+OpMemberName %LightA 1 "color"
+OpName %LightB "Light"
+OpMemberName %LightB 0 "position"
+OpMemberName %LightB 1 "color"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%LightA = OpTypeStruct %v4float %v4float
+%LightB = OpTypeStruct %v4float %v4float
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_VULKAN_SAMPLES_STORAGE_BUFFER_NAME_COLLISION_ASSEMBLY = """
+; Reduced from KhronosGroup/Vulkan-Samples
+; shaders/ray_tracing_extended/slang/closesthit.rchit.spv disassembly.
+; Multiple storage buffers may use the same generic block name, with some
+; sharing identical fields and others carrying a different element type.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %UIntBuffer "StructuredBuffer"
+OpMemberName %UIntBuffer 0 "values"
+OpName %VecBuffer "StructuredBuffer"
+OpMemberName %VecBuffer 0 "values"
+OpName %index_buffer "index_buffer"
+OpName %dynamic_index_buffer "dynamic_index_buffer"
+OpName %vertex_buffer "vertex_buffer"
+OpDecorate %UIntBuffer Block
+OpMemberDecorate %UIntBuffer 0 Offset 0
+OpDecorate %VecBuffer Block
+OpMemberDecorate %VecBuffer 0 Offset 0
+OpDecorate %index_buffer DescriptorSet 0
+OpDecorate %index_buffer Binding 5
+OpDecorate %dynamic_index_buffer DescriptorSet 0
+OpDecorate %dynamic_index_buffer Binding 9
+OpDecorate %vertex_buffer DescriptorSet 0
+OpDecorate %vertex_buffer Binding 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%rt_uint = OpTypeRuntimeArray %uint
+%rt_v4float = OpTypeRuntimeArray %v4float
+%UIntBuffer = OpTypeStruct %rt_uint
+%VecBuffer = OpTypeStruct %rt_v4float
+%ptr_uint_buffer = OpTypePointer StorageBuffer %UIntBuffer
+%ptr_vec_buffer = OpTypePointer StorageBuffer %VecBuffer
+%index_buffer = OpVariable %ptr_uint_buffer StorageBuffer
+%dynamic_index_buffer = OpVariable %ptr_uint_buffer StorageBuffer
+%vertex_buffer = OpVariable %ptr_vec_buffer StorageBuffer
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY = """
 ; Reduced from glslangValidator -V -H output for GLSL module-scope globals:
 ; vec4 privateColor; float privateWeight = 1.0;
@@ -5337,6 +5409,40 @@ def test_spirv_assembly_matrix_interface_codegen():
 
     assert "float4x4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_duplicate_struct_names_codegen_reparse():
+    tokens = tokenize_code(SPIRV_VULKAN_SAMPLES_DUPLICATE_STRUCT_NAMES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert generated_code.count("struct Light") == 1
+    assert "float4 position;" in generated_code
+    assert "float4 color;" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
+    tokens = tokenize_code(SPIRV_VULKAN_SAMPLES_STORAGE_BUFFER_NAME_COLLISION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert generated_code.count("struct StructuredBuffer {") == 1
+    assert "RWStructuredBuffer<StructuredBuffer> index_buffer @set(0) @binding(5);" in (
+        generated_code
+    )
+    assert (
+        "RWStructuredBuffer<StructuredBuffer> dynamic_index_buffer @set(0) @binding(9);"
+        in generated_code
+    )
+    assert "struct StructuredBuffer_vertex_buffer {" in generated_code
+    assert (
+        "RWStructuredBuffer<StructuredBuffer_vertex_buffer> vertex_buffer "
+        "@set(0) @binding(4);" in generated_code
+    )
     assert "Unhandled statement type" not in generated_code
 
 

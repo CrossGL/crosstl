@@ -35,6 +35,14 @@ class MojoToCrossGLConverter:
         r"\s+else\s+"
         r"(?P<false>\([^,\[\]]+\)|[A-Za-z_][A-Za-z0-9_.]*|\d+(?:\.\d+)?)"
     )
+    NUMERIC_LITERAL_PATTERN = re.compile(
+        r"^(?:"
+        r"0[xX][0-9a-fA-F_]+|"
+        r"0[bB][01_]+|"
+        r"0[oO][0-7_]+|"
+        r"(?:(?:\d[\d_]*)?\.\d[\d_]*|\d[\d_]*\.|\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?"
+        r")$"
+    )
     STRING_LITERAL_PREFIXES = {
         "r",
         "R",
@@ -1021,11 +1029,10 @@ class MojoToCrossGLConverter:
             return True
         if not isinstance(value, str):
             return False
-        try:
-            float(value.rstrip("fF"))
-        except ValueError:
-            return False
-        return True
+        return bool(self.NUMERIC_LITERAL_PATTERN.match(value))
+
+    def normalize_numeric_literal(self, value):
+        return value.replace("_", "")
 
     def is_negative_numeric_literal(self, value):
         if isinstance(value, (int, float)):
@@ -1147,6 +1154,8 @@ class MojoToCrossGLConverter:
         if expr is None:
             return ""
         elif isinstance(expr, str):
+            if self.is_numeric_literal(expr):
+                return self.normalize_numeric_literal(expr)
             return self.normalize_string_literal(expr)
         elif isinstance(expr, (int, float, bool)):
             return str(expr)

@@ -4228,6 +4228,57 @@ mprime: 4034666248
     assert call.args[1].type_name == "String"
 
 
+def test_soft_infix_line_continuations_parse_from_practical_examples():
+    # Reduced from ahmetax/Practical-Mojo-Examples v0.26.2 examples that
+    # split long expressions after and before infix operators.
+    code = """
+    fn fmt_time(ns: UInt) -> String:
+        return String(ns // 1_000_000) + "." +
+               String((ns % 1_000_000) // 10_000) + " ms"
+
+    fn accumulate(state: RunState, a: Float32):
+        var xbi = (state.xb.data + 1).load[width=4](0)
+            + a * (state.value_cache.data + 1).load[width=4](0)
+    """
+    ast = parse_code(tokenize_code(code))
+    fmt_time = find_function(ast, "fmt_time")
+    accumulate = find_function(ast, "accumulate")
+
+    assert isinstance(fmt_time.body[0], ReturnNode)
+    assert isinstance(fmt_time.body[0].value, BinaryOpNode)
+    declaration = accumulate.body[0]
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert isinstance(declaration.initial_value, BinaryOpNode)
+
+
+def test_braced_type_initializer_suffix_parse_from_nbody_example():
+    # Reduced from ksandvik/mojo-examples examples/nbody.mojo Planet.__init__.
+    code = """
+    struct Planet:
+        var pos: SIMD[DType.float64, 4]
+        var velocity: SIMD[DType.float64, 4]
+        var mass: Float64
+
+        fn __init__(
+            pos: SIMD[DType.float64, 4],
+            velocity: SIMD[DType.float64, 4],
+            mass: Float64,
+        ) -> Self:
+            return Self {
+                pos: pos,
+                velocity: velocity,
+                mass: mass,
+            }
+    """
+    ast = parse_code(tokenize_code(code))
+    init_method = find_struct(ast, "Planet").methods[0]
+    value = init_method.body[0].value
+
+    assert isinstance(value, FunctionCallNode)
+    assert value.name == "Self"
+    assert [arg.left.name for arg in value.args] == ["pos", "velocity", "mass"]
+
+
 def test_nested_prefixed_tstring_parse_from_modular_format_tests():
     code = r"""
     fn main():

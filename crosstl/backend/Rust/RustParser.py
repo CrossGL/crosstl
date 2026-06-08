@@ -764,6 +764,9 @@ class RustParser:
                 + "}"
             )
         else:
+            if self.current_token[0] == "DOUBLE_COLON":
+                self.eat("DOUBLE_COLON")
+                path.append("")
             path.append(self.parse_use_path_segment())
 
         while self.current_token[0] == "DOUBLE_COLON":
@@ -1426,6 +1429,9 @@ class RustParser:
             return self.format_array_type(element_type, size)
 
         type_parts = []
+        if self.current_token[0] == "DOUBLE_COLON":
+            type_parts.append("::")
+            self.eat("DOUBLE_COLON")
 
         type_parts.append(self.current_token[1])
         self.eat(self.current_token[0])
@@ -2538,6 +2544,10 @@ class RustParser:
                 is_mutable = True
             return ReferenceNode(self.parse_single_match_pattern(), is_mutable)
 
+        if self.current_token[0] == "LOGICAL_AND":
+            self.eat("LOGICAL_AND")
+            return ReferenceNode(ReferenceNode(self.parse_single_match_pattern()))
+
         if self.current_token[0] == "MINUS":
             self.eat("MINUS")
             return UnaryOpNode("-", self.parse_match_pattern_atom())
@@ -2698,7 +2708,7 @@ class RustParser:
 
     def parse_for_loop(self, label=None):
         self.eat("FOR")
-        pattern = self.parse_let_pattern()
+        pattern = self.parse_match_pattern()
         self.eat("IN")
         previous = self.expression_stops_at_lbrace
         self.expression_stops_at_lbrace = True
@@ -2755,8 +2765,6 @@ class RustParser:
         return left
 
     def parse_conditional_expression(self):
-        if self.current_token[0] == "IF":
-            return self.parse_if_expression()
         return self.parse_range_expression()
 
     def parse_if_expression(self):
@@ -2979,6 +2987,18 @@ class RustParser:
             self.eat(self.current_token[0])
 
             if op == "&":
+                if (
+                    self.current_token[0] == "IDENTIFIER"
+                    and self.current_token[1] == "raw"
+                ):
+                    self.eat("IDENTIFIER")
+                    is_mutable = False
+                    if self.current_token[0] in {"MUT", "CONST"}:
+                        is_mutable = self.current_token[0] == "MUT"
+                        self.eat(self.current_token[0])
+                    expr = self.parse_unary_expression()
+                    return ReferenceNode(expr, is_mutable)
+
                 is_mutable = False
                 if self.current_token[0] == "MUT":
                     is_mutable = True

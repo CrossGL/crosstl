@@ -61,3 +61,61 @@ def test_opencl_vector_constructor_cast_codegen_reparse():
 
     assert "var coord: vec2<i32> = vec2<i32>(" in crossgl
     assert "var color: vec4<f32> = vec4<f32>(" in crossgl
+
+
+def test_opencl_signed_char_pointer_lowers_to_crossgl_i8_array():
+    crossgl = generate_crossgl("""
+        kernel void pocl_add_i8(global signed char *a,
+                                global signed char *b,
+                                global signed char *out) {
+            uint gid = get_global_id(0);
+            out[gid] = a[gid] + b[gid];
+        }
+        """)
+
+    assert "a: array<i8>" in crossgl
+    assert "b: array<i8>" in crossgl
+    assert "out: array<i8>" in crossgl
+
+
+def test_opencl_typedef_alias_chain_lowers_to_reparseable_crossgl():
+    crossgl = generate_crossgl("""
+        typedef float real;
+        typedef real real_arg;
+
+        kernel void scale(global real *out, real_arg alpha) {
+            uint gid = get_global_id(0);
+            out[gid] = alpha;
+        }
+        """)
+
+    assert "typedef f32 real;" in crossgl
+    assert "typedef f32 real_arg;" in crossgl
+    assert "out: array<f32>" in crossgl
+    assert "f32 alpha" in crossgl
+
+
+def test_opencl_host_embedded_source_string_is_skipped_in_crossgl():
+    crossgl = generate_crossgl("""
+        static const char *embedded_kernel = "
+        __kernel void not_a_top_level_kernel(__global float *out) {
+            out[0] = 1.0f;
+        }
+        ";
+        """)
+
+    assert "// skipped host OpenCL source string: embedded_kernel" in crossgl
+    assert "not_a_top_level_kernel" not in crossgl
+
+
+def test_opencl_standalone_real_alias_falls_back_to_f32():
+    crossgl = generate_crossgl("""
+        typedef real realV;
+
+        INLINE_FUNC realV multiply(realV value, const real scale) {
+            return value * scale;
+        }
+        """)
+
+    assert "typedef f32 realV;" in crossgl
+    assert "f32 multiply(f32 value, f32 scale)" in crossgl

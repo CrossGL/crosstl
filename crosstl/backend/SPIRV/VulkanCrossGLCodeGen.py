@@ -171,12 +171,18 @@ class VulkanToCrossGLConverter:
         self.indentation = 0
         self.code = []
         self.flattened_uniform_block_instances = {}
+        self.storage_buffer_type_names = {}
+        self.storage_buffer_name_signatures = {}
+        self.emitted_storage_buffer_type_names = set()
 
     def get_indent(self):
         return "    " * self.indentation
 
     def generate(self, ast):
         self.flattened_uniform_block_instances = {}
+        self.storage_buffer_type_names = {}
+        self.storage_buffer_name_signatures = {}
+        self.emitted_storage_buffer_type_names = set()
         code = "shader main {\n"
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
@@ -576,7 +582,7 @@ class VulkanToCrossGLConverter:
                 )
         elif layout_type == "buffer":
             if node.struct_fields:
-                block_name = node.block_name or node.variable_name or "StorageBuffer"
+                block_name = self.storage_buffer_block_type_name(node)
                 variable_name = (
                     node.variable_name or block_name[0].lower() + block_name[1:]
                 )
@@ -586,10 +592,12 @@ class VulkanToCrossGLConverter:
                     else "RWStructuredBuffer"
                 )
                 attributes = self.uniform_block_attribute_suffix(node)
-                code += f"    struct {block_name} {{\n"
-                for field_type, field_name in node.struct_fields:
-                    code += f"        {self.map_type(field_type)} {field_name};\n"
-                code += "    };\n\n"
+                if block_name not in self.emitted_storage_buffer_type_names:
+                    code += f"    struct {block_name} {{\n"
+                    for field_type, field_name in node.struct_fields:
+                        code += f"        {self.map_type(field_type)} {field_name};\n"
+                    code += "    };\n\n"
+                    self.emitted_storage_buffer_type_names.add(block_name)
                 code += (
                     f"    {buffer_type}<{block_name}> {variable_name}"
                     f"{attributes};\n\n"
@@ -602,6 +610,45 @@ class VulkanToCrossGLConverter:
                 )
 
         return code
+
+    def storage_buffer_block_type_name(self, node):
+        base_name = node.block_name or node.variable_name or "StorageBuffer"
+        signature = tuple(
+            (str(field_type), str(field_name))
+            for field_type, field_name in getattr(node, "struct_fields", []) or []
+        )
+        key = (base_name, signature)
+        if key in self.storage_buffer_type_names:
+            return self.storage_buffer_type_names[key]
+
+        existing_signature = self.storage_buffer_name_signatures.get(base_name)
+        if existing_signature is None or existing_signature == signature:
+            type_name = base_name
+        else:
+            suffix_source = node.variable_name or str(
+                len(self.storage_buffer_type_names)
+            )
+            suffix = self.storage_buffer_type_suffix(suffix_source)
+            type_name = f"{base_name}_{suffix}"
+            counter = 2
+            while (
+                type_name in self.storage_buffer_name_signatures
+                and self.storage_buffer_name_signatures[type_name] != signature
+            ):
+                type_name = f"{base_name}_{suffix}_{counter}"
+                counter += 1
+
+        self.storage_buffer_type_names[key] = type_name
+        self.storage_buffer_name_signatures[type_name] = signature
+        return type_name
+
+    def storage_buffer_type_suffix(self, raw_value):
+        suffix = str(raw_value or "").split("[", 1)[0]
+        suffix = "".join(
+            char if char.isalnum() or char == "_" else "_" for char in suffix
+        )
+        suffix = suffix.strip("_")
+        return suffix or "block"
 
     def is_specialization_constant_layout(self, node):
         if (getattr(node, "layout_type", None) or "").lower() != "const":

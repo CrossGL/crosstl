@@ -12,7 +12,7 @@ from .preprocessor import OpenCLPreprocessor
 OPENCL_TOKENS = (
     ("__GLOBAL__", r"\b(?:__kernel|kernel)\b"),
     ("__DEVICE__", r"\b(?:__global|global)\b"),
-    ("__SHARED__", r"\b(?:__local|local)\b"),
+    ("__SHARED__", r"\b(?:__local|local|LOCAL_PTR)\b"),
     ("__CONSTANT__", r"\b(?:__constant|constant)\b"),
     ("__MANAGED__", r"\b(?:__private|private)\b"),
     ("__RESTRICT__", r"\b(?:__restrict__|__restrict|restrict)\b"),
@@ -131,11 +131,20 @@ class OpenCLLexer:
             return code
 
         content = code[content_start:content_end]
-        if not re.search(r"\b(__kernel|kernel)\b", content):
+        if not self._looks_like_embedded_opencl(content):
             return code
 
         return (
             code[: match.start()] + "\n" + content + code[content_end + len(closing) :]
+        )
+
+    def _looks_like_embedded_opencl(self, content: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(__kernel|kernel|__global|global|__local|local|INLINE_FUNC)\b"
+                r"|#\s*(?:define|pragma|if|ifdef|ifndef|include)\b",
+                content,
+            )
         )
 
     def tokenize(self) -> List[Token]:

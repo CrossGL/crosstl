@@ -35,14 +35,24 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "read_write",
     }
     OPENCL_SCALAR_TYPE_MAPPING = {
+        "signed char": "i8",
+        "unsigned char": "u8",
         "uchar": "u8",
+        "signed short": "i16",
+        "unsigned short": "u16",
         "ushort": "u16",
+        "signed int": "i32",
+        "unsigned int": "u32",
         "uint": "u32",
+        "signed long": "i64",
+        "unsigned long": "u64",
         "ulong": "u64",
         "intptr_t": "i64",
         "uintptr_t": "u64",
         "ptrdiff_t": "i64",
         "dim_t": "i64",
+        "real": "f32",
+        "real_arg": "f32",
         "sampler_t": "sampler",
         "event_t": "u64",
         "clk_event_t": "u64",
@@ -250,6 +260,23 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         else:
             super().visit_SyncNode(node)
 
+    def visit_VariableNode(self, node):
+        if self.is_host_embedded_source_string(node):
+            self.emit(f"// skipped host OpenCL source string: {node.name}")
+            return
+        super().visit_VariableNode(node)
+
+    def is_host_embedded_source_string(self, node):
+        if self.indent_level != 0:
+            return False
+
+        compact_type = str(getattr(node, "vtype", "")).replace(" ", "")
+        if compact_type not in {"constchar*", "charconst*", "staticconstchar*"}:
+            return False
+
+        value = getattr(node, "value", None)
+        return isinstance(value, str) and "\n" in value
+
     def visit_FunctionCallNode(self, node):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
@@ -297,11 +324,25 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if not isinstance(hip_type, str):
             hip_type = str(hip_type)
         normalized = self.strip_type_qualifiers(hip_type)
+        normalized = self.resolve_opencl_type_alias_chain(normalized)
         if normalized in self.OPENCL_VECTOR_TYPE_MAPPING:
             return self.OPENCL_VECTOR_TYPE_MAPPING[normalized]
         if normalized in self.OPENCL_SCALAR_TYPE_MAPPING:
             return self.OPENCL_SCALAR_TYPE_MAPPING[normalized]
         return super().convert_hip_type_to_crossgl(normalized)
+
+    def resolve_opencl_type_alias_chain(self, type_name):
+        seen = set()
+        resolved = self.strip_type_qualifiers(type_name)
+
+        while resolved not in seen:
+            seen.add(resolved)
+            next_resolved = self.resolve_type_alias(resolved)
+            if next_resolved == resolved:
+                break
+            resolved = self.strip_type_qualifiers(next_resolved)
+
+        return resolved
 
     def strip_type_qualifiers(self, type_name):
         qualifiers = {

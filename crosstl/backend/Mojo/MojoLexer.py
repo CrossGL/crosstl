@@ -21,6 +21,9 @@ TRIPLE_STRING_PREFIXES = {
     "TR",
 }
 
+SOFT_CONTINUATION_SUFFIXES = ("+",)
+SOFT_CONTINUATION_PREFIXES = ("+",)
+
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"#.*"),
@@ -455,8 +458,9 @@ class MojoLexer:
         """Join explicit Mojo line continuations before indentation analysis."""
         joined_lines = []
         pending = ""
+        lines = code.splitlines(keepends=True)
 
-        for line in code.splitlines(keepends=True):
+        for line_index, line in enumerate(lines):
             content, newline = self._split_line_ending(line)
             if pending:
                 content = content.lstrip(" \t")
@@ -469,6 +473,10 @@ class MojoLexer:
                 pending += stripped[:-1] + " "
                 continue
 
+            if self._is_soft_continuation_line(stripped, lines, line_index):
+                pending += stripped + " "
+                continue
+
             joined_lines.append(pending + content + newline)
             pending = ""
 
@@ -476,6 +484,35 @@ class MojoLexer:
             joined_lines.append(pending)
 
         return "".join(joined_lines)
+
+    def _is_soft_continuation_line(self, stripped: str, lines, line_index: int) -> bool:
+        """Detect unparenthesized expression continuations around infix operators."""
+        if not stripped:
+            return False
+        if self._ends_with_soft_continuation_operator(stripped):
+            return True
+        next_line = self._next_significant_line(lines, line_index + 1)
+        return bool(
+            next_line and self._starts_with_soft_continuation_operator(next_line)
+        )
+
+    def _ends_with_soft_continuation_operator(self, stripped: str) -> bool:
+        if self._has_comment_before(stripped, len(stripped)):
+            return False
+        if stripped.lstrip(" \t").startswith(("from ", "import ")):
+            return False
+        return stripped.endswith(SOFT_CONTINUATION_SUFFIXES)
+
+    def _starts_with_soft_continuation_operator(self, stripped: str) -> bool:
+        return stripped.lstrip(" \t").startswith(SOFT_CONTINUATION_PREFIXES)
+
+    def _next_significant_line(self, lines, start_index: int) -> str:
+        for line in lines[start_index:]:
+            content, _ = self._split_line_ending(line)
+            stripped = content.strip()
+            if stripped and not stripped.startswith("#"):
+                return content.rstrip(" \t")
+        return ""
 
     def _split_line_ending(self, line: str) -> Tuple[str, str]:
         if line.endswith("\r\n"):

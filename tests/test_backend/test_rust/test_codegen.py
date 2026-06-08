@@ -17,6 +17,8 @@ from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def parse_and_generate(code: str) -> str:
@@ -151,6 +153,32 @@ def test_value_returning_function_uses_final_expression_as_return():
     assert "uint choose(uint value, uint fallback, bool ready)" in result
     assert "if (ready) {\n            return value;\n        } else {" in result
     assert "return fallback;" in result
+
+
+def test_impl_receiver_reference_generic_return_is_normalized_for_crossgl_reparse():
+    code = """
+    pub struct Adapter {
+        inner: Device,
+    }
+
+    impl Adapter {
+        pub fn features(&self) -> Features {
+            self.inner.features()
+        }
+
+        pub fn as_custom(&self) -> Option<&T> {
+            self.inner.as_custom()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Features Adapter_features(Adapter self)" in result
+    assert "return self.inner.features();" in result
+    assert "Option<T> Adapter_as_custom(Adapter self)" in result
+    assert "return self.inner.as_custom();" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
 def test_value_returning_function_uses_final_literal_expression_as_return():

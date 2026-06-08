@@ -19,6 +19,9 @@ class OpenCLParser(HipParser):
     OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS = {"__GLOBAL__"}
     IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {
         *HipParser.IDENTIFIER_FUNCTION_SPECIFIER_VALUES,
+        "__inline",
+        "__inline__",
+        "INLINE_FUNC",
         "OPENCL_KERNEL",
     }
     KERNEL_FUNCTION_SPECIFIER_VALUES = {"kernel", "__kernel", "OPENCL_KERNEL"}
@@ -111,6 +114,40 @@ class OpenCLParser(HipParser):
         "image2d_depth_t",
         "image2d_array_depth_t",
         "image3d_t",
+    }
+    NON_CAST_FOLLOW_TOKENS = {
+        "ASSIGN",
+        "PLUS_ASSIGN",
+        "MINUS_ASSIGN",
+        "MULTIPLY_ASSIGN",
+        "DIVIDE_ASSIGN",
+        "STAR_ASSIGN",
+        "SLASH_ASSIGN",
+        "PERCENT_ASSIGN",
+        "AND_ASSIGN",
+        "OR_ASSIGN",
+        "XOR_ASSIGN",
+        "LSHIFT_ASSIGN",
+        "RSHIFT_ASSIGN",
+        "LT",
+        "LE",
+        "GT",
+        "GE",
+        "EQ",
+        "NE",
+        "AND",
+        "OR",
+        "LOGICAL_AND",
+        "LOGICAL_OR",
+        "PIPE",
+        "XOR",
+        "QUESTION",
+        "COLON",
+        "COMMA",
+        "RPAREN",
+        "RBRACKET",
+        "RBRACE",
+        "SEMICOLON",
     }
 
     def parse(self):
@@ -255,6 +292,10 @@ class OpenCLParser(HipParser):
             return self.parse_opencl_vector_constructor_cast()
         return super().parse_primary_expression()
 
+    def parse_unary_expression(self):
+        self.skip_newlines()
+        return super().parse_unary_expression()
+
     def is_opencl_vector_constructor_cast(self):
         if not self.match("LPAREN"):
             return False
@@ -316,6 +357,26 @@ class OpenCLParser(HipParser):
             token.type in {"ASTERISK", "STAR", *self.POSTFIX_TYPE_QUALIFIER_TOKENS}
             for token in tokens[index:]
         )
+
+    def is_cast_expression(self):
+        if not self.match("LPAREN"):
+            return False
+
+        type_start = self.skip_newlines_at_pos(self.pos + 1)
+        type_end = self.skip_type_at_pos(
+            type_start,
+            allow_unknown_identifier_pointers=True,
+        )
+        if type_end is not None and type_end < len(self.tokens):
+            after_type = self.skip_newlines_at_pos(type_end + 1)
+            if (
+                self.tokens[type_end].type == "RPAREN"
+                and after_type < len(self.tokens)
+                and self.tokens[after_type].type in self.NON_CAST_FOLLOW_TOKENS
+            ):
+                return False
+
+        return super().is_cast_expression()
 
     def is_identifier_type_name(self, type_name):
         return (

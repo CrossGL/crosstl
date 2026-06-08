@@ -2637,6 +2637,10 @@ class MojoParser:
                     node = self.parse_array_access(node)
                 continue
 
+            if self.current_token[0] == "LBRACE":
+                node = self.parse_braced_initializer_suffix(node)
+                continue
+
             if self.current_token[0] == "ATTRIBUTE":
                 node = ArrayAccessNode(node, self.parse_attribute_index_suffix())
                 continue
@@ -2654,6 +2658,39 @@ class MojoParser:
                 continue
 
             return node
+
+    def parse_braced_initializer_suffix(self, callee):
+        self.eat("LBRACE")
+        args = []
+        self.expression_layout_depth += 1
+        try:
+            self.skip_layout_tokens()
+            while self.current_token[0] != "RBRACE":
+                key = self.parse_expression()
+                self.skip_layout_tokens()
+                if self.current_token[0] == "COLON":
+                    self.eat("COLON")
+                    self.skip_layout_tokens()
+                    value = self.parse_expression()
+                    key = AssignmentNode(key, value, "=")
+                args.append(key)
+                self.skip_layout_tokens()
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    self.skip_layout_tokens()
+                    if self.current_token[0] == "RBRACE":
+                        break
+                elif self.current_token[0] != "RBRACE":
+                    raise SyntaxError(
+                        f"Expected COMMA or RBRACE, got {self.current_token[0]}"
+                    )
+            self.eat("RBRACE")
+        finally:
+            self.expression_layout_depth -= 1
+
+        if isinstance(callee, VariableNode):
+            return FunctionCallNode(callee.name, args)
+        return CallNode(callee, args)
 
     def parse_attribute_index_suffix(self):
         content = self.current_token[1][2:-2].strip()

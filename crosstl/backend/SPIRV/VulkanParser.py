@@ -5787,6 +5787,7 @@ class VulkanParser:
     ):
         skip_type_ids = set(skip_type_ids or [])
         structs = []
+        seen_struct_signatures = set()
         for type_id, type_info in types.items():
             if type_info.get("kind") != "struct":
                 continue
@@ -5810,6 +5811,13 @@ class VulkanParser:
                 members.append(VariableNode(data_type, f"{member_name}{array_suffix}"))
 
             if members:
+                signature = (
+                    type_info["name"],
+                    tuple((member.vtype, member.name) for member in members),
+                )
+                if signature in seen_struct_signatures:
+                    continue
+                seen_struct_signatures.add(signature)
                 structs.append(StructNode(type_info["name"], members))
 
         return structs
