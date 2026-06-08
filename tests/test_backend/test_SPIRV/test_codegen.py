@@ -5446,6 +5446,117 @@ def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_cross_block_name_alias_global_codegen_reparse():
+    assembly = """
+    ; Reduced from SPIRV-Cross shaders/asm/comp/block-name-alias-global.asm.comp.
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint GLCompute %main "main"
+    OpExecutionMode %main LocalSize 1 1 1
+    OpName %Foo "A"
+    OpMemberName %Foo 0 "a"
+    OpMemberName %Foo 1 "b"
+    OpName %A "A"
+    OpMemberName %A 0 "Data"
+    OpName %C1 "C1"
+    OpName %A_0 "A"
+    OpMemberName %A_0 0 "Data"
+    OpName %C2 "C2"
+    OpMemberDecorate %Foo 0 Offset 0
+    OpMemberDecorate %Foo 1 Offset 4
+    OpDecorate %_runtimearr_Foo ArrayStride 8
+    OpMemberDecorate %A 0 Offset 0
+    OpDecorate %A BufferBlock
+    OpDecorate %C1 DescriptorSet 0
+    OpDecorate %C1 Binding 1
+    OpDecorate %_arr_Foo_uint_4 ArrayStride 8
+    OpMemberDecorate %A_0 0 Offset 0
+    OpDecorate %A_0 Block
+    OpDecorate %C2 DescriptorSet 0
+    OpDecorate %C2 Binding 2
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %int = OpTypeInt 32 1
+    %Foo = OpTypeStruct %int %int
+    %_runtimearr_Foo = OpTypeRuntimeArray %Foo
+    %A = OpTypeStruct %_runtimearr_Foo
+    %_ptr_Uniform_A = OpTypePointer Uniform %A
+    %C1 = OpVariable %_ptr_Uniform_A Uniform
+    %uint = OpTypeInt 32 0
+    %uint_4 = OpConstant %uint 4
+    %_arr_Foo_uint_4 = OpTypeArray %Foo %uint_4
+    %A_0 = OpTypeStruct %_arr_Foo_uint_4
+    %_ptr_Uniform_A_0 = OpTypePointer Uniform %A_0
+    %C2 = OpVariable %_ptr_Uniform_A_0 Uniform
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(assembly)))
+
+    parse_crossgl(generated_code)
+    assert "struct A_C1 {" in generated_code
+    assert "RWStructuredBuffer<A_C1> C1 @set(0) @binding(1);" in generated_code
+    assert "cbuffer A_C2 @set(0) @binding(2) {" in generated_code
+    assert generated_code.count("struct A {") == 1
+
+
+def test_spirv_cross_block_name_namespace_codegen_reparse():
+    assembly = """
+    ; Reduced from SPIRV-Cross shaders/asm/geom/block-name-namespace.asm.geom.
+    OpCapability Geometry
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint Geometry %main "main"
+    OpExecutionMode %main Triangles
+    OpExecutionMode %main Invocations 1
+    OpExecutionMode %main OutputTriangleStrip
+    OpExecutionMode %main OutputVertices 4
+    OpName %Interface "VertexInput"
+    OpMemberName %Interface 0 "vColor"
+    OpName %UniformBlock "VertexInput"
+    OpMemberName %UniformBlock 0 "a"
+    OpName %ubo "ubo"
+    OpName %StorageBlock "VertexInput"
+    OpMemberName %StorageBlock 0 "b"
+    OpName %ssbo "ssbo"
+    OpMemberDecorate %UniformBlock 0 Offset 0
+    OpDecorate %UniformBlock Block
+    OpDecorate %ubo DescriptorSet 0
+    OpDecorate %ubo Binding 0
+    OpMemberDecorate %StorageBlock 0 Offset 0
+    OpDecorate %StorageBlock BufferBlock
+    OpDecorate %ssbo DescriptorSet 0
+    OpDecorate %ssbo Binding 1
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %float = OpTypeFloat 32
+    %v4float = OpTypeVector %float 4
+    %Interface = OpTypeStruct %v4float
+    %UniformBlock = OpTypeStruct %v4float
+    %_ptr_Uniform_UniformBlock = OpTypePointer Uniform %UniformBlock
+    %ubo = OpVariable %_ptr_Uniform_UniformBlock Uniform
+    %StorageBlock = OpTypeStruct %v4float
+    %_ptr_Uniform_StorageBlock = OpTypePointer Uniform %StorageBlock
+    %ssbo = OpVariable %_ptr_Uniform_StorageBlock Uniform
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(assembly)))
+
+    parse_crossgl(generated_code)
+    assert "struct VertexInput {" in generated_code
+    assert "cbuffer VertexInput_ubo @set(0) @binding(0) {" in generated_code
+    assert "struct VertexInput_ssbo {" in generated_code
+    assert "RWStructuredBuffer<VertexInput_ssbo> ssbo @set(0) @binding(1);" in (
+        generated_code
+    )
+
+
 def test_glslang_private_global_variables_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_PRIVATE_GLOBAL_ASSEMBLY)
     ast = parse_code(tokens)

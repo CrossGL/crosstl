@@ -293,6 +293,32 @@ class OpenCLParser(HipParser):
             base_type, qualifiers, allow_prefix=False
         )
 
+    def parse_function_pointer_parameter_declarator(self):
+        if not (
+            self.match("LPAREN")
+            and self.peek()
+            and self.peek().type in {"ASTERISK", "STAR"}
+        ):
+            return None
+
+        self.consume("LPAREN")
+        self.advance()
+
+        while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
+            self.advance()
+
+        name = ""
+        if self.is_declarator_name_token():
+            name = self.current_token.value
+            self.advance()
+
+        self.consume("RPAREN")
+
+        if self.match("LPAREN"):
+            self.skip_balanced_parentheses()
+
+        return name
+
     def parse_simple_function(self):
         qualifiers = []
         attributes = []

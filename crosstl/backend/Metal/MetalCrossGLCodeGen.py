@@ -2369,11 +2369,9 @@ class MetalToCrossGLConverter:
         ):
             return None
 
-        mapped_type = self.map_type_alias(alias)
+        mapped_type = self.crossgl_typedef_source_type(self.map_type_alias(alias))
         alias_name = self.sanitize_identifier(alias.name)
         if not mapped_type or not alias_name or mapped_type == alias_name:
-            return None
-        if not self.is_crossgl_typedef_source_type(mapped_type):
             return None
         return f"typedef {mapped_type} {alias_name};"
 
@@ -2385,29 +2383,99 @@ class MetalToCrossGLConverter:
             return "f16"
         return self.map_type(alias.alias_type)
 
-    def is_crossgl_typedef_source_type(self, mapped_type):
+    def crossgl_typedef_source_type(self, mapped_type):
         mapped_type = str(mapped_type).strip()
         if not mapped_type or "::" in mapped_type:
-            return False
+            return None
         if any(char in mapped_type for char in "*&[]"):
-            return False
+            return None
+
+        normalized_type = self.normalize_crossgl_typedef_source_type(mapped_type)
+        if normalized_type is not None:
+            return normalized_type
         if re.fullmatch(r"(?:matrix|vec|vector)<[^{};]+>", mapped_type):
-            return True
-        return mapped_type in self.crossgl_typedef_source_types()
+            return mapped_type
+        if mapped_type in self.crossgl_typedef_source_types():
+            return mapped_type
+        return None
+
+    def normalize_crossgl_typedef_source_type(self, mapped_type):
+        scalar_aliases = {
+            "int8": "i8",
+            "uint8": "u8",
+            "int16": "i16",
+            "uint16": "u16",
+            "int64": "i64",
+            "uint64": "u64",
+            "float16": "f16",
+            "float32": "f32",
+            "float64": "f64",
+        }
+        if mapped_type in scalar_aliases:
+            return scalar_aliases[mapped_type]
+
+        vector_match = re.fullmatch(r"(f16|i8|u8|i16|u16)vec([2-4])", mapped_type)
+        if vector_match:
+            element_type, size = vector_match.groups()
+            return f"vector<{element_type},{size}>"
+
+        matrix_match = re.fullmatch(r"f16mat([2-4])(?:x([2-4]))?", mapped_type)
+        if matrix_match:
+            columns, rows = matrix_match.groups()
+            rows = rows or columns
+            return f"matrix<f16,{columns},{rows}>"
+        return None
 
     def crossgl_typedef_source_types(self):
-        return set(self.type_map.values()) | {
+        return {
+            "bool",
+            "int",
+            "uint",
+            "float",
+            "double",
             "f16",
             "bfloat",
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "f32",
+            "f64",
+            "half",
+            "char",
+            "string",
+            "void",
+            "vec2",
+            "vec3",
+            "vec4",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "dvec2",
+            "dvec3",
+            "dvec4",
+            "bvec2",
+            "bvec3",
+            "bvec4",
             "mat2",
             "mat3",
             "mat4",
+            "mat2x2",
             "mat2x3",
             "mat2x4",
             "mat3x2",
+            "mat3x3",
             "mat3x4",
             "mat4x2",
             "mat4x3",
+            "mat4x4",
         }
 
     def map_scoped_type_name(self, type_name):

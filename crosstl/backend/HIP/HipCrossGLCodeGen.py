@@ -258,7 +258,7 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"in"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in"}
     CPP_SCALAR_TYPE_ALIASES = {
         **{
             f"std::{name}": name
@@ -1047,6 +1047,20 @@ class HipToCrossGLConverter:
         if output_name[0].isdigit():
             output_name = f"_{output_name}"
         return self.sanitize_identifier_name(output_name)
+
+    def format_function_declaration_name(self, name):
+        if self.is_simple_identifier(name):
+            return self.sanitize_identifier_name(name)
+        if not isinstance(name, str) or "::" not in name:
+            return name
+
+        normalized_name = name.replace("::~", "::destructor_")
+        return self.sanitize_qualified_variable_name(normalized_name) or name
+
+    def format_function_call_name(self, name):
+        if self.is_user_defined_function(name):
+            return self.format_function_declaration_name(name)
+        return name
 
     def strip_cpp_template_arguments(self, text):
         stripped = []
@@ -4442,7 +4456,8 @@ class HipToCrossGLConverter:
                     params.append(f"{param_type} {output_name}")
 
             param_str = ", ".join(params)
-            self.emit(f"{return_type} {node.name}({param_str}) {{")
+            function_name = self.format_function_declaration_name(node.name)
+            self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()
@@ -5016,7 +5031,7 @@ class HipToCrossGLConverter:
             return hip_intrinsic
 
         if self.is_user_defined_function(func_name):
-            return f"{func_name}({args_str})"
+            return f"{self.format_function_call_name(func_name)}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -6989,6 +7004,7 @@ class HipToCrossGLConverter:
             hip_type = str(hip_type)
 
         hip_type = self.strip_type_qualifiers(hip_type)
+        hip_type = self.strip_variadic_type_marker(hip_type)
         hip_type = self.strip_union_type_keyword(hip_type)
         hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
         cooperative_group_type = self.convert_cooperative_group_type(hip_type)
@@ -7231,6 +7247,9 @@ class HipToCrossGLConverter:
         return " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )
+
+    def strip_variadic_type_marker(self, type_name):
+        return " ".join(part for part in str(type_name).split() if part != "...")
 
     def convert_hip_array_type(self, hip_type, type_mapping):
         base_type = hip_type.split("[", 1)[0].strip()

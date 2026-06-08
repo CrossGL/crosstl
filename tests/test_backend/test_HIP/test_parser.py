@@ -182,6 +182,47 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_public_hip_examples_typedef_struct_multi_alias_parsing(self):
+        code = """
+        typedef struct _GaussParms
+        {
+            float nsigma;
+            float coefn;
+        } GaussParms, *pGaussParms;
+        """
+        ast = self.parse_code(code)
+
+        struct_node = ast.statements[0]
+        pointer_alias = ast.statements[1]
+
+        assert isinstance(struct_node, StructNode)
+        assert struct_node.name == "GaussParms"
+        assert [member.name for member in struct_node.members] == ["nsigma", "coefn"]
+
+        assert isinstance(pointer_alias, TypeAliasNode)
+        assert pointer_alias.name == "pGaussParms"
+        assert pointer_alias.alias_type == "GaussParms *"
+
+    def test_public_hip_examples_line_broken_cast_argument_parsing(self):
+        code = """
+        void host(float* vsq_d, float* next_s_d) {
+            int gridSize = 256;
+            int groupSize = 256;
+            hipLaunchKernelGGL(rtm8, dim3(gridSize), dim3(groupSize), 0, 0,
+                               (float*)vsq_d, (
+                                   float*)next_s_d);
+        }
+        """
+        ast = self.parse_code(code)
+
+        launch = ast.statements[0].body[2]
+        line_broken_cast = launch.args[1]
+
+        assert isinstance(launch, KernelLaunchNode)
+        assert isinstance(line_broken_cast, CastNode)
+        assert line_broken_cast.target_type == "float *"
+        assert line_broken_cast.expression == "next_s_d"
+
     def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ auto load_callback_dev = load_callback;

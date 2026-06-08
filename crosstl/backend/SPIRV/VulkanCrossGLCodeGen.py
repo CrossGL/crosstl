@@ -174,6 +174,7 @@ class VulkanToCrossGLConverter:
         self.storage_buffer_type_names = {}
         self.storage_buffer_name_signatures = {}
         self.emitted_storage_buffer_type_names = set()
+        self.used_global_declaration_names = set()
 
     def get_indent(self):
         return "    " * self.indentation
@@ -181,8 +182,11 @@ class VulkanToCrossGLConverter:
     def generate(self, ast):
         self.flattened_uniform_block_instances = {}
         self.storage_buffer_type_names = {}
-        self.storage_buffer_name_signatures = {}
-        self.emitted_storage_buffer_type_names = set()
+        self.storage_buffer_name_signatures = self.initial_type_name_signatures(ast)
+        self.emitted_storage_buffer_type_names = set(
+            self.storage_buffer_name_signatures
+        )
+        self.used_global_declaration_names = set(self.storage_buffer_name_signatures)
         code = "shader main {\n"
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
@@ -559,6 +563,51 @@ class VulkanToCrossGLConverter:
     def assignment_right(self, node):
         return getattr(node, "right", getattr(node, "value", None))
 
+    def initial_type_name_signatures(self, ast):
+        signatures = {}
+        for struct in getattr(ast, "structs", []) or []:
+            struct_name = getattr(struct, "name", None)
+            if not struct_name:
+                continue
+            signatures.setdefault(struct_name, self.struct_signature(struct))
+        return signatures
+
+    def struct_signature(self, struct):
+        signature = []
+        for member in getattr(struct, "members", []) or []:
+            if isinstance(member, VariableNode):
+                signature.append((str(self.variable_type(member)), str(member.name)))
+            elif isinstance(member, AssignmentNode):
+                lhs = self.assignment_left(member)
+                if isinstance(lhs, VariableNode):
+                    signature.append((str(self.variable_type(lhs)), str(lhs.name)))
+        return tuple(signature)
+
+    def declaration_base_name(self, name):
+        return str(name or "").split("[", 1)[0]
+
+    def reserve_global_declaration_name(self, name):
+        base_name = self.declaration_base_name(name)
+        if base_name:
+            self.used_global_declaration_names.add(base_name)
+
+    def unique_global_declaration_name(self, preferred_name, suffix_source):
+        preferred_name = self.declaration_base_name(preferred_name)
+        if not preferred_name:
+            preferred_name = "Declaration"
+        if preferred_name not in self.used_global_declaration_names:
+            self.used_global_declaration_names.add(preferred_name)
+            return preferred_name
+
+        suffix = self.storage_buffer_type_suffix(suffix_source)
+        candidate = f"{preferred_name}_{suffix}"
+        counter = 2
+        while candidate in self.used_global_declaration_names:
+            candidate = f"{preferred_name}_{suffix}_{counter}"
+            counter += 1
+        self.used_global_declaration_names.add(candidate)
+        return candidate
+
     def generate_layout(self, node):
         code = ""
         if (getattr(node, "layout_type", None) or "").lower() == "const":
@@ -568,7 +617,10 @@ class VulkanToCrossGLConverter:
 
         if layout_type == "uniform":
             if node.struct_fields:
-                block_name = node.block_name or node.variable_name or "UniformBuffer"
+                block_name = self.unique_global_declaration_name(
+                    node.block_name or node.variable_name or "UniformBuffer",
+                    node.variable_name or node.spirv_id or "block",
+                )
                 self.record_flattened_uniform_block_instance(node)
                 attributes = self.uniform_block_attribute_suffix(node)
                 code += f"    cbuffer {block_name}{attributes} {{\n"
@@ -580,6 +632,7 @@ class VulkanToCrossGLConverter:
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
                     f"{self.uniform_resource_attribute_suffix(node)};\n"
                 )
+                self.reserve_global_declaration_name(node.variable_name)
         elif layout_type == "buffer":
             if node.struct_fields:
                 block_name = self.storage_buffer_block_type_name(node)
@@ -602,12 +655,14 @@ class VulkanToCrossGLConverter:
                     f"    {buffer_type}<{block_name}> {variable_name}"
                     f"{attributes};\n\n"
                 )
+                self.reserve_global_declaration_name(variable_name)
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 code += (
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
                     f"{self.interface_layout_attribute_suffix(node)};\n"
                 )
+                self.reserve_global_declaration_name(node.variable_name)
 
         return code
 
@@ -622,7 +677,10 @@ class VulkanToCrossGLConverter:
             return self.storage_buffer_type_names[key]
 
         existing_signature = self.storage_buffer_name_signatures.get(base_name)
-        if existing_signature is None or existing_signature == signature:
+        if (
+            existing_signature is None
+            and base_name not in self.used_global_declaration_names
+        ) or existing_signature == signature:
             type_name = base_name
         else:
             suffix_source = node.variable_name or str(
@@ -631,7 +689,7 @@ class VulkanToCrossGLConverter:
             suffix = self.storage_buffer_type_suffix(suffix_source)
             type_name = f"{base_name}_{suffix}"
             counter = 2
-            while (
+            while type_name in self.used_global_declaration_names or (
                 type_name in self.storage_buffer_name_signatures
                 and self.storage_buffer_name_signatures[type_name] != signature
             ):
@@ -640,6 +698,7 @@ class VulkanToCrossGLConverter:
 
         self.storage_buffer_type_names[key] = type_name
         self.storage_buffer_name_signatures[type_name] = signature
+        self.used_global_declaration_names.add(type_name)
         return type_name
 
     def storage_buffer_type_suffix(self, raw_value):
@@ -944,9 +1003,11 @@ class VulkanToCrossGLConverter:
         }
 
     def generate_uniform(self, node):
+        self.reserve_global_declaration_name(node.name)
         return f"    {self.map_type(node.vtype)} {node.name};\n"
 
     def generate_struct(self, node):
+        self.reserve_global_declaration_name(node.name)
         code = f"    struct {node.name} {{\n"
         for member in node.members:
             if isinstance(member, VariableNode):

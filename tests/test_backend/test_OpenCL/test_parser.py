@@ -144,3 +144,18 @@ def test_line_break_after_binary_operator_parses():
 
     value = ast.statements[0].body[0].value
     assert value.op == "+"
+
+
+def test_darktable_pointer_to_array_const_declarator_parses():
+    ast = parse_code("""
+        static inline int FCxtrans(const int row,
+                                  const int col,
+                                  global const unsigned char (*const xtrans)[6]) {
+            return xtrans[row][col];
+        }
+        """)
+
+    helper = ast.statements[0]
+    assert helper.name == "FCxtrans"
+    assert helper.params[2]["name"] == "xtrans"
+    assert helper.params[2]["type"] == "__global__ const unsigned char (*)[6]"

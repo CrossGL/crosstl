@@ -28,6 +28,68 @@ class TestHipCodeGen:
         assert "hipBlockDim_y" not in result
         assert "warpSize" not in result
 
+    def test_public_hip_examples_buffer_kernel_parameter_reparse(self):
+        code = """
+        __global__ void group_prefixSum(float* buffer) {
+            buffer[threadIdx.x] = 1.0f;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "buffer_: array<f32>" in result
+        assert "buffer_[gl_LocalInvocationID.x] = 1.0f;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_hip_examples_qualified_method_conversion_reparse(self):
+        code = """
+        class RecursiveGaussian {
+        public:
+            int readInputImage(std::string inputImageName);
+        };
+
+        int RecursiveGaussian::readInputImage(std::string inputImageName) {
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "i32 RecursiveGaussian_readInputImage(std::string inputImageName)" in result
+        )
+        assert "i32 RecursiveGaussian::readInputImage" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_hip_examples_variadic_helper_type_conversion_reparse(self):
+        code = """
+        template <typename T, typename... Args>
+        T* make_unique(Args&&... args) {
+            return new T(std::forward<Args>(args)...);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "ptr<T> make_unique(Args args)" in result
+        assert "Args ... args" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_basic_kernel_conversion(self):
         code = """
         #include <hip/hip_runtime.h>

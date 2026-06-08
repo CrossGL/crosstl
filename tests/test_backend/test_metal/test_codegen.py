@@ -3133,6 +3133,28 @@ def test_codegen_enum_and_typedef():
     assert "enum Mode" in result
 
 
+def test_codegen_size_t_typedef_uses_parseable_crossgl_alias_from_moltenvk():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/MoltenVK
+    # Commit: 5843e5da2e1f561261cb06a2f859ad39663d054f
+    # Path: MoltenVK/MoltenVK/Commands/MVKCommandPipelineStateFactoryShaderSource.h
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef size_t VkDeviceSize;
+
+    typedef enum : uint32_t {
+        VK_FORMAT_BC1_RGB_UNORM_BLOCK = 131,
+    } VkFormat;
+    """
+    crossgl = convert(code)
+
+    assert "typedef u64 VkDeviceSize;" in crossgl
+    assert "typedef uint64 VkDeviceSize;" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_omits_user_type_aliases_from_public_metal_headers():
     # Reduced from MetalPetal's MTIShaderLib.h: CrossGL can use the user type
     # directly, but cannot parse a typedef whose source is another user type.

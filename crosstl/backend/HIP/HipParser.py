@@ -1070,18 +1070,43 @@ class HipParser:
         members = self.parse_struct_members(tag_name)
         self.consume("RBRACE")
 
-        alias_name = tag_name
+        alias_base_type = f"struct {tag_name}" if tag_name else "struct <anonymous>"
+        aliases = []
         self.skip_newlines()
-        if self.match("IDENTIFIER"):
-            alias_name = self.current_token.value
+        while self.current_token and not self.match("SEMICOLON"):
+            aliases.append(
+                self.parse_type_alias_declarator(alias_base_type, allow_prefix=True)
+            )
+            self.skip_newlines()
+            if not self.match("COMMA"):
+                break
             self.advance()
+            self.skip_newlines()
+
+        alias_name = aliases[0].name if aliases else tag_name
         if not alias_name:
             self.error("Expected typedef struct alias name")
 
         if self.match("SEMICOLON"):
             self.advance()
         self.type_aliases.add(alias_name)
-        return StructNode(alias_name, members)
+
+        extra_aliases = []
+        for alias in aliases[1:]:
+            alias.alias_type = self.replace_typedef_record_base_type(
+                alias.alias_type, alias_base_type, alias_name
+            )
+            extra_aliases.append(alias)
+
+        struct_node = StructNode(alias_name, members)
+        return [struct_node, *extra_aliases] if extra_aliases else struct_node
+
+    def replace_typedef_record_base_type(self, alias_type, original_base, alias_name):
+        if not isinstance(alias_type, str):
+            return alias_type
+        if alias_type.startswith(original_base):
+            return alias_name + alias_type[len(original_base) :]
+        return alias_type
 
     def parse_typedef_enum_alias(self):
         self.consume("ENUM")
@@ -3879,7 +3904,9 @@ class HipParser:
         elif self.match("LPAREN"):
             if self.is_cast_expression():
                 self.consume("LPAREN")
+                self.skip_newlines()
                 target_type = self.parse_type()
+                self.skip_newlines()
                 self.consume("RPAREN")
                 self.skip_newlines()
                 expr = self.parse_unary_expression()

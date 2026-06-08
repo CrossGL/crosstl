@@ -135,3 +135,24 @@ def test_opencl_standalone_real_alias_falls_back_to_f32():
 
     assert "typedef f32 realV;" in crossgl
     assert "f32 multiply(f32 value, f32 scale)" in crossgl
+
+
+def test_opencv_anonymous_enum_and_constant_array_codegen_reparse():
+    crossgl = generate_crossgl("""
+        enum
+        {
+            hsv_shift = 12
+        };
+
+        __constant int sector_data[][3] = { { 1, 3, 0 },
+                                            { 1, 0, 2 } };
+
+        __kernel void RGB2HSV(__global uchar *dst) {
+            int h = hsv_shift;
+            dst[sector_data[0][0]] = (uchar)h;
+        }
+        """)
+
+    assert "enum  {" not in crossgl
+    assert "const i32 hsv_shift = 12;" in crossgl
+    assert "sector_data: array<array<i32, 3>>" in crossgl
