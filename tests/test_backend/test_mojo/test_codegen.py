@@ -699,6 +699,22 @@ def test_mlir_backtick_type_codegen_from_modular_gpu_globals_reparses_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_mlir_type_argument_codegen_from_modular_gather_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/test/nn/test_gather.mojo simd_width_of specialization.
+    code = """
+    def test_gather():
+        let simd_width = simd_width_of[__mlir_type.`!kgen.scalar<f32>`]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let simd_width = simd_width_of[MLIR_kgen_scalar_f32]();" in generated_code
+    assert "__mlir_type" not in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_mlir_attr_type_argument_codegen_from_modular_builtins_reparses_crossgl():
     # Reduced from modularml/mojo stdlib builtin literal and variadics helpers.
     code = """

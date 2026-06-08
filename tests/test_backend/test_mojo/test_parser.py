@@ -2629,6 +2629,35 @@ def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_do
     assert assignment.right.elements == ["0", "0"]
 
 
+def test_tuple_assignment_with_mixed_targets_and_ref_binding_parse():
+    code = """
+    def main():
+        curr_index, res.data[i] = divmod(curr_index, IntType(shape.get[i]()))
+        count, ref chars = mapping.value()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    index_assignment = function.body[0]
+    ref_assignment = function.body[1]
+
+    assert isinstance(index_assignment, AssignmentNode)
+    assert isinstance(index_assignment.left, TupleNode)
+    index_target = index_assignment.left.elements[1]
+    assert index_assignment.left.elements[0].name == "curr_index"
+    assert isinstance(index_target, ArrayAccessNode)
+    assert isinstance(index_target.array, MemberAccessNode)
+    assert index_target.array.object.name == "res"
+    assert index_target.array.member == "data"
+    assert index_target.index.name == "i"
+
+    assert isinstance(ref_assignment, AssignmentNode)
+    assert isinstance(ref_assignment.left, TupleNode)
+    count_target, chars_target = ref_assignment.left.elements
+    assert count_target.name == "count"
+    assert chars_target.name == "chars"
+    assert getattr(chars_target, "target_convention", None) == "ref"
+
+
 def test_parenthesized_tuple_var_declaration_parse_from_modular_sm90_matmul():
     # Reduced from https://github.com/modular/modular.git commit
     # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,

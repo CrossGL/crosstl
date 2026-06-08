@@ -104,6 +104,7 @@ class RustParser:
             "SUPER",
         }
     )
+    ATTRIBUTE_PATH_SEGMENT_TOKENS = PATH_SEGMENT_TOKENS | {"UNSAFE"}
     ASSIGNMENT_TOKENS = {
         "EQUALS",
         "PLUS_EQUALS",
@@ -882,7 +883,7 @@ class RustParser:
         return attrs
 
     def parse_attribute_path(self):
-        if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
+        if self.current_token[0] not in self.ATTRIBUTE_PATH_SEGMENT_TOKENS:
             raise SyntaxError(f"Expected attribute path, got {self.current_token[0]}")
 
         path = [self.current_token[1]]
@@ -890,7 +891,7 @@ class RustParser:
 
         while self.current_token[0] == "DOUBLE_COLON":
             self.eat("DOUBLE_COLON")
-            if self.current_token[0] not in self.PATH_SEGMENT_TOKENS:
+            if self.current_token[0] not in self.ATTRIBUTE_PATH_SEGMENT_TOKENS:
                 raise SyntaxError(
                     f"Expected attribute path segment, got {self.current_token[0]}"
                 )

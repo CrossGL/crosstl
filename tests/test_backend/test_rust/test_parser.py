@@ -1166,6 +1166,24 @@ def test_cfg_attributes_preserved_on_use_and_function_items():
     assert function.attributes[0].args == ["target_os", "=", '"unknown"']
 
 
+def test_keyword_attribute_path_parses_from_rust_cuda_codegen_entrypoint():
+    code = """
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn __rustc_codegen_backend() {
+        return;
+    }
+    """
+    ast = parse_code(code)
+
+    function = ast.functions[0]
+    assert function.name == "__rustc_codegen_backend"
+    assert function.attributes[0].name == "unsafe"
+    assert function.attributes[0].args == ["no_mangle"]
+    assert function.visibility == "pub"
+    assert function.is_unsafe is True
+    assert function.abi == "C"
+
+
 def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
     code = """
     #![cfg_attr(target_arch = "spirv", no_std)]

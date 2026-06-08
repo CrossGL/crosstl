@@ -1422,31 +1422,6 @@ class MojoParser:
                 attributes=attributes,
             )
 
-        if self.current_token[0] == "IDENTIFIER" and self.peek_token()[0] == "COMMA":
-            left = self.parse_identifier_tuple()
-            if self.current_token[0] not in [
-                "EQUALS",
-                "PLUS_EQUALS",
-                "MINUS_EQUALS",
-                "MULTIPLY_EQUALS",
-                "POWER_EQUALS",
-                "DIVIDE_EQUALS",
-                "FLOOR_DIVIDE_EQUALS",
-                "ASSIGN_XOR",
-                "ASSIGN_OR",
-                "ASSIGN_AND",
-                "ASSIGN_SHIFT_LEFT",
-                "ASSIGN_SHIFT_RIGHT",
-                "ASSIGN_MOD",
-                "AT_EQUALS",
-            ]:
-                raise SyntaxError("Expected assignment after identifier tuple")
-            op = self.current_token[1]
-            self.eat(self.current_token[0])
-            right = self.parse_expression_list_value()
-            self.consume_statement_terminator()
-            return AssignmentNode(left, right, op)
-
         if self.current_token[0] == "IDENTIFIER" and self.peek_token()[0] == "COLON":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -1480,7 +1455,7 @@ class MojoParser:
         while self.current_token[0] == "COMMA":
             self.eat("COMMA")
             self.skip_layout_tokens()
-            targets.append(self.parse_logical_or())
+            targets.append(self.parse_tuple_assignment_target())
             self.skip_expression_layout()
 
         if self.current_token[0] not in self.ASSIGNMENT_OPERATOR_TOKENS:
@@ -1490,6 +1465,13 @@ class MojoParser:
         self.eat(self.current_token[0])
         right = self.parse_expression_list_value()
         return AssignmentNode(TupleNode(targets), right, op)
+
+    def parse_tuple_assignment_target(self):
+        convention = self.parse_parameter_convention()
+        target = self.parse_logical_or()
+        if convention:
+            target.target_convention = convention
+        return target
 
     def is_ref_binding_declaration_start(self):
         return (

@@ -25,6 +25,8 @@ class MojoToCrossGLConverter:
     MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
     REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
     MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`([^`]+)`$")
+    MLIR_DOT_TYPE_EXPRESSION_PATTERN = re.compile(r"__mlir_type\.`([^`]+)`")
+    MLIR_BRACKET_TYPE_EXPRESSION_PATTERN = re.compile(r"__mlir_type\[`([^`]+)`\]")
     BACKTICK_IDENTIFIER_PATTERN = re.compile(r"^`([^`]+)`$")
     INLINE_IF_TYPE_PATTERN = re.compile(
         r"(?P<true>\([^,\[\]]+\)|[A-Za-z_][A-Za-z0-9_.]*|\d+(?:\.\d+)?)"
@@ -1357,8 +1359,16 @@ class MojoToCrossGLConverter:
         mojo_type = re.sub(r"(?<=[\[,])\s*\*(?=[A-Za-z_`])", "", mojo_type)
         mojo_type = re.sub(r"(?<=[\[,])\s*//\s*(?=,|\])", " /", mojo_type)
         mojo_type = re.sub(r"\s*//\s*", " / ", mojo_type)
+        mojo_type = self.normalize_mlir_type_expressions(mojo_type)
         mojo_type = self.normalize_mlir_attr_type_expressions(mojo_type)
         return self.normalize_inline_if_type_expressions(mojo_type)
+
+    def normalize_mlir_type_expressions(self, mojo_type):
+        def replace(match):
+            return self.map_mlir_type_payload(match.group(1))
+
+        mojo_type = self.MLIR_DOT_TYPE_EXPRESSION_PATTERN.sub(replace, mojo_type)
+        return self.MLIR_BRACKET_TYPE_EXPRESSION_PATTERN.sub(replace, mojo_type)
 
     def normalize_mlir_attr_type_expressions(self, mojo_type):
         marker = "__mlir_attr["
@@ -1454,6 +1464,9 @@ class MojoToCrossGLConverter:
             return None
 
         payload = match.group(1)
+        return self.map_mlir_type_payload(payload)
+
+    def map_mlir_type_payload(self, payload):
         return self.MLIR_TYPE_MAP.get(
             payload, f"MLIR_{self.sanitize_identifier(payload)}"
         )
