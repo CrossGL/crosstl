@@ -6490,6 +6490,52 @@ def test_codegen_template_specialized_struct_declarations_reparse_crossgl():
     parse_crossgl(output)
 
 
+def test_codegen_dependent_typename_scoped_template_return_reparse_crossgl():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
+    code = textwrap.dedent("""
+        namespace hlsl {
+        template <bool B, typename T> struct enable_if {};
+        template <typename T> struct enable_if<true, T> {
+            using type = T;
+        };
+        template <typename T> struct is_arithmetic {
+            static const bool value = false;
+        };
+        template <> struct is_arithmetic<float> {
+            static const bool value = true;
+        };
+        }
+
+        template <typename T>
+        struct Wrapper {
+            static const bool IsArithmetic = hlsl::is_arithmetic<T>::value;
+
+            template <typename U = T>
+            typename hlsl::enable_if<IsArithmetic, U>::type Get() {
+                return val;
+            }
+
+            T val;
+        };
+
+        [numthreads(1, 1, 1)]
+        void main() {
+            Wrapper<float> wf;
+            wf.val = 1.0f;
+            float f = wf.Get();
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "struct Wrapper" in output
+    assert "Wrapper wf;" in output
+    assert "float f = wf.Get();" in output
+    assert "typename" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_upstream_declarations_defaults_and_for_update_sequences():
     code = textwrap.dedent("""
         cbuffer CSConstants : register(b0) {

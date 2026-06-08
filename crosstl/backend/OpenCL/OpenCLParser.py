@@ -2,7 +2,12 @@
 
 import re
 
-from crosstl.backend.HIP.HipAst import FunctionCallNode, FunctionNode, KernelNode
+from crosstl.backend.HIP.HipAst import (
+    ForNode,
+    FunctionCallNode,
+    FunctionNode,
+    KernelNode,
+)
 from crosstl.backend.HIP.HipParser import HipParser
 
 from .OpenCLAst import OpenCLProgramNode, OpenCLStatementExpressionNode
@@ -433,6 +438,50 @@ class OpenCLParser(HipParser):
     def parse_unary_expression(self):
         self.skip_newlines()
         return super().parse_unary_expression()
+
+    def parse_for_statement(self):
+        self.consume("FOR")
+        self.skip_newlines()
+        self.consume("LPAREN")
+        self.skip_newlines()
+
+        if self.is_range_for_statement():
+            return self.parse_range_for_statement()
+
+        init = None
+        if not self.match("SEMICOLON"):
+            if self.is_variable_declaration():
+                init_declarations = self.parse_variable_declaration_list(
+                    consume_semicolon=False
+                )
+                init = (
+                    init_declarations
+                    if len(init_declarations) > 1
+                    else init_declarations[0]
+                )
+            else:
+                init = self.parse_for_update_expression()
+        self.skip_newlines()
+        self.consume("SEMICOLON")
+        self.skip_newlines()
+
+        condition = None
+        if not self.match("SEMICOLON"):
+            condition = self.parse_expression()
+        self.skip_newlines()
+        self.consume("SEMICOLON")
+        self.skip_newlines()
+
+        update = None
+        if not self.match("RPAREN"):
+            update = self.parse_for_update_expression()
+        self.skip_newlines()
+        self.consume("RPAREN")
+
+        self.skip_newlines()
+        body = self.parse_statement()
+
+        return ForNode(init, condition, update, body)
 
     def is_opencl_vector_constructor_cast(self):
         if not self.match("LPAREN"):

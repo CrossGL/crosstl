@@ -56,6 +56,7 @@ from .array_utils import (
     get_array_size_from_node,
     split_array_type_suffix,
 )
+from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -467,13 +468,19 @@ class SlangCodeGen:
             result += self.generate_enum_support_code()
 
             structs = getattr(ast, "structs", [])
+            leading_constants, struct_dependent_constants = (
+                partition_constants_by_struct_dependency(
+                    getattr(ast, "constants", []) or [], structs
+                )
+            )
+            result += self.generate_constants(ast, leading_constants)
             for struct in structs:
                 if isinstance(struct, EnumNode):
                     continue
                 struct_code = self.generate_struct(struct)
                 if struct_code:
                     result += struct_code + "\n\n"
-            result += self.generate_constants(ast)
+            result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
             global_vars = getattr(ast, "global_variables", [])
@@ -1659,13 +1666,19 @@ class SlangCodeGen:
         result += self.generate_enum_support_code()
 
         structs = getattr(node, "structs", [])
+        leading_constants, struct_dependent_constants = (
+            partition_constants_by_struct_dependency(
+                getattr(node, "constants", []) or [], structs
+            )
+        )
+        result += self.generate_constants(node, leading_constants)
         for struct in structs:
             if isinstance(struct, EnumNode):
                 continue
             struct_code = self.generate_struct(struct)
             if struct_code:
                 result += struct_code + "\n\n"
-        result += self.generate_constants(node)
+        result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
         global_vars = getattr(node, "global_variables", [])
@@ -1727,10 +1740,12 @@ class SlangCodeGen:
         )
         return code
 
-    def generate_constants(self, ast):
+    def generate_constants(self, ast, constants=None):
         """Emit CrossGL compile-time constants as Slang static constants."""
         code = ""
-        for node in getattr(ast, "constants", []) or []:
+        for node in (
+            getattr(ast, "constants", []) or [] if constants is None else constants
+        ):
             name = getattr(node, "name", None)
             if not name:
                 continue

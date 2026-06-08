@@ -111,6 +111,61 @@ def test_preprocessor_error_directive_raises():
         """).tokenize()
 
 
+def test_preprocessor_defaults_to_rocm_amd_linux_platform_branches():
+    values = token_values("""
+        #if defined(__HIP_PLATFORM_AMD__)
+        int selected_amd;
+        #elif defined(__HIP_PLATFORM_NVIDIA__)
+        int selected_nvidia;
+        #else
+        #error unsupported hip platform
+        #endif
+
+        #if defined(_WIN32)
+        int selected_windows;
+        #elif defined(__linux__)
+        int selected_linux;
+        #else
+        #error unsupported host platform
+        #endif
+    """)
+
+    assert "selected_amd" in values
+    assert "selected_linux" in values
+    assert "selected_nvidia" not in values
+    assert "selected_windows" not in values
+
+
+def test_preprocessor_platform_define_override_disables_matching_defaults():
+    values = token_values(
+        """
+        #if defined(__HIP_PLATFORM_AMD__)
+        int selected_amd;
+        #elif defined(__HIP_PLATFORM_NVIDIA__)
+        int selected_nvidia;
+        #else
+        int selected_no_hip_platform;
+        #endif
+
+        #if defined(_WIN32)
+        int selected_windows;
+        #elif defined(__linux__)
+        int selected_linux;
+        #else
+        int selected_no_host_platform;
+        #endif
+        """,
+        defines={"__HIP_PLATFORM_NVIDIA__": "1", "_WIN32": "1"},
+    )
+
+    assert "selected_nvidia" in values
+    assert "selected_windows" in values
+    assert "selected_amd" not in values
+    assert "selected_linux" not in values
+    assert "selected_no_hip_platform" not in values
+    assert "selected_no_host_platform" not in values
+
+
 def test_parser_uses_preprocessed_conditionals():
     tokens = HipLexer("""
         #define USE_SELECTED 1

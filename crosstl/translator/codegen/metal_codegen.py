@@ -68,6 +68,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -1610,8 +1611,16 @@ class MetalCodeGen:
             self.generic_enum_struct_definitions,
             qualifier=self.metal_unused_declaration_qualifier("constant"),
         )
-        code += self.generate_constants(ast)
+        leading_constants, struct_dependent_constants = (
+            partition_constants_by_struct_dependency(
+                getattr(ast, "constants", []) or [], structs
+            )
+        )
+        code += self.generate_constants(ast, leading_constants)
         code += self.generate_metal_struct_declarations(structs)
+        code += self.generate_constants(
+            ast, struct_dependent_constants, include_function_constants=False
+        )
         code += self.generate_metal_stage_io_array_helpers()
         code += self.generate_metal_enum_constructor_functions(
             self.struct_payload_enums
@@ -2202,9 +2211,11 @@ class MetalCodeGen:
             return None
         return line
 
-    def generate_constants(self, ast):
+    def generate_constants(self, ast, constants=None, include_function_constants=True):
         code = ""
-        for node in getattr(ast, "constants", []) or []:
+        for node in (
+            getattr(ast, "constants", []) or [] if constants is None else constants
+        ):
             name = getattr(node, "name", None)
             if not name:
                 continue
@@ -2219,6 +2230,9 @@ class MetalCodeGen:
                 f"{self.metal_unused_declaration_qualifier('constant')} "
                 f"{declaration} = {value_code};\n"
             )
+
+        if not include_function_constants:
+            return f"{code}\n" if code else ""
 
         used_function_constant_ids = {}
         for node in getattr(ast, "global_variables", []) or []:

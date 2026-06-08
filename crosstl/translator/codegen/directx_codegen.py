@@ -65,6 +65,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -1268,8 +1269,14 @@ class HLSLCodeGen:
             self,
             self.generic_enum_struct_definitions,
         )
-        code += self.generate_constants(ast)
+        leading_constants, struct_dependent_constants = (
+            partition_constants_by_struct_dependency(
+                getattr(ast, "constants", []) or [], structs
+            )
+        )
+        code += self.generate_constants(ast, leading_constants)
         code += self.generate_hlsl_ordered_struct_declarations(structs)
+        code += self.generate_constants(ast, struct_dependent_constants)
         code += generate_enum_constructor_functions(self, self.struct_payload_enums)
         code += generate_generic_enum_constructor_functions(
             self,
@@ -2894,9 +2901,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return line
 
-    def generate_constants(self, ast):
+    def generate_constants(self, ast, constants=None):
         code = ""
-        for node in getattr(ast, "constants", []) or []:
+        for node in (
+            getattr(ast, "constants", []) or [] if constants is None else constants
+        ):
             name = getattr(node, "name", None)
             if not name:
                 continue

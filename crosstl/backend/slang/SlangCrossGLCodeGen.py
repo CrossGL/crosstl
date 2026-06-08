@@ -703,7 +703,12 @@ class SlangToCrossGLConverter:
         constraint_type = getattr(constraint, "constraint_type", "")
         if relation == ":" and constraint_type.startswith("__Builtin"):
             return True
-        return relation == "==" and parameter == f"{constraint_type}.Differential"
+        if relation == "==" and parameter == f"{constraint_type}.Differential":
+            return True
+        return relation == "==" and self.is_plain_generic_type_parameter(parameter)
+
+    def is_plain_generic_type_parameter(self, parameter):
+        return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(parameter)))
 
     def is_forward_struct_declaration(self, node):
         return isinstance(node, StructNode) and getattr(

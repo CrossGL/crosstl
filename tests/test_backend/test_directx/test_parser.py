@@ -1718,6 +1718,40 @@ def test_parse_template_specialized_struct_declarations_from_dxc_sfinae():
     assert ast.structs[1].members[0].value is True
 
 
+def test_parse_dependent_typename_scoped_template_return_from_dxc_sfinae():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
+    ast = parse_code("""
+    namespace hlsl {
+    template <bool B, typename T> struct enable_if {};
+    template <typename T> struct enable_if<true, T> {
+        using type = T;
+    };
+    template <typename T> struct is_arithmetic {
+        static const bool value = false;
+    };
+    }
+
+    template <typename T>
+    struct Wrapper {
+        static const bool IsArithmetic = hlsl::is_arithmetic<T>::value;
+
+        template <typename U = T>
+        typename hlsl::enable_if<IsArithmetic, U>::type Get() {
+            return val;
+        }
+
+        T val;
+    };
+    """)
+
+    wrapper = next(struct for struct in ast.structs if struct.name == "Wrapper")
+
+    assert wrapper.methods[0].return_type == "hlsl::enable_if<IsArithmetic, U>::type"
+    assert wrapper.methods[0].name == "Get"
+    assert wrapper.members[-1].name == "val"
+
+
 def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
     ast = parse_code("""
     Shader "Custom/ExtractedProgram"

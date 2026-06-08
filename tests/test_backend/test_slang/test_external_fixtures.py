@@ -1202,6 +1202,7 @@ EXTERNAL_FIXTURES = [
             void sumHelper(inout int acc, int term) { acc += term; }
 
             int sumInts<each T>(expand each T terms)
+                where T == int
             {
                 int acc = 0;
                 expand sumHelper(acc, each terms);
@@ -1224,6 +1225,7 @@ EXTERNAL_FIXTURES = [
             "outputBuffer[0] = sumInts(1, 2, 3);",
         ],
         "not_contains": [
+            "where T == int",
             "expand sumHelper",
             "each terms",
             "Expected SEMICOLON",

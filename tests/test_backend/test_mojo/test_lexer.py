@@ -426,6 +426,27 @@ def test_string_literals_tokenization():
         pytest.fail("String literals tokenization not implemented.")
 
 
+def test_simple_string_with_embedded_triple_quote_text_from_numojo_ndarray():
+    # Reduced from Mojo-Numerics-and-Algorithms-group/NuMojo commit
+    # 785bae6c9e3d87f6a003afabdd2e7554891e9311,
+    # numojo/core/ndarray.mojo.
+    code = r'''
+    fn main():
+        let rendered = (
+            String("numojo.array[")
+            + String('](\n"""\n')
+            + value
+            + '\n"""\n)'
+        )
+    '''
+    tokens = tokenize_code(code)
+    string_literals = [token[1] for token in tokens if token[0] == "STRING_LITERAL"]
+
+    assert '"numojo.array["' in string_literals
+    assert '\'](\\n"""\\n\'' in string_literals
+    assert '\'\\n"""\\n)\'' in string_literals
+
+
 def test_triple_quoted_string_literal_tokenization_from_mojo_reference():
     # Reduced from https://mojolang.org/docs/reference/literals/
     code = '''

@@ -942,6 +942,12 @@ class HLSLParser:
         if self.current_token_is_double_colon():
             self.eat_double_colon()
 
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "typename"
+        ):
+            self.eat("IDENTIFIER")
+
         if not self.is_type_token(self.current_token[0]):
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
 
@@ -963,21 +969,27 @@ class HLSLParser:
             type_name = f"{type_name} {self.current_token[1]}"
             self.eat(self.current_token[0])
 
-        while self.current_token[0] == "COLON" and self.peek()[0] == "COLON":
-            self.eat("COLON")
-            self.eat("COLON")
-            if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
-                    f"Expected identifier after scoped type, got {self.current_token[0]}"
-                )
-            type_name += f"::{self.current_token[1]}"
-            self.eat("IDENTIFIER")
-
-        if self.current_token[0] == "LESS_THAN":
-            args = self.parse_generic_arguments()
-            type_name = f"{type_name}<{', '.join(args)}>"
+        type_name = self.parse_type_suffixes(type_name)
 
         return type_name
+
+    def parse_type_suffixes(self, type_name):
+        while True:
+            if self.current_token[0] == "LESS_THAN":
+                args = self.parse_generic_arguments()
+                type_name = f"{type_name}<{', '.join(args)}>"
+                continue
+            if self.current_token_is_double_colon():
+                self.eat_double_colon()
+                if self.current_token[0] != "IDENTIFIER":
+                    raise SyntaxError(
+                        "Expected identifier after scoped type, "
+                        f"got {self.current_token[0]}"
+                    )
+                type_name += f"::{self.current_token[1]}"
+                self.eat("IDENTIFIER")
+                continue
+            return type_name
 
     def parse_generic_arguments(self):
         args = []

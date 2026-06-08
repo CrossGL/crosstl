@@ -1,4 +1,5 @@
 from crosstl.backend.OpenCL.OpenCLAst import (
+    ForNode,
     FunctionCallNode,
     KernelNode,
     OpenCLStatementExpressionNode,
@@ -150,6 +151,30 @@ def test_line_break_after_binary_operator_parses():
 
     value = ast.statements[0].body[0].value
     assert value.op == "+"
+
+
+def test_khronos_histogram_newline_after_for_lparen_declaration_parses():
+    ast = parse_code("""
+        kernel void histogram_probe(global uint *out,
+                                    uint channel_per_thread,
+                                    uint lid,
+                                    uint bins) {
+            for(
+                uint channel = channel_per_thread * lid;
+                channel < min(channel_per_thread * (lid + 1), bins);
+                channel++
+            ){
+                out[channel] = channel;
+            }
+        }
+        """)
+
+    loop = ast.statements[0].body[0]
+    assert isinstance(loop, ForNode)
+    assert loop.init.name == "channel"
+    assert loop.init.vtype == "uint"
+    assert loop.condition.op == "<"
+    assert loop.update.op == "++_POST"
 
 
 def test_darktable_pointer_to_array_const_declarator_parses():

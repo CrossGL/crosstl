@@ -41,6 +41,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
         "path": "samples/core/reduce/reduce.cl",
     },
+    "khronos_opencl_sdk_histogram_newline_for_declaration": {
+        "url": "https://github.com/KhronosGroup/OpenCL-SDK",
+        "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
+        "path": "samples/extensions/khr/histogram/histogram.cl",
+    },
 }
 
 
@@ -236,3 +241,32 @@ def test_external_khronos_opencl_sdk_shared_parameter_name_codegen_reparse():
     assert "ptr<i32> shared_" in crossgl
     assert "shared_[i]" in crossgl
     assert "shared: array<i32>" not in crossgl
+
+
+def test_external_khronos_opencl_sdk_histogram_newline_for_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "khronos_opencl_sdk_histogram_newline_for_declaration"
+    ]
+    assert source_info["commit"] == "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f"
+    assert source_info["path"] == "samples/extensions/khr/histogram/histogram.cl"
+
+    source = """
+    kernel void histogram_probe(global uint *out,
+                                uint channel_per_thread,
+                                uint lid,
+                                uint bins) {
+        for(
+            uint channel = channel_per_thread * lid;
+            channel < min(channel_per_thread * (lid + 1), bins);
+            channel++
+        ){
+            out[channel] = channel;
+        }
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "for (var channel: u32 =" in crossgl
+    assert "channel < min" in crossgl
+    assert "channel++" in crossgl

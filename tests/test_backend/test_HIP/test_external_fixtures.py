@@ -392,6 +392,45 @@ def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
     assert "Kernel launch: saxpy_kernel<<<" in crossgl
 
 
+def test_external_rocm_platform_error_guards_default_codegen_reparse():
+    # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1:
+    # HIP-Basic/vulkan_interop/main.hip,
+    # HIP-Basic/vulkan_interop_mipmap/main.hip, and
+    # HIP-Doc/Programming-Guide/Porting-CUDA-code-to-HIP/
+    # identifying_compilation_target_platform/main.cpp.
+    source = """
+    #if defined(__HIP_PLATFORM_AMD__)
+    static int selected_hip_platform() { return 1; }
+    #elif defined(__HIP_PLATFORM_NVIDIA__)
+    static int selected_hip_platform() { return 2; }
+    #else
+    #error unsupported platform
+    #endif
+
+    #if defined(_WIN32)
+    static int selected_host_platform() { return 3; }
+    #elif defined(__linux__)
+    static int selected_host_platform() { return 4; }
+    #else
+    #error unsupported host
+    #endif
+
+    void host(int* out) {
+        out[0] = selected_hip_platform() + selected_host_platform();
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "i32 selected_hip_platform()" in crossgl
+    assert "return 1;" in crossgl
+    assert "return 2;" not in crossgl
+    assert "i32 selected_host_platform()" in crossgl
+    assert "return 4;" in crossgl
+    assert "return 3;" not in crossgl
+    assert "unsupported" not in crossgl
+
+
 def test_external_rocm_runtime_compilation_adjacent_raw_string_codegen_reparse():
     # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
     # HIP-Basic/runtime_compilation/main.hip.

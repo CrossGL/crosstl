@@ -66,6 +66,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -2351,7 +2352,12 @@ class GLSLCodeGen:
             self.generic_enum_struct_definitions,
             qualifier="const",
         )
-        code += self.generate_constants(ast)
+        leading_constants, struct_dependent_constants = (
+            partition_constants_by_struct_dependency(
+                getattr(ast, "constants", []) or [], structs
+            )
+        )
+        code += self.generate_constants(ast, leading_constants)
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
         global_vars = list(getattr(ast, "global_variables", []) or [])
@@ -2581,6 +2587,7 @@ class GLSLCodeGen:
                     data_struct_nodes.append(node)
 
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
+        code += self.generate_constants(ast, struct_dependent_constants)
         code += generate_enum_constructor_functions(self, self.struct_payload_enums)
         code += generate_generic_enum_constructor_functions(
             self,
@@ -3587,9 +3594,11 @@ class GLSLCodeGen:
         )
         return call_args
 
-    def generate_constants(self, ast):
+    def generate_constants(self, ast, constants=None):
         code = ""
-        for node in getattr(ast, "constants", []) or []:
+        for node in (
+            getattr(ast, "constants", []) or [] if constants is None else constants
+        ):
             name = getattr(node, "name", None)
             if not name:
                 continue

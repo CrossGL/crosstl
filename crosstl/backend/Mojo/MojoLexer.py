@@ -248,6 +248,39 @@ class MojoLexer:
         pos = 0
 
         while pos < len(code):
+            if code[pos] == "#":
+                line_end = code.find("\n", pos)
+                if line_end == -1:
+                    pieces.append(code[pos:])
+                    break
+                pieces.append(code[pos : line_end + 1])
+                pos = line_end + 1
+                continue
+
+            if code[pos : pos + 3] not in {'"""', "'''"}:
+                if code[pos : pos + 1] in {'"', "'"}:
+                    body_end = self._find_simple_string_end(code, pos + 1, code[pos])
+                    if body_end is None:
+                        raise SyntaxError("Unterminated Mojo string literal")
+                    pieces.append(code[pos : body_end + 1])
+                    pos = body_end + 1
+                    continue
+
+                prefix, quote = self._match_prefixed_string_start(code, pos)
+                if quote is not None:
+                    body_start = pos + len(prefix) + 1
+                    body_end = self._find_prefixed_string_end(
+                        code,
+                        body_start,
+                        quote,
+                        interpolation="t" in prefix.lower(),
+                    )
+                    if body_end is None:
+                        raise SyntaxError("Unterminated Mojo prefixed string literal")
+                    pieces.append(code[pos : body_end + 1])
+                    pos = body_end + 1
+                    continue
+
             prefix, quote = self._match_triple_string_start(code, pos)
             if quote is None:
                 pieces.append(code[pos])
