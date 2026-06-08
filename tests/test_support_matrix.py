@@ -901,7 +901,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert "include, source override, and exclude scan patterns" in (
             backend_support["notes"]
         )
-        assert "validation rejects missing diagnostic summary rollups" in (
+        assert "contract-checked rollups by severity, diagnostic code" in (
+            backend_support["notes"]
+        )
+        assert "validation rejects missing diagnostic severity, code" in (
             backend_support["notes"]
         )
         assert "text output carries diagnostic location, target, and" in (
@@ -939,6 +942,11 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_missing_diagnostic_summary_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_top_level_"
+            "diagnostic_counts"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

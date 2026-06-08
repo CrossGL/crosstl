@@ -11685,7 +11685,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             declared_units_by_path=external_corpus_units_by_path,
         )
     )
-    if "diagnosticCounts" in report and isinstance(diagnostics, list):
+    if (has_summary or "diagnosticCounts" in report) and isinstance(diagnostics, list):
         reasons.extend(
             _diagnostic_counts_contract_reasons(
                 "diagnosticCounts", report.get("diagnosticCounts"), diagnostics

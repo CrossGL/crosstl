@@ -466,7 +466,8 @@ Project reports are JSON documents with:
   dependency source-backend status, include dependency resolution source,
   include dependency variant, artifact provenance pipeline, intermediate,
   source backend plus intermediate, target plus intermediate, variant plus
-  intermediate, diagnostic code (``diagnosticsByCode``), and missing capability
+  intermediate, diagnostic severity (``diagnosticCounts``), diagnostic code
+  (``diagnosticsByCode``), and missing capability
   (``missingCapabilityCounts``).
 - ``units``: discovered translation units with stable repository-relative POSIX
   paths,
@@ -619,7 +620,8 @@ Project reports are JSON documents with:
   and summary checks, summary consistency checks, migration action shape,
   rollup, and target declaration checks,
   preserved diagnostic shape, repository-relative file path, span consistency,
-  target declaration checks, scan-scope count consistency, validation
+  target declaration checks, diagnostic severity rollup checks, scan-scope
+  count consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact coverage,
   toolchain-run target, source-backend, check-kind, tool, and variant rollups,
