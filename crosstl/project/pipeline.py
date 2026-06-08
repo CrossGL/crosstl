@@ -3037,6 +3037,9 @@ class ProjectScan:
             diagnostics=diagnostics,
             validation={"toolchains": [], "artifacts": []},
             migration_actions=_runtime_migration_actions(self.units, report_targets),
+            artifact_matrix=_artifact_matrix_report(
+                self.config, self.units, report_targets, self.config.variants, []
+            ),
         )
 
 
@@ -7297,6 +7300,18 @@ def _artifact_matrix_metadata_contract_reasons(
     return reasons
 
 
+def _artifact_matrix_requires_artifact_records(artifact_matrix: Any) -> bool:
+    if not isinstance(artifact_matrix, Mapping):
+        return False
+    for field_name in ("emittedArtifactCount", "translatedCount", "failedCount"):
+        value = artifact_matrix.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return True
+        if value != 0:
+            return True
+    return False
+
+
 def _duplicate_identity_contract_reasons(
     prefix: str, records: Sequence[Any]
 ) -> list[str]:
@@ -10992,7 +11007,10 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         if (
             has_summary
             and isinstance(project, Mapping)
-            and (bool(artifacts) or isinstance(artifact_matrix, Mapping))
+            and (
+                bool(artifacts)
+                or _artifact_matrix_requires_artifact_records(artifact_matrix)
+            )
         ):
             reasons.extend(
                 _artifact_matrix_contract_reasons(

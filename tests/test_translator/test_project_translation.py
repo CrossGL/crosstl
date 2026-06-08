@@ -4959,6 +4959,7 @@ def test_validate_project_report_allows_scan_reports_without_artifacts(tmp_path)
     report.write_json(report_path)
 
     validation = validate_project_report(report_path)
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
 
     assert validation["success"] is True
     assert validation["validation"]["artifacts"] == []
@@ -4971,9 +4972,20 @@ def test_validate_project_report_allows_scan_reports_without_artifacts(tmp_path)
         "sourceMapStatusCounts": _source_map_status_counts(),
         "sourceRemapStatusCounts": _source_remap_status_counts(),
     }
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 0
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 2
+    assert payload["artifactMatrix"]["complete"] is False
+    assert (
+        payload["artifactMatrix"]["statusByTarget"]["cgl"]["missingArtifactCount"] == 1
+    )
+    assert (
+        payload["artifactMatrix"]["statusByTarget"]["opengl"]["missingArtifactCount"]
+        == 1
+    )
 
 
-def test_inspect_project_report_does_not_derive_scan_only_artifact_matrix(tmp_path):
+def test_inspect_project_report_summarizes_scan_only_artifact_matrix(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -4984,7 +4996,19 @@ def test_inspect_project_report_does_not_derive_scan_only_artifact_matrix(tmp_pa
     payload = inspect_project_report(report_path)
 
     assert payload["success"] is True
-    assert payload["artifactMatrix"] == {"available": False}
+    assert payload["artifactMatrix"]["available"] is True
+    assert payload["artifactMatrix"]["source"] == "report"
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 0
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 2
+    assert payload["artifactMatrix"]["complete"] is False
+    assert (
+        payload["artifactMatrix"]["statusByTarget"]["cgl"]["missingArtifactCount"] == 1
+    )
+    assert (
+        payload["artifactMatrix"]["statusByTarget"]["opengl"]["missingArtifactCount"]
+        == 1
+    )
 
 
 def test_validate_project_report_rejects_missing_artifact_defines(tmp_path):
@@ -13806,6 +13830,8 @@ def test_project_cli_report_records_include_dir_and_define_overrides(tmp_path):
             "crosstl._crosstl",
             "report",
             str(repo),
+            "--target",
+            "cgl",
             "--include-dir",
             "includes",
             "--define",
@@ -13835,6 +13861,11 @@ def test_project_cli_report_records_include_dir_and_define_overrides(tmp_path):
         }
     ]
     assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 0
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 1
+    assert payload["artifactMatrix"]["complete"] is False
 
 
 def test_project_cli_report_records_variant_metadata(tmp_path):
@@ -13866,6 +13897,8 @@ def test_project_cli_report_records_variant_metadata(tmp_path):
             "crosstl._crosstl",
             "report",
             str(repo),
+            "--target",
+            "cgl",
             "--output",
             str(output),
         ],
@@ -13892,6 +13925,30 @@ def test_project_cli_report_records_variant_metadata(tmp_path):
     assert payload["project"]["selectedVariants"] == []
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 0
+    assert payload["artifactMatrix"]["variantCount"] == 2
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 0
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 2
+    assert payload["artifactMatrix"]["statusByVariant"] == {
+        "debug": {
+            "expectedArtifactCount": 1,
+            "emittedArtifactCount": 0,
+            "translatedCount": 0,
+            "failedCount": 0,
+            "missingArtifactCount": 1,
+            "extraArtifactCount": 0,
+            "complete": False,
+        },
+        "release": {
+            "expectedArtifactCount": 1,
+            "emittedArtifactCount": 0,
+            "translatedCount": 0,
+            "failedCount": 0,
+            "missingArtifactCount": 1,
+            "extraArtifactCount": 0,
+            "complete": False,
+        },
+    }
 
 
 def test_project_cli_report_limits_named_variants_to_selected(tmp_path):
@@ -13923,6 +13980,8 @@ def test_project_cli_report_limits_named_variants_to_selected(tmp_path):
             "crosstl._crosstl",
             "report",
             str(repo),
+            "--target",
+            "cgl",
             "--variant",
             "release",
             "--variant",
@@ -13947,6 +14006,21 @@ def test_project_cli_report_limits_named_variants_to_selected(tmp_path):
     assert payload["project"]["selectedVariants"] == ["release"]
     assert payload["summary"]["unitCount"] == 1
     assert payload["summary"]["artifactCount"] == 0
+    assert payload["artifactMatrix"]["variantCount"] == 1
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 0
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 1
+    assert payload["artifactMatrix"]["statusByVariant"] == {
+        "release": {
+            "expectedArtifactCount": 1,
+            "emittedArtifactCount": 0,
+            "translatedCount": 0,
+            "failedCount": 0,
+            "missingArtifactCount": 1,
+            "extraArtifactCount": 0,
+            "complete": False,
+        }
+    }
 
 
 def test_project_cli_report_applies_source_backend_overrides(tmp_path):
@@ -16691,7 +16765,7 @@ def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
     ) in result.stdout
 
 
-def test_project_cli_inspect_report_text_omits_scan_only_artifact_matrix(tmp_path):
+def test_project_cli_inspect_report_text_includes_scan_only_artifact_matrix(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
@@ -16716,8 +16790,16 @@ def test_project_cli_inspect_report_text_omits_scan_only_artifact_matrix(tmp_pat
     )
 
     assert result.returncode == 0
-    assert "Artifact matrix:" not in result.stdout
-    assert "Artifact matrix by target:" not in result.stdout
+    assert (
+        "Artifact matrix: 0 emitted of 2 expected "
+        "(0 translated, 0 failed, 2 missing, 0 extra; variants=none)"
+    ) in result.stdout
+    assert (
+        "Artifact matrix by target: cgl=0/1 emitted "
+        "(0 translated, 0 failed, 1 missing, 0 extra, incomplete), "
+        "opengl=0/1 emitted "
+        "(0 translated, 0 failed, 1 missing, 0 extra, incomplete)"
+    ) in result.stdout
 
 
 def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):

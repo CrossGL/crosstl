@@ -164,11 +164,11 @@ def test_project_report_inspection_is_first_class_support_feature():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_inspect_project_report_does_not_derive_scan_only_artifact_matrix"
+            "test_inspect_project_report_summarizes_scan_only_artifact_matrix"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_project_cli_inspect_report_text_omits_scan_only_artifact_matrix"
+            "test_project_cli_inspect_report_text_includes_scan_only_artifact_matrix"
         ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert (
@@ -355,11 +355,11 @@ def test_project_report_inspection_documents_rollups():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_inspect_project_report_does_not_derive_scan_only_artifact_matrix"
+            "test_inspect_project_report_summarizes_scan_only_artifact_matrix"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_project_cli_inspect_report_text_omits_scan_only_artifact_matrix"
+            "test_project_cli_inspect_report_text_includes_scan_only_artifact_matrix"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -988,6 +988,8 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             backend_support["notes"]
         )
         assert "artifactMatrix metadata" in backend_support["notes"]
+        assert "scan-only artifactMatrix plans" in backend_support["notes"]
+        assert "before artifact generation" in backend_support["notes"]
         assert "closed top-level report field set" in backend_support["notes"]
         assert "artifact records whose targets are not declared by the report" in (
             backend_support["notes"]
@@ -1021,6 +1023,14 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_records_artifact_matrix_metadata"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_allows_scan_reports_without_artifacts"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_summarizes_scan_only_artifact_matrix"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1288,6 +1298,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "non-empty scan-scope list entries" in backend_support["notes"]
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
+        assert "scan-only artifactMatrix plans" in backend_support["notes"]
         assert "artifact matrix coverage" in backend_support["notes"]
         assert (
             "direct validation report artifact target, artifact source backend, "

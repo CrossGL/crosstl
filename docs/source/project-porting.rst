@@ -79,8 +79,8 @@ Use these report fields to decide the next action:
        forwarding gaps, artifact manifest issues, provenance issues, and
        optional toolchain validation gaps.
    * - ``artifactMatrix``
-     - Confirm every discovered unit, target, and named variant produced the
-       expected artifact record, and identify missing or extra artifacts.
+     - Confirm the expected unit, target, and named-variant artifact plan before
+       translation, then identify missing or extra artifacts after translation.
    * - ``validation``
      - Check current source hashes, generated artifact hashes, source maps,
        source remaps, optional toolchain availability, and opt-in artifact or
@@ -530,13 +530,14 @@ Project reports are JSON documents with:
   generated hashes or source-map records. Full reports also reject translated
   artifacts that carry error metadata. Invalid project output directories are
   recorded as failed artifacts without writing files.
-- ``artifactMatrix``: translation-report metadata with expected, emitted,
+- ``artifactMatrix``: scan and translation metadata with expected, emitted,
   translated, failed, missing, extra, and completion counts plus target,
   source-backend, and variant completion rollups for the unit, target, and
   variant matrix.
-  Scan-only reports omit this object because they intentionally contain no
-  translated or failed artifacts. Report inspection also includes sampled
-  missing and extra artifact identities from report-provided or translation
+  Scan-only reports include the expected artifact plan with zero emitted,
+  translated, and failed artifacts so automation can review planned outputs
+  before artifact generation. Report inspection also includes sampled missing
+  and extra artifact identities from report-provided or translation
   artifact-derived matrix metadata, so incomplete batch outputs are visible
   without opening every artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
