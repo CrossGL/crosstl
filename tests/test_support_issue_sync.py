@@ -676,6 +676,45 @@ def test_pytest_failure_issues_are_preserved_without_failure_summary_input():
     assert closing_closures["stale_extracted"] == 1
 
 
+def test_pytest_failure_issues_are_preserved_when_failure_summary_has_load_errors():
+    module = load_sync_module()
+    signals = sample_signals()
+    signals["summary"]["pytest_failures"] = {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 1,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+    desired = module.build_desired_issues(sample_matrix(), signals)
+    stale_pytest = issue(
+        77,
+        "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+    close_pytest_failure_issues = module.signals_allow_pytest_failure_closure(signals)
+
+    preserved_closures = module.planned_issue_closures(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=close_pytest_failure_issues,
+    )
+    preserved_samples = module.planned_issue_action_samples(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=close_pytest_failure_issues,
+    )
+
+    assert close_pytest_failure_issues is False
+    assert preserved_closures["total"] == 0
+    assert preserved_samples["preserved"][0]["reason"] == (
+        "stale_pytest_failure_preserved"
+    )
+
+
 def test_desired_issue_counts_summarizes_planned_parent_backlog_and_signal_issues():
     module = load_sync_module()
 

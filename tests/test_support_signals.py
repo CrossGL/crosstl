@@ -1449,3 +1449,96 @@ def test_load_pytest_failure_report_validates_generator_and_missing_files(tmp_pa
         "type": "UnexpectedGenerator",
         "message": "expected tools/pytest_failure_summary.py, got tools/other.py",
     }
+
+
+def test_load_pytest_failure_report_rejects_malformed_summary_contract(tmp_path):
+    module = load_signals_module()
+    malformed = tmp_path / "malformed-summary.json"
+    malformed.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generator": "tools/pytest_failure_summary.py",
+                "summary": {"load_error_count": 1},
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = module.load_pytest_failure_report(malformed)
+
+    assert report["load_error"]["type"] == "InvalidPytestFailureSummary"
+    assert "reports is required" in report["load_error"]["message"]
+    assert "clean_workflow_runs is required" in report["load_error"]["message"]
+    assert "summary.report_count must be a non-negative integer" in (
+        report["load_error"]["message"]
+    )
+
+
+def test_pytest_failure_summary_propagates_nested_load_errors(tmp_path):
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    summary_path = tmp_path / "failure-summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generator": "tools/pytest_failure_summary.py",
+                "summary": {
+                    "report_count": 1,
+                    "load_error_count": 1,
+                    "testcase_count": 0,
+                    "failure_count": 0,
+                    "error_count": 0,
+                    "skipped_count": 0,
+                    "failed_testcase_count": 0,
+                    "categories": {},
+                    "backends": {},
+                },
+                "reports": [
+                    {
+                        "path": "junit.xml",
+                        "load_error": {
+                            "type": "ParseError",
+                            "message": "invalid XML",
+                        },
+                    }
+                ],
+                "clean_workflow_runs": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    failure_report = module.load_pytest_failure_report(summary_path)
+    report = module.build_report(
+        backends,
+        features,
+        pytest_failure_reports=[failure_report],
+    )
+
+    assert "load_error" not in failure_report
+    assert report["summary"]["pytest_failures"] == {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 1,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+    assert [
+        issue for issue in report["issues"] if issue["kind"] == "pytest_failure_summary"
+    ] == []
