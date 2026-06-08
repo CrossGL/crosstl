@@ -237,7 +237,16 @@ REPORT_EXTERNAL_CORPUS_SUMMARY_FIELDS = frozenset(
     )
 )
 REPORT_DIAGNOSTIC_FIELDS = frozenset(
-    ("severity", "code", "message", "location", "target", "missingCapabilities")
+    (
+        "severity",
+        "code",
+        "message",
+        "location",
+        "target",
+        "sourceBackend",
+        "variant",
+        "missingCapabilities",
+    )
 )
 REPORT_ARTIFACT_FIELDS = frozenset(
     (
@@ -801,6 +810,7 @@ def _frontend_define_forwarding_diagnostic(
             "text without project define preprocessing for this source backend."
         ),
         location=SourceLocation(file=unit.relative_path),
+        source_backend=unit.source_backend,
         missing_capabilities=["macro.defines"],
     )
 
@@ -818,6 +828,7 @@ def _frontend_include_path_forwarding_diagnostic(
             "text without project include path preprocessing for this source backend."
         ),
         location=SourceLocation(file=unit.relative_path),
+        source_backend=unit.source_backend,
         missing_capabilities=["include.forwarding"],
     )
 
@@ -3080,6 +3091,8 @@ class ProjectDiagnostic:
     message: str
     location: SourceLocation
     target: str | None = None
+    source_backend: str | None = None
+    variant: str | None = None
     missing_capabilities: Sequence[str] = ()
 
     def to_json(self) -> dict[str, Any]:
@@ -3091,6 +3104,10 @@ class ProjectDiagnostic:
         }
         if self.target:
             payload["target"] = self.target
+        if self.source_backend:
+            payload["sourceBackend"] = self.source_backend
+        if self.variant:
+            payload["variant"] = self.variant
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
         return payload
@@ -4567,6 +4584,8 @@ def translate_project(
                             message=str(exc),
                             location=SourceLocation(file=unit.relative_path),
                             target=target,
+                            source_backend=unit.source_backend,
+                            variant=variant,
                             missing_capabilities=["batch.translation"],
                         )
                     )
@@ -5004,7 +5023,7 @@ def _source_map_file_span_validation_diagnostics(
                 f"{artifact.get('path')}: {'; '.join(reasons)}"
             ),
             location=SourceLocation(file=str(artifact.get("source", ""))),
-            target=str(artifact.get("target", "")),
+            **_artifact_diagnostic_context(artifact),
             missing_capabilities=["source.provenance"],
         )
     ]
@@ -5031,7 +5050,7 @@ def _source_remap_validation_diagnostics(
                     f"{source_remap['path']}"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
-                target=str(artifact["target"]),
+                **_artifact_diagnostic_context(artifact),
                 missing_capabilities=["source.provenance"],
             )
         ]
@@ -5046,7 +5065,7 @@ def _source_remap_validation_diagnostics(
                     f"{source_remap['path']}"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
-                target=str(artifact["target"]),
+                **_artifact_diagnostic_context(artifact),
                 missing_capabilities=["source.provenance"],
             )
         ]
@@ -5065,7 +5084,7 @@ def _source_remap_validation_diagnostics(
                     f"{source_remap['path']}"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
-                target=str(artifact["target"]),
+                **_artifact_diagnostic_context(artifact),
                 missing_capabilities=["source.provenance"],
             )
         )
@@ -5082,7 +5101,7 @@ def _source_remap_validation_diagnostics(
                     f"{source_remap['path']}: {exc}"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
-                target=str(artifact["target"]),
+                **_artifact_diagnostic_context(artifact),
                 missing_capabilities=["source.provenance"],
             )
         )
@@ -5099,7 +5118,7 @@ def _source_remap_validation_diagnostics(
                     f"{source_remap['path']}: {'; '.join(semantic_reasons)}"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
-                target=str(artifact["target"]),
+                **_artifact_diagnostic_context(artifact),
                 missing_capabilities=["source.provenance"],
             )
         )
@@ -5117,7 +5136,7 @@ def _source_remap_validation_diagnostics(
                         f"{source_remap['path']}"
                     ),
                     location=SourceLocation(file=str(artifact["source"])),
-                    target=str(artifact["target"]),
+                    **_artifact_diagnostic_context(artifact),
                     missing_capabilities=["source.provenance"],
                 )
             )
@@ -5169,6 +5188,17 @@ def _source_remap_validation_status(
     return "invalid"
 
 
+def _artifact_diagnostic_context(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {"target": str(artifact.get("target", ""))}
+    source_backend = artifact.get("sourceBackend")
+    if _is_non_empty_string(source_backend):
+        context["source_backend"] = source_backend
+    variant = artifact.get("variant")
+    if _is_non_empty_string(variant):
+        context["variant"] = variant
+    return context
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -5191,7 +5221,7 @@ def _validate_artifacts(
                         f"{artifact['path']}"
                     ),
                     location=SourceLocation(file=str(artifact["source"])),
-                    target=str(artifact["target"]),
+                    **_artifact_diagnostic_context(artifact),
                     missing_capabilities=["artifact.manifest"],
                 )
             )
@@ -5212,7 +5242,7 @@ def _validate_artifacts(
                             f"{artifact['source']}"
                         ),
                         location=SourceLocation(file=str(artifact["source"])),
-                        target=str(artifact["target"]),
+                        **_artifact_diagnostic_context(artifact),
                         missing_capabilities=["source.provenance"],
                     )
                 )
@@ -5227,7 +5257,7 @@ def _validate_artifacts(
                             f"{artifact['source']}"
                         ),
                         location=SourceLocation(file=str(artifact["source"])),
-                        target=str(artifact["target"]),
+                        **_artifact_diagnostic_context(artifact),
                         missing_capabilities=["source.provenance"],
                     )
                 )
@@ -5244,7 +5274,7 @@ def _validate_artifacts(
                                 f"{artifact['source']}"
                             ),
                             location=SourceLocation(file=str(artifact["source"])),
-                            target=str(artifact["target"]),
+                            **_artifact_diagnostic_context(artifact),
                             missing_capabilities=["source.provenance"],
                         )
                     )
@@ -5261,7 +5291,7 @@ def _validate_artifacts(
                     code="project.validate.missing-artifact",
                     message=f"Expected translated artifact is missing: {artifact['path']}",
                     location=SourceLocation(file=str(artifact["source"])),
-                    target=str(artifact["target"]),
+                    **_artifact_diagnostic_context(artifact),
                     missing_capabilities=["artifact.manifest"],
                 )
             )
@@ -5291,7 +5321,7 @@ def _validate_artifacts(
                                 f"{artifact['path']}"
                             ),
                             location=SourceLocation(file=str(artifact["source"])),
-                            target=str(artifact["target"]),
+                            **_artifact_diagnostic_context(artifact),
                             missing_capabilities=["artifact.manifest"],
                         )
                     )
@@ -5332,7 +5362,7 @@ def _validate_artifacts(
                     code="project.validate.failed-artifact",
                     message=message,
                     location=SourceLocation(file=str(artifact["source"])),
-                    target=str(artifact["target"]),
+                    **_artifact_diagnostic_context(artifact),
                     missing_capabilities=["batch.translation"],
                 )
             )
@@ -5453,6 +5483,8 @@ def _diagnostic_identity(diagnostic: Mapping[str, Any]) -> tuple[Any, ...]:
             "message",
             "location",
             "target",
+            "sourceBackend",
+            "variant",
             "missingCapabilities",
         )
     )
@@ -7081,13 +7113,20 @@ def _toolchain_run_diagnostics(
                 f"Validation toolchain for target {target} rejected "
                 f"{artifact_path}: {reason}"
             )
+        context: dict[str, Any] = {"target": target}
+        source_backend = run.get("sourceBackend")
+        if _is_non_empty_string(source_backend):
+            context["source_backend"] = source_backend
+        variant = run.get("variant")
+        if _is_non_empty_string(variant):
+            context["variant"] = variant
         diagnostics.append(
             ProjectDiagnostic(
                 severity="error",
                 code="project.validate.toolchain-failed",
                 message=message,
                 location=SourceLocation(file=artifact_path),
-                target=target,
+                **context,
                 missing_capabilities=["toolchain.validation"],
             )
         )
@@ -11885,6 +11924,28 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         require_canonical=has_summary,
                     )
                 )
+            if "sourceBackend" in diagnostic:
+                reasons.extend(
+                    _source_backend_contract_reasons(
+                        f"diagnostics[{index}].sourceBackend",
+                        diagnostic.get("sourceBackend"),
+                        require_registered=has_summary,
+                    )
+                )
+            if "variant" in diagnostic:
+                variant = diagnostic.get("variant")
+                if not _is_non_empty_string(variant):
+                    reasons.append(f"diagnostics[{index}].variant must be a string")
+                elif (
+                    has_summary
+                    and project_variants_valid
+                    and project_variants
+                    and variant not in declared_variants
+                ):
+                    reasons.append(
+                        f"diagnostics[{index}].variant must be listed in "
+                        "project.variants"
+                    )
             missing_capabilities = diagnostic.get("missingCapabilities", [])
             if not isinstance(missing_capabilities, list) or any(
                 not _is_non_empty_string(capability)

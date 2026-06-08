@@ -7575,6 +7575,7 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     assert diagnostic["code"] == "project.validate.generated-hash-mismatch"
     assert diagnostic["location"]["file"] == "simple.cgl"
     assert diagnostic["target"] == "cgl"
+    assert diagnostic["sourceBackend"] == "cgl"
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
 
 
@@ -13793,6 +13794,8 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                             "endOffset": "0",
                         },
                         "target": "",
+                        "sourceBackend": "",
+                        "variant": 0,
                         "missingCapabilities": "repo.scan",
                     }
                 ],
@@ -13834,6 +13837,8 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
         diagnostic["message"]
     )
     assert "diagnostics[0].target must be a string" in diagnostic["message"]
+    assert "diagnostics[0].sourceBackend must be a string" in diagnostic["message"]
+    assert "diagnostics[0].variant must be a string" in diagnostic["message"]
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
@@ -14120,6 +14125,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["diagnosticCounts"]["error"] == 1
     assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
     assert payload["diagnostics"][0]["target"] == "opengl"
+    assert payload["diagnostics"][0]["sourceBackend"] == "cgl"
     assert payload["diagnostics"][0]["location"]["file"] == ("out/opengl/simple.glsl")
     assert payload["validation"]["toolchainRuns"][0]["status"] == "failed"
     assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "cgl"
@@ -16388,6 +16394,7 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     }
     assert sarif_result["properties"] == {
         "target": "opengl",
+        "sourceBackend": "cgl",
         "missingCapabilities": ["artifact.manifest"],
     }
 

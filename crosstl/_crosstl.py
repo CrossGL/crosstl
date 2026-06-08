@@ -789,6 +789,12 @@ def _format_project_diagnostic_line(diagnostic):
     target = diagnostic.get("target")
     if isinstance(target, str) and target:
         details.append(f"target={target}")
+    source_backend = diagnostic.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
+    variant = diagnostic.get("variant")
+    if isinstance(variant, str) and variant:
+        details.append(f"variant={variant}")
     missing_capabilities = diagnostic.get("missingCapabilities")
     if isinstance(missing_capabilities, list):
         capabilities = [
@@ -928,6 +934,12 @@ def _format_project_diagnostics_sarif(
         target = diagnostic.get("target")
         if isinstance(target, str) and target:
             properties["target"] = target
+        source_backend = diagnostic.get("sourceBackend")
+        if isinstance(source_backend, str) and source_backend:
+            properties["sourceBackend"] = source_backend
+        variant = diagnostic.get("variant")
+        if isinstance(variant, str) and variant:
+            properties["variant"] = variant
         missing_capabilities = diagnostic.get("missingCapabilities")
         if isinstance(missing_capabilities, list) and missing_capabilities:
             properties["missingCapabilities"] = list(missing_capabilities)
