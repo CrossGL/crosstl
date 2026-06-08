@@ -87,6 +87,51 @@ def _minimal_catalogs(module):
     return backends, features
 
 
+def test_docs_report_writes_support_signals_compatible_schema(tmp_path, monkeypatch):
+    module = load_support_matrix_module()
+    support_signals = module.load_support_signals_module()
+    monkeypatch.setattr(module, "load_support_signals_module", lambda: support_signals)
+
+    def fetch_url(url, timeout):
+        text = "Code generation texture gather support reference."
+        return {
+            "ok": True,
+            "status": 200,
+            "url": url,
+            "final_url": url,
+            "content_type": "text/html",
+            "content_length": len(text),
+            "sha256": "0" * 64,
+            "elapsed_ms": 1,
+            "text": text,
+            "text_extraction": {
+                "kind": "html",
+                "parser": "html.parser",
+                "links": [],
+                "text_length": len(text),
+            },
+        }
+
+    monkeypatch.setattr(support_signals, "fetch_url", fetch_url)
+    backends, features = _minimal_catalogs(module)
+    output = tmp_path / "backend-docs-report.json"
+
+    result = module.docs_report(
+        backends,
+        features,
+        output,
+        timeout=0.1,
+        strict=True,
+        max_linked_pages=0,
+    )
+
+    assert result == 0
+    loaded = support_signals.load_docs_report(output)
+    assert loaded["generator"] == support_signals.DOCS_REPORT_GENERATOR
+    assert loaded["summary"]["total"] == 3
+    assert loaded["summary"]["failed"] == 0
+
+
 def test_support_matrix_generated_artifacts_are_current():
     result = subprocess.run(
         [sys.executable, "tools/support_matrix.py", "check"],

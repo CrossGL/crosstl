@@ -9,14 +9,12 @@ checked-in machine-readable and Sphinx documentation artifacts.
 import argparse
 import difflib
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import sys
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +26,19 @@ MATRIX_JSON_PATH = GENERATED_DIR / "support-matrix.json"
 GRAPHICS_ROADMAP_JSON_PATH = GENERATED_DIR / "graphics-backend-roadmap.json"
 DOCS_RST_PATH = ROOT / "docs" / "source" / "support-matrix.rst"
 DEFAULT_DOC_REPORT_PATH = GENERATED_DIR / "backend-docs-report.json"
+
+
+def load_support_signals_module():
+    spec = importlib.util.spec_from_file_location(
+        "support_signals",
+        ROOT / "tools" / "support_signals.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
 
 STATUS_CODES = {
     "supported": "Y",
@@ -1390,71 +1401,26 @@ def evidence_audit(
     return 0
 
 
-def fetch_url(url, timeout):
-    started = time.time()
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "CrossGL-support-matrix/1.0 (+https://github.com/CrossGL)"
-        },
+def docs_report(
+    backends_data,
+    features_data,
+    output_path,
+    timeout,
+    strict,
+    max_linked_pages,
+):
+    support_signals = load_support_signals_module()
+
+    report = support_signals.build_docs_report(
+        backends_data,
+        features_data,
+        timeout=timeout,
+        max_linked_pages=max_linked_pages,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            content = response.read()
-            status = getattr(response, "status", response.getcode())
-            return {
-                "ok": 200 <= int(status) < 400,
-                "status": int(status),
-                "url": url,
-                "final_url": response.geturl(),
-                "content_type": response.headers.get("content-type", ""),
-                "content_length": len(content),
-                "sha256": hashlib.sha256(content).hexdigest(),
-                "elapsed_ms": int((time.time() - started) * 1000),
-            }
-    except urllib.error.HTTPError as exc:
-        return {
-            "ok": False,
-            "status": exc.code,
-            "url": url,
-            "final_url": exc.geturl(),
-            "error": str(exc),
-            "elapsed_ms": int((time.time() - started) * 1000),
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "url": url,
-            "error": f"{exc.__class__.__name__}: {exc}",
-            "elapsed_ms": int((time.time() - started) * 1000),
-        }
-
-
-def docs_report(backends_data, output_path, timeout, strict):
-    rows = []
-    for backend in backends_data["backends"]:
-        for doc in backend.get("docs", []):
-            result = fetch_url(doc["url"], timeout)
-            result["backend_id"] = backend["id"]
-            result["backend"] = backend["name"]
-            result["source"] = doc["name"]
-            rows.append(result)
-
-    report = {
-        "schema_version": 1,
-        "generated_by": "tools/support_matrix.py docs",
-        "source": relpath(BACKENDS_PATH),
-        "documents": rows,
-        "summary": {
-            "total": len(rows),
-            "ok": sum(1 for row in rows if row.get("ok")),
-            "failed": sum(1 for row in rows if not row.get("ok")),
-        },
-    }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(stable_json(report), encoding="utf-8")
 
-    for row in rows:
+    for row in report["documents"]:
         status = row.get("status", "error")
         marker = "OK" if row.get("ok") else "FAIL"
         print("{} {} {} - {}".format(marker, status, row["backend"], row["source"]))
@@ -1576,6 +1542,12 @@ def parse_args(argv):
     )
     docs_parser.add_argument("--timeout", type=float, default=20.0)
     docs_parser.add_argument(
+        "--max-linked-pages",
+        type=int,
+        default=3,
+        help="Fetch up to this many relevant same-site links per configured docs URL",
+    )
+    docs_parser.add_argument(
         "--strict",
         action="store_true",
         help="Exit non-zero when any documentation URL cannot be fetched",
@@ -1649,7 +1621,14 @@ def main(argv=None):
         output_path = args.output
         if not output_path.is_absolute():
             output_path = ROOT / output_path
-        return docs_report(backends_data, output_path, args.timeout, args.strict)
+        return docs_report(
+            backends_data,
+            features_data,
+            output_path,
+            args.timeout,
+            args.strict,
+            args.max_linked_pages,
+        )
 
     raise AssertionError(f"unhandled command: {args.command}")
 
