@@ -1799,13 +1799,16 @@ def _external_corpus_manifest_entry_reasons(entry: Any) -> list[str]:
 
     targets = entry.get("targets")
     if targets is not None:
-        valid_targets = isinstance(targets, str) or (
+        valid_targets = _is_non_empty_string(targets) or (
             isinstance(targets, Sequence)
             and not isinstance(targets, (bytes, bytearray))
-            and all(isinstance(target, str) for target in targets)
+            and len(targets) > 0
+            and all(_is_non_empty_string(target) for target in targets)
         )
         if not valid_targets:
-            reasons.append("targets must be a string or list of strings")
+            reasons.append(
+                "targets must be a non-empty string or list of non-empty strings"
+            )
 
     for field_name in ("repository", "commit", "sourceUrl"):
         if field_name in entry and not _is_non_empty_string(entry.get(field_name)):
