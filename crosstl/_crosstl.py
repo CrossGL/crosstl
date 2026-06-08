@@ -647,6 +647,10 @@ def _format_project_validation_report(payload):
             payload.get("toolchainRunStatusByCheckKind"),
         ),
         _format_validation_run_rollup(
+            "Validation toolchain runs by tool",
+            payload.get("toolchainRunStatusByTool"),
+        ),
+        _format_validation_run_rollup(
             "Validation toolchain runs by variant",
             payload.get("toolchainRunStatusByVariant"),
         ),
@@ -2085,6 +2089,9 @@ def _format_project_report_inspection(payload):
     validation_toolchain_run_status_by_check_kind = payload.get("validation", {}).get(
         "toolchainRunStatusByCheckKind"
     )
+    validation_toolchain_run_status_by_tool = payload.get("validation", {}).get(
+        "toolchainRunStatusByTool"
+    )
     validation_toolchain_run_status_by_variant = payload.get("validation", {}).get(
         "toolchainRunStatusByVariant"
     )
@@ -2511,6 +2518,12 @@ def _format_project_report_inspection(payload):
     )
     if validation_toolchain_runs_by_check_kind:
         lines.append(validation_toolchain_runs_by_check_kind)
+    validation_toolchain_runs_by_tool = _format_validation_run_rollup(
+        "Validation toolchain runs by tool",
+        validation_toolchain_run_status_by_tool,
+    )
+    if validation_toolchain_runs_by_tool:
+        lines.append(validation_toolchain_runs_by_tool)
     validation_toolchain_runs_by_variant = _format_validation_run_rollup(
         "Validation toolchain runs by variant",
         validation_toolchain_run_status_by_variant,

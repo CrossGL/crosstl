@@ -323,6 +323,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "toolchainRunStatusByTarget",
         "toolchainRunStatusBySourceBackend",
         "toolchainRunStatusByCheckKind",
+        "toolchainRunStatusByTool",
         "toolchainRunStatusByVariant",
         "sourceHashStatusCounts",
         "generatedHashStatusCounts",
@@ -4520,6 +4521,47 @@ def _validation_toolchain_run_status_by_check_kind(
     return _validation_run_status_rollup(runs, "checkKind")
 
 
+def _validation_toolchain_run_tool_name(run: Mapping[str, Any]) -> str | None:
+    command = run.get("command")
+    if (
+        not isinstance(command, Sequence)
+        or isinstance(command, (str, bytes, bytearray))
+        or not command
+    ):
+        return None
+    tool_name = command[0]
+    if isinstance(tool_name, str) and tool_name.strip():
+        return tool_name.strip()
+    return None
+
+
+def _validation_toolchain_run_status_by_tool(
+    runs: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for run in runs:
+        if not isinstance(run, Mapping):
+            continue
+        tool_name = _validation_toolchain_run_tool_name(run)
+        if tool_name is None:
+            continue
+        row = counts.setdefault(
+            tool_name,
+            {
+                "runCount": 0,
+                "okCount": 0,
+                "failedCount": 0,
+            },
+        )
+        row["runCount"] += 1
+        status = run.get("status")
+        if status == "ok":
+            row["okCount"] += 1
+        elif status == "failed":
+            row["failedCount"] += 1
+    return {tool_name: counts[tool_name] for tool_name in sorted(counts)}
+
+
 def _validation_toolchain_run_status_by_variant(
     runs: Sequence[Any],
 ) -> dict[str, dict[str, int]]:
@@ -5360,6 +5402,7 @@ def inspect_project_report(
     toolchain_run_status_by_check_kind = validation_report.get(
         "toolchainRunStatusByCheckKind"
     )
+    toolchain_run_status_by_tool = validation_report.get("toolchainRunStatusByTool")
     toolchain_run_status_by_variant = validation_report.get(
         "toolchainRunStatusByVariant"
     )
@@ -5466,6 +5509,13 @@ def inspect_project_report(
                 dict(toolchain_run_status_by_check_kind)
                 if isinstance(toolchain_run_status_by_check_kind, Mapping)
                 else _validation_toolchain_run_status_by_check_kind(
+                    _record_sequence(validation_toolchain_runs)
+                )
+            ),
+            "toolchainRunStatusByTool": (
+                dict(toolchain_run_status_by_tool)
+                if isinstance(toolchain_run_status_by_tool, Mapping)
+                else _validation_toolchain_run_status_by_tool(
                     _record_sequence(validation_toolchain_runs)
                 )
             ),
@@ -6871,6 +6921,9 @@ def _validation_report_payload(
             )
         ),
         "toolchainRunStatusByCheckKind": _validation_toolchain_run_status_by_check_kind(
+            validation_toolchain_runs
+        ),
+        "toolchainRunStatusByTool": _validation_toolchain_run_status_by_tool(
             validation_toolchain_runs
         ),
         "toolchainRunStatusByVariant": _validation_toolchain_run_status_by_variant(

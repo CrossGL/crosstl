@@ -183,7 +183,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert (
             "validation status, diagnostic-code, missing-capability, "
             "toolchain-status, toolchain-run target, source-backend, check-kind, "
-            "and variant rollups plus artifact target, source-backend, and "
+            "tool, and variant rollups plus artifact target, source-backend, and "
             "variant rollups" in (backend_support["notes"])
         )
         assert "configurable diagnostic and failed-artifact truncation" in (
@@ -1519,6 +1519,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "toolchain run target" in backend_support["notes"]
         assert "toolchain run source backend" in backend_support["notes"]
         assert "toolchain run check-kind" in backend_support["notes"]
+        assert "toolchain run tool" in backend_support["notes"]
         assert "toolchain run variant" in backend_support["notes"]
         assert "translate-project can embed artifact validation" in (
             backend_support["notes"]

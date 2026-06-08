@@ -202,8 +202,8 @@ severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, artifact source-backend,
 artifact variant, hash-status, source-map status, source-remap status,
 toolchain status, toolchain-run status, toolchain-run target, toolchain-run
-source backend, toolchain-run check kind, and toolchain-run variant rollups for
-validation results.
+source backend, toolchain-run check kind, toolchain-run tool, and
+toolchain-run variant rollups for validation results.
 The JSON validation report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift.
 The default output is JSON; ``--format text``
@@ -235,7 +235,7 @@ variant labels when present, diagnostic code and missing-capability rollups,
 validation diagnostic-code, missing-capability, artifact target,
 artifact source-backend, artifact variant, hash-status, source-map status,
 source-remap status, toolchain status, and toolchain-run target,
-source-backend, check-kind, and variant rollups, report
+source-backend, check-kind, tool, and variant rollups, report
 source-backend, file-extension, and artifact
 target rollups, source-map count, granularity, target, and source-backend
 rollups, artifact matrix completion counts, target and variant completion
@@ -583,7 +583,8 @@ Project reports are JSON documents with:
   status summary counts, direct validation report artifact target, source
   backend, variant, hash-status, source-map status, source-remap status,
   toolchain status, toolchain-run status rollups, toolchain-run check-kind
-  metadata, and a closed standalone validation-report field set,
+  metadata, toolchain-run tool rollups, and a closed standalone validation-report
+  field set,
   failed-artifact text with
   non-OK hash, source-map, and source-remap statuses, bounded validation artifact
   and validation toolchain-run inspection samples, source-root and
@@ -617,7 +618,7 @@ Project reports are JSON documents with:
   target declaration checks, scan-scope count consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact coverage,
-  toolchain-run target, source-backend, check-kind, and variant rollups,
+  toolchain-run target, source-backend, check-kind, tool, and variant rollups,
   toolchain target coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,
   current include dependency status, resolved-path, resolved-hash,
