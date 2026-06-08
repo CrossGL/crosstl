@@ -9,6 +9,7 @@ from crosstl.translator.ast import (
     ArrayType,
     AssignmentNode,
     BinaryOpNode,
+    ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
     DoWhileNode,
@@ -399,6 +400,50 @@ def test_square_generic_parameters_accept_keyword_like_names():
     variable = ast.global_variables[0]
 
     assert [param.name for param in variable.generic_params] == ["dtype", "layout"]
+
+
+def test_square_generic_parameters_accept_positional_and_keyword_markers():
+    code = """
+    shader MarkerSquareGenericShader {
+        let SMemTile[
+            dtype:DType,
+            layout:Layout,
+            /,
+            *,
+            element_layout:Layout=Layout(1, 1)
+        ] = LayoutTensor[dtype, layout_, MutAnyOrigin];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    variable = ast.global_variables[0]
+
+    assert [param.name for param in variable.generic_params] == [
+        "dtype",
+        "layout",
+        "/",
+        "*",
+        "element_layout",
+    ]
+
+
+def test_constant_declarations_accept_array_suffixes():
+    code = """
+    shader ConstantArraySuffixShader {
+        const uint WIDTH_CANDIDATES[5] = {64, 32, 16, 8, 1};
+        const str OPTIX_ROOT_ENVS[2] = {"OPTIX_ROOT", "OPTIX_ROOT_DIR"};
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    width = ast.constants[0]
+    roots = ast.constants[1]
+
+    assert isinstance(width, ConstantNode)
+    assert isinstance(width.const_type, ArrayType)
+    assert width.const_type.size.value == 5
+    assert isinstance(roots.const_type, ArrayType)
+    assert roots.const_type.size.value == 2
 
 
 def test_square_bracket_generic_parameters_parse_on_variable_declarations():

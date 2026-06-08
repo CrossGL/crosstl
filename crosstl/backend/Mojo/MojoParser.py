@@ -2173,6 +2173,14 @@ class MojoParser:
             self.eat(self.current_token[0])
             operand = self.parse_unary()
             return UnaryOpNode(op, operand)
+        if self.current_token[0] == "POWER":
+            self.eat("POWER")
+            operand = self.parse_unary()
+            return SpreadExpressionNode(operand, kind="keyword")
+        if self.current_token[0] == "MULTIPLY":
+            self.eat("MULTIPLY")
+            operand = self.parse_unary()
+            return SpreadExpressionNode(operand)
         return self.parse_power()
 
     def parse_power(self):

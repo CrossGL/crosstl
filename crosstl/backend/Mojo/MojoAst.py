@@ -175,6 +175,19 @@ class SliceNode(ASTNode):
         )
 
 
+class SpreadExpressionNode(ASTNode):
+    """Node representing Mojo positional or keyword unpacking in expressions."""
+
+    def __init__(self, expression, kind="positional"):
+        self.expression = expression
+        self.kind = kind
+
+    def __repr__(self):
+        return (
+            "SpreadExpressionNode(" f"kind={self.kind}, expression={self.expression})"
+        )
+
+
 class WithNode(ASTNode):
     """Node representing a Mojo with/as block."""
 

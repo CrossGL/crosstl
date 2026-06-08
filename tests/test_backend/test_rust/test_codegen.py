@@ -6687,6 +6687,41 @@ def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
     crosstl.translator.parse(result)
 
 
+def test_rust_cuda_global_include_str_macro_initializer_codegen_reparse():
+    # Reduced from Rust-GPU/Rust-CUDA examples/*/src/main.rs PTX statics.
+    code = """
+    static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/kernels.ptx"));
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        'static str PTX = include_str(concat(env("OUT_DIR"), "/kernels.ptx"));'
+        in result
+    )
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_global_array_declarators_codegen_reparse():
+    # Reduced from Rust-GPU/Rust-CUDA nvvm.rs and int_replace.rs globals.
+    code = """
+    static LIBDEVICE_BITCODE: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/libdevice.bc"));
+    const WIDTH_CANDIDATES: [u32; 5] = [64, 32, 16, 8, 1];
+    const OPTIX_ROOT_ENVS: [&str; 2] = ["OPTIX_ROOT", "OPTIX_ROOT_DIR"];
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "static uint8_t LIBDEVICE_BITCODE[] = "
+        'include_bytes(concat(env("OUT_DIR"), "/libdevice.bc"));'
+    ) in result
+    assert "const uint WIDTH_CANDIDATES[5] = {64, 32, 16, 8, 1};" in result
+    assert 'const str OPTIX_ROOT_ENVS[2] = {"OPTIX_ROOT", "OPTIX_ROOT_DIR"};' in result
+    crosstl.translator.parse(result)
+
+
 def test_byte_literal_conversion():
     code = r"""
     fn test_byte_literals(c: u8) -> String {

@@ -246,6 +246,38 @@ def test_variadic_keyword_parameter_codegen_from_current_docs():
     assert "Unhandled" not in generated_code
 
 
+def test_variadic_unpack_call_codegen_from_modular_layout_reparses_crossgl():
+    # Reduced from modularml/mojo max/kernels/src/layout/int_tuple.mojo.
+    code = """
+    def elements_size(*elements: IntTuple) -> Int:
+        return 0
+
+    def build(*elements: IntTuple):
+        var size = elements_size(*elements)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "elements_size(elements);" in generated_code
+    assert "(*elements)" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_variadic_keyword_unpack_call_codegen_reparses_crossgl():
+    code = """
+    def build(**kwargs: Int):
+        consume(**kwargs)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "consume(kwargs);" in generated_code
+    assert "**kwargs" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_heterogeneous_variadic_type_pack_codegen_from_current_docs():
     code = """
     def count_many_things[*ArgTypes: Intable](*args: *ArgTypes) -> Int:
@@ -682,6 +714,19 @@ def test_floor_divide_in_parameterized_type_codegen_reparses_crossgl():
         generated_code
     )
     assert "kernel_cols//simd_size" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_positional_marker_in_alias_generic_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo max/kernels/src/structured_kernels/smem_types.mojo.
+    code = """
+    alias eval[T: AnyType, //, val: T] = val
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let eval[T:AnyType, /, val:T] = val;" in generated_code
+    assert "eval[T:AnyType, //, val:T]" not in generated_code
     parse_crossgl(generated_code)
 
 

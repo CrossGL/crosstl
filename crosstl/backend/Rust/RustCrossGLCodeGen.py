@@ -36,6 +36,13 @@ CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
 class RustToCrossGLConverter:
     """Serialize Rust backend AST nodes back into CrossGL source."""
 
+    GLOBAL_INITIALIZER_MACROS = {
+        "concat",
+        "env",
+        "include_bytes",
+        "include_str",
+        "option_env",
+    }
     SCALAR_ZERO_ARG_METHOD_MAP = {
         "abs": "abs",
         "floor": "floor",
@@ -832,17 +839,17 @@ class RustToCrossGLConverter:
 
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
-                declarator = self.format_typed_declarator(
+                declarator = self.format_global_declarator(
                     global_var.vtype, global_var.name
                 )
-                value = self.generate_expression(global_var.value)
+                value = self.generate_global_initializer(global_var.value)
                 code += f"    const {declarator} = {value};\n"
             elif isinstance(global_var, StaticNode):
                 mutability = "mut " if global_var.is_mutable else ""
-                declarator = self.format_typed_declarator(
+                declarator = self.format_global_declarator(
                     global_var.vtype, global_var.name
                 )
-                value = self.generate_expression(global_var.value)
+                value = self.generate_global_initializer(global_var.value)
                 code += f"    static {mutability}{declarator} = {value};\n"
 
         for struct in ast.structs:
@@ -8755,6 +8762,33 @@ class RustToCrossGLConverter:
             return self.normalize_macro_body(arg)
         return self.generate_expression(arg)
 
+    def generate_global_initializer(self, value):
+        if self.is_reparseable_global_macro(value):
+            return self.generate_reparseable_global_macro(value)
+        return self.generate_expression(value)
+
+    def is_reparseable_global_macro(self, value):
+        if not isinstance(value, FunctionCallNode) or not isinstance(value.name, str):
+            return False
+
+        name = value.name[:-1] if value.name.endswith("!") else value.name
+        return name.rsplit("::", 1)[-1] in self.GLOBAL_INITIALIZER_MACROS
+
+    def generate_reparseable_global_macro(self, value):
+        name = self.map_function(value.name)
+        if isinstance(name, str) and name.endswith("!"):
+            name = name[:-1]
+
+        args = ", ".join(
+            self.generate_reparseable_global_macro_argument(arg) for arg in value.args
+        )
+        return f"{name}({args})"
+
+    def generate_reparseable_global_macro_argument(self, arg):
+        if isinstance(arg, str):
+            return self.normalize_reparseable_macro_body(arg)
+        return self.generate_global_initializer(arg)
+
     def format_cast_expression(self, target_type, expression):
         if target_type == "_":
             return expression
@@ -8766,6 +8800,14 @@ class RustToCrossGLConverter:
 
     def normalize_macro_body(self, body):
         return body.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
+    def normalize_reparseable_macro_body(self, body):
+        body = self.normalize_macro_body(body)
+        return re.sub(
+            r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)!\s*(?=[({\[])",
+            r"\1",
+            body,
+        )
 
     def generate_inline_result_expression(self, expression):
         value_name = self.next_inline_expression_value_name()
@@ -10442,6 +10484,14 @@ class RustToCrossGLConverter:
             return f"{base_type} {name}{array_suffix}"
         return f"{mapped_type} {name}"
 
+    def format_global_declarator(self, type_name, name):
+        mapped_type = self.map_type(type_name)
+        array_parts = self.split_array_type(mapped_type)
+        if array_parts:
+            base_type, array_suffix = array_parts
+            return f"{base_type} {name}{array_suffix}"
+        return f"{mapped_type} {name}"
+
     def expand_repeated_array_literal(self, element, size):
         try:
             count = int(self.generate_expression(size))
@@ -10814,12 +10864,12 @@ class RustToCrossGLConverter:
         return f"// use {node.path}\n"
 
     def visit_ConstNode(self, node):
-        type_str = self.map_type(node.vtype)
-        value = self.generate_expression(node.value)
-        return f"const {type_str} {node.name} = {value};\n"
+        declarator = self.format_global_declarator(node.vtype, node.name)
+        value = self.generate_global_initializer(node.value)
+        return f"const {declarator} = {value};\n"
 
     def visit_StaticNode(self, node):
         mutability = "mut " if node.is_mutable else ""
-        type_str = self.map_type(node.vtype)
-        value = self.generate_expression(node.value)
-        return f"static {mutability}{type_str} {node.name} = {value};\n"
+        declarator = self.format_global_declarator(node.vtype, node.name)
+        value = self.generate_global_initializer(node.value)
+        return f"static {mutability}{declarator} = {value};\n"

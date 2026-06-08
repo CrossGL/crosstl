@@ -2067,6 +2067,7 @@ class Parser:
         self.eat("CONST")
         const_type = self.parse_type()
         name = self.parse_binding_identifier()
+        const_type = self.parse_array_suffixes(const_type)
         attributes = self.parse_post_declaration_attributes()
 
         self.eat("EQUALS")
@@ -2492,6 +2493,10 @@ class Parser:
         if self.current_token[0] == "MULTIPLY":
             self.eat("MULTIPLY")
             return IdentifierNode("*")
+
+        if self.current_token[0] == "DIVIDE":
+            self.eat("DIVIDE")
+            return IdentifierNode("/")
 
         if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
             name = self.parse_binding_identifier()

@@ -808,7 +808,7 @@ class MojoToCrossGLConverter:
     def generate_declaration_name(self, name):
         if isinstance(name, TupleNode):
             return self.generate_expression(name)
-        return self.map_identifier_name(name)
+        return self.normalize_type_expression_operators(self.map_identifier_name(name))
 
     def add_scoped_declaration_names(self, name):
         if isinstance(name, TupleNode):
@@ -1147,6 +1147,8 @@ class MojoToCrossGLConverter:
             return self.generate_dict_comprehension(expr)
         elif isinstance(expr, SliceNode):
             return self.generate_slice_index(expr)
+        elif isinstance(expr, SpreadExpressionNode):
+            return self.generate_expression(expr.expression)
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -1328,6 +1330,7 @@ class MojoToCrossGLConverter:
         """Normalize Mojo-only operators embedded in source-like type strings."""
         if not isinstance(mojo_type, str):
             return mojo_type
+        mojo_type = re.sub(r"(?<=[\[,])\s*//\s*(?=,|\])", " /", mojo_type)
         return re.sub(r"\s*//\s*", " / ", mojo_type)
 
     def strip_reference_type(self, mojo_type):

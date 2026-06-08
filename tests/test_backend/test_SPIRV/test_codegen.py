@@ -971,6 +971,46 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_PHYSICAL_STORAGE_POINTER_FUNCTION_ASSEMBLY = """
+; Reduced from glslang Test/baseResults/spv.bufferhandle13.frag.out.
+; Buffer-reference function signatures use PhysicalStorageBufferEXT pointers,
+; which must resolve to CrossGL signature types instead of raw SPIR-V ids.
+OpCapability Shader
+OpCapability PhysicalStorageBufferAddressesEXT
+OpExtension "SPV_KHR_physical_storage_buffer"
+OpMemoryModel PhysicalStorageBuffer64EXT GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %main "main"
+OpName %buffer_ref "BufferRef"
+OpMemberName %buffer_ref 0 "value"
+OpName %identity "identity("
+OpName %param "buffer"
+OpName %out_value "outValue"
+OpDecorate %buffer_ref Block
+OpMemberDecorate %buffer_ref 0 Offset 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%int = OpTypeInt 32 1
+%buffer_ref = OpTypeStruct %int
+%ptr_physical_buffer_ref = OpTypePointer PhysicalStorageBufferEXT %buffer_ref
+%identity_fn = OpTypeFunction %ptr_physical_buffer_ref %ptr_physical_buffer_ref
+%main_fn = OpTypeFunction %void
+%ptr_output_int = OpTypePointer Output %int
+%zero = OpConstant %int 0
+%out_value = OpVariable %ptr_output_int Output
+%main = OpFunction %void None %main_fn
+%main_label = OpLabel
+OpStore %out_value %zero
+OpReturn
+OpFunctionEnd
+%identity = OpFunction %ptr_physical_buffer_ref None %identity_fn
+%param = OpFunctionParameter %ptr_physical_buffer_ref
+%identity_label = OpLabel
+OpReturnValue %param
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_SELECTION_MERGE_ASSEMBLY = """
 ; Source tool: glslangValidator -V -H, reduced from a fragment shader
 ; containing if (value > 0.0) { outColor = red; } else { outColor = blue; }.
@@ -5423,6 +5463,19 @@ def test_spirv_glslang_pointer_parameter_function_call_codegen_reparse():
     assert "outColor = local_value;" not in generated_code
     assert "OpFunctionParameter" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_physical_storage_pointer_function_codegen_reparse():
+    tokens = tokenize_code(SPIRV_PHYSICAL_STORAGE_POINTER_FUNCTION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "struct BufferRef" in generated_code
+    assert "BufferRef identity(BufferRef buffer_)" in generated_code
+    assert "return buffer_;" in generated_code
+    assert "%ptr_physical_buffer_ref" not in generated_code
+    assert "return_type_" not in generated_code
 
 
 def test_spirv_glslang_selection_merge_codegen_reparse():

@@ -5125,26 +5125,37 @@ class VulkanParser:
     def spirv_assembly_function_return_type_name(self, type_id, types, constants):
         if type_id is None:
             return "void"
-        if types.get(type_id, {}).get("kind") in {"array", "runtime_array"}:
-            base_type, array_suffix = self.spirv_type_name_and_suffix(
-                type_id, types, constants
-            )
-            if base_type is not None:
-                return f"{base_type}{array_suffix}"
-        return self.spirv_type_name(type_id, types) or type_id or "void"
+        signature_type = self.spirv_function_signature_type_name(
+            type_id, types, constants
+        )
+        if signature_type is not None:
+            return signature_type
+        return (
+            self.spirv_type_name(type_id, types)
+            or self.spirv_fallback_identifier(type_id, "return_type")
+            or "void"
+        )
 
     def spirv_function_parameter_type_name(self, type_id, types, constants):
-        type_info = types.get(type_id, {})
-        if type_info.get("kind") == "pointer":
-            pointee_type, array_suffix = self.spirv_type_name_and_suffix(
-                type_info.get("type_id"), types, constants
-            )
-            if pointee_type is not None:
-                return f"{pointee_type}{array_suffix}"
-
+        signature_type = self.spirv_function_signature_type_name(
+            type_id, types, constants
+        )
+        if signature_type is not None:
+            return signature_type
         return self.spirv_type_name(type_id, types) or self.spirv_fallback_identifier(
             type_id, "param_type"
         )
+
+    def spirv_function_signature_type_name(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        if type_info.get("kind") == "pointer":
+            return self.spirv_function_signature_type_name(
+                type_info.get("type_id"), types, constants
+            )
+        base_type, suffix = self.spirv_type_name_and_suffix(type_id, types, constants)
+        if base_type is None:
+            return None
+        return f"{base_type}{suffix}"
 
     def spirv_written_pointer_parameter_ids(
         self, parameter_records, raw_instructions, types
