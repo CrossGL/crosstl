@@ -171,9 +171,12 @@ names loaded from ``crosstl.toml``. CLI source overrides use ``PATTERN=BACKEND``
 syntax and override matching source patterns loaded from ``crosstl.toml``.
 These overrides are recorded in the emitted project report.
 Scan, report, and translation commands accept repeatable ``--variant NAME``
-selectors. Scoped scan and report output evaluates only the selected declared
-variants for variant-aware include and define metadata, records the selected
-variant list, and does not claim omitted variants as scanned.
+selectors. ``crosstl.toml`` can set ``selected_variants = ["debug"]`` as the
+default scoped variant list for project runs; explicit ``--variant`` arguments
+override that configured default for the command. Scoped scan and report output
+evaluates only the selected declared variants for variant-aware include and
+define metadata, records the selected variant list, and does not claim omitted
+variants as scanned.
 
 Unsupported target backend names are reported as configuration diagnostics in
 scan, report, and translation output. Translation still records per-artifact
@@ -418,9 +421,11 @@ define overrides to the source frontend. Variant artifacts are written under a
 variant path segment inside each target output directory, and the original
 variant name plus applied define map are recorded on the artifact and variant
 name is recorded on validation records. ``--variant NAME`` can be repeated to
-scope scan, report, or translation runs to declared variants; scoped reports
-declare only the selected variants, de-duplicate repeated selections before
-planning, and do not claim omitted variants as scanned or attempted.
+scope scan, report, or translation runs to declared variants; when no explicit
+``--variant`` arguments are provided, ``selected_variants`` in ``crosstl.toml``
+sets the default scoped variant list. Scoped reports declare only the selected
+variants, de-duplicate repeated selections before planning, and do not claim
+omitted variants as scanned or attempted.
 CrossGL source translation applies object-like define expansion and conditional
 branch selection for ``#if``/``#ifdef``/``#ifndef``/``#elif``/``#else``/``#endif``
 when defines are provided. Project translation also passes selected variant

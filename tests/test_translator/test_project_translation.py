@@ -838,6 +838,7 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
             targets = ["metal"]
             output_dir = "generated"
             include_dirs = ["gpu/include"]
+            selected_variants = ["debug"]
 
             [project.sources]
             "gpu/*.shader" = "cgl"
@@ -859,6 +860,7 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert config.include_dirs == ["gpu/include"]
     assert config.defines == {"USE_FAST_PATH": "1"}
     assert config.variants == {"debug": {"USE_FAST_PATH": "0"}}
+    assert config.selected_variants == ["debug"]
     assert [(unit.relative_path, unit.source_backend) for unit in scan.units] == [
         ("gpu/kernel.shader", "cgl")
     ]
@@ -872,6 +874,7 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert payload["project"]["variants"] == {"debug": {"USE_FAST_PATH": "0"}}
     assert payload["project"]["variantCount"] == 1
     assert payload["project"]["variantDefineCounts"] == {"debug": 1}
+    assert payload["project"]["selectedVariants"] == ["debug"]
 
 
 def test_project_config_normalizes_relative_path_separators(tmp_path):
@@ -1443,6 +1446,71 @@ def test_scan_project_limits_named_variants_to_selected(tmp_path):
         scan_project(load_project_config(repo), variants=["debug", "debug"])
         .to_report(targets=["cgl"])
         .to_json()
+    )
+
+    assert payload["project"]["variants"] == {"debug": {"DEBUG_HEADER": '"debug.inc"'}}
+    assert payload["project"]["variantCount"] == 1
+    assert payload["project"]["variantDefineCounts"] == {"debug": 1}
+    assert payload["project"]["selectedVariants"] == ["debug"]
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "debug.inc",
+            "kind": "local",
+            "status": "resolved",
+            "line": 3,
+            "column": 1,
+            "resolvedFromDefine": "DEBUG_HEADER",
+            "variant": "debug",
+            "resolvedPath": "shaders/debug.inc",
+            "resolvedHash": project_pipeline._source_hash(shader_dir / "debug.inc"),
+            "resolvedFrom": "source",
+        }
+    ]
+    assert payload["summary"]["includeDependenciesByVariant"] == {"debug": 1}
+    assert payload["summary"]["artifactCount"] == 0
+
+
+def test_scan_project_uses_configured_selected_variants(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    (shader_dir / "debug.inc").write_text("vec4 debug_color();\n", encoding="utf-8")
+    (include_dir / "release.inc").write_text(
+        "vec4 release_color();\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if defined(DEBUG_HEADER)
+            #include DEBUG_HEADER
+            #elif defined(RELEASE_HEADER)
+            #include RELEASE_HEADER
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include_dirs = ["includes"]
+            selected_variants = ["debug", "debug"]
+
+            [project.variants.debug]
+            DEBUG_HEADER = '"debug.inc"'
+
+            [project.variants.release]
+            RELEASE_HEADER = "<release.inc>"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
     )
 
     assert payload["project"]["variants"] == {"debug": {"DEBUG_HEADER": '"debug.inc"'}}
@@ -2887,6 +2955,20 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
             include_dirs = [" "]
             """,
             "project.include_dirs entries must be non-empty strings",
+        ),
+        (
+            """
+            [project]
+            selected_variants = [" "]
+            """,
+            "project.selected_variants entries must be non-empty strings",
+        ),
+        (
+            """
+            [project]
+            selected_variants = [1]
+            """,
+            "project.selected_variants entries must be strings",
         ),
         (
             """

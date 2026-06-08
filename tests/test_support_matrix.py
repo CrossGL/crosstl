@@ -804,6 +804,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         )
         assert "with define names and without define values" in backend_support["notes"]
         assert "scoped runs for selected declared variants" in backend_support["notes"]
+        assert "configured selected_variants defaults" in backend_support["notes"]
         assert "de-duplicates repeated selections before scan or artifact planning" in (
             backend_support["notes"]
         )
@@ -828,6 +829,7 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "missing define-processing target and variant rollups" in (
             backend_support["notes"]
         )
+        assert "selected-variant TOML values" in backend_support["notes"]
         assert "object-like define expansion" in backend_support["notes"]
         assert "#if/#ifdef/#ifndef/#elif/#else/#endif branch selection" in (
             backend_support["notes"]
@@ -936,6 +938,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_limits_named_variants_to_selected"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_uses_configured_selected_variants"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

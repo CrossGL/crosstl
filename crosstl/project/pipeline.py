@@ -3790,6 +3790,10 @@ def load_project_config(
         ),
         defines=defines,
         variants=_variant_defines(variants),
+        selected_variants=_as_str_list(
+            project.get("selected_variants"),
+            field_name="project.selected_variants",
+        ),
         external_corpus_manifest=external_corpus_manifest,
     )
 
@@ -4004,6 +4008,8 @@ def _config_with_selected_variants(
     config: ProjectConfig, variants: Sequence[str] | str | None
 ) -> ProjectConfig:
     selected = _selected_variant_names(variants)
+    if selected is None and config.selected_variants:
+        selected = _selected_variant_names(config.selected_variants)
     if selected is None:
         return config
 
