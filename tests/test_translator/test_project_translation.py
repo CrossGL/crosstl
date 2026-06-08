@@ -7825,6 +7825,23 @@ def test_translate_project_rejects_empty_output_dir_override(tmp_path):
     assert not (repo / "cgl").exists()
 
 
+def test_translate_project_normalizes_output_dir_separators(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="foo\\bar")
+    payload = report.to_json()
+    report_path = repo / "foo" / "bar" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert payload["project"]["outputDir"] == str(repo / "foo" / "bar")
+    assert payload["artifacts"][0]["path"] == "foo/bar/cgl/simple.cgl"
+    assert (repo / "foo" / "bar" / "cgl" / "simple.cgl").is_file()
+    assert validation["success"] is True
+
+
 def test_translate_project_rejects_output_dir_outside_project_without_writing(
     tmp_path,
 ):

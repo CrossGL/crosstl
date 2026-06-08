@@ -1502,6 +1502,15 @@ def pytest_failure_summary_report_errors(index: int, report: Any) -> list[str]:
     failed_testcases = report.get("failed_testcases")
     if not isinstance(failed_testcases, list):
         errors.append(f"{prefix}.failed_testcases must be a list")
+    else:
+        for failure_index, failure in enumerate(failed_testcases):
+            errors.extend(
+                pytest_failure_summary_mapping_errors(
+                    f"{prefix}.failed_testcases[{failure_index}]",
+                    failure,
+                    PYTEST_FAILURE_REQUIRED_FAILURE_FIELDS,
+                )
+            )
     return errors
 
 
@@ -1515,13 +1524,27 @@ def pytest_failure_summary_loaded_reports(
     ]
 
 
+def pytest_failure_summary_nested_failures(
+    reports: list[Any],
+) -> list[Any]:
+    nested_failures = []
+    for report in pytest_failure_summary_loaded_reports(reports):
+        failed_testcases = report.get("failed_testcases")
+        if isinstance(failed_testcases, list):
+            nested_failures.extend(failed_testcases)
+    return nested_failures
+
+
 def pytest_failure_summary_counter_mismatch_errors(
     summary: Mapping[str, Any],
     reports: list[Any],
     failures: list[Any],
 ) -> list[str]:
     loaded_reports = pytest_failure_summary_loaded_reports(reports)
-    valid_failures = [failure for failure in failures if isinstance(failure, Mapping)]
+    nested_failures = pytest_failure_summary_nested_failures(reports)
+    valid_nested_failures = [
+        failure for failure in nested_failures if isinstance(failure, Mapping)
+    ]
     expected_counts = {
         "report_count": len(reports),
         "load_error_count": sum(
@@ -1549,7 +1572,7 @@ def pytest_failure_summary_counter_mismatch_errors(
             for report in loaded_reports
             if valid_non_negative_int(report.get("skipped"))
         ),
-        "failed_testcase_count": len(valid_failures),
+        "failed_testcase_count": len(valid_nested_failures),
     }
     errors = []
     for field_name, expected_count in expected_counts.items():
@@ -1559,14 +1582,17 @@ def pytest_failure_summary_counter_mismatch_errors(
         ):
             errors.append(f"summary.{field_name} must match reports")
 
+    if failures != nested_failures:
+        errors.append("failures must match reports[].failed_testcases")
+
     categories = Counter(
         failure.get("category")
-        for failure in valid_failures
+        for failure in valid_nested_failures
         if isinstance(failure.get("category"), str)
     )
     backends = Counter(
         failure.get("backend")
-        for failure in valid_failures
+        for failure in valid_nested_failures
         if isinstance(failure.get("backend"), str)
     )
     if isinstance(summary.get("categories"), Mapping) and dict(

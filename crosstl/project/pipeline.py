@@ -671,6 +671,13 @@ def _is_relative_to(path: Path, root: Path) -> bool:
     return True
 
 
+def _project_output_path(root: Path, output_dir: str) -> Path:
+    output = Path(output_dir.replace("\\", "/"))
+    if output.is_absolute():
+        return output
+    return root / output
+
+
 def _path_matches(path: str, patterns: Sequence[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
@@ -3080,10 +3087,7 @@ class ProjectConfig:
 
     @property
     def output_path(self) -> Path:
-        output = Path(self.output_dir)
-        if output.is_absolute():
-            return output
-        return self.root / output
+        return _project_output_path(self.root, self.output_dir)
 
 
 def _project_config_hash(config: ProjectConfig) -> dict[str, str] | None:
@@ -6243,10 +6247,7 @@ def _inspection_artifact_matrix_identity_sets(
         return None, None
 
     root_path = Path(root).resolve()
-    project_output_path = Path(output_dir)
-    if not project_output_path.is_absolute():
-        project_output_path = root_path / project_output_path
-    project_output_path = project_output_path.resolve()
+    project_output_path = _project_output_path(root_path, output_dir).resolve()
     variant_names: list[str | None] = sorted(variants) if variants else [None]
     expected_identities = set()
     for unit in units:
@@ -11627,9 +11628,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
         if not _is_non_empty_string(output_dir):
             reasons.append("project.outputDir must be a string")
         elif root_path is not None and root_path.is_absolute() and root_path.is_dir():
-            output_path = Path(output_dir)
-            if not output_path.is_absolute():
-                output_path = root_path / output_path
+            output_path = _project_output_path(root_path, output_dir)
             if not _is_relative_to(output_path, root_path):
                 reasons.append("project.outputDir must resolve inside project.root")
             else:

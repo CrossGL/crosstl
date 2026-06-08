@@ -1519,6 +1519,63 @@ def test_load_pytest_failure_report_rejects_mismatched_summary_accounting(tmp_pa
     )
 
 
+def test_load_pytest_failure_report_rejects_unflattened_nested_failures(tmp_path):
+    module = load_signals_module()
+    failure = {
+        "nodeid": "tests/test_backend/test_directx/test_parser.py::test_failure",
+        "file": "tests/test_backend/test_directx/test_parser.py",
+        "kind": "failure",
+        "category": "backend_frontend",
+        "backend": "directx",
+        "message": "failed",
+    }
+    mismatched = tmp_path / "unflattened-failures.json"
+    mismatched.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generator": "tools/pytest_failure_summary.py",
+                "summary": {
+                    "report_count": 1,
+                    "load_error_count": 0,
+                    "testcase_count": 1,
+                    "failure_count": 1,
+                    "error_count": 0,
+                    "skipped_count": 0,
+                    "failed_testcase_count": 0,
+                    "categories": {},
+                    "backends": {},
+                },
+                "reports": [
+                    {
+                        "path": "junit.xml",
+                        "tests": 1,
+                        "failures": 1,
+                        "errors": 0,
+                        "skipped": 0,
+                        "failed_testcases": [failure],
+                    }
+                ],
+                "clean_workflow_runs": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = module.load_pytest_failure_report(mismatched)
+
+    assert report["load_error"]["type"] == "InvalidPytestFailureSummary"
+    assert "summary.failed_testcase_count must match reports" in (
+        report["load_error"]["message"]
+    )
+    assert "summary.categories must match failures" in report["load_error"]["message"]
+    assert "summary.backends must match failures" in report["load_error"]["message"]
+    assert "failures must match reports[].failed_testcases" in (
+        report["load_error"]["message"]
+    )
+
+
 def test_pytest_failure_summary_propagates_nested_load_errors(tmp_path):
     module = load_signals_module()
     backends = {
