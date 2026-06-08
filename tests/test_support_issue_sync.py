@@ -422,6 +422,59 @@ def test_build_desired_issues_routes_project_backlog_to_frontend_parent():
         == []
     )
 
+    signals = {
+        "features": [
+            {
+                "id": "project.source_provenance",
+                "support": {
+                    "directx": {
+                        "catalog_status": "partial",
+                        "catalog_evidence_count": 1,
+                        "state": "tested",
+                        "docs": [],
+                        "implementation": [
+                            {
+                                "path": "tools/directx_project_probe.py",
+                                "matched_terms": ["source_provenance"],
+                            }
+                        ],
+                        "tests": [],
+                        "unsupported": [],
+                    },
+                    "opengl": {
+                        "catalog_status": "partial",
+                        "catalog_evidence_count": 2,
+                        "state": "not_detected",
+                        "docs": [],
+                        "implementation": [],
+                        "tests": [
+                            {
+                                "path": "tests/project_opengl.py",
+                                "symbol": "test_opengl_project_provenance",
+                                "matched_terms": ["source_provenance"],
+                            }
+                        ],
+                        "unsupported": [],
+                    },
+                },
+            }
+        ],
+        "issues": [],
+    }
+
+    desired_with_signals = module.build_desired_issues(matrix, signals)
+    child_with_signals = desired_with_signals[
+        "backlog:frontend:project.source_provenance"
+    ]
+    assert "### DirectX / HLSL" in child_with_signals.body
+    assert "Extractor state: `tested`" in child_with_signals.body
+    assert "Catalog evidence count: `1`" in child_with_signals.body
+    assert "`tools/directx_project_probe.py`" in child_with_signals.body
+    assert "### OpenGL / GLSL" in child_with_signals.body
+    assert "Extractor state: `not_detected`" in child_with_signals.body
+    assert "Catalog evidence count: `2`" in child_with_signals.body
+    assert "`test_opengl_project_provenance`" in child_with_signals.body
+
 
 def test_build_desired_issues_skips_empty_parent_trackers():
     module = load_sync_module()

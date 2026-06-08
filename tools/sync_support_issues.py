@@ -1142,13 +1142,11 @@ def shared_project_child_body(
     if not evidence_text:
         evidence_text = "- No evidence is recorded for this shared non-supported row."
 
-    signal_text = "No generated support-signal data was provided for this shared row."
-    if signals_lookup:
-        for row in rows:
-            signal = signals_lookup.get((row["backend_id"], feature_id))
-            if signal:
-                signal_text = format_signal_section(signal)
-                break
+    signal_text = format_shared_project_signal_section(
+        rows,
+        feature_id,
+        signals_lookup,
+    )
 
     return "\n\n".join(
         [
@@ -1179,6 +1177,29 @@ def shared_project_child_body(
             ),
         ]
     )
+
+
+def format_shared_project_signal_section(
+    rows: list[dict[str, Any]],
+    feature_id: str,
+    signals_lookup: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> str:
+    no_data = "No generated support-signal data was provided for this shared row."
+    if not signals_lookup:
+        return no_data
+
+    row_signals = [
+        (row, signals_lookup.get((row["backend_id"], feature_id))) for row in rows
+    ]
+    if not any(signal for _row, signal in row_signals):
+        return no_data
+
+    sections = []
+    for row, signal in row_signals:
+        sections.append(
+            "### {}\n\n{}".format(row["backend"], format_signal_section(signal))
+        )
+    return "\n\n".join(sections)
 
 
 def format_signal_hits(title: str, hits: list[dict[str, Any]]) -> str:
