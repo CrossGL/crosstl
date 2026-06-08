@@ -790,6 +790,18 @@ def _sarif_region(location):
         value = location.get(source_name)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             region[sarif_name] = value
+    offset = location.get("offset")
+    length = location.get("length")
+    if (
+        isinstance(offset, int)
+        and not isinstance(offset, bool)
+        and offset >= 0
+        and isinstance(length, int)
+        and not isinstance(length, bool)
+        and length > 0
+    ):
+        region["charOffset"] = offset
+        region["charLength"] = length
     return region
 
 

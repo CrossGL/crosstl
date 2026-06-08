@@ -18988,6 +18988,43 @@ def test_project_cli_inspect_report_sarif_reports_diagnostics(tmp_path):
     }
 
 
+def test_project_sarif_region_includes_positive_character_span():
+    payload = {
+        "success": False,
+        "diagnostics": [
+            {
+                "severity": "warning",
+                "code": "project.test.span",
+                "message": "Synthetic span diagnostic.",
+                "location": {
+                    "file": "shader.cgl",
+                    "line": 3,
+                    "column": 5,
+                    "offset": 42,
+                    "length": 7,
+                    "endLine": 3,
+                    "endColumn": 12,
+                    "endOffset": 49,
+                },
+            }
+        ],
+    }
+
+    sarif_payload = crosstl_cli._format_project_diagnostics_sarif(payload)
+
+    region = sarif_payload["runs"][0]["results"][0]["locations"][0]["physicalLocation"][
+        "region"
+    ]
+    assert region == {
+        "startLine": 3,
+        "startColumn": 5,
+        "endLine": 3,
+        "endColumn": 12,
+        "charOffset": 42,
+        "charLength": 7,
+    }
+
+
 def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

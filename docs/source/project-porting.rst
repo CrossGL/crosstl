@@ -269,8 +269,9 @@ remain present with ``available: false`` until their source report data exists.
 Migration action inspection is bounded and records truncation counts for large
 reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for
-code-scanning workflows. Inspection exits nonzero when validation finds report
-errors.
+code-scanning workflows. SARIF locations include line and column metadata and
+positive-length character spans when diagnostics carry source offsets.
+Inspection exits nonzero when validation finds report errors.
 
 Configuration
 -------------
