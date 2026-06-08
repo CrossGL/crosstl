@@ -697,8 +697,8 @@ def test_project_macro_variants_document_artifact_define_maps():
             backend_support["notes"]
         )
         assert (
-            "active source #define or #undef directives shadow configured project "
-            "or selected variant define names"
+            "active #define or #undef directives in translation units or resolved "
+            "include files shadow configured project or selected variant define names"
         ) in backend_support["notes"]
         assert (
             "inspection summaries and text output expose variant names, "
@@ -768,6 +768,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_scopes_define_shadowing_to_selected_variants"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_include_define_shadowing"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -869,7 +873,7 @@ def test_project_diagnostics_document_location_path_checks():
         assert "translation-time warnings surfaced in report summaries" in (
             backend_support["notes"]
         )
-        assert "scan-time source #define/#undef shadowing warnings" in (
+        assert "scan-time translation-unit and include-file #define/#undef" in (
             backend_support["notes"]
         )
         assert "non-repository-relative diagnostic locations" in (
@@ -932,6 +936,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_scopes_define_shadowing_to_selected_variants"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_include_define_shadowing"
         ) in backend_support["evidence"]
 
 

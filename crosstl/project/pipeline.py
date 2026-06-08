@@ -2215,13 +2215,6 @@ def _include_condition_value(
     return _include_if_expression_value(config, expression)
 
 
-def _configured_define_names(config: ProjectConfig) -> set[str]:
-    names = set(config.defines)
-    for defines in config.variants.values():
-        names.update(defines)
-    return names
-
-
 def _configured_define_origin_label(config: ProjectConfig, name: str) -> str:
     origins = []
     if name in config.defines:
@@ -2265,58 +2258,53 @@ def _define_shadowing_diagnostic(
     )
 
 
-def _scan_define_shadowing_diagnostics(
-    config: ProjectConfig, source_path: Path, relative_path: str
+def _scan_define_shadowing_lines(
+    config: ProjectConfig,
+    lines: Sequence[str],
+    relative_path: str,
+    *,
+    seen: set[tuple[str, int, str, str]],
+    diagnostic_config: ProjectConfig | None = None,
 ) -> list[ProjectDiagnostic]:
-    configured_names = _configured_define_names(config)
-    if not configured_names:
+    if not config.defines:
         return []
 
-    try:
-        lines = source_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return []
-
+    diagnostic_config = diagnostic_config or config
     diagnostics: list[ProjectDiagnostic] = []
-    seen: set[tuple[int, str, str]] = set()
-    for variant, defines in _variant_jobs(config):
-        scan_config = (
-            replace(config, defines=defines) if variant is not None else config
-        )
-        conditional_stack: list[_IncludeConditionalFrame] = []
-        for line_number, line in enumerate(lines, start=1):
-            conditional = INCLUDE_CONDITIONAL_DIRECTIVE_RE.match(line)
-            if conditional:
-                _apply_include_conditional_directive(
-                    scan_config,
-                    conditional_stack,
-                    conditional.group("directive"),
-                    conditional.group("body"),
-                )
-                continue
-            if not _include_conditionals_active(conditional_stack):
-                continue
-            define_directive = DEFINE_DIRECTIVE_RE.match(line)
-            if not define_directive:
-                continue
-            directive = define_directive.group("directive")
-            name = define_directive.group("name")
-            if name not in scan_config.defines:
-                continue
-            key = (line_number, directive, name)
-            if key in seen:
-                continue
-            seen.add(key)
-            diagnostics.append(
-                _define_shadowing_diagnostic(
-                    config=config,
-                    relative_path=relative_path,
-                    line_number=line_number,
-                    column=max(1, line.find("#") + 1),
-                    directive=directive,
-                    name=name,
-                )
+    conditional_stack: list[_IncludeConditionalFrame] = []
+    for line_number, line in enumerate(lines, start=1):
+        conditional = INCLUDE_CONDITIONAL_DIRECTIVE_RE.match(line)
+        if conditional:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                conditional.group("directive"),
+                conditional.group("body"),
             )
+            continue
+        if not _include_conditionals_active(conditional_stack):
+            continue
+        define_directive = DEFINE_DIRECTIVE_RE.match(line)
+        if not define_directive:
+            continue
+        directive = define_directive.group("directive")
+        name = define_directive.group("name")
+        if name not in config.defines:
+            continue
+        key = (relative_path, line_number, directive, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            _define_shadowing_diagnostic(
+                config=diagnostic_config,
+                relative_path=relative_path,
+                line_number=line_number,
+                column=max(1, line.find("#") + 1),
+                directive=directive,
+                name=name,
+            )
+        )
     return diagnostics
 
 
@@ -2488,6 +2476,8 @@ def _scan_resolved_include_dependencies(
     location: SourceLocation,
     include_stack: tuple[str, ...],
     scanned_sources: set[str],
+    define_shadowing_seen: set[tuple[str, int, str, str]],
+    diagnostic_config: ProjectConfig,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     if resolved_path in include_stack:
@@ -2508,6 +2498,8 @@ def _scan_resolved_include_dependencies(
         resolved_path,
         include_stack=(*include_stack, resolved_path),
         scanned_sources=scanned_sources,
+        define_shadowing_seen=define_shadowing_seen,
+        diagnostic_config=diagnostic_config,
         variant=variant,
     )
 
@@ -2520,6 +2512,8 @@ def _scan_include_dependencies_for_source(
     *,
     include_stack: tuple[str, ...],
     scanned_sources: set[str],
+    define_shadowing_seen: set[tuple[str, int, str, str]],
+    diagnostic_config: ProjectConfig,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
@@ -2542,6 +2536,16 @@ def _scan_include_dependencies_for_source(
             )
         )
         return dependencies, diagnostics
+
+    diagnostics.extend(
+        _scan_define_shadowing_lines(
+            config,
+            lines,
+            source_relative_path,
+            seen=define_shadowing_seen,
+            diagnostic_config=diagnostic_config,
+        )
+    )
 
     conditional_stack: list[_IncludeConditionalFrame] = []
     for line_number, line in enumerate(lines, start=1):
@@ -2618,6 +2622,8 @@ def _scan_include_dependencies_for_source(
                             location=location,
                             include_stack=include_stack,
                             scanned_sources=scanned_sources,
+                            define_shadowing_seen=define_shadowing_seen,
+                            diagnostic_config=diagnostic_config,
                             variant=variant,
                         )
                     )
@@ -2692,6 +2698,8 @@ def _scan_include_dependencies_for_source(
                     location=location,
                     include_stack=include_stack,
                     scanned_sources=scanned_sources,
+                    define_shadowing_seen=define_shadowing_seen,
+                    diagnostic_config=diagnostic_config,
                     variant=variant,
                 )
             )
@@ -2706,6 +2714,7 @@ def _scan_include_dependencies(
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
     dependencies: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = []
+    define_shadowing_seen: set[tuple[str, int, str, str]] = set()
     for variant, defines in _variant_jobs(config):
         scan_config = (
             replace(config, defines=defines) if variant is not None else config
@@ -2718,6 +2727,8 @@ def _scan_include_dependencies(
                 relative_path,
                 include_stack=(relative_path,),
                 scanned_sources=set(),
+                define_shadowing_seen=define_shadowing_seen,
+                diagnostic_config=config,
                 variant=variant,
             )
         )
@@ -3546,9 +3557,6 @@ def scan_project(
             )
             continue
 
-        diagnostics.extend(
-            _scan_define_shadowing_diagnostics(config, path, relative_path)
-        )
         include_dependencies, include_diagnostics = _scan_include_dependencies(
             config, path, relative_path
         )

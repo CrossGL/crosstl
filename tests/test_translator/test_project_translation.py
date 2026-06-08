@@ -1453,6 +1453,69 @@ def test_scan_project_reports_configured_define_shadowing(tmp_path):
     }
 
 
+def test_scan_project_reports_include_define_shadowing(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "material.inc").write_text(
+        textwrap.dedent("""
+            #define MODE 2
+            #if defined(DEBUG_MODE)
+            #undef DEBUG_MODE
+            #endif
+            #define LOCAL_ONLY 1
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #include "material.inc"
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            MODE = "1"
+
+            [project.variants.debug]
+            DEBUG_MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 2, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.define-shadowed": 2
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.defines": 2}
+    diagnostics = payload["diagnostics"]
+    assert [diagnostic["location"]["file"] for diagnostic in diagnostics] == [
+        "shaders/material.inc",
+        "shaders/material.inc",
+    ]
+    assert "redefines configured define 'MODE' (project define)" in (
+        diagnostics[0]["message"]
+    )
+    assert "undefines configured define 'DEBUG_MODE' (variant define: debug)" in (
+        diagnostics[1]["message"]
+    )
+    assert "LOCAL_ONLY" not in json.dumps(diagnostics)
+    assert [
+        (dependency["include"], dependency["status"])
+        for dependency in payload["units"][0]["includeDependencies"]
+    ] == [("material.inc", "resolved")]
+
+
 def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

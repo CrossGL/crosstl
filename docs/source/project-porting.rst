@@ -328,10 +328,11 @@ define maps that were not requested or could not be consumed by that frontend.
 When configured defines cannot be forwarded, translation reports emit a
 non-blocking warning diagnostic with a missing-capability rollup so the
 limitation appears in validation and inspection summaries.
-Scan reports also emit non-blocking warning diagnostics when active source
-``#define`` or ``#undef`` directives shadow configured project or selected
-variant define names. The diagnostics identify the source location and define
-name without reporting configured define values.
+Scan reports also emit non-blocking warning diagnostics when active
+``#define`` or ``#undef`` directives in translation units or resolved include
+files shadow configured project or selected variant define names. The
+diagnostics identify the source location and define name without reporting
+configured define values.
 Summary, inspection payloads, and text reports also include define-processing
 rollups by source backend and by named variant when variants are configured, so
 frontend-specific and variant-specific preprocessing gaps are visible without
@@ -556,9 +557,9 @@ Project reports are JSON documents with:
 - ``diagnostics``: structured diagnostics using severity, code, message,
   location, target, and missing-capability fields compatible with the compiler
   diagnostic contract. Project-level include and define forwarding limitations
-  are warnings, not translation failures. Scan-time source ``#define`` and
-  ``#undef`` directives that shadow active project or selected variant define
-  names are also reported as warnings.
+  are warnings, not translation failures. Scan-time ``#define`` and ``#undef``
+  directives in translation units or resolved include files that shadow active
+  project or selected variant define names are also reported as warnings.
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata, target normalization, and config
