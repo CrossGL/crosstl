@@ -1235,6 +1235,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]
         )
+        assert "source-map-derived generated/original mappings" in (
+            backend_support["notes"]
+        )
         assert "unit and skipped source override rollups" in (backend_support["notes"])
         assert "source-relative target/variant layout" in backend_support["notes"]
         assert "missing artifact provenance summary rollups" in (

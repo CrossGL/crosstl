@@ -4124,14 +4124,23 @@ def _source_remap_path(output_path: Path) -> Path:
 
 
 def _source_remap_payload(source_map: Mapping[str, Any]) -> dict[str, Any]:
+    source_mappings = source_map.get("mappings")
+    if not isinstance(source_mappings, list) or not source_mappings:
+        source_mappings = [
+            {
+                "source": source_map["source"],
+                "generated": source_map["generated"],
+            }
+        ]
     return {
         "schemaVersion": SOURCE_REMAP_SCHEMA_VERSION,
         "generatedFile": source_map["generated"]["file"],
         "mappings": [
             {
-                "generated": dict(source_map["generated"]),
-                "original": dict(source_map["source"]),
+                "generated": dict(mapping["generated"]),
+                "original": dict(mapping["source"]),
             }
+            for mapping in source_mappings
         ],
     }
 
@@ -4148,13 +4157,14 @@ def _artifact_source_remap(
     target: str,
     artifact_path: str,
     remap_path: Path,
+    mapping_granularity: str,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": SOURCE_REMAP_SCHEMA_VERSION,
         "path": _artifact_report_path(remap_path, config),
         "target": target,
         "generatedFile": artifact_path,
-        "mappingGranularity": "file",
+        "mappingGranularity": mapping_granularity,
         "hash": _source_hash(remap_path),
     }
 
@@ -4452,6 +4462,7 @@ def translate_project(
                             target,
                             artifact["path"],
                             remap_path,
+                            str(artifact["sourceMap"]["mappingGranularity"]),
                         )
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
@@ -11206,8 +11217,24 @@ def _source_remap_contract_reasons(
     elif _is_non_empty_string(artifact_path) and generated_file != artifact_path:
         reasons.append(f"{prefix}.generatedFile must match artifacts[{index}].path")
 
-    if source_remap.get("mappingGranularity") != "file":
-        reasons.append(f"{prefix}.mappingGranularity must be file")
+    mapping_granularity = source_remap.get("mappingGranularity")
+    if mapping_granularity not in SOURCE_MAP_GRANULARITIES:
+        reasons.append(
+            f"{prefix}.mappingGranularity must be one of "
+            f"{', '.join(SOURCE_MAP_GRANULARITIES)}"
+        )
+    else:
+        source_map = artifact.get("sourceMap")
+        if isinstance(source_map, Mapping):
+            source_map_granularity = source_map.get("mappingGranularity")
+            if (
+                source_map_granularity in SOURCE_MAP_GRANULARITIES
+                and mapping_granularity != source_map_granularity
+            ):
+                reasons.append(
+                    f"{prefix}.mappingGranularity must match "
+                    f"artifacts[{index}].sourceMap.mappingGranularity"
+                )
     reasons.extend(
         _hash_contract_reasons(
             f"{prefix}.hash",
