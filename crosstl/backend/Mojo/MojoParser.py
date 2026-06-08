@@ -2245,6 +2245,8 @@ class MojoParser:
         elif self.current_token[0] == "STRING_LITERAL":
             value = self.current_token[1]
             self.eat("STRING_LITERAL")
+            self.skip_expression_layout()
+            value = self.parse_adjacent_string_literals(value)
             return self.parse_postfix_suffixes(value)
         elif self.current_token[0] == "BOOL_LITERAL":
             value = self.current_token[1]
@@ -2682,6 +2684,14 @@ class MojoParser:
         return ArrayAccessNode(array, index)
 
     def parse_index_component(self):
+        if (
+            self.current_token[0] in self.IDENTIFIER_NAME_TOKENS
+            and self.peek_token()[0] == "EQUALS"
+        ):
+            keyword = VariableNode("", self.parse_identifier_name("index keyword"))
+            self.eat("EQUALS")
+            return AssignmentNode(keyword, self.parse_index_component())
+
         if self.current_token[0] == "COLON":
             return self.parse_slice_index(None)
 

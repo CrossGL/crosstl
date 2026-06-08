@@ -805,6 +805,11 @@ class MojoToCrossGLConverter:
         return comment
 
     def generate_variable_declaration(self, node):
+        attributes = self.map_attributes(getattr(node, "attributes", []))
+        has_initial_value = (
+            hasattr(node, "initial_value") and node.initial_value is not None
+        )
+
         name = self.generate_declaration_name(node.name)
         if node.vtype:
             declaration = f"{self.map_type(node.vtype)} {name}"
@@ -812,13 +817,14 @@ class MojoToCrossGLConverter:
             var_type = "var" if node.var_type == "var" else "let"
             declaration = f"{var_type} {name}"
 
-        attributes = self.map_attributes(getattr(node, "attributes", []))
-        if attributes:
+        if attributes and not has_initial_value:
             declaration += f" {attributes}"
 
-        if hasattr(node, "initial_value") and node.initial_value is not None:
+        if has_initial_value:
             value = self.generate_expression(node.initial_value)
             declaration += f" = {value}"
+            if attributes:
+                declaration = f"{attributes} {declaration}"
         return declaration
 
     def generate_declaration_name(self, name):
@@ -1242,6 +1248,8 @@ class MojoToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def generate_array_index(self, index):
+        if isinstance(index, AssignmentNode) and isinstance(index.left, VariableNode):
+            return self.generate_array_index(index.right)
         if isinstance(index, SliceNode):
             return self.generate_slice_index(index)
         if isinstance(index, TupleNode):

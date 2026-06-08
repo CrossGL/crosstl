@@ -971,6 +971,25 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_EMPTY_PARAMETER_NAMES_ASSEMBLY = """
+; Reduced from glslang tensorARM parameter output, where unused parameters can
+; receive empty OpName strings.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpName %helper "helper("
+OpName %_ ""
+OpName %__0 ""
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%fn = OpTypeFunction %void %float %float
+%helper = OpFunction %void None %fn
+%_ = OpFunctionParameter %float
+%__0 = OpFunctionParameter %float
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_PHYSICAL_STORAGE_POINTER_FUNCTION_ASSEMBLY = """
 ; Reduced from glslang Test/baseResults/spv.bufferhandle13.frag.out.
 ; Buffer-reference function signatures use PhysicalStorageBufferEXT pointers,
@@ -5604,6 +5623,18 @@ def test_spirv_glslang_pointer_parameter_function_call_codegen_reparse():
     assert "float4* value" not in generated_code
     assert "outColor = local_value;" not in generated_code
     assert "OpFunctionParameter" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_glslang_empty_parameter_names_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_EMPTY_PARAMETER_NAMES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "void helper(float _, float __0)" in generated_code
+    assert "float ," not in generated_code
+    assert "float )" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

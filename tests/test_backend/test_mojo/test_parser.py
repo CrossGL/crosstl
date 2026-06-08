@@ -1896,6 +1896,27 @@ def test_multiline_parenthesized_inline_if_parsing_from_mojo_gpu_puzzles():
     assert inline_if.false_expr.name == "series_correction"
 
 
+def test_multiline_parenthesized_string_concat_parse_from_modular_asserts():
+    # Reduced from Modular layout/matmul comptime assert diagnostic strings.
+    code = """
+    def main():
+        comptime assert value == expected, (
+            "Expected value "
+            "to match "
+            + String(expected)
+            + ", got "
+            + String(value)
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    assertion = find_function(ast, "main").body[0]
+    message = assertion.args[1]
+
+    assert isinstance(message, BinaryOpNode)
+    assert message.op == "+"
+    assert '"Expected value to match "' in repr(message)
+
+
 def test_at_attributes_attach_to_declarations():
     code = """
     @value
@@ -2183,6 +2204,35 @@ def test_slice_index_access_parse_from_modular_stdlib_slice_tests():
     assert open_slice.index.stop is None
     assert open_slice.index.step is None
     assert open_slice.index.has_step
+
+
+def test_keyword_slice_index_parse_from_modular_stdlib():
+    # Reduced from Modular string/path stdlib byte-indexed slices.
+    code = """
+    def main():
+        var head = path_str[byte=i:]
+        var prefix = String(e)[byte=:expected_msg.byte_length()]
+        var suffix = self[byte=:-suffix.byte_length()]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    head = function.body[0].initial_value
+    prefix = function.body[1].initial_value
+    suffix = function.body[2].initial_value
+
+    assert isinstance(head.index, AssignmentNode)
+    assert head.index.left.name == "byte"
+    assert isinstance(head.index.right, SliceNode)
+    assert head.index.right.start.name == "i"
+    assert head.index.right.stop is None
+
+    assert isinstance(prefix.index.right, SliceNode)
+    assert prefix.index.right.start is None
+    assert isinstance(prefix.index.right.stop, MethodCallNode)
+
+    assert isinstance(suffix.index.right, SliceNode)
+    assert suffix.index.right.start is None
+    assert isinstance(suffix.index.right.stop, UnaryOpNode)
 
 
 def test_member_access_parsing():

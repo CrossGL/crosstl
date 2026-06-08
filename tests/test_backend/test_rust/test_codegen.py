@@ -6712,6 +6712,35 @@ def test_rust_cuda_match_expression_return_arm_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_rust_cuda_nested_statement_match_with_expression_block_arms_codegen():
+    # Reduced from Rust-CUDA crates/optix/examples/path_tracer/src/viewer.rs.
+    code = """
+    fn process_event(ev: Event) {
+        match ev {
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::CloseRequested => {
+                    exit();
+                }
+                _ => {}
+            },
+            Event::RedrawRequested(_) => {
+                render();
+            }
+            _ => {}
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "is_Event_WindowEvent(ev)" in result
+    assert "switch (event)" in result
+    assert "case WindowEvent::CloseRequested:" in result
+    assert "exit();" in result
+    assert "render();" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
     # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/warp.rs.
     code = """

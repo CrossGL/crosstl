@@ -1098,6 +1098,24 @@ def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
     assert "var open_slice = s[::];" in generated_code
 
 
+def test_keyword_slice_index_codegen_from_modular_stdlib_reparses_crossgl():
+    # Reduced from Modular string/path stdlib byte-indexed slices.
+    code = """
+    def main():
+        var head = path_str[byte=i:]
+        var prefix = String(e)[byte=:expected_msg.byte_length()]
+        var suffix = self[byte=:-suffix.byte_length()]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var head = path_str[i:];" in generated_code
+    assert "var prefix = String(e)[:expected_msg.byte_length()];" in generated_code
+    assert "var suffix = self[:(-suffix.byte_length())];" in generated_code
+    assert "byte=" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_try_except_codegen_from_layout_tensor_gpu_docs():
     code = """
     def main():
@@ -3471,6 +3489,33 @@ def test_global_variable_codegen_preserves_typed_globals():
     assert "SamplerState sampler @ group(0) @ binding(1);" in generated_code
     assert "sampler2D combined_texture @ group(2) @ binding(3);" in generated_code
     assert generated_code.index("float exposure;") < generated_code.index("void main")
+
+
+def test_initialized_global_attribute_codegen_reparses_crossgl():
+    # Reduced from Modular docs decorator examples where global constants carry
+    # decorators that become CrossGL attributes on initialized globals.
+    code = """
+    @deprecated("Ignore. Deprecation test.")
+    comptime pi = 3.141592
+
+    @doc_hidden
+    comptime INTERNAL_CONSTANT = 42
+
+    fn main():
+        print(pi)
+        print(INTERNAL_CONSTANT)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert '@ deprecated("Ignore. Deprecation test.") let pi = 3.141592;' in (
+        generated_code
+    )
+    assert "@ doc_hidden let INTERNAL_CONSTANT = 42;" in generated_code
+    assert "let pi @ deprecated" not in generated_code
+    assert "let INTERNAL_CONSTANT @ doc_hidden" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_explicit_none_return_codegen_maps_to_void():

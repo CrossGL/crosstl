@@ -1167,15 +1167,11 @@ class VulkanParser:
                     self.spirv_function_parameter_type_name(
                         parameter_type_id, types, constants
                     ),
-                    names.get(
+                    self.spirv_assembly_value_name(
                         parameter_id,
-                        (
-                            self.spirv_fallback_identifier(
-                                parameter_id, f"param{index}"
-                            )
-                            if parameter_id
-                            else f"param{index}"
-                        ),
+                        names,
+                        decorations,
+                        prefix=f"param{index}",
                     ),
                     qualifiers=self.spirv_function_parameter_qualifiers(
                         parameter_type_id,

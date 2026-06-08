@@ -2949,6 +2949,34 @@ def test_spirv_assembly_function_parameters_parse():
     ]
 
 
+def test_spirv_assembly_empty_parameter_names_fall_back_to_ids():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpName %helper "helper("
+    OpName %_ ""
+    OpName %__0 ""
+    %void = OpTypeVoid
+    %float = OpTypeFloat 32
+    %fn = OpTypeFunction %void %float %float
+    %helper = OpFunction %void None %fn
+    %_ = OpFunctionParameter %float
+    %__0 = OpFunctionParameter %float
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert [(param.vtype, param.name, param.spirv_id) for param in function.params] == [
+        ("float", "_", "%_"),
+        ("float", "__0", "%__0"),
+    ]
+
+
 def test_spirv_assembly_pointer_function_parameter_parse():
     code = """
     OpCapability Shader

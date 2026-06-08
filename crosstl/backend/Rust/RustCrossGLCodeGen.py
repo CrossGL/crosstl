@@ -6087,7 +6087,7 @@ class RustToCrossGLConverter:
             return self.generate_match_if_chain(
                 node,
                 indent,
-                self.generate_scoped_function_body,
+                self.generate_match_statement_branch,
                 loop_contexts,
             )
 
@@ -6110,7 +6110,7 @@ class RustToCrossGLConverter:
 
         for arm in node.arms:
             code += self.generate_match_case_label(arm.pattern, indent + 1)
-            code += self.generate_scoped_function_body(
+            code += self.generate_match_statement_branch(
                 arm.body,
                 indent + 2,
                 arm_loop_contexts,
@@ -6125,6 +6125,11 @@ class RustToCrossGLConverter:
             indent,
         )
         return code
+
+    def generate_match_statement_branch(self, body, indent, loop_contexts=None):
+        if isinstance(body, list):
+            return self.generate_scoped_function_body(body, indent, loop_contexts)
+        return self.generate_result_branch(body, indent, None, loop_contexts)
 
     def generate_match_case_label(self, pattern, indent):
         indent_str = "    " * indent
