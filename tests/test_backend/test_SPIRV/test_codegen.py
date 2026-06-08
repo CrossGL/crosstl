@@ -159,6 +159,39 @@ OpMemoryModel Logical GLSL450
 %2 = OpTypeVoid
 """
 
+SPIRV_NAGA_EMPTY_GLOBAL_NAME_ASSEMBLY = """
+; Source repo: https://github.com/gfx-rs/naga
+; Source commit: d0f28c0b1a3c772e55e68db1c47eff5131cb6732
+; Source path: tests/in/spv/empty-global-name.spvasm
+; Reduced from a storage-buffer variable with an explicit empty OpName.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %global
+OpExecutionMode %main LocalSize 1 1 1
+OpName %global ""
+OpDecorate %block Block
+OpMemberDecorate %block 0 Offset 0
+OpDecorate %global DescriptorSet 0
+OpDecorate %global Binding 0
+%void = OpTypeVoid
+%int = OpTypeInt 32 1
+%block = OpTypeStruct %int
+%ptr_int = OpTypePointer StorageBuffer %int
+%ptr_block = OpTypePointer StorageBuffer %block
+%fn = OpTypeFunction %void
+%zero = OpConstant %int 0
+%one = OpConstant %int 1
+%global = OpVariable %ptr_block StorageBuffer
+%main = OpFunction %void None %fn
+%label = OpLabel
+%member_ptr = OpAccessChain %ptr_int %global %zero
+%member_val = OpLoad %int %member_ptr
+%plus_one = OpIAdd %int %member_val %one
+OpStore %member_ptr %plus_one
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_NON_MAIN_VERTEX_ENTRY_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -7651,6 +7684,17 @@ def test_naga_linkage_metadata_only_assembly_codegen_reparse():
     parse_crossgl(generated_code)
     assert ast.spirv_capabilities == ["Shader", "Linkage"]
     assert generated_code == "shader main {\n}\n"
+
+
+def test_naga_empty_global_name_fallback_identifier_codegen_reparse():
+    tokens = tokenize_code(SPIRV_NAGA_EMPTY_GLOBAL_NAME_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "RWStructuredBuffer<global_> global_ @set(0) @binding(0);" in generated_code
+    assert "global_[0].member0 = (global_[0].member0 + 1);" in generated_code
+    assert "struct global {" not in generated_code
 
 
 def test_translate_api_accepts_linkage_pointer_type_only_spirv_assembly(tmp_path):

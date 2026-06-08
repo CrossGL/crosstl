@@ -296,7 +296,7 @@ class MojoParser:
         if name and self.current_token[0] == "IMPORT":
             return name
 
-        if self.is_identifier_like_token():
+        if self.is_dotted_name_token():
             name += self.current_token[1]
             self.eat(self.current_token[0])
         elif not name:
@@ -304,7 +304,7 @@ class MojoParser:
 
         while self.current_token[0] == "DOT":
             self.eat("DOT")
-            if not self.is_identifier_like_token():
+            if not self.is_dotted_name_token():
                 raise SyntaxError(
                     f"Expected IDENTIFIER after dot, got {self.current_token[0]}"
                 )

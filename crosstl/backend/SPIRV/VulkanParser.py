@@ -388,6 +388,9 @@ class VulkanParser:
         "workgroup",
         "yield",
     }
+    SPIRV_VALUE_FALLBACK_RENAMES = {
+        "global": "global_",
+    }
     SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS = {
         "Acos": "acos",
         "Acosh": "acosh",
@@ -5259,7 +5262,8 @@ class VulkanParser:
             return builtin_name
         if value_id in names and names[value_id]:
             return names[value_id]
-        return self.spirv_fallback_identifier(value_id, prefix)
+        fallback = self.spirv_fallback_identifier(value_id, prefix)
+        return self.SPIRV_VALUE_FALLBACK_RENAMES.get(fallback, fallback)
 
     def spirv_assembly_variable_storage_class(self, value_id, variables_by_id, types):
         if not variables_by_id or not types:

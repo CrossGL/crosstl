@@ -5433,6 +5433,32 @@ def test_struct_initialization_field_shorthand_parsing():
     assert value.fields == [("shape", "shape"), ("thickness", "thickness")]
 
 
+def test_rust_cuda_lowercase_struct_initialization_field_shorthand_parsing():
+    # Reduced from Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/optix/examples/ex03_window/src/gl_util.rs.
+    code = """
+    #[allow(non_camel_case_types)]
+    pub struct f32x2 {
+        x: f32,
+        y: f32,
+    }
+
+    impl f32x2 {
+        pub fn new(x: f32, y: f32) -> f32x2 {
+            f32x2 { x, y }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.impl_blocks[0].methods[0].body[0]
+
+    assert isinstance(value, StructInitializationNode)
+    assert value.struct_name == "f32x2"
+    assert value.fields == [("x", "x"), ("y", "y")]
+
+
 def test_qualified_struct_initialization_chains_in_match_arm():
     code = """
     fn shade(i: i32, resolution: Vec3, time: f32, color: &mut Vec4, frag_coord: Vec2) {

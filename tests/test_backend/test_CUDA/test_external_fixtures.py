@@ -287,6 +287,37 @@ def test_cuda_samples_eglstream_elaborated_struct_types_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_simple_ipc_platform_error_guard_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/0_Introduction/simpleIPC/simpleIPC.cu
+    source = """
+    #if defined(__linux__)
+    #define cpu_atomic_add32(a, x) __sync_add_and_fetch(a, x)
+    #elif defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+    #define cpu_atomic_add32(a, x) InterlockedAdd((volatile LONG *)a, x)
+    #else
+    #error Unsupported system
+    #endif
+
+    static void barrierWait(volatile int *barrier, unsigned int n) {
+        int count;
+        count = cpu_atomic_add32(barrier, 1);
+        if (count == n) {
+            return;
+        }
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "__sync_add_and_fetch(barrier, 1)" in crossgl
+    assert "InterlockedAdd" not in crossgl
+    assert "Unsupported system" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_line_of_sight_anonymous_enum_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

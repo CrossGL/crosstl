@@ -3823,6 +3823,27 @@ def test_import_codegen():
         pytest.fail("Import parsing or code generation not implemented.")
 
 
+def test_backtick_import_item_codegen_reparses_from_numojo_type_aliases():
+    # Reduced from Mojo-Numerics-and-Algorithms-group/NuMojo commit
+    # 785bae6c9e3d87f6a003afabdd2e7554891e9311,
+    # numojo/__init__.mojo top-level type alias re-exports.
+    code = """
+    from numojo.core.type_aliases import (
+        Shape,
+        `1j`,
+    )
+
+    fn identity(value: Int) -> Int:
+        return value
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from numojo.core.type_aliases import Shape, `1j`" in generated_code
+    assert "int identity(int value)" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_global_variable_codegen_preserves_typed_globals():
     code = """
     var exposure: Float32

@@ -1946,7 +1946,10 @@ class RustParser:
         if self.current_token[0] != "LBRACE":
             return False
         if not self.is_struct_initialization_name(name):
-            return False
+            return (
+                not self.expression_stops_at_lbrace
+                and self.looks_like_struct_literal_brace()
+            )
         if not self.expression_stops_at_lbrace:
             return True
         return self.looks_like_struct_literal_brace()
@@ -1957,6 +1960,8 @@ class RustParser:
             return False
 
         first_type = self.tokens[first_index][0]
+        if first_type == "RBRACE":
+            return True
         if first_type == "RANGE":
             return True
         if first_type != "IDENTIFIER":
@@ -1965,7 +1970,7 @@ class RustParser:
         second_index = first_index + 1
         if second_index >= len(self.tokens):
             return False
-        return self.tokens[second_index][0] == "COLON"
+        return self.tokens[second_index][0] in {"COLON", "COMMA", "RBRACE"}
 
     def parse_function(
         self,

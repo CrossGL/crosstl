@@ -29,6 +29,8 @@ SAMPLE_METAL_REPO = "https://github.com/dehesa/sample-metal"
 SAMPLE_METAL_COMMIT = "0003824a52516052f2d28503f576907e03425dd3"
 BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shaders-metal"
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
+WGPU_REPO = "https://github.com/gfx-rs/wgpu"
+WGPU_COMMIT = "26e2525f8dea477ef356b80efb6eb1bc1dec120d"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 MLX_CURRENT_COMMIT = "b155224b9963cd9476363b464a559232a0868000"
@@ -645,6 +647,84 @@ EXTERNAL_FIXTURES = [
                 float fraction = sin(uniforms.time) * 0.5 + 0.5f;
                 float3 color = mix(colorA, colorB, fraction);
                 return float4(color, 1.0);
+            }
+        """
+        ),
+    },
+    {
+        "name": "wgpu_naga_bare_coherent_parameter_qualifier",
+        "repo_url": WGPU_REPO,
+        "commit": WGPU_COMMIT,
+        "source_path": "naga/tests/out/msl/wgsl-memory-decorations-coherent.metal",
+        "roundtrip": True,
+        "contains": [
+            "void main_(device Data& coherent_buf @user(fake0), "
+            "device Data& plain_buf @user(fake0))",
+            "coherent_buf.values[0] = value;",
+        ],
+        "not_contains": ["coherent device"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using metal::uint;
+
+            struct Data {
+                uint values[1];
+            };
+
+            [[max_total_threads_per_threadgroup(1)]]
+            kernel void main_(
+                coherent device Data& coherent_buf [[user(fake0)]],
+                device Data const& plain_buf [[user(fake0)]]) {
+                uint value = plain_buf.values[0];
+                coherent_buf.values[0] = value;
+            }
+        """
+        ),
+    },
+    {
+        "name": "wgpu_naga_int16_global_static_cast_literal_reparse",
+        "repo_url": WGPU_REPO,
+        "commit": WGPU_COMMIT,
+        "source_path": "naga/tests/out/msl/wgsl-int16.metal",
+        "roundtrip": True,
+        "contains": [
+            "constant uint16 constant_variable = (uint16)(20);",
+            "constant int16 f16_to_i16_clamped = (int16)(32767);",
+        ],
+        "not_contains": ["(uint16)20", "(int16)32767"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant ushort constant_variable = static_cast<ushort>(20);
+            constant short f16_to_i16_clamped = static_cast<short>(32767);
+        """
+        ),
+    },
+    {
+        "name": "wgpu_naga_int64_integer_literal_suffix_reparse",
+        "repo_url": WGPU_REPO,
+        "commit": WGPU_COMMIT,
+        "source_path": "naga/tests/out/msl/wgsl-int64.metal",
+        "roundtrip": True,
+        "contains": [
+            "constant uint64 constant_variable = 20u;",
+            "int64 val = 20;",
+            "return val + 5;",
+        ],
+        "not_contains": ["20uL", "20L", "5L"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant ulong constant_variable = 20uL;
+
+            long helper() {
+                long val = 20L;
+                return val + 5L;
             }
         """
         ),

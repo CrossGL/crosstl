@@ -994,12 +994,7 @@ class MetalParser:
             and value in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
         ):
             return True
-        return (
-            tok_type == "IDENTIFIER"
-            and value in TYPE_QUALIFIER_FUNCTIONS
-            and idx + 1 < len(self.tokens)
-            and self.tokens[idx + 1][0] == "LPAREN"
-        )
+        return tok_type == "IDENTIFIER" and value in TYPE_QUALIFIER_FUNCTIONS
 
     def parse_preprocessor_directive(self):
         text = self.current_token[1] or ""
@@ -1554,7 +1549,6 @@ class MetalParser:
         return (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in TYPE_QUALIFIER_FUNCTIONS
-            and self.peek(1)[0] == "LPAREN"
         )
 
     def parse_type_qualifier(self):
@@ -1569,8 +1563,10 @@ class MetalParser:
 
         qualifier_name = self.current_token[1]
         self.eat("IDENTIFIER")
-        args = self.parse_balanced_token_text("LPAREN", "RPAREN")
-        return (f"{qualifier_name}({args})",)
+        if self.current_token[0] == "LPAREN":
+            args = self.parse_balanced_token_text("LPAREN", "RPAREN")
+            return (f"{qualifier_name}({args})",)
+        return (qualifier_name,)
 
     def parse_balanced_token_text(
         self, open_token, close_token, error_message="Unterminated type qualifier"

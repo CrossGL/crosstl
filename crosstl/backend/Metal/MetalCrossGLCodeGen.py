@@ -11,6 +11,17 @@ class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
     crossgl_identifier_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+    decimal_integer_literal_pattern = re.compile(r"^(?P<body>\d+)(?P<suffix>[uUlL]+)$")
+    hex_integer_literal_pattern = re.compile(
+        r"^(?P<body>0[xX][0-9a-fA-F]+)(?P<suffix>[uUlL]+)$"
+    )
+    binary_integer_literal_pattern = re.compile(
+        r"^(?P<body>0[bB][01]+)(?P<suffix>[uUlL]+)$"
+    )
+    cast_literal_operand_pattern = re.compile(
+        r"^(?:0[xX][0-9a-fA-F]+u?|0[bB][01]+u?|"
+        r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fF]?|\d+u?)$"
+    )
     binary_precedence = {
         "||": 1,
         "&&": 2,
@@ -1935,6 +1946,17 @@ class MetalToCrossGLConverter:
     def normalize_literal_string(self, value):
         if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
             return value[:-1]
+        for pattern in (
+            self.hex_integer_literal_pattern,
+            self.binary_integer_literal_pattern,
+            self.decimal_integer_literal_pattern,
+        ):
+            match = pattern.fullmatch(value)
+            if match:
+                suffix = match.group("suffix")
+                if "u" in suffix.lower():
+                    return f"{match.group('body')}u"
+                return match.group("body")
         return value
 
     def generate_expression(self, expr, is_main=False):
@@ -2302,6 +2324,10 @@ class MetalToCrossGLConverter:
 
     def generate_cast_operand(self, operand, rendered_operand):
         if isinstance(operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
+            return f"({rendered_operand})"
+        if isinstance(operand, str) and self.cast_literal_operand_pattern.fullmatch(
+            rendered_operand
+        ):
             return f"({rendered_operand})"
         return rendered_operand
 

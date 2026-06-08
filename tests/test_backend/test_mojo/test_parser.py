@@ -1978,6 +1978,23 @@ def test_import_parsing():
         pytest.fail("Import parsing not implemented.")
 
 
+def test_backtick_import_item_parse_from_numojo_type_aliases():
+    # Reduced from Mojo-Numerics-and-Algorithms-group/NuMojo commit
+    # 785bae6c9e3d87f6a003afabdd2e7554891e9311,
+    # numojo/__init__.mojo top-level type alias re-exports.
+    code = """
+    from numojo.core.type_aliases import (
+        Shape,
+        `1j`,
+    )
+    """
+    ast = parse_code(tokenize_code(code))
+    import_node = ast.includes[0]
+
+    assert import_node.module_name == "numojo.core.type_aliases"
+    assert import_node.items == ["Shape", "`1j`"]
+
+
 def test_relative_import_path_parsing_from_modular_corpus():
     code = """
     from .add_constant import *

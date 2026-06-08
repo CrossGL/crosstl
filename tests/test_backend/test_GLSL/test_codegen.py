@@ -1360,6 +1360,37 @@ def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
     parse_crossgl(crossgl)
 
 
+def test_codegen_constant_expression_resource_binding_from_godot_scene_forward():
+    # Reduced from godotengine/godot@a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # servers/rendering/renderer_rd/shaders/forward_clustered/scene_forward_clustered.glsl.
+    # That file includes samplers_inc.glsl after defining
+    # SAMPLERS_BINDING_FIRST_INDEX to 12, producing resource bindings like
+    # 12 + 0.
+    code = textwrap.dedent("""
+        #version 450
+        #define SAMPLERS_BINDING_FIRST_INDEX 12
+
+        layout(set = 1, binding = SAMPLERS_BINDING_FIRST_INDEX + 0)
+        uniform sampler2D SAMPLER_NEAREST_CLAMP;
+
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(SAMPLER_NEAREST_CLAMP, vec2(0.5));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "sampler2D SAMPLER_NEAREST_CLAMP @set(1) @binding(12);" in crossgl
+    assert "@binding((12 + 0))" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "layout(binding = 1036) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
+    GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
+
+
 def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/300samplerExternalYUV.frag.

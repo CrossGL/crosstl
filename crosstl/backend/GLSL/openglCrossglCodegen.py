@@ -1505,9 +1505,74 @@ class GLSLToCrossGLConverter:
         return " ".join(emitted)
 
     def layout_value_to_string(self, value):
+        folded = self.evaluate_integer_layout_constant(value)
+        if folded is not None:
+            return str(folded)
         if isinstance(value, str):
             return value
         return self.generate_expression(value)
+
+    def evaluate_integer_layout_constant(self, value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, NumberNode):
+            return self.integer_number_literal_value(value.value)
+        if isinstance(value, UnaryOpNode):
+            operand = self.evaluate_integer_layout_constant(value.operand)
+            if operand is None:
+                return None
+            operator = self.operator_map.get(value.op, value.op)
+            if operator == "+":
+                return operand
+            if operator == "-":
+                return -operand
+            if operator == "~":
+                return ~operand
+            return None
+        if isinstance(value, BinaryOpNode):
+            left = self.evaluate_integer_layout_constant(value.left)
+            right = self.evaluate_integer_layout_constant(value.right)
+            if left is None or right is None:
+                return None
+            operator = self.operator_map.get(value.op, value.op)
+            if operator == "+":
+                return left + right
+            if operator == "-":
+                return left - right
+            if operator == "*":
+                return left * right
+            if operator == "/" and right != 0:
+                sign = -1 if (left < 0) ^ (right < 0) else 1
+                return sign * (abs(left) // abs(right))
+            if operator == "%" and right != 0:
+                sign = -1 if (left < 0) ^ (right < 0) else 1
+                quotient = sign * (abs(left) // abs(right))
+                return left - quotient * right
+            if operator == "<<" and right >= 0:
+                return left << right
+            if operator == ">>" and right >= 0:
+                return left >> right
+            if operator == "&":
+                return left & right
+            if operator == "|":
+                return left | right
+            if operator == "^":
+                return left ^ right
+        return None
+
+    def integer_number_literal_value(self, value):
+        text = self.normalize_number_literal(value)
+        if text.lower().endswith("u"):
+            text = text[:-1]
+        if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
+            return int(text, 16)
+        if re.fullmatch(r"0[0-7]+", text):
+            return int(text, 8)
+        if re.fullmatch(r"\d+", text):
+            return int(text, 10)
+        return None
 
     def format_layout(self, layout_entry):
         layout = (
