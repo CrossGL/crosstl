@@ -18394,6 +18394,68 @@ def test_single_file_cli_forwards_frontend_options(
     assert output.read_text(encoding="utf-8") == "// translated\n"
 
 
+@pytest.mark.parametrize("command_prefix", ([], ["translate"]))
+def test_single_file_cli_writes_explicit_stdout(
+    tmp_path, monkeypatch, capsys, command_prefix
+):
+    shader = tmp_path / "kernel.shader"
+    shader.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    calls = []
+
+    def fake_translate(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        calls.append(
+            {
+                "file_path": file_path,
+                "backend": backend,
+                "save_shader": save_shader,
+                "format_output": format_output,
+                "source_backend": source_backend,
+                "include_paths": include_paths,
+                "defines": defines,
+            }
+        )
+        return "// translated\n"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(crosstl_cli, "translate", fake_translate)
+
+    exit_code = crosstl_cli.main(
+        [
+            *command_prefix,
+            str(shader),
+            "--backend",
+            "opengl",
+            "--output",
+            "-",
+            "--no-format",
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "// translated\n"
+    assert calls == [
+        {
+            "file_path": str(shader),
+            "backend": "opengl",
+            "save_shader": None,
+            "format_output": False,
+            "source_backend": None,
+            "include_paths": None,
+            "defines": None,
+        }
+    ]
+    assert not (tmp_path / "-").exists()
+
+
 def test_legacy_single_file_cli_still_works(tmp_path):
     shader = tmp_path / "simple.cgl"
     output = tmp_path / "simple.glsl"

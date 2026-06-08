@@ -30,6 +30,7 @@ except ImportError:
 
 
 SPIRV_BINARY_MAGIC_PREFIXES = (b"\x03\x02\x23\x07", b"\x07\x23\x02\x03")
+STDOUT_OUTPUT_PATH = "-"
 
 
 def _non_negative_int(value):
@@ -171,23 +172,31 @@ def _derive_single_file_output(input_path, backend):
     return base + ext
 
 
+def _is_stdout_output(output_path):
+    return str(output_path) == STDOUT_OUTPUT_PATH
+
+
 def _run_single_file(args):
     if not os.path.exists(args.input):
         print(f"Error: Input file {args.input} not found")
         return 1
 
     output_path = args.output or _derive_single_file_output(args.input, args.backend)
+    write_stdout = _is_stdout_output(output_path)
     defines = _parse_project_define_overrides(getattr(args, "define", None))
-    translate(
+    generated = translate(
         args.input,
         backend=args.backend,
-        save_shader=output_path,
+        save_shader=None if write_stdout else output_path,
         format_output=not args.no_format,
         source_backend=getattr(args, "source_backend", None),
         include_paths=getattr(args, "include_dir", None),
         defines=defines or None,
     )
-    print(f"Successfully translated to {output_path}")
+    if write_stdout:
+        print(generated, end="" if generated.endswith("\n") else "\n")
+    else:
+        print(f"Successfully translated to {output_path}")
     return 0
 
 
@@ -202,7 +211,7 @@ def _legacy_parser():
         default="cgl",
         help=f"Target backend ({supported_backends})",
     )
-    parser.add_argument("--output", "-o", help="Output file path")
+    parser.add_argument("--output", "-o", help="Output file path; use '-' for stdout")
     parser.add_argument(
         "--no-format", action="store_true", help="Disable code formatting"
     )
@@ -222,7 +231,7 @@ def _legacy_parser():
 
 
 def _write_text_payload(text, output_path=None):
-    if output_path and output_path != "-":
+    if output_path and not _is_stdout_output(output_path):
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
@@ -3010,7 +3019,9 @@ def _build_parser():
         default="cgl",
         help=f"Target backend ({supported_backends})",
     )
-    translate_parser.add_argument("--output", "-o", help="Output file path")
+    translate_parser.add_argument(
+        "--output", "-o", help="Output file path; use '-' for stdout"
+    )
     translate_parser.add_argument(
         "--no-format", action="store_true", help="Disable code formatting"
     )
