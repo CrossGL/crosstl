@@ -2068,6 +2068,48 @@ def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_p
     ) in result.stdout
 
 
+def test_scan_project_reports_variant_define_backed_include_resolution_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.frag").write_text("#include PROJECT_HEADER\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.defines]
+            PROJECT_HEADER = "\\"base.inc\\""
+
+            [project.variants.debug]
+            PROJECT_HEADER = "\\"missing-debug.inc\\""
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "missing-debug.inc",
+            "kind": "local",
+            "status": "missing",
+            "line": 1,
+            "column": 1,
+            "resolvedFromDefine": "PROJECT_HEADER",
+            "variant": "debug",
+        }
+    ]
+    assert payload["diagnostics"][0]["code"] == "project.scan.missing-include"
+    assert payload["diagnostics"][0]["message"] == (
+        "Include directive in main.frag:1 could not be resolved "
+        "(from variant debug define PROJECT_HEADER): missing-debug.inc"
+    )
+
+
 def test_scan_project_records_variant_define_backed_include_resolution(tmp_path):
     repo = tmp_path / "repo"
     include_dir = repo / "includes"
@@ -17378,7 +17420,9 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
     assert "Migration actions by severity: note=1" in result.stdout
     assert "Migration actions by target: cgl=1" in result.stdout
     assert "Migration actions:" in result.stdout
-    assert "- manual-runtime-integration [targets: cgl]:" in result.stdout
+    assert "- manual-runtime-integration [severity: note; targets: cgl]:" in (
+        result.stdout
+    )
     assert "CrossTL translated shader/kernel source artifacts only" in result.stdout
     assert (
         "review host runtime API calls, resource binding setup, build scripts, "
@@ -17408,11 +17452,11 @@ def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp
     assert result.returncode == 0
     assert "Migration actions by kind: manual-runtime-integration=21" in result.stdout
     assert (
-        "- manual-runtime-integration [targets: cgl]: "
+        "- manual-runtime-integration [severity: note; targets: cgl]: "
         "Review host integration task 0."
     ) in (result.stdout)
     assert (
-        "- manual-runtime-integration [targets: cgl]: "
+        "- manual-runtime-integration [severity: note; targets: cgl]: "
         "Review host integration task 19."
     ) in (result.stdout)
     assert "Review host integration task 20." not in result.stdout

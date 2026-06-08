@@ -2613,11 +2613,11 @@ def _include_resolution_diagnostic(
     include_path: str,
     location: SourceLocation,
     define_name: str | None = None,
+    variant: str | None = None,
 ) -> ProjectDiagnostic | None:
-    define_suffix = (
-        f" (from project define {define_name})"
-        if _is_non_empty_string(define_name)
-        else ""
+    context_suffix = _include_resolution_context_suffix(
+        define_name=define_name,
+        variant=variant,
     )
     if status == "missing":
         return ProjectDiagnostic(
@@ -2625,7 +2625,7 @@ def _include_resolution_diagnostic(
             code="project.scan.missing-include",
             message=(
                 f"Include directive in {relative_path}:{line_number} "
-                f"could not be resolved{define_suffix}: {include_path}"
+                f"could not be resolved{context_suffix}: {include_path}"
             ),
             location=location,
             missing_capabilities=["include.resolution"],
@@ -2637,12 +2637,27 @@ def _include_resolution_diagnostic(
             message=(
                 f"Include directive in {relative_path}:{line_number} "
                 "resolves outside the repository or uses an absolute "
-                f"path{define_suffix}: {include_path}"
+                f"path{context_suffix}: {include_path}"
             ),
             location=location,
             missing_capabilities=["include.resolution"],
         )
     return None
+
+
+def _include_resolution_context_suffix(
+    *, define_name: str | None = None, variant: str | None = None
+) -> str:
+    if _is_non_empty_string(define_name):
+        define_source = (
+            f"variant {variant} define"
+            if _is_non_empty_string(variant)
+            else "project define"
+        )
+        return f" (from {define_source} {define_name})"
+    if _is_non_empty_string(variant):
+        return f" (for variant {variant})"
+    return ""
 
 
 def _include_cycle_diagnostic(
@@ -2807,6 +2822,7 @@ def _scan_include_dependencies_for_source(
                     include_path=include_path,
                     location=location,
                     define_name=define_name,
+                    variant=variant,
                 )
                 if diagnostic is not None:
                     diagnostics.append(diagnostic)
@@ -2848,7 +2864,9 @@ def _scan_include_dependencies_for_source(
                     code="project.scan.dynamic-include",
                     message=(
                         "Include directive uses a dynamic target that cannot be "
-                        f"resolved during project scan: {body}"
+                        "resolved during project scan"
+                        f"{_include_resolution_context_suffix(variant=variant)}: "
+                        f"{body}"
                     ),
                     location=location,
                     missing_capabilities=["include.resolution"],
@@ -2883,6 +2901,7 @@ def _scan_include_dependencies_for_source(
             status=status,
             include_path=include_path,
             location=location,
+            variant=variant,
         )
         if diagnostic is not None:
             diagnostics.append(diagnostic)

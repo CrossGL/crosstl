@@ -398,7 +398,8 @@ Unresolved system includes are recorded without warning because they often
 refer to SDK or toolchain headers. Missing local includes, dynamic include
 expressions, and include paths that resolve outside the repository emit
 structured ``include.resolution`` diagnostics. When the failed include came
-from a project define, diagnostics identify that define.
+from a project or selected variant define, diagnostics identify that define
+and the variant context when applicable.
 Report inspection samples resolved include dependencies, unresolved system
 include dependencies, and include issues, including the source location,
 source backend, include kind,
