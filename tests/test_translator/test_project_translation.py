@@ -1332,6 +1332,53 @@ def test_scan_project_honors_ifndef_else_in_nested_include_dependencies(tmp_path
     ]
 
 
+def test_scan_project_evaluates_integer_comparison_include_conditions(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "fast.inc").write_text("vec4 fast_color();\n", encoding="utf-8")
+    (shader_dir / "fallback.inc").write_text(
+        "vec4 fallback_color();\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if USE_FAST_PATH == 1 && QUALITY >= 2
+            #include "fast.inc"
+            #elif QUALITY < 1
+            #include "fallback.inc"
+            #else
+            #include "missing.inc"
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.defines]
+            USE_FAST_PATH = "1"
+            QUALITY = "2"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert [
+        (dependency["include"], dependency["status"])
+        for dependency in payload["units"][0]["includeDependencies"]
+    ] == [("fast.inc", "resolved")]
+    assert payload["summary"]["includeDependencyCount"] == 1
+
+
 def test_scan_project_keeps_includes_for_unsupported_conditional_expressions(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -1344,7 +1391,7 @@ def test_scan_project_keeps_includes_for_unsupported_conditional_expressions(tmp
     (shader_dir / "main.frag").write_text(
         textwrap.dedent("""
             #version 450
-            #if USE_FAST_PATH == 1
+            #if USE_FAST_PATH + 1
             #include "fast.inc"
             #else
             #include "fallback.inc"

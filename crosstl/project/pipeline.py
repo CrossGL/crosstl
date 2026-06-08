@@ -506,7 +506,7 @@ INCLUDE_CONDITIONAL_DIRECTIVE_RE = re.compile(
 )
 INCLUDE_LITERAL_RE = re.compile(r'^(?P<open>["<])(?P<path>[^">]+)(?P<close>[">])')
 INCLUDE_CONDITION_TOKEN_RE = re.compile(
-    r"defined|&&|\|\||!|\(|\)|[A-Za-z_][A-Za-z0-9_]*|[0-9]+|\S"
+    r"defined|&&|\|\||==|!=|<=|>=|<|>|!|\(|\)|[+-]?[0-9]+|" r"[A-Za-z_][A-Za-z0-9_]*|\S"
 )
 REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -2034,11 +2034,24 @@ def _include_condition_tokens(expression: str) -> list[str] | None:
     )
     if not tokens:
         return None
-    allowed_operators = {"defined", "&&", "||", "!", "(", ")"}
+    allowed_operators = {
+        "defined",
+        "&&",
+        "||",
+        "!",
+        "(",
+        ")",
+        "==",
+        "!=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+    }
     for token in tokens:
         if token in allowed_operators:
             continue
-        if token.isdigit():
+        if re.match(r"^[+-]?[0-9]+$", token):
             continue
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", token):
             continue
@@ -2046,12 +2059,12 @@ def _include_condition_tokens(expression: str) -> list[str] | None:
     return tokens
 
 
-def _define_condition_value(value: str) -> bool | None:
+def _define_condition_scalar(value: str) -> int | bool | None:
     stripped = value.strip()
     if not stripped:
         return False
     if re.match(r"^[+-]?[0-9]+$", stripped):
-        return int(stripped, 10) != 0
+        return int(stripped, 10)
     if stripped.lower() == "true":
         return True
     if stripped.lower() == "false":
@@ -2059,11 +2072,25 @@ def _define_condition_value(value: str) -> bool | None:
     return None
 
 
+def _define_condition_value(value: str) -> bool | None:
+    scalar = _define_condition_scalar(value)
+    return None if scalar is None else bool(scalar)
+
+
 def _include_if_expression_value(config: ProjectConfig, expression: str) -> bool | None:
     tokens = _include_condition_tokens(expression)
     if tokens is None:
         return None
     index = 0
+    comparison_operators = {"==", "!=", "<", "<=", ">", ">="}
+
+    def condition_bool(value: int | bool | None) -> bool | None:
+        return None if value is None else bool(value)
+
+    def condition_int(value: int | bool | None) -> int | None:
+        if value is None:
+            return None
+        return int(value)
 
     def parse_or() -> bool | None:
         nonlocal index
@@ -2079,25 +2106,52 @@ def _include_if_expression_value(config: ProjectConfig, expression: str) -> bool
 
     def parse_and() -> bool | None:
         nonlocal index
-        value = parse_not()
+        value = parse_comparison()
         while index < len(tokens) and tokens[index] == "&&":
             index += 1
-            right = parse_not()
+            right = parse_comparison()
             if value is None or right is None:
                 value = None
             else:
                 value = value and right
         return value
 
-    def parse_not() -> bool | None:
+    def parse_comparison() -> bool | None:
+        nonlocal index
+        left = parse_not()
+        if index >= len(tokens) or tokens[index] not in comparison_operators:
+            return condition_bool(left)
+        operator = tokens[index]
+        index += 1
+        right = parse_not()
+        left_value = condition_int(left)
+        right_value = condition_int(right)
+        if left_value is None or right_value is None:
+            return None
+        if operator == "==":
+            return left_value == right_value
+        if operator == "!=":
+            return left_value != right_value
+        if operator == "<":
+            return left_value < right_value
+        if operator == "<=":
+            return left_value <= right_value
+        if operator == ">":
+            return left_value > right_value
+        if operator == ">=":
+            return left_value >= right_value
+        return None
+
+    def parse_not() -> int | bool | None:
         nonlocal index
         if index < len(tokens) and tokens[index] == "!":
             index += 1
             value = parse_not()
-            return None if value is None else not value
+            truth_value = condition_bool(value)
+            return None if truth_value is None else not truth_value
         return parse_atom()
 
-    def parse_atom() -> bool | None:
+    def parse_atom() -> int | bool | None:
         nonlocal index
         if index >= len(tokens):
             return None
@@ -2129,12 +2183,12 @@ def _include_if_expression_value(config: ProjectConfig, expression: str) -> bool
                 return None
             return name in config.defines
         index += 1
-        if token.isdigit():
-            return int(token, 10) != 0
+        if re.match(r"^[+-]?[0-9]+$", token):
+            return int(token, 10)
         if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", token):
             if token not in config.defines:
                 return False
-            return _define_condition_value(config.defines[token])
+            return _define_condition_scalar(config.defines[token])
         return None
 
     value = parse_or()

@@ -362,8 +362,10 @@ define-backed include targets with the same base-plus-variant define maps used
 for translation, and variant-scoped dependency records keep ``variant``.
 Scan-time include discovery also honors simple ``#if``, ``#ifdef``,
 ``#ifndef``, ``#elif``, ``#else``, and ``#endif`` branches using the same
-project and variant define maps; unsupported conditional expressions remain
-open so discovery does not hide possible dependencies.
+project and variant define maps. Supported ``#if`` expressions include
+``defined`` checks, boolean operators, parentheses, integer and boolean define
+values, and simple integer comparisons. Unsupported conditional expressions
+remain open so discovery does not hide possible dependencies.
 Resolved include files are scanned recursively for additional dependencies.
 Nested dependency records keep ``source`` when the directive came from a
 resolved include file rather than the root translation unit, so diagnostics and

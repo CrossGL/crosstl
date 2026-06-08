@@ -546,6 +546,8 @@ def test_project_include_resolution_documents_status_reporting():
             "simple #if, #ifdef, #ifndef, #elif, #else, and #endif branches"
             in backend_support["notes"]
         )
+        assert "simple integer comparisons" in backend_support["notes"]
+        assert "integer and boolean define values" in backend_support["notes"]
         assert (
             "summary rollups including source-backend, source-backend status, "
             "resolution-source, and variant counts"
@@ -590,6 +592,10 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_keeps_includes_for_unsupported_conditional_"
             "expressions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_evaluates_integer_comparison_include_conditions"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
