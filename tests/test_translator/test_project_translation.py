@@ -839,6 +839,75 @@ def test_project_config_loads_overrides_and_variant_metadata(tmp_path):
     assert payload["project"]["variantDefineCounts"] == {"debug": 1}
 
 
+def test_project_config_normalizes_relative_path_separators(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu" / "shaders"
+    include_dir = repo / "gpu" / "include"
+    corpus_dir = repo / "corpus"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    corpus_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (corpus_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/kernel",
+                        "path": "gpu/shaders/kernel.shader",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(r"""
+            [project]
+            source_roots = ['gpu\shaders']
+            include = ['gpu\shaders\*.shader']
+            exclude = ['ignored\*']
+            targets = ["cgl"]
+            output_dir = 'generated\out'
+            include_dirs = ['gpu\include']
+            external_corpus_manifest = 'corpus\manifest.json'
+
+            [project.sources]
+            'gpu\shaders\*.shader' = "cgl"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+    report = translate_project(config)
+    payload = report.to_json()
+    report_path = repo / "generated" / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert config.source_roots == ["gpu/shaders"]
+    assert config.include_patterns == ["gpu/shaders/*.shader"]
+    assert config.exclude_patterns == ["ignored/*"]
+    assert config.output_dir == "generated/out"
+    assert config.include_dirs == ["gpu/include"]
+    assert config.external_corpus_manifest == "corpus/manifest.json"
+    assert config.source_overrides == {"gpu/shaders/*.shader": "cgl"}
+    assert payload["project"]["sourceRootStatus"][0]["status"] == "active"
+    assert payload["project"]["includeDirStatus"][0]["status"] == "active"
+    assert payload["project"]["sourceOverrides"] == {"gpu/shaders/*.shader": "cgl"}
+    assert payload["units"][0]["path"] == "gpu/shaders/kernel.shader"
+    assert payload["units"][0]["sourceOverride"] == "cgl"
+    assert payload["artifacts"][0]["path"] == (
+        "generated/out/cgl/gpu/shaders/kernel.cgl"
+    )
+    assert payload["externalCorpus"]["manifest"] == "corpus/manifest.json"
+    assert payload["externalCorpus"]["status"] == "ok"
+    assert validation["success"] is True
+
+
 def test_project_config_resolves_relative_config_path_from_root(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -855,6 +924,26 @@ def test_project_config_resolves_relative_config_path_from_root(tmp_path):
 
     assert config.config_path == repo.resolve() / "custom.toml"
     assert config.targets == ["opengl"]
+    assert config.output_dir == "generated"
+
+
+def test_project_config_normalizes_explicit_config_path_separators(tmp_path):
+    repo = tmp_path / "repo"
+    config_dir = repo / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "custom.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["metal"]
+            output_dir = "generated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo, "config\\custom.toml")
+
+    assert config.config_path == (config_dir / "custom.toml").resolve()
+    assert config.targets == ["metal"]
     assert config.output_dir == "generated"
 
 
@@ -7812,6 +7901,27 @@ def test_scan_project_reports_output_dir_outside_project(tmp_path):
     assert diagnostic["location"]["file"] == "crosstl.toml"
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
     assert "../outside" in diagnostic["message"]
+
+
+def test_scan_project_reports_drive_qualified_output_dir_outside_project(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent(r"""
+            [project]
+            output_dir = 'C:\translated'
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    scan = scan_project(load_project_config(repo))
+    payload = scan.to_report().to_json()
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.output-dir-outside-project"
+    assert "C:\\translated" in diagnostic["message"]
 
 
 def test_translate_project_rejects_empty_output_dir_override(tmp_path):
@@ -15154,6 +15264,43 @@ def test_project_cli_scan_resolves_relative_config_path_from_root(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["project"]["config"] == str(repo / "custom.toml")
     assert payload["project"]["targets"] == ["opengl"]
+    assert payload["project"]["outputDir"] == str(repo / "generated")
+
+
+def test_project_cli_scan_normalizes_explicit_config_path_separators(tmp_path):
+    repo = tmp_path / "repo"
+    config_dir = repo / "config"
+    repo.mkdir()
+    config_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (config_dir / "custom.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["metal"]
+            output_dir = "generated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--config",
+            "config\\custom.toml",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["project"]["config"] == str(config_dir / "custom.toml")
+    assert payload["project"]["targets"] == ["metal"]
     assert payload["project"]["outputDir"] == str(repo / "generated")
 
 

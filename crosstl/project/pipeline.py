@@ -671,11 +671,41 @@ def _is_relative_to(path: Path, root: Path) -> bool:
     return True
 
 
+def _is_absolute_or_windows_drive_path(path: str) -> bool:
+    return (
+        Path(path).is_absolute()
+        or PureWindowsPath(path).is_absolute()
+        or bool(PureWindowsPath(path).drive)
+    )
+
+
+def _normalize_project_relative_path(path: str) -> str:
+    if _is_absolute_or_windows_drive_path(path):
+        return path
+    return path.replace("\\", "/")
+
+
+def _normalize_project_relative_paths(paths: Sequence[str]) -> list[str]:
+    return [_normalize_project_relative_path(path) for path in paths]
+
+
+def _normalize_project_relative_path_mapping(
+    paths: Mapping[str, str],
+) -> dict[str, str]:
+    return {
+        _normalize_project_relative_path(path): backend
+        for path, backend in paths.items()
+    }
+
+
+def _project_config_path(root: Path, path: str) -> Path:
+    if _is_absolute_or_windows_drive_path(path):
+        return Path(path)
+    return root / _normalize_project_relative_path(path)
+
+
 def _project_output_path(root: Path, output_dir: str) -> Path:
-    output = Path(output_dir.replace("\\", "/"))
-    if output.is_absolute():
-        return output
-    return root / output
+    return _project_config_path(root, output_dir)
 
 
 def _path_matches(path: str, patterns: Sequence[str]) -> bool:
@@ -724,7 +754,11 @@ def _is_diagnostic_location_path(path: str) -> bool:
 
 
 def _repository_relative_globs(patterns: Sequence[str]) -> list[str]:
-    return [pattern for pattern in patterns if _is_repository_relative_glob(pattern)]
+    return [
+        _normalize_project_relative_path(pattern)
+        for pattern in patterns
+        if _is_repository_relative_glob(pattern)
+    ]
 
 
 def _internal_exclude_patterns(config: ProjectConfig) -> tuple[str, ...]:
@@ -1805,10 +1839,7 @@ def _external_corpus_manifest_path(config: ProjectConfig) -> Path | None:
     manifest = config.external_corpus_manifest
     if not manifest:
         return None
-    path = Path(manifest)
-    if not path.is_absolute():
-        path = config.root / path
-    return path.resolve()
+    return _project_config_path(config.root, manifest).resolve()
 
 
 def _load_external_corpus_manifest(
@@ -2138,10 +2169,7 @@ def _external_corpus_report(
 
 
 def _resolved_include_dir(config: ProjectConfig, include_dir: str) -> Path:
-    path = Path(include_dir)
-    if not path.is_absolute():
-        path = config.root / path
-    return path.resolve()
+    return _project_config_path(config.root, include_dir).resolve()
 
 
 def _resolved_include_dirs(config: ProjectConfig) -> list[str]:
@@ -3010,10 +3038,7 @@ def _scan_include_dependencies(
 
 
 def _resolved_source_root(config: ProjectConfig, source_root: str) -> Path:
-    path = Path(source_root)
-    if not path.is_absolute():
-        path = config.root / path
-    return path.resolve()
+    return _project_config_path(config.root, source_root).resolve()
 
 
 def _source_root_status_for_path(config: ProjectConfig, path: Path) -> str:
@@ -3703,12 +3728,7 @@ def load_project_config(
         config_value = os.fspath(config)
         if not config_value.strip():
             raise ValueError("Project config path must be non-empty")
-        requested_config_path = Path(config_value)
-        config_path = (
-            requested_config_path
-            if requested_config_path.is_absolute()
-            else root_path / requested_config_path
-        ).resolve()
+        config_path = _project_config_path(root_path, config_value).resolve()
     else:
         config_path = root_path / DEFAULT_CONFIG_NAME
     if not config_path.exists():
@@ -3738,6 +3758,10 @@ def load_project_config(
         project.get("external_corpus_manifest"),
         field_name="crosstl.toml project.external_corpus_manifest",
     )
+    if external_corpus_manifest is not None:
+        external_corpus_manifest = _normalize_project_relative_path(
+            external_corpus_manifest
+        )
 
     excludes = _as_str_list(project.get("exclude"), field_name="project.exclude")
     if not excludes:
@@ -3745,19 +3769,24 @@ def load_project_config(
     return ProjectConfig(
         root=root_path,
         config_path=config_path,
-        source_roots=_as_str_list(
-            project.get("source_roots", "."), field_name="project.source_roots"
-        )
-        or (".",),
-        include_patterns=_as_str_list(
-            project.get("include"), field_name="project.include"
+        source_roots=(
+            _normalize_project_relative_paths(
+                _as_str_list(
+                    project.get("source_roots", "."),
+                    field_name="project.source_roots",
+                )
+            )
+            or (".",)
         ),
-        exclude_patterns=excludes,
+        include_patterns=_normalize_project_relative_paths(
+            _as_str_list(project.get("include"), field_name="project.include")
+        ),
+        exclude_patterns=_normalize_project_relative_paths(excludes),
         targets=_as_str_list(project.get("targets"), field_name="project.targets"),
-        output_dir=output_dir or DEFAULT_OUTPUT_DIR,
-        source_overrides=sources,
-        include_dirs=_as_str_list(
-            project.get("include_dirs"), field_name="project.include_dirs"
+        output_dir=_normalize_project_relative_path(output_dir or DEFAULT_OUTPUT_DIR),
+        source_overrides=_normalize_project_relative_path_mapping(sources),
+        include_dirs=_normalize_project_relative_paths(
+            _as_str_list(project.get("include_dirs"), field_name="project.include_dirs")
         ),
         defines=defines,
         variants=_variant_defines(variants),
@@ -3767,7 +3796,7 @@ def load_project_config(
 
 def _override_for_path(relative_path: str, config: ProjectConfig) -> str | None:
     for pattern, backend in config.source_overrides.items():
-        if fnmatch.fnmatch(relative_path, pattern):
+        if fnmatch.fnmatch(relative_path, _normalize_project_relative_path(pattern)):
             return backend
     return None
 
@@ -8534,7 +8563,7 @@ def _project_config_for_include_validation(
         output_dir = DEFAULT_OUTPUT_DIR
     return ProjectConfig(
         root=root_path,
-        include_dirs=tuple(include_dirs),
+        include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         variants=variants,
         selected_variants=tuple(
