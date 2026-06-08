@@ -2072,6 +2072,40 @@ def test_support_plan_fields_flow_to_generated_backlog_rows():
     }
 
 
+def test_rendered_docs_label_actionable_backlog_policy():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    features["features"].append(
+        {
+            "id": "target.fallback",
+            "category": "target",
+            "name": "Fallback diagnostics",
+            "description": "Emit deterministic diagnostics.",
+            "support": {
+                "directx": {"status": "diagnostic", "notes": "Reports fallback."},
+                "opengl": {
+                    "status": "validated_rejection",
+                    "notes": "Rejected with validation.",
+                },
+                "metal": {"status": "diagnostic", "notes": "Reports fallback."},
+            },
+        }
+    )
+    matrix = module.build_matrix(backends, features)
+
+    docs = module.render_docs(matrix)
+
+    assert "Actionable Backlog" in docs
+    assert "Actionable backlog rows" in docs
+    assert "DirectX/OpenGL/Metal actionable backlog" in docs
+    assert "Non-supported or unaudited feature rows" not in docs
+    assert (
+        "Evidence-backed\n``diagnostic`` and ``validated_rejection`` rows "
+        "remain visible in\nthe matrix counts"
+    ) in docs
+    assert all(item["feature_id"] != "target.fallback" for item in matrix["backlog"])
+
+
 def test_validate_matrix_catches_inconsistent_generated_counts():
     module = load_support_matrix_module()
     backends, features = _minimal_catalogs(module)

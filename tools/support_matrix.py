@@ -990,7 +990,7 @@ def render_docs(matrix):
     ]
     lines.extend(
         render_csv_table(
-            "DirectX/OpenGL/Metal backlog",
+            "DirectX/OpenGL/Metal actionable backlog",
             ["Backend", "Category", "Feature", "Status", "Notes"],
             graphics_backlog_rows,
         )
@@ -1034,17 +1034,21 @@ def render_docs(matrix):
         )
     lines.extend(
         [
-            "Backlog",
-            "-------",
+            "Actionable Backlog",
+            "------------------",
             "",
-            "These rows are the current path to full backend coverage. Unknown rows",
-            "need an audit before implementation work can be scoped accurately.",
+            "These rows are actionable coverage gaps with ``partial``,",
+            "``unsupported``, or ``unknown`` status. Evidence-backed",
+            "``diagnostic`` and ``validated_rejection`` rows remain visible in",
+            "the matrix counts, but are closed-loop behavior rather than synced",
+            "implementation backlog work. Unknown rows need an audit before",
+            "implementation work can be scoped accurately.",
             "",
         ]
     )
     lines.extend(
         render_csv_table(
-            "Non-supported or unaudited feature rows",
+            "Actionable backlog rows",
             [
                 "Backend",
                 "Category",
