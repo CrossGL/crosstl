@@ -36,6 +36,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "f2565512667db3d4a7142ba3d3248a02f7be917d",
         "path": "data/kernels/channelmixer.cl",
     },
+    "opencv_multiline_constant_address_space_array": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/core/src/opencl/cvtclr_dx.cl",
+    },
     "khronos_opencl_sdk_reduce_shared_parameter_name": {
         "url": "https://github.com/KhronosGroup/OpenCL-SDK",
         "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
@@ -216,6 +221,38 @@ def test_external_darktable_channelmixer_statement_expression_codegen_reparse():
     assert "switch (kind)" in crossgl
     assert "case 0:" in crossgl
     assert "out[0] = 1.0f;" in crossgl
+
+
+def test_external_opencv_multiline_constant_address_space_array_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "opencv_multiline_constant_address_space_array"
+    ]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/core/src/opencl/cvtclr_dx.cl"
+
+    source = """
+    static
+    __constant
+    float c_YUV2RGBCoeffs_420[5] =
+    {
+         1.163999557f,
+         2.017999649f,
+        -0.390999794f,
+        -0.812999725f,
+         1.5959997177f
+    };
+
+    kernel void yuv_coeff_probe(global float *out) {
+        __constant float *coeffs = c_YUV2RGBCoeffs_420;
+        out[0] = coeffs[0];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].vtype == "__constant__ float[5]"
+    assert "var c_YUV2RGBCoeffs_420: array<f32, 5>" in crossgl
+    assert "var<uniform> coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
 
 
 def test_external_khronos_opencl_sdk_shared_parameter_name_codegen_reparse():

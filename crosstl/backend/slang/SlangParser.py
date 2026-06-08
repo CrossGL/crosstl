@@ -3399,12 +3399,16 @@ class SlangParser:
                         return VariableNode(type_name, f"{var_name}[{index}]")
                     return VariableNode(type_name, var_name)
                 elif self.current_token[0] == "LPAREN":
-                    return self.parse_vector_constructor(type_name)
+                    return self.parse_postfix_suffixes(
+                        self.parse_vector_constructor(type_name)
+                    )
                 elif self.current_token[0] == "LBRACE":
-                    return self.parse_vector_constructor(
-                        type_name,
-                        open_token="LBRACE",
-                        close_token="RBRACE",
+                    return self.parse_postfix_suffixes(
+                        self.parse_vector_constructor(
+                            type_name,
+                            open_token="LBRACE",
+                            close_token="RBRACE",
+                        )
                     )
                 elif self.current_token[0] == "DOT":
                     return self.parse_postfix_suffixes(VariableNode("", type_name))
@@ -3639,7 +3643,7 @@ class SlangParser:
             break
         if self.current_token[0] == "LBRACKET" and self.is_array_constructor_suffix():
             name += self.parse_type_array_suffixes()
-            return self.parse_vector_constructor(name)
+            return self.parse_postfix_suffixes(self.parse_vector_constructor(name))
         if name == "__intrinsic_asm" and self.current_token[0] == "STRING":
             arg = self.current_token[1]
             self.eat("STRING")

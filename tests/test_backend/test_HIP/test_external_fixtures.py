@@ -778,6 +778,28 @@ def test_external_rocm_reduction_digit_separator_literals_crossgl_reparse():
     assert "100'000'000" not in crossgl
 
 
+def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse():
+    # Upstream: https://github.com/ROCm/rocm-examples
+    # Commit: adaf64a066eecb4ad90036dfd1838fc95bed9914
+    # Path: Tools/rocprof-compute/occupancy.hip
+    source = """
+    constexpr size_t fully_allocate_lds = 64ul * 1024ul / sizeof(double);
+
+    __launch_bounds__(256)
+    __global__ void ldsbound(double* ptr) {
+        __shared__ double intermediates[fully_allocate_lds];
+        double x = ptr[threadIdx.x];
+        ptr[threadIdx.x] = x;
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "var fully_allocate_lds: u32 = ((64u * 1024u) / sizeof(double));" in crossgl
+    assert "64ul" not in crossgl
+    assert "1024ul" not in crossgl
+
+
 def test_external_rocm_graph_api_variable_template_constant_crossgl_reparse():
     source = """
     __global__ void filter_creation_kernel(float* __restrict__ r,

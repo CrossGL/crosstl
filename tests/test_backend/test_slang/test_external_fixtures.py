@@ -36,6 +36,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
     },
+    "shader-slang/slang-main-2026-06-08-constructor-swizzle": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
     "shader-slang/slang-gh-4104-2026-06-08": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
@@ -1690,6 +1694,36 @@ EXTERNAL_FIXTURES = [
             "buffer_[0] = g.b0[0] - g.b1[0] + g.s1.c0[0] - g.s1.c1[0] + g.s2.c0[0];",
         ],
         "not_contains": ["[root]", "__AttributeUsage"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: tests/bugs/gh-3087.slang
+        "id": "slang_constructor_swizzle_postfix_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-08-constructor-swizzle",
+        "path": "tests/bugs/gh-3087.slang",
+        "source": (
+            """
+            struct PSInput
+            {
+                uint vInstance : SV_InstanceID;
+                float4 color : COLOR;
+            };
+
+            [shader("pixel")]
+            float4 main(PSInput input) : SV_TARGET
+            {
+                return input.color + float(input.vInstance).xxxx;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "uint vInstance @ gl_InstanceID;",
+            "vec4 color @ Color;",
+            "return input.color + float(input.vInstance).xxxx;",
+        ],
+        "not_contains": ["Expected SEMICOLON, got DOT"],
     },
     {
         # Source: https://github.com/shader-slang/slang

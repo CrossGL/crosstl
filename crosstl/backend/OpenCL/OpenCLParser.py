@@ -333,6 +333,44 @@ class OpenCLParser(HipParser):
             return index
         return None
 
+    def parse_variable_declaration_type(self, qualifiers):
+        saved_pos = self.pos
+        saved_token = self.current_token
+        type_prefixes = []
+        saw_integral_sign = False
+
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
+
+        while self.match(*self.TYPE_QUALIFIER_TOKENS):
+            if self.current_token.type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
+            type_prefixes.append(self.current_token.value)
+            self.advance()
+            self.skip_newlines()
+
+        self.skip_cpp_attributes()
+        interleaved_qualifiers = self.parse_declaration_qualifiers()
+        if type_prefixes or interleaved_qualifiers:
+            qualifiers.extend(interleaved_qualifiers)
+            self.skip_newlines()
+            if self.is_implicit_int_current_type(saw_integral_sign):
+                base_type = "int"
+            else:
+                base_type = self.parse_type()
+            qualifiers.extend(self.parse_declaration_qualifiers())
+            return " ".join([*type_prefixes, base_type]).strip()
+
+        self.pos = saved_pos
+        self.current_token = saved_token
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
+        base_type = self.parse_type()
+        qualifiers.extend(self.parse_declaration_qualifiers())
+        return base_type
+
     def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
         if allow_prefix:
             base_type = self.parse_declarator_prefix(base_type)

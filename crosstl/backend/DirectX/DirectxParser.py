@@ -3441,6 +3441,38 @@ class HLSLParser:
             idx += 1
         return False
 
+    def looks_like_scoped_template_arguments(self):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        depth = 0
+        idx = self.current_index
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return self.is_scoped_template_argument_follower(idx + 1)
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    return self.is_scoped_template_argument_follower(idx + 1)
+            elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
+                return False
+            elif token_type == "EOF":
+                return False
+            idx += 1
+        return False
+
+    def is_scoped_template_argument_follower(self, index):
+        if index >= len(self.tokens):
+            return False
+        if self.tokens[index][0] == "LPAREN":
+            return True
+        return self.token_at_is_double_colon(index)
+
     def parse_scoped_name(self, prefix):
         if not isinstance(prefix, str):
             raise SyntaxError("Expected identifier before scoped name separator")
@@ -3449,6 +3481,10 @@ class HLSLParser:
         while self.current_token_is_double_colon():
             self.eat_double_colon()
             member = self.parse_identifier()
+            if self.looks_like_scoped_template_arguments():
+                member = self.format_templated_name(
+                    member, self.parse_generic_arguments()
+                )
             scoped_name = f"{scoped_name}::{member}"
         return scoped_name
 

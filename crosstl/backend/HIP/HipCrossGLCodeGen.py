@@ -33,6 +33,13 @@ class HipToCrossGLConverter:
         r")"
         r"[fFdDlLuU]*$"
     )
+    CPP_INTEGER_LITERAL = re.compile(
+        r"^(?P<body>"
+        r"0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*"
+        r"|0[bB][01](?:'?[01])*"
+        r"|\d(?:'?\d)*"
+        r")(?P<suffix>[uUlL]*)$"
+    )
 
     HIP_RUNTIME_ERROR_WRAPPER_NAMES = {
         "CHECK_HIP",
@@ -364,9 +371,15 @@ class HipToCrossGLConverter:
             return str(node)
 
     def normalize_cpp_numeric_literal(self, value):
-        if "'" not in value:
-            return value
-        if self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
+        integer_literal = self.CPP_INTEGER_LITERAL.match(value)
+        if integer_literal:
+            body = integer_literal.group("body").replace("'", "")
+            suffix = integer_literal.group("suffix").lower()
+            if "u" in suffix:
+                return f"{body}u"
+            return body
+
+        if "'" in value and self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
             return value.replace("'", "")
         return value
 

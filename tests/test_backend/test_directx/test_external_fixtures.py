@@ -47,6 +47,9 @@ DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a
 DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -653,6 +656,27 @@ EXTERNAL_FIXTURES = [
             "type uint16_t3 = u16vec3;",
             "@ numthreads(1, 1, 1)",
             "u16vec3 dims = u16vec3(gl_WorkGroupSize());",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_template_conversion_selector",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/convert.selector.hlsl",
+        code=textwrap.dedent("""
+            RWStructuredBuffer<SOURCE_TYPE4> source;
+            RWStructuredBuffer<TARGET_TYPE4> target;
+
+            [numthreads(64, 1, 1)]
+            void main() {
+              target[0] = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE4>(source[0]);
+              target[0].x = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE>(source[0].x);
+            }
+        """).strip(),
+        contains=(
+            "@ numthreads(64, 1, 1)",
+            "target[0] = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE4>(source[0]);",
+            "target[0].x = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE>(source[0].x);",
         ),
     ),
     ExternalFixture(

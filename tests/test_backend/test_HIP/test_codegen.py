@@ -4393,7 +4393,7 @@ class TestHipCodeGen:
         ) in result
         assert (
             "// HIP batched 3D memory copy: count: 1, operations: (&batch3DOp), "
-            "fail index output: failIndex, flags: 0ull, stream: stream"
+            "fail index output: failIndex, flags: 0u, stream: stream"
         ) in result
         assert "// HIP 3D peer memory copy: params: peerCopyParams" in result
         assert (
@@ -5793,7 +5793,7 @@ class TestHipCodeGen:
         ) in result
         assert (
             "// HIP batched 3D memory copy: count: 1, operations: batch3DOps, "
-            "fail index output: failIndices[1], flags: 0ull, stream: stream"
+            "fail index output: failIndices[1], flags: 0u, stream: stream"
         ) in result
         assert (
             "// HIP get symbol address: output: symbolPtrs[0], symbol: symbol" in result
@@ -11108,11 +11108,11 @@ class TestHipCodeGen:
         ) in result
         assert (
             "// HIP stream wait value64: stream: stream, address: ptr64, "
-            "value: 11ull, flags: hipStreamWaitValueGte"
+            "value: 11u, flags: hipStreamWaitValueGte"
         ) in result
         assert (
             "// HIP stream write value64: stream: stream, address: ptr64, "
-            "value: 13ull, flags: 0"
+            "value: 13u, flags: 0"
         ) in result
         assert (
             "// HIP stream batch memory op: stream: stream, count: 2, "
@@ -11126,7 +11126,7 @@ class TestHipCodeGen:
         assert (
             "var wrote: bool = "
             "((/* HIP stream write value64: stream: stream, address: ptr64, "
-            "value: 2ull, flags: 0 */ hipSuccess) == hipSuccess);"
+            "value: 2u, flags: 0 */ hipSuccess) == hipSuccess);"
         ) in result
         assert (
             "var selected: hipError_t = "
@@ -16203,7 +16203,7 @@ class TestHipCodeGen:
         assert "var tid: u32 = gl_LocalInvocationID.x;" in result
         assert "var lid: u32 = (gl_LocalInvocationID.x % 32);" in result
         assert "var bid: u32 = gl_WorkGroupID.x;" in result
-        assert "var warp_mask: u64 = (1ull << lid);" in result
+        assert "var warp_mask: u64 = (1u << lid);" in result
         assert "std::uint" not in result
         assert "std::size_t" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
@@ -16955,14 +16955,14 @@ class TestHipCodeGen:
         assert "var cached: f32 = 1.0f;" in result
         assert "var mask: u32 = 3u;" in result
         assert "var signedMask: i32 = (-1);" in result
-        assert "var wide: i64 = 2ll;" in result
-        assert "var uwide: u64 = 3ull;" in result
+        assert "var wide: i64 = 2;" in result
+        assert "var uwide: u64 = 3u;" in result
         assert "out: array<u32>" in result
         assert "f32 scale" in result
         assert "i64 x" in result
         assert "var local: i32 = 1;" in result
         assert "var idx: u32 = 2u;" in result
-        assert "var y: u64 = 1ull;" in result
+        assert "var y: u64 = 1u;" in result
         assert "var z: i64 = i64(x);" in result
         assert "var tmp: f32 = 0.0f;" in result
 
