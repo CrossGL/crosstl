@@ -9486,14 +9486,14 @@ def _tool_status_contract_reasons(
     )
     status = toolchain.get("status")
     status_is_valid = status in {"available", "unavailable", "not-configured"}
-    reasons.extend(
-        _target_name_contract_reasons(
-            f"{prefix}.target",
-            toolchain.get("target"),
-            declared_targets=declared_targets,
-            require_canonical=require_closed_fields,
-        )
+    target = toolchain.get("target")
+    target_reasons = _target_name_contract_reasons(
+        f"{prefix}.target",
+        target,
+        declared_targets=declared_targets,
+        require_canonical=require_closed_fields,
     )
+    reasons.extend(target_reasons)
     if not status_is_valid:
         reasons.append(
             f"{prefix}.status must be available, unavailable, or not-configured"
@@ -9536,6 +9536,42 @@ def _tool_status_contract_reasons(
             if not isinstance(tool.get("available"), bool):
                 reasons.append(f"{tool_prefix}.available must be a boolean")
                 tools_are_valid = False
+    if (
+        tools_are_valid
+        and not target_reasons
+        and _is_non_empty_string(target)
+        and isinstance(tools, list)
+    ):
+        normalized_target = _normalized_targets([target])[0]
+        configured_tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
+        if configured_tools:
+            reported_tool_names = {
+                tool.get("name")
+                for tool in tools
+                if isinstance(tool, Mapping) and _is_non_empty_string(tool.get("name"))
+            }
+            missing_tools = [
+                tool_name
+                for tool_name in configured_tools
+                if tool_name not in reported_tool_names
+            ]
+            for tool_name in missing_tools:
+                reasons.append(
+                    f"{prefix}.tools must include configured validation tool "
+                    f"{tool_name} for target {normalized_target}"
+                )
+            for tool_index, tool in enumerate(tools):
+                name = tool.get("name") if isinstance(tool, Mapping) else None
+                if _is_non_empty_string(name) and name not in configured_tools:
+                    reasons.append(
+                        f"{prefix}.tools[{tool_index}].name must match a configured "
+                        f"validation tool for target {normalized_target}"
+                    )
+        elif tools:
+            reasons.append(
+                f"{prefix}.tools must be empty when no validation toolchain hook "
+                f"is configured for target {normalized_target}"
+            )
     if status_is_valid and tools_are_valid:
         expected_status = (
             "not-configured"

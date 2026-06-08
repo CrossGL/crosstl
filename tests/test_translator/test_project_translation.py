@@ -9286,6 +9286,75 @@ def test_validate_project_report_rejects_duplicate_toolchain_tool_names(tmp_path
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_toolchain_tools_that_do_not_match_target(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "mismatched-toolchain-tools-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl", "cgl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [],
+                "validation": {
+                    "toolchains": [
+                        {
+                            "target": "opengl",
+                            "status": "available",
+                            "tools": [
+                                {
+                                    "name": "dxc",
+                                    "path": "/usr/bin/dxc",
+                                    "available": True,
+                                }
+                            ],
+                        },
+                        {
+                            "target": "cgl",
+                            "status": "available",
+                            "tools": [
+                                {
+                                    "name": "glslangValidator",
+                                    "path": "/usr/bin/glslangValidator",
+                                    "available": True,
+                                }
+                            ],
+                        },
+                    ],
+                    "artifacts": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchains[0].tools must include configured validation tool "
+        "glslangValidator for target opengl"
+    ) in diagnostic["message"]
+    assert (
+        "validation.toolchains[0].tools[0].name must match a configured "
+        "validation tool for target opengl"
+    ) in diagnostic["message"]
+    assert (
+        "validation.toolchains[1].tools must be empty when no validation "
+        "toolchain hook is configured for target cgl"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_inconsistent_validation_artifact_status(
     tmp_path,
 ):

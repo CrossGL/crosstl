@@ -153,6 +153,8 @@ error diagnostics.
 ``--validate`` records artifact existence, source and generated hash checks,
 source-map and source-remap status, and configured toolchain availability
 without invoking external compiler tools.
+Embedded toolchain availability records name the configured validation hook
+tools for each target; paths and availability remain environment-specific.
 ``--run-toolchains`` implies artifact validation and records any available
 bounded toolchain smoke-check results in the generated portability report.
 Smoke-check records include a check kind so report consumers can distinguish
