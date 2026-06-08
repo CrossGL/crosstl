@@ -14,6 +14,7 @@ from crosstl.backend.Mojo.MojoAst import (
     ContinueNode,
     DictComprehensionNode,
     DictLiteralNode,
+    ExtensionNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -2784,6 +2785,36 @@ def test_modular_tuning_config_trait_base_list_parse():
     assert trait.name == "TuningConfig"
     assert trait.base_classes == ["TrivialRegisterPassable", "Writable"]
     assert isinstance(trait.members[0], PassNode)
+
+
+def test_extension_block_parse_from_modular_gpu_kernels():
+    # Reduced from Modular SM90 matmul and RDNA attention __extension blocks.
+    code = """
+    __extension HopperMatmulSM90Kernel:
+        @staticmethod
+        @always_inline
+        def run_persistent[
+            tile_shape: IndexList[2],
+        ](problem_shape: IndexList[3]) -> Int:
+            return 1
+
+    __extension AttentionRDNA:
+        def mha_decode(mut self, num_partitions: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+
+    assert len(ast.extensions) == 2
+    extension = ast.extensions[0]
+    assert isinstance(extension, ExtensionNode)
+    assert extension.name == "HopperMatmulSM90Kernel"
+    assert [method.name for method in extension.methods] == ["run_persistent"]
+    assert extension.methods[0].return_type == "Int"
+    assert [attr.name for attr in extension.methods[0].attributes] == [
+        "staticmethod",
+        "always_inline",
+    ]
+    assert ast.extensions[1].methods[0].params[0].name == "self"
 
 
 def test_function_local_imports_parse_from_layout_tensor_gpu_docs():

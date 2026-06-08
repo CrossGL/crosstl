@@ -2087,6 +2087,9 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 self.parse_attributes()
                 continue
+            if self.is_macro_rules_definition():
+                self.skip_macro_rules_definition()
+                continue
             if self.current_starts_local_item():
                 self.parse_local_item()
                 continue
@@ -3403,6 +3406,9 @@ class RustParser:
                 continue
             if self.current_token[0] == "POUND":
                 self.parse_attributes()
+                continue
+            if self.is_macro_rules_definition():
+                self.skip_macro_rules_definition()
                 continue
             if self.current_starts_local_item():
                 self.parse_local_item()

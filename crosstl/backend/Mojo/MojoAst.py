@@ -262,6 +262,22 @@ class ClassNode(ASTNode):
         return f"ClassNode(name={self.name}, members={len(self.members)}, methods={len(self.methods)})"
 
 
+class ExtensionNode(ASTNode):
+    """Node representing a Mojo __extension block."""
+
+    def __init__(self, name, members=None, methods=None, attributes=None):
+        self.name = name
+        self.members = members or []
+        self.methods = methods or []
+        self.attributes = attributes or []
+
+    def __repr__(self):
+        return (
+            f"ExtensionNode(name={self.name}, members={len(self.members)}, "
+            f"methods={len(self.methods)})"
+        )
+
+
 class TraitNode(ASTNode):
     """Node representing a Mojo trait definition."""
 

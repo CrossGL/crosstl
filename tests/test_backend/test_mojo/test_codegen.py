@@ -699,6 +699,46 @@ def test_mlir_backtick_type_codegen_from_modular_gpu_globals_reparses_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_mlir_attr_type_argument_codegen_from_modular_builtins_reparses_crossgl():
+    # Reduced from modularml/mojo stdlib builtin literal and variadics helpers.
+    code = """
+    def convert(_value: IntLiteral[_]) -> FloatLiteral[
+        __mlir_attr[
+            `#pop<int_to_float_literal<`,
+            _value.value,
+            `>> : !pop.float_literal`,
+        ]
+    ]:
+        pass
+
+    def upcast(existing: TypeList[...]) -> TypeList[
+        Trait=Self.Trait,
+        __mlir_attr[
+            `#kgen.upcast<`,
+            existing.values,
+            `> : `,
+            _MLIR.KGENParamListType[Self.Trait],
+        ],
+    ]:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "FloatLiteral[MLIRAttr_pop_int_to_float_literal__value_value_pop_float_literal] "
+        "convert(IntLiteral[_] _value)"
+    ) in generated_code
+    assert (
+        "TypeList[Trait=Self.Trait, "
+        "MLIRAttr_kgen_upcast_existing_values__MLIR_KGENParamListType_Self_Trait] "
+        "upcast(TypeList[...] existing)"
+    ) in generated_code
+    assert "__mlir_attr" not in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_floor_divide_in_parameterized_type_codegen_reparses_crossgl():
     # Reduced from modularml/mojo max/kernels/src/linalg/matmul/cpu/default.mojo.
     # Mojo floor division in a parameterized type must not emit CrossGL comments.
@@ -1120,6 +1160,31 @@ def test_modular_trait_codegen_omits_abstract_contract_methods():
     assert "PipelineSchedule" not in generated_code
     assert "config(" not in generated_code
     assert "..." not in generated_code
+
+
+def test_extension_block_codegen_from_modular_gpu_kernels_reparses_crossgl():
+    # Reduced from Modular SM90 matmul and RDNA attention __extension blocks.
+    code = """
+    __extension HopperMatmulSM90Kernel:
+        @staticmethod
+        @always_inline
+        def run_persistent[
+            tile_shape: IndexList[2],
+        ](problem_shape: IndexList[3]) -> Int:
+            return 1
+
+    __extension AttentionRDNA:
+        def mha_decode(mut self, num_partitions: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "struct HopperMatmulSM90Kernel" not in generated_code
+    assert "int run_persistent(IndexList[3] problem_shape)" in generated_code
+    assert "return 1;" in generated_code
+    assert "void mha_decode(int num_partitions)" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_multiple_with_context_managers_codegen_from_mojo_gpu_puzzles():

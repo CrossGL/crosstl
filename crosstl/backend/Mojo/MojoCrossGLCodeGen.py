@@ -337,6 +337,10 @@ class MojoToCrossGLConverter:
                 functions.extend(getattr(struct_node, "methods", []))
             for class_node in [f for f in ast.functions if isinstance(f, ClassNode)]:
                 functions.extend(getattr(class_node, "methods", []))
+            for extension_node in [
+                f for f in ast.functions if isinstance(f, ExtensionNode)
+            ]:
+                functions.extend(getattr(extension_node, "methods", []))
             for func in functions:
                 if (
                     func.qualifier == "vertex"
@@ -388,6 +392,9 @@ class MojoToCrossGLConverter:
                 for method in getattr(node, "methods", []):
                     record(method)
             elif isinstance(node, ClassNode):
+                for method in getattr(node, "methods", []):
+                    record(method)
+            elif isinstance(node, ExtensionNode):
                 for method in getattr(node, "methods", []):
                     record(method)
         return arities
@@ -686,6 +693,8 @@ class MojoToCrossGLConverter:
                     continue
 
                 if isinstance(stmt, TraitNode):
+                    continue
+                if isinstance(stmt, ExtensionNode):
                     continue
 
                 if isinstance(stmt, FunctionNode):
@@ -1340,7 +1349,55 @@ class MojoToCrossGLConverter:
         mojo_type = re.sub(r"(?<=[\[,])\s*\*(?=[A-Za-z_`])", "", mojo_type)
         mojo_type = re.sub(r"(?<=[\[,])\s*//\s*(?=,|\])", " /", mojo_type)
         mojo_type = re.sub(r"\s*//\s*", " / ", mojo_type)
+        mojo_type = self.normalize_mlir_attr_type_expressions(mojo_type)
         return self.normalize_inline_if_type_expressions(mojo_type)
+
+    def normalize_mlir_attr_type_expressions(self, mojo_type):
+        marker = "__mlir_attr["
+        result = []
+        index = 0
+
+        while True:
+            start = mojo_type.find(marker, index)
+            if start == -1:
+                result.append(mojo_type[index:])
+                return "".join(result)
+
+            result.append(mojo_type[index:start])
+            payload_start = start + len(marker)
+            end = self.find_matching_type_bracket(mojo_type, payload_start)
+            if end is None:
+                result.append(mojo_type[start:])
+                return "".join(result)
+
+            payload = mojo_type[payload_start:end]
+            result.append(f"MLIRAttr_{self.sanitize_identifier(payload)}")
+            index = end + 1
+
+    def find_matching_type_bracket(self, text, start):
+        depth = 1
+        quote = None
+        index = start
+
+        while index < len(text):
+            char = text[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    return index
+            index += 1
+
+        return None
 
     def normalize_inline_if_type_expressions(self, mojo_type):
         def replace(match):

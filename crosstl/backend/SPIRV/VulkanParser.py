@@ -1017,6 +1017,14 @@ class VulkanParser:
                 )
 
         self.spirv_register_struct_type_names(types, names)
+        self.spirv_assign_flattened_resource_block_member_aliases(
+            variables,
+            names,
+            decorations,
+            member_names,
+            types,
+            constants,
+        )
         resource_block_type_ids = self.spirv_resource_block_struct_type_ids(
             variables, types, decorations
         )
@@ -3764,7 +3772,9 @@ class VulkanParser:
         if self.spirv_is_flattened_resource_block_access(
             storage_class, struct_type_id, decorations
         ):
-            member_name = member_names.get(struct_type_id, {}).get(
+            member_name = variable.get("flattened_member_aliases", {}).get(
+                member_key
+            ) or member_names.get(struct_type_id, {}).get(
                 member_key, f"member{member_key}"
             )
             access = VariableNode("", member_name)
@@ -5902,7 +5912,9 @@ class VulkanParser:
                 continue
 
             member_key = str(member_index)
-            field_name = member_names.get(struct_type_id, {}).get(
+            field_name = variable.get("flattened_member_aliases", {}).get(
+                member_key
+            ) or member_names.get(struct_type_id, {}).get(
                 member_key, f"member{member_key}"
             )
             struct_fields.append((data_type, f"{field_name}{array_suffix}"))
@@ -5941,6 +5953,107 @@ class VulkanParser:
 
     def spirv_has_decoration(self, decorations, target_decoration):
         return any(decoration == target_decoration for decoration, _ in decorations)
+
+    def spirv_assign_flattened_resource_block_member_aliases(
+        self,
+        variables,
+        names,
+        decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        occurrences = []
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            struct_type_id = pointer_type.get("type_id")
+            struct_type = types.get(struct_type_id, {})
+            if struct_type.get("kind") != "struct":
+                continue
+            if not self.spirv_is_flattened_resource_block_access(
+                storage_class, struct_type_id, decorations
+            ):
+                continue
+            if storage_class == "Uniform" and not self.spirv_has_descriptor_binding(
+                decorations.get(variable["id"], [])
+            ):
+                continue
+
+            variable_name = self.spirv_assembly_value_name(
+                variable["id"], names, decorations
+            )
+            for member_index, member_type_id in enumerate(
+                struct_type.get("member_types", [])
+            ):
+                data_type, _array_suffix = self.spirv_type_name_and_suffix(
+                    member_type_id, types, constants
+                )
+                if data_type is None:
+                    continue
+
+                member_key = str(member_index)
+                member_name = member_names.get(struct_type_id, {}).get(
+                    member_key, f"member{member_key}"
+                )
+                occurrences.append(
+                    {
+                        "variable": variable,
+                        "variable_name": variable_name,
+                        "member_key": member_key,
+                        "member_name": member_name,
+                    }
+                )
+
+        member_counts = {}
+        for occurrence in occurrences:
+            member_counts[occurrence["member_name"]] = (
+                member_counts.get(occurrence["member_name"], 0) + 1
+            )
+        duplicate_members = {
+            member_name for member_name, count in member_counts.items() if count > 1
+        }
+        if not duplicate_members:
+            return
+
+        used_names = {
+            occurrence["member_name"]
+            for occurrence in occurrences
+            if occurrence["member_name"] not in duplicate_members
+        }
+        for occurrence in occurrences:
+            if occurrence["member_name"] not in duplicate_members:
+                continue
+
+            alias_base = self.spirv_identifier_name(
+                f"{occurrence['variable_name']}_{occurrence['member_name']}",
+                f"{occurrence['variable']['id']}_{occurrence['member_key']}",
+                prefix="member",
+            )
+            alias = self.spirv_unique_identifier(alias_base, used_names)
+            used_names.add(alias)
+            occurrence["variable"].setdefault("flattened_member_aliases", {})[
+                occurrence["member_key"]
+            ] = alias
+
+    def spirv_has_descriptor_binding(self, decorations):
+        qualifier_names = {
+            name for name, _value in self.spirv_descriptor_qualifiers(decorations)
+        }
+        return {"set", "binding"}.issubset(qualifier_names)
+
+    def spirv_unique_identifier(self, base_identifier, used_identifiers):
+        identifier = base_identifier
+        suffix = 1
+        while identifier in used_identifiers:
+            identifier = f"{base_identifier}_{suffix}"
+            suffix += 1
+        return identifier
 
     def spirv_descriptor_qualifiers(self, decorations):
         qualifiers = []

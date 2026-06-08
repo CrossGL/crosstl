@@ -262,6 +262,57 @@ def test_macro_rules_definition_is_skipped():
     assert ast.functions[0].name == "main"
 
 
+def test_local_macro_rules_definition_is_skipped_from_function_body():
+    code = r"""
+    fn classify(value: u32) -> u32 {
+        macro_rules! map_case {
+            ($input:expr, $($name:ident => $result:expr),*) => {
+                match $input {
+                    $($name => $result,)*
+                    _ => 0,
+                }
+            };
+        }
+
+        let mapped = map_case!(value, One => 1, Two => 2);
+        mapped
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "classify"
+    assert len(function.body) == 2
+    assert isinstance(function.body[0], LetNode)
+    assert function.body[0].name == "mapped"
+    assert function.body[1] == "mapped"
+
+
+def test_local_macro_rules_definition_is_skipped_from_block_expression():
+    code = r"""
+    fn classify(value: u32) -> u32 {
+        unsafe {
+            macro_rules! pick {
+                ($input:expr) => {
+                    $input
+                };
+            }
+
+            pick!(value)
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[0].body[0]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert unsafe_block.block.statements == []
+    assert isinstance(unsafe_block.block.returns_value, FunctionCallNode)
+    assert unsafe_block.block.returns_value.name == "pick!"
+
+
 def test_top_level_macro_invocations_are_skipped_from_rust_gpu_spirv_std():
     code = r"""
     bitflags::bitflags! {

@@ -154,6 +154,7 @@ class MojoParser:
         constants = []
         classes = []
         traits = []
+        extensions = []
         all_items = []
 
         while self.current_token[0] != "EOF":
@@ -180,6 +181,10 @@ class MojoParser:
             elif self.current_token[0] == "TRAIT":
                 node = self.parse_trait(attributes)
                 traits.append(node)
+                all_items.append(node)
+            elif self.is_extension_declaration_start():
+                node = self.parse_extension(attributes)
+                extensions.append(node)
                 all_items.append(node)
             elif self.current_token[0] == "CONSTANT":
                 node = self.parse_constant_buffer()
@@ -220,6 +225,7 @@ class MojoParser:
             constants=constants,
             classes=classes,
             traits=traits,
+            extensions=extensions,
         )
 
     def parse_import_statement(self):
@@ -657,6 +663,43 @@ class MojoParser:
         )
         node.generic_parameters = generic_parameters
         return node
+
+    def is_extension_declaration_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "__extension"
+        )
+
+    def parse_extension(self, initial_attributes=None):
+        self.eat("IDENTIFIER")
+        name = self.parse_type()
+        members = []
+        methods = []
+
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            self.skip_newlines()
+            if self.current_token[0] == "INDENT":
+                self.eat("INDENT")
+                while self.current_token[0] not in ["DEDENT", "EOF"]:
+                    self.skip_newlines()
+                    if self.current_token[0] in ["DEDENT", "EOF"]:
+                        break
+                    self.add_class_member(members, methods, self.parse_class_member())
+                    self.skip_newlines()
+                if self.current_token[0] == "DEDENT":
+                    self.eat("DEDENT")
+            else:
+                self.add_class_member(members, methods, self.parse_class_member())
+        else:
+            raise SyntaxError(f"Expected extension body, got {self.current_token[0]}")
+
+        return ExtensionNode(
+            name,
+            members=members,
+            methods=methods,
+            attributes=initial_attributes,
+        )
 
     def parse_class_member(self):
         self.skip_newlines()

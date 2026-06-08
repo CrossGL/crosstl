@@ -1415,6 +1415,84 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_DUPLICATE_PUSH_CONSTANT_MEMBER_NAMES_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %out_value "outValue"
+OpName %PushA "PushA"
+OpName %PushB "PushB"
+OpName %bank0 "bank0"
+OpName %bank1 "bank1"
+OpMemberName %PushA 0 "data"
+OpMemberName %PushB 0 "data"
+OpDecorate %out_value Location 0
+OpDecorate %PushA Block
+OpDecorate %PushB Block
+OpMemberDecorate %PushA 0 Offset 0
+OpMemberDecorate %PushB 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%zero = OpConstant %uint 0
+%PushA = OpTypeStruct %uint
+%PushB = OpTypeStruct %uint
+%ptr_push_a = OpTypePointer PushConstant %PushA
+%ptr_push_b = OpTypePointer PushConstant %PushB
+%ptr_push_uint = OpTypePointer PushConstant %uint
+%ptr_output_uint = OpTypePointer Output %uint
+%bank0 = OpVariable %ptr_push_a PushConstant
+%bank1 = OpVariable %ptr_push_b PushConstant
+%out_value = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%bank0_data_ptr = OpAccessChain %ptr_push_uint %bank0 %zero
+%bank0_data = OpLoad %uint %bank0_data_ptr
+%bank1_data_ptr = OpAccessChain %ptr_push_uint %bank1 %zero
+%bank1_data = OpLoad %uint %bank1_data_ptr
+%sum = OpIAdd %uint %bank0_data %bank1_data
+OpStore %out_value %sum
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_DUPLICATE_UNIFORM_PUSH_CONSTANT_MEMBER_NAMES_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %UBO "UBO"
+OpName %ubo "ubo"
+OpName %PC "PC"
+OpName %pc "pc"
+OpMemberName %UBO 0 "v5"
+OpMemberName %UBO 1 "v7"
+OpMemberName %PC 0 "v5"
+OpMemberName %PC 1 "v7"
+OpDecorate %UBO Block
+OpDecorate %ubo DescriptorSet 0
+OpDecorate %ubo Binding 1
+OpDecorate %PC Block
+OpMemberDecorate %UBO 0 Offset 0
+OpMemberDecorate %UBO 1 Offset 4
+OpMemberDecorate %PC 0 Offset 0
+OpMemberDecorate %PC 1 Offset 4
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%UBO = OpTypeStruct %uint %uint
+%PC = OpTypeStruct %uint %uint
+%ptr_ubo = OpTypePointer Uniform %UBO
+%ptr_pc = OpTypePointer PushConstant %PC
+%ubo = OpVariable %ptr_ubo Uniform
+%pc = OpVariable %ptr_pc PushConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_BUFFER_BLOCK_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -5685,6 +5763,38 @@ def test_spirv_assembly_uniform_block_codegen():
     assert "float4x4 viewProj;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%camera" not in generated_code
+
+
+def test_spirv_duplicate_push_constant_member_names_are_aliased_for_reparse():
+    tokens = tokenize_code(SPIRV_DUPLICATE_PUSH_CONSTANT_MEMBER_NAMES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer PushA @push_constant {" in generated_code
+    assert "cbuffer PushB @push_constant {" in generated_code
+    assert "uint bank0_data;" in generated_code
+    assert "uint bank1_data;" in generated_code
+    assert "uint data;" not in generated_code
+    assert "outValue = (bank0_data + bank1_data);" in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_duplicate_uniform_and_push_constant_member_names_are_aliased():
+    tokens = tokenize_code(SPIRV_DUPLICATE_UNIFORM_PUSH_CONSTANT_MEMBER_NAMES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer UBO @set(0) @binding(1) {" in generated_code
+    assert "cbuffer PC @push_constant {" in generated_code
+    assert "uint ubo_v5;" in generated_code
+    assert "uint ubo_v7;" in generated_code
+    assert "uint pc_v5;" in generated_code
+    assert "uint pc_v7;" in generated_code
+    assert "uint v5;" not in generated_code
+    assert "uint v7;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_assembly_buffer_block_codegen():
