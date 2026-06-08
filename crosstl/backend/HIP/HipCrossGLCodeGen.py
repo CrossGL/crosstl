@@ -7125,6 +7125,7 @@ class HipToCrossGLConverter:
 
     def convert_hip_pointer_type(self, hip_type):
         base_type, pointer_depth = self.split_pointer_declarators(hip_type)
+        base_type = self.strip_function_pointer_parameter_list(base_type)
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
 
         for _ in range(pointer_depth):
@@ -7134,12 +7135,17 @@ class HipToCrossGLConverter:
 
     def convert_hip_pointer_element_type(self, hip_type):
         base_type, pointer_depth = self.split_pointer_declarators(hip_type)
+        base_type = self.strip_function_pointer_parameter_list(base_type)
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
 
         for _ in range(max(0, pointer_depth - 1)):
             mapped_type = f"ptr<{mapped_type}>"
 
         return mapped_type
+
+    def strip_function_pointer_parameter_list(self, type_name):
+        """Keep imported C++ function-pointer types reparsable in CrossGL."""
+        return re.sub(r"\s*\(\s*\)\s*$", "", str(type_name)).strip()
 
     def strip_type_qualifiers(self, type_name):
         qualifiers = {"const", "volatile", "__restrict__", "restrict", "&", "&&"}

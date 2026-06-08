@@ -470,7 +470,18 @@ class GLSLToCrossGLConverter:
             "texture1DArray": "texture1DArray",
             "texture2DArray": "texture2DArray",
             "textureCubeArray": "textureCubeArray",
+            "Texture1D": "texture1D",
+            "Texture1DArray": "texture1DArray",
+            "Texture2D": "texture2D",
+            "Texture2DArray": "texture2DArray",
+            "Texture3D": "texture3D",
+            "TextureCube": "textureCube",
+            "TextureCubeArray": "textureCubeArray",
+            "Texture2DMS": "sampler2DMS",
+            "Texture2DMSArray": "sampler2DMSArray",
             "sampler": "sampler",
+            "SamplerState": "sampler",
+            "SamplerComparisonState": "sampler",
             "sampler1D": "sampler1D",
             "sampler2D": "sampler2D",
             "sampler3D": "sampler3D",
@@ -518,6 +529,24 @@ class GLSLToCrossGLConverter:
             "image1DArray": "image1DArray",
             "image2DArray": "image2DArray",
             "imageCubeArray": "imageCubeArray",
+            "RWTexture1D": "image1D",
+            "RWTexture1DArray": "image1DArray",
+            "RWTexture2D": "image2D",
+            "RWTexture2DArray": "image2DArray",
+            "RWTexture2DMS": "image2DMS",
+            "RWTexture2DMSArray": "image2DMSArray",
+            "RWTexture3D": "image3D",
+            "RWTextureCube": "imageCube",
+            "RWTextureCubeArray": "imageCubeArray",
+            "RasterizerOrderedTexture1D": "image1D",
+            "RasterizerOrderedTexture1DArray": "image1DArray",
+            "RasterizerOrderedTexture2D": "image2D",
+            "RasterizerOrderedTexture2DArray": "image2DArray",
+            "RasterizerOrderedTexture2DMS": "image2DMS",
+            "RasterizerOrderedTexture2DMSArray": "image2DMSArray",
+            "RasterizerOrderedTexture3D": "image3D",
+            "RasterizerOrderedTextureCube": "imageCube",
+            "RasterizerOrderedTextureCubeArray": "imageCubeArray",
             "image2DRect": "image2DRect",
             "imageBuffer": "imageBuffer",
             "image2DMS": "image2DMS",
@@ -632,7 +661,7 @@ class GLSLToCrossGLConverter:
     def _is_resource_type(self, type_name):
         if not type_name:
             return False
-        name = str(type_name)
+        name = str(getattr(self, "type_map", {}).get(type_name, type_name))
         return name == "accelerationStructureEXT" or name.startswith(
             (
                 "__sampler",
@@ -1126,8 +1155,9 @@ class GLSLToCrossGLConverter:
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)
+        resource_type = getattr(self, "type_map", {}).get(var_type, var_type)
         storage_attributes = self.storage_qualifier_attributes(var)
-        if not self._is_resource_type(var_type) and not storage_attributes:
+        if not self._is_resource_type(resource_type) and not storage_attributes:
             return ""
 
         attributes = []
@@ -1148,7 +1178,7 @@ class GLSLToCrossGLConverter:
         if var_type == "atomic_uint" and offset is not None:
             attributes.append(f"@offset({self.layout_value_to_string(offset)})")
 
-        if self._is_image_resource_type(var_type):
+        if self._is_image_resource_type(resource_type):
             supported_formats = self.supported_image_formats()
             for key in layout:
                 format_name = str(key).lower()
@@ -1611,9 +1641,14 @@ class GLSLToCrossGLConverter:
 
         block_struct = self.structs_by_name.get(block_name)
         layout = self.uniform_block_layout(block_name, [var])
+        is_interface_block = bool(
+            getattr(block_struct, "interface_layout", None)
+            or getattr(var, "interface_block", None)
+        )
         if not (
             self.layout_has_key(layout, "set")
             or getattr(block_struct, "hlsl_cbuffer", False)
+            or (self.layout_has_key(layout, "binding") and not is_interface_block)
         ):
             return None
         return block_name
@@ -1636,6 +1671,18 @@ class GLSLToCrossGLConverter:
                 attributes.append(f"@{name}({self.layout_value_to_string(value)})")
         return f" {' '.join(attributes)}" if attributes else ""
 
+    def descriptor_set_uniform_block_output_name(self, block_name, uniforms):
+        block_struct = self.structs_by_name.get(block_name)
+        if block_struct is None:
+            return block_name
+        if getattr(block_struct, "interface_layout", None) or getattr(
+            block_struct, "hlsl_cbuffer", False
+        ):
+            return block_name
+        if len(uniforms) == 1 and getattr(uniforms[0], "name", None):
+            return uniforms[0].name
+        return block_name
+
     def generate_descriptor_set_uniform_block(self, block_name, uniforms):
         fields = self.uniform_block_fields(block_name, uniforms)
         self.record_flattened_uniform_block_instance(block_name, uniforms, fields)
@@ -1643,7 +1690,10 @@ class GLSLToCrossGLConverter:
         attributes = self.descriptor_set_uniform_block_attribute_suffix(
             block_name, uniforms
         )
-        result = f"cbuffer {block_name}{attributes} {{\n"
+        output_name = self.descriptor_set_uniform_block_output_name(
+            block_name, uniforms
+        )
+        result = f"cbuffer {output_name}{attributes} {{\n"
         self.increase_indent()
         for field in fields:
             var_type = self.convert_type(getattr(field, "vtype", ""))

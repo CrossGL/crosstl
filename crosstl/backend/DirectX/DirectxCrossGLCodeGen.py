@@ -1416,6 +1416,15 @@ class HLSLToCrossGLConverter:
         used_names = set(declared_names)
         renames = {}
         for name in sorted(declared_names):
+            if "::" in name:
+                candidate = self.sanitize_scoped_identifier_name(name)
+                if candidate in self.crossgl_reserved_identifiers:
+                    candidate = f"{candidate}_"
+                while candidate in used_names or candidate in renames.values():
+                    candidate = f"{candidate}_"
+                renames[name] = candidate
+                used_names.add(candidate)
+                continue
             if not name.isidentifier() or name not in self.crossgl_reserved_identifiers:
                 continue
             candidate = f"{name}_"
@@ -4085,6 +4094,10 @@ class HLSLToCrossGLConverter:
     def sanitize_type_name(self, type_name):
         """Convert HLSL scoped type paths into CrossGL identifier-safe names."""
         return str(type_name).replace("::", "_")
+
+    def sanitize_scoped_identifier_name(self, name):
+        """Convert HLSL scoped function declarations into CrossGL identifiers."""
+        return str(name).strip(":").replace("::", "_")
 
     def map_template_vector_or_matrix_type(self, base_type, generic_type):
         args = self.split_generic_arguments(generic_type)

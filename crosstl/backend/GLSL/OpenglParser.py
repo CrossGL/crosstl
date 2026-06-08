@@ -1250,8 +1250,16 @@ class GLSLParser:
                 value = self.parse_assignment_expression()
 
             semantic = None
+            variable_layout = layout
             if self.current_token[0] == "COLON":
-                semantic = self.parse_hlsl_semantic()
+                if self.is_hlsl_register_annotation_start():
+                    register_layout = self.parse_hlsl_register_annotation()
+                    if register_layout:
+                        variable_layout = self.merge_layout_qualifiers(
+                            layout, register_layout
+                        )
+                else:
+                    semantic = self.parse_hlsl_semantic()
 
             var = VariableNode(
                 type_name,
@@ -1259,7 +1267,7 @@ class GLSLParser:
                 value=value,
                 qualifiers=qualifiers or [],
                 array_size=array_size,
-                layout=layout,
+                layout=variable_layout,
                 is_array=is_array,
                 array_sizes=array_sizes,
                 semantic=semantic,
@@ -1461,6 +1469,18 @@ class GLSLParser:
                 block_vars.append(member)
 
         return struct_node, block_vars
+
+    def is_hlsl_register_annotation_start(self):
+        if self.current_token[0] != "COLON":
+            return False
+        index = self.skip_newline_index(self.index + 1)
+        if not (
+            self.token_at(index)[0] == "IDENTIFIER"
+            and str(self.token_at(index)[1]).lower() == "register"
+        ):
+            return False
+        index = self.skip_newline_index(index + 1)
+        return self.token_at(index)[0] == "LPAREN"
 
     def parse_hlsl_register_annotation(self):
         if self.current_token[0] != "COLON":

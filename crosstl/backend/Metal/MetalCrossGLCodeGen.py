@@ -583,6 +583,17 @@ class MetalToCrossGLConverter:
                 return scope[name]
         return self.sanitize_identifier(name)
 
+    def reserve_generated_identifier(self, base):
+        used = self.used_identifier_names[-1]
+        sanitized_base = self.sanitize_identifier(base)
+        candidate = sanitized_base
+        suffix = 2
+        while candidate in used:
+            candidate = f"{sanitized_base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        return candidate
+
     def generate_sampler_constructor_arg(self, arg, is_main=False):
         if isinstance(arg, VariableNode) and self.is_scoped_identifier(arg.name):
             return arg.name
@@ -1500,6 +1511,27 @@ class MetalToCrossGLConverter:
             parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
+    def format_parameter_decl(self, var, index, semantic_context=None):
+        if getattr(var, "name", None):
+            return self.format_decl(
+                var,
+                include_semantic=True,
+                semantic_context=semantic_context,
+            )
+
+        generated_name = self.reserve_generated_identifier(f"_unnamed_param_{index}")
+        original_name = var.name
+        var.name = generated_name
+        try:
+            return self.format_decl(
+                var,
+                include_semantic=True,
+                declare_name=False,
+                semantic_context=semantic_context,
+            )
+        finally:
+            var.name = original_name
+
     def format_global_decl(self, var, include_semantic=False):
         declaration = self.format_decl(var, include_semantic=include_semantic)
         attributes = getattr(var, "attributes", []) or []
@@ -1531,16 +1563,13 @@ class MetalToCrossGLConverter:
                     self.current_storage_texture_names.add(param.name)
                 if self.structured_buffer_pointer_type(param):
                     self.current_structured_buffer_names.add(param.name)
+            semantic_context = {
+                "kind": "parameter",
+                "function_qualifier": getattr(func, "qualifier", None),
+            }
             params = ", ".join(
-                self.format_decl(
-                    p,
-                    include_semantic=True,
-                    semantic_context={
-                        "kind": "parameter",
-                        "function_qualifier": getattr(func, "qualifier", None),
-                    },
-                )
-                for p in func.params
+                self.format_parameter_decl(p, index, semantic_context=semantic_context)
+                for index, p in enumerate(func.params)
             )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
@@ -2039,7 +2068,7 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand, is_main)
             if expr.op == "post...":
-                return f"{operand}..."
+                return operand
             if isinstance(expr.operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
                 operand = f"({operand})"
             return f"({expr.op}{operand})"
@@ -2280,6 +2309,8 @@ class MetalToCrossGLConverter:
             return f"{self.map_type(element_type)}[{size}]"
 
         base = metal_type.strip()
+        if base.endswith("..."):
+            base = base[:-3].strip()
         if base.startswith("metal::"):
             base = base.split("metal::", 1)[1]
         if base.startswith("raytracing::"):

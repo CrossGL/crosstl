@@ -305,6 +305,37 @@ def test_cufftdx_scoped_storage_types_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_dependent_scoped_and_enum_types_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # paths:
+    # - cpp/5_Domain_Specific/nbody/bodysystemcuda.cu
+    # - cpp/5_Domain_Specific/SobelFilter/SobelFilter_kernels.cu
+    source = """
+    enum SobelDisplayMode { SOBELDISPLAY_IMAGE };
+
+    template <typename T>
+    __device__ typename vec3<T>::Type bodyBodyInteraction(
+        typename vec3<T>::Type ai,
+        enum SobelDisplayMode mode) {
+        typename vec3<T>::Type r = ai;
+        return r;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert (
+        "vec3_T_Type bodyBodyInteraction(vec3_T_Type ai, SobelDisplayMode mode)"
+        in crossgl
+    )
+    assert "var r: vec3_T_Type = ai;" in crossgl
+    assert "vec3<T>::Type" not in crossgl
+    assert "enum SobelDisplayMode mode" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_tiny_cuda_nn_wmma_type_positions_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVlabs/tiny-cuda-nn

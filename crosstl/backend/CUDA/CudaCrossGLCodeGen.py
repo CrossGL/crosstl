@@ -397,6 +397,20 @@ class CudaToCrossGLConverter:
         converted_base_type = self.convert_cuda_type_to_crossgl(base_type)
         return f"{self.sanitize_crossgl_type_identifier(converted_base_type)}_pack"
 
+    def convert_cuda_elaborated_type_to_crossgl(self, cuda_type):
+        normalized_type = str(cuda_type).strip()
+        if normalized_type.startswith("enum "):
+            type_name = normalized_type[len("enum ") :].strip()
+            return self.convert_cuda_type_to_crossgl(type_name)
+        return None
+
+    def convert_cuda_scoped_type_to_crossgl(self, cuda_type):
+        normalized_type = str(cuda_type).strip()
+        if "::" not in normalized_type or ">::" not in normalized_type:
+            return None
+
+        return self.sanitize_crossgl_type_identifier(normalized_type)
+
     def convert_cuda_record_name_to_crossgl(self, name):
         template_record_name = self.convert_unknown_cuda_template_type_to_crossgl(name)
         if template_record_name is not None:
@@ -6257,6 +6271,10 @@ class CudaToCrossGLConverter:
         cuda_type = self.strip_dependent_template_disambiguators(cuda_type)
         cuda_type = self.strip_type_qualifiers(cuda_type)
 
+        elaborated_type = self.convert_cuda_elaborated_type_to_crossgl(cuda_type)
+        if elaborated_type is not None:
+            return elaborated_type
+
         parameter_pack_type = self.convert_cuda_parameter_pack_type_to_crossgl(
             cuda_type
         )
@@ -6348,6 +6366,9 @@ class CudaToCrossGLConverter:
         mapped_type = type_mapping.get(cuda_type)
         if mapped_type is not None:
             return mapped_type
+        scoped_type = self.convert_cuda_scoped_type_to_crossgl(cuda_type)
+        if scoped_type is not None:
+            return scoped_type
         return cuda_type
 
     def unqualified_leading_cuda_std_type_name(self, cuda_type):

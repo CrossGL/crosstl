@@ -55,9 +55,10 @@ def test_codegen_preserves_variadic_pack_expansion_from_mlx_integral_constant():
     """
     generated = convert(code)
 
-    assert "Us... us" in generated
-    assert "sum(us...)" in generated
+    assert "Us us" in generated
+    assert "sum(us)" in generated
     assert "post..." not in generated
+    assert parse_crossgl(generated) is not None
 
 
 def test_codegen_emits_shader_and_stages():
@@ -3438,6 +3439,34 @@ def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax
     assert "gemm_loop<" not in compact
     assert "if (kAlignedM.value)" in compact
     assert "Unhandled expression" not in compact
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_names_unnamed_template_tag_parameters_from_mlx_nax():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/steel/attn/nax.h
+    code = """
+    template <
+        typename CTile,
+        typename ATile,
+        typename BTile,
+        bool transpose_a,
+        bool transpose_b>
+    void tile_matmad_nax(thread CTile& C,
+                         thread ATile& A,
+                         bool_constant<transpose_a>,
+                         thread BTile& B,
+                         bool_constant<transpose_b>) {
+        const short TM = transpose_a ? 1 : 2;
+        C.val = TM;
+    }
+    """
+    result = convert(code)
+
+    assert "bool_constant<transpose_a> _unnamed_param_2" in result
+    assert "bool_constant<transpose_b> _unnamed_param_4" in result
     assert parse_crossgl(result) is not None
 
 

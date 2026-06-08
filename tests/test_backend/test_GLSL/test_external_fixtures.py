@@ -137,6 +137,52 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.register.autoassign.frag.
+    # Covers HLSL-style resource/register annotations accepted by glslang.
+    ExternalFixture(
+        name="glslang-spv-register-autoassign-resources",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.register.autoassign.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            SamplerState g_sSamp1 : register(s0);
+            SamplerState g_sSamp3[2] : register(s2);
+            SamplerState g_sSamp4;
+
+            Texture1D g_tTex1 : register(t1);
+            Texture1D g_tTex3[2] : register(t3);
+            Texture1D g_tTex4;
+
+            struct MyStruct_t
+            {
+                int a;
+                float b;
+                float3 c;
+            };
+
+            uniform MyStruct_t mystruct : register(b4);
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            float4 Func1()
+            {
+                return g_tTex1.Sample(g_sSamp1, 0.1) +
+                    g_tTex3[1].Sample(g_sSamp3[1], 0.3) +
+                    mystruct.c[1];
+            }
+
+            PS_OUTPUT main()
+            {
+                PS_OUTPUT psout;
+                psout.Color = Func1();
+                return psout;
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.int16.amd.frag.
     # Reduced from AMD int16 literal and specialization-constant coverage.
     ExternalFixture(
@@ -1926,6 +1972,53 @@ def test_codegen_glslang_cbuffer_register_fixture_snippets():
     assert "vec4 Color @ gl_FragData[0];" in crossgl
     assert "PS_OUTPUT main()" in crossgl
     assert "cbuffer Uniforms" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_register_autoassign_resource_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-register-autoassign-resources"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    sampler = next(var for var in ast.global_variables if var.name == "g_sSamp1")
+    sampler_array = next(var for var in ast.global_variables if var.name == "g_sSamp3")
+    sampler_without_register = next(
+        var for var in ast.global_variables if var.name == "g_sSamp4"
+    )
+    texture = next(var for var in ast.global_variables if var.name == "g_tTex1")
+    texture_array = next(var for var in ast.global_variables if var.name == "g_tTex3")
+    texture_without_register = next(
+        var for var in ast.global_variables if var.name == "g_tTex4"
+    )
+    mystruct = next(var for var in ast.uniforms if var.name == "mystruct")
+    ps_output = next(struct for struct in ast.structs if struct.name == "PS_OUTPUT")
+    color = next(member for member in ps_output.members if member.name == "Color")
+
+    assert sampler.layout == {"binding": "0"}
+    assert sampler_array.layout == {"binding": "2"}
+    assert sampler_array.array_sizes[0].value == "2"
+    assert sampler_without_register.layout is None
+    assert texture.layout == {"binding": "1"}
+    assert texture_array.layout == {"binding": "3"}
+    assert texture_array.array_sizes[0].value == "2"
+    assert texture_without_register.layout is None
+    assert mystruct.layout == {"binding": "4"}
+    assert color.semantic == "SV_Target0"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "sampler g_sSamp1 @binding(0);" in crossgl
+    assert "sampler g_sSamp3 @binding(2)[2];" in crossgl
+    assert "sampler g_sSamp4;" in crossgl
+    assert "texture1D g_tTex1 @binding(1);" in crossgl
+    assert "texture1D g_tTex3 @binding(3)[2];" in crossgl
+    assert "texture1D g_tTex4;" in crossgl
+    assert "struct MyStruct_t" in crossgl
+    assert "cbuffer mystruct @binding(4) {" in crossgl
+    assert "vec4 Color @ gl_FragData[0];" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

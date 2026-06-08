@@ -454,6 +454,29 @@ def test_external_rocm_stb_image_trailing_aligned_attribute_codegen_reparse():
     assert "aligned" not in crossgl
 
 
+def test_external_hip_examples_function_pointer_parameter_codegen_reparse():
+    # Upstream: ROCm/HIP-Examples@cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3,
+    # HIP-Examples-Applications/common/SDKUtil.hpp.
+    source = """
+    template <class T>
+    std::string toString(T t,
+                         std::ios_base& (*r)(std::ios_base&) = std::dec) {
+        std::ostringstream output;
+        output << r << t;
+        return output.str();
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+
+    assert isinstance(function, FunctionNode)
+    assert function.params[1]["type"] == "std::ios_base & (*)"
+    assert "std::string toString(T t, ptr<std::ios_base> r)" in crossgl
+    assert "ptr<std::ios_base ()>" not in crossgl
+    assert "var output: std::ostringstream;" in crossgl
+
+
 def test_external_hip_one_component_vectors_codegen_reparse():
     # HIP exposes CUDA-compatible one-component vector types through
     # hip_vector_types.h; they should lower to scalar CrossGL values.

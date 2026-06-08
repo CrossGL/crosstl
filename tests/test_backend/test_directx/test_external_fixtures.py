@@ -42,6 +42,7 @@ DIRECTX_SHADER_COMPILER_REWRITER_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01b
 DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
 )
+DIRECTX_SHADER_COMPILER_NAMESPACE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -770,6 +771,37 @@ EXTERNAL_FIXTURES = [
             "vec4 m = vec4(4, 5, 6, 7);",
             "const vec2[2] m3 = {12, 13, 14, 15};",
             "return ((a + m) + m3[0].xyxy) + m3[1].xyxy;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_function_definitions",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_NAMESPACE_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/namespace.functions.hlsl",
+        code=textwrap.dedent("""
+            namespace A {
+              float3 AddGreen();
+
+              namespace B {
+                float3 AddBlue();
+              }
+            }
+
+            float4 main(float4 PosCS : SV_Position) : SV_Target
+            {
+              float3 blue = A::B::AddBlue();
+              float3 green = A::AddGreen();
+              return float4(blue + green, 1);
+            }
+
+            float3 A::B::AddBlue() { return float3(0, 0, 1); }
+            float3 A::AddGreen() { return float3(0, 1, 0); }
+        """).strip(),
+        contains=(
+            "vec3 blue = A_B_AddBlue();",
+            "vec3 green = A_AddGreen();",
+            "vec3 A_B_AddBlue()",
+            "vec3 A_AddGreen()",
         ),
     ),
     ExternalFixture(
