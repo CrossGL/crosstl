@@ -547,12 +547,19 @@ class GLSLToCrossGLConverter:
             "RasterizerOrderedTexture3D": "image3D",
             "RasterizerOrderedTextureCube": "imageCube",
             "RasterizerOrderedTextureCubeArray": "imageCubeArray",
+            "StructuredBuffer": "StructuredBuffer",
+            "RWStructuredBuffer": "RWStructuredBuffer",
+            "AppendStructuredBuffer": "RWStructuredBuffer",
+            "ConsumeStructuredBuffer": "StructuredBuffer",
+            "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
             "image2DRect": "image2DRect",
             "imageBuffer": "imageBuffer",
             "image2DMS": "image2DMS",
             "image2DMSArray": "image2DMSArray",
             "subpassInput": "subpassInput",
             "subpassInputMS": "subpassInputMS",
+            "SubpassInput": "subpassInput",
+            "SubpassInputMS": "subpassInputMS",
             "isubpassInput": "isubpassInput",
             "isubpassInputMS": "isubpassInputMS",
             "usubpassInput": "usubpassInput",
@@ -661,10 +668,12 @@ class GLSLToCrossGLConverter:
     def _is_resource_type(self, type_name):
         if not type_name:
             return False
-        name = str(getattr(self, "type_map", {}).get(type_name, type_name))
+        name = str(self.convert_type(type_name))
         return name == "accelerationStructureEXT" or name.startswith(
             (
                 "__sampler",
+                "StructuredBuffer",
+                "RWStructuredBuffer",
                 "texture",
                 "subpassInput",
                 "isubpassInput",
@@ -1155,7 +1164,7 @@ class GLSLToCrossGLConverter:
 
     def image_resource_attribute_suffix(self, var):
         var_type = getattr(var, "vtype", None)
-        resource_type = getattr(self, "type_map", {}).get(var_type, var_type)
+        resource_type = self.convert_type(var_type)
         storage_attributes = self.storage_qualifier_attributes(var)
         if not self._is_resource_type(resource_type) and not storage_attributes:
             return ""
@@ -1169,7 +1178,7 @@ class GLSLToCrossGLConverter:
         if binding is not None:
             attributes.append(f"@binding({self.layout_value_to_string(binding)})")
         input_attachment_index = layout.get("input_attachment_index")
-        if input_attachment_index is not None:
+        if input_attachment_index is not None and "uniform" in self._qualifier_set(var):
             attributes.append(
                 "@input_attachment_index("
                 f"{self.layout_value_to_string(input_attachment_index)})"
@@ -3203,7 +3212,15 @@ class GLSLToCrossGLConverter:
         return None
 
     def convert_type(self, type_name):
-        return self.type_map.get(type_name, type_name)
+        mapped_type = self.type_map.get(type_name)
+        if mapped_type is not None:
+            return mapped_type
+        if isinstance(type_name, str) and "<" in type_name and type_name.endswith(">"):
+            base_type, generic_args = type_name.split("<", 1)
+            mapped_base = self.type_map.get(base_type)
+            if mapped_base is not None:
+                return f"{mapped_base}<{generic_args}"
+        return type_name
 
     def variable_declaration_type(self, node):
         var_type = self.convert_type(node.vtype)

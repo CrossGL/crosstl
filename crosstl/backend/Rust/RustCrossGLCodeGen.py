@@ -9679,6 +9679,10 @@ class RustToCrossGLConverter:
         if referenced_type != rust_type:
             return self.map_type(referenced_type)
 
+        raw_pointer_type = self.strip_raw_pointer_type(rust_type)
+        if raw_pointer_type != rust_type:
+            return f"ptr<{self.map_type(raw_pointer_type)}>"
+
         trait_object_type = self.strip_trait_object_type(rust_type)
         if trait_object_type != rust_type:
             return self.map_type(trait_object_type)
@@ -9728,6 +9732,16 @@ class RustToCrossGLConverter:
             )
 
         return self.crossgl_type_path_identifier(rust_type)
+
+    def strip_raw_pointer_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return rust_type
+
+        for prefix in ("*const ", "*mut "):
+            if rust_type.startswith(prefix):
+                return rust_type[len(prefix) :].strip()
+
+        return rust_type
 
     def crossgl_type_path_identifier(self, type_name):
         return self.crossgl_identifier(type_name.replace("::", "_"))

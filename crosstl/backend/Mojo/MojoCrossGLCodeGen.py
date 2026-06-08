@@ -26,6 +26,20 @@ class MojoToCrossGLConverter:
     REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
     MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`([^`]+)`$")
     BACKTICK_IDENTIFIER_PATTERN = re.compile(r"^`([^`]+)`$")
+    STRING_LITERAL_PREFIXES = {
+        "r",
+        "R",
+        "t",
+        "T",
+        "rt",
+        "rT",
+        "Rt",
+        "RT",
+        "tr",
+        "tR",
+        "Tr",
+        "TR",
+    }
     MATRIX_DTYPE_PREFIXES = {
         "DType.float16": "half",
         "DType.float32": "mat",
@@ -1101,7 +1115,7 @@ class MojoToCrossGLConverter:
         if expr is None:
             return ""
         elif isinstance(expr, str):
-            return expr
+            return self.normalize_string_literal(expr)
         elif isinstance(expr, (int, float, bool)):
             return str(expr)
         elif isinstance(expr, VariableNode):
@@ -1403,8 +1417,18 @@ class MojoToCrossGLConverter:
 
     def generate_attribute_argument(self, arg):
         if isinstance(arg, str):
-            return arg.strip()
+            return self.normalize_string_literal(arg).strip()
         return self.generate_expression(arg)
+
+    def normalize_string_literal(self, value):
+        for quote in ("'", '"'):
+            quote_index = value.find(quote)
+            if quote_index <= 0:
+                continue
+            prefix = value[:quote_index]
+            if prefix in self.STRING_LITERAL_PREFIXES and value.endswith(quote):
+                return value[quote_index:]
+        return value
 
     def map_function_attributes(self, func):
         if not hasattr(func, "attributes") or not func.attributes:

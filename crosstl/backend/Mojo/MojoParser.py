@@ -71,6 +71,20 @@ class MojoParser:
         "FLOOR_DIVIDE",
         "MOD",
     }
+    STRING_LITERAL_PREFIXES = {
+        "r",
+        "R",
+        "t",
+        "T",
+        "rt",
+        "rT",
+        "Rt",
+        "RT",
+        "tr",
+        "tR",
+        "Tr",
+        "TR",
+    }
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -2099,6 +2113,8 @@ class MojoParser:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_multiplicative()
+            self.skip_expression_layout()
+            right = self.parse_adjacent_string_literals(right)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2403,7 +2419,9 @@ class MojoParser:
         if self.current_token[0] in self.IDENTIFIER_NAME_TOKENS:
             name = self.current_token[1]
             self.eat(self.current_token[0])
-            if self.current_token[0] == "STRING_LITERAL":
+            if self.current_token[
+                0
+            ] == "STRING_LITERAL" and self.is_string_literal_prefix(name):
                 value = f"{name}{self.current_token[1]}"
                 self.eat("STRING_LITERAL")
                 return self.parse_postfix_suffixes(value)
@@ -2495,19 +2513,61 @@ class MojoParser:
         if not self.is_string_literal_value(arg):
             return arg
 
-        while self.current_token[0] == "STRING_LITERAL":
-            next_literal = self.current_token[1]
-            self.eat("STRING_LITERAL")
+        while self.is_adjacent_string_literal_start():
+            next_literal = self.parse_adjacent_string_literal()
             arg = self.concat_string_literals(arg, next_literal)
             self.skip_layout_tokens()
         return arg
 
+    def is_adjacent_string_literal_start(self):
+        if self.current_token[0] == "STRING_LITERAL":
+            return True
+        return (
+            self.current_token[0] in self.IDENTIFIER_NAME_TOKENS
+            and self.is_string_literal_prefix(self.current_token[1])
+            and self.peek_token()[0] == "STRING_LITERAL"
+        )
+
+    def parse_adjacent_string_literal(self):
+        prefix = ""
+        if self.current_token[0] in self.IDENTIFIER_NAME_TOKENS:
+            prefix = self.current_token[1]
+            self.eat(self.current_token[0])
+        literal = self.current_token[1]
+        self.eat("STRING_LITERAL")
+        return f"{prefix}{literal}"
+
+    def is_string_literal_prefix(self, value):
+        return isinstance(value, str) and value in self.STRING_LITERAL_PREFIXES
+
     def is_string_literal_value(self, value):
-        return isinstance(value, str) and len(value) >= 2 and value[0] in {"'", '"'}
+        return self.split_string_literal(value) is not None
 
     def concat_string_literals(self, left, right):
-        quote = left[0]
-        return f"{quote}{left[1:-1]}{right[1:-1]}{quote}"
+        left_parts = self.split_string_literal(left)
+        right_parts = self.split_string_literal(right)
+        if left_parts is None or right_parts is None:
+            return left
+
+        left_prefix, left_quote, left_body = left_parts
+        _, _, right_body = right_parts
+        return f"{left_prefix}{left_quote}{left_body}{right_body}{left_quote}"
+
+    def split_string_literal(self, value):
+        if not isinstance(value, str):
+            return None
+
+        for quote in ("'", '"'):
+            quote_index = value.find(quote)
+            if quote_index == -1:
+                continue
+            prefix = value[:quote_index]
+            if prefix and not self.is_string_literal_prefix(prefix):
+                continue
+            if not value.endswith(quote):
+                continue
+            return prefix, quote, value[quote_index + 1 : -1]
+        return None
 
     def parse_decorator(self):
         self.eat("DECORATOR")

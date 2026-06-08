@@ -1530,7 +1530,14 @@ class GLSLParser:
         self.eat("COLON")
         self.skip_newlines()
         parts = []
-        while self.current_token[0] not in ("COMMA", "SEMICOLON", "RPAREN", "EOF"):
+        while self.current_token[0] not in (
+            "COMMA",
+            "SEMICOLON",
+            "RPAREN",
+            "LBRACE",
+            "NEWLINE",
+            "EOF",
+        ):
             parts.append(str(self.current_token[1]))
             self.advance()
         return " ".join(parts).strip()

@@ -2484,6 +2484,53 @@ def test_adjacent_string_literals_in_call_parse_from_modular_tiled_matmul_exampl
     assert call.args == ['"Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)"']
 
 
+def test_prefixed_adjacent_string_literals_in_call_parse_from_modular_trace_gemv():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/benchmarks/gpu/nn/trace_gemv_partial_norm.mojo.
+    code = """
+    def main():
+        print(
+            t"{b},"
+            t"{Int(trace_host[base + 0])},"
+            t"{Int(trace_host[base + 1])}"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0]
+
+    assert call.args == [
+        't"{b},{Int(trace_host[base + 0])},{Int(trace_host[base + 1])}"'
+    ]
+
+
+def test_adjacent_string_after_binary_string_parse_from_modular_topk_gpu_fi():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/test/gpu/nn/test_topk_gpu_fi.mojo.
+    code = """
+    def main():
+        raise Error(
+            "Sampled index "
+            + String(idx)
+            + " is NOT in the top-K set! This indicates a bug in the"
+            " sampling kernel."
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    error_call = function.body[0].args[0]
+    message = error_call.args[0]
+
+    assert isinstance(error_call, FunctionCallNode)
+    assert isinstance(message, BinaryOpNode)
+    assert (
+        message.right
+        == '" is NOT in the top-K set! This indicates a bug in the sampling kernel."'
+    )
+
+
 def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_docs():
     code = """
     def main():

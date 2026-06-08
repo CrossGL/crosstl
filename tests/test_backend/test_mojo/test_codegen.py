@@ -679,6 +679,57 @@ def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_exam
     )
 
 
+def test_prefixed_adjacent_string_literals_in_call_codegen_from_modular_trace_gemv():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/benchmarks/gpu/nn/trace_gemv_partial_norm.mojo.
+    code = """
+    def main():
+        print(
+            t"{b},"
+            t"{Int(trace_host[base + 0])},"
+            t"{Int(trace_host[base + 1])}"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'print("{b},{Int(trace_host[base + 0])},{Int(trace_host[base + 1])}");'
+        in generated_code
+    )
+    assert 't"' not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_adjacent_string_after_binary_string_codegen_from_modular_topk_gpu_fi():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/test/gpu/nn/test_topk_gpu_fi.mojo.
+    code = """
+    def main():
+        raise Error(
+            "Sampled index "
+            + String(idx)
+            + " is NOT in the top-K set! This indicates a bug in the"
+            " sampling kernel."
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        '" is NOT in the top-K set! This indicates a bug in the sampling kernel."'
+        in generated_code
+    )
+    assert (
+        'raise(Error((("Sampled index " + String(idx)) + '
+        '" is NOT in the top-K set! This indicates a bug in the sampling kernel.")));'
+        in generated_code
+    )
+    parse_crossgl(generated_code)
+
+
 def test_identifier_tuple_declaration_and_assignment_codegen_from_layout_tensor_docs():
     code = """
     def main():

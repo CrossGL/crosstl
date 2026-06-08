@@ -4833,6 +4833,30 @@ def test_reference_dereference_assignment_return_conversion():
         pytest.fail(f"Reference/dereference assignment/return conversion failed: {e}")
 
 
+def test_rust_cuda_raw_pointer_parameter_codegen_reparse():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # examples/vecadd/kernels/src/lib.rs vecadd kernel.
+    code = """
+    use cuda_std::prelude::*;
+
+    #[kernel]
+    pub unsafe fn vecadd(a: &[f32], b: &[f32], c: *mut f32) {
+        let idx = thread::index_1d() as usize;
+        if idx < a.len() {
+            let elem = c.add(idx);
+            *elem = a[idx] + b[idx];
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void vecadd(float a[], float b[], ptr<float> c)" in result
+    assert "*mut" not in result
+    crosstl.translator.parse(result)
+
+
 def test_function_call_conversion():
     code = """
     fn test_calls() {

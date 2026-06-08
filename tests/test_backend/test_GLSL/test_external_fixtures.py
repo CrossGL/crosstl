@@ -183,6 +183,46 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.register.subpass.frag.
+    # Reduced from HLSL-style subpass input resource register coverage.
+    ExternalFixture(
+        name="glslang-spv-register-subpass-input-resources",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.register.subpass.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            layout(input_attachment_index = 1) SubpassInput<float4> subpass_f4 : register(t1);
+            layout(input_attachment_index = 4) SubpassInputMS<float4> subpass_ms_f4;
+
+            float4 main() : SV_Target0
+            {
+                float4 result00 = subpass_f4.SubpassLoad();
+                float4 result10 = subpass_ms_f4.SubpassLoad(3);
+                return result00 + result10;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.ssboAlias.frag.
+    # Reduced from HLSL-style append structured-buffer register coverage.
+    ExternalFixture(
+        name="glslang-spv-register-append-structured-buffer",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.ssboAlias.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            AppendStructuredBuffer<uint> Buf1 : register(u1);
+            AppendStructuredBuffer<uint> Buf2 : register(u2);
+
+            float4 main() : SV_Target
+            {
+                Buf1.Append(10u);
+                Buf2.Append(20u);
+                return float4(1.0, 3.0, 5.0, 1.0);
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.int16.amd.frag.
     # Reduced from AMD int16 literal and specialization-constant coverage.
     ExternalFixture(
@@ -2019,6 +2059,67 @@ def test_codegen_glslang_register_autoassign_resource_fixture_snippets():
     assert "struct MyStruct_t" in crossgl
     assert "cbuffer mystruct @binding(4) {" in crossgl
     assert "vec4 Color @ gl_FragData[0];" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_register_subpass_input_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-register-subpass-input-resources"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    subpass = next(var for var in ast.global_variables if var.name == "subpass_f4")
+    subpass_ms = next(
+        var for var in ast.global_variables if var.name == "subpass_ms_f4"
+    )
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert subpass.vtype == "SubpassInput<float4>"
+    assert subpass.layout == {"input_attachment_index": "1", "binding": "1"}
+    assert subpass_ms.vtype == "SubpassInputMS<float4>"
+    assert subpass_ms.layout == {"input_attachment_index": "4"}
+    assert main.semantic == "SV_Target0"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert (
+        "subpassInput<float4> subpass_f4 @input_attachment_index(1) @binding(1);"
+        in crossgl
+    )
+    assert "subpassInputMS<float4> subpass_ms_f4 @input_attachment_index(4);" in crossgl
+    assert (
+        "@input_attachment_index(1) @binding(1) @input_attachment_index(1)"
+        not in crossgl
+    )
+    assert "vec4 main() @ gl_FragData[0]" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_register_append_structured_buffer_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-register-append-structured-buffer"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    buf1 = next(var for var in ast.global_variables if var.name == "Buf1")
+    buf2 = next(var for var in ast.global_variables if var.name == "Buf2")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert buf1.vtype == "AppendStructuredBuffer<uint>"
+    assert buf1.layout == {"binding": "1"}
+    assert buf2.layout == {"binding": "2"}
+    assert main.semantic == "SV_Target"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "RWStructuredBuffer<uint> Buf1 @binding(1);" in crossgl
+    assert "RWStructuredBuffer<uint> Buf2 @binding(2);" in crossgl
+    assert "AppendStructuredBuffer<uint> Buf1" not in crossgl
+    assert "vec4 main() @ gl_FragColor" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
