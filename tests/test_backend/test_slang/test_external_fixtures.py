@@ -335,6 +335,37 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/autodiff/arithmetic-jvp.slang
+        "id": "slang_autodiff_scalar_differential_typedef_reparse",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/autodiff/arithmetic-jvp.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            typedef DifferentialPair<float> dpfloat;
+            typedef float.Differential dfloat;
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                dfloat x = 1.0;
+                outputBuffer[0] = x;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "typedef DifferentialPair<float> dpfloat;",
+            "typedef float dfloat;",
+            "dfloat x = 1.0;",
+            "outputBuffer[0] = x;",
+        ],
+        "not_contains": ["float.Differential"],
+    },
+    {
         "id": "slang_generated_defer_scope_exit",
         "repo": "shader-slang/slang-current-2026-06-07",
         "path": (

@@ -40,6 +40,9 @@ class SlangToCrossGLConverter:
     )
     HEX_NUMERIC_LITERAL = re.compile(r"^0[xX][0-9a-fA-F]+[uUlL]*$")
     RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
+    ASSOCIATED_DIFFERENTIAL_TYPE = re.compile(
+        r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*(?:[234](?:x[234])?)?)\.Differential$"
+    )
     HLSL_NAMESPACE_PREFIX = "hlsl::"
     HLSL_NAMESPACE_SPECIAL_BUILTINS = {"mad", "mul", "rcp", "saturate", "sincos"}
     HLSL_NAMESPACE_BITCAST_BUILTINS = {"asfloat", "asint", "asuint"}
@@ -1685,6 +1688,9 @@ class SlangToCrossGLConverter:
             while slang_type.endswith("*"):
                 pointer_suffix += "*"
                 slang_type = slang_type[:-1].strip()
+            differential_type = self.map_associated_differential_type(slang_type)
+            if differential_type:
+                return f"{differential_type}{pointer_suffix}"
             generic_vector_or_matrix = self.map_generic_vector_or_matrix_type(
                 slang_type
             )
@@ -1696,6 +1702,15 @@ class SlangToCrossGLConverter:
             )
             return f"{mapped_type}{pointer_suffix}"
         return slang_type
+
+    def map_associated_differential_type(self, slang_type):
+        match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))
+        if not match:
+            return None
+        base_type = match.group("base")
+        if base_type not in self.type_map and base_type != "half":
+            return None
+        return self.map_type(base_type)
 
     def map_generic_vector_or_matrix_type(self, slang_type):
         base_type = str(slang_type).split("<", 1)[0].strip()
