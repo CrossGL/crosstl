@@ -6945,6 +6945,58 @@ def test_translate_project_skips_invalid_external_corpus_source_backend(tmp_path
     assert "sourceBackend must be a non-empty string" in diagnostic["message"]
 
 
+def test_translate_project_skips_invalid_external_corpus_id(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "",
+                        "path": "empty-id.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                    {
+                        "path": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["summary"]["manifestEntryCount"] == 2
+    assert external_corpus["summary"]["validEntryCount"] == 1
+    assert external_corpus["summary"]["invalidEntryCount"] == 1
+    assert external_corpus["entries"][0]["id"] == "simple.cgl"
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.config.external-corpus-entry-invalid"
+    assert "entry 1" in diagnostic["message"]
+    assert "id must be a non-empty string" in diagnostic["message"]
+
+
 def test_translate_project_skips_invalid_external_corpus_provenance(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

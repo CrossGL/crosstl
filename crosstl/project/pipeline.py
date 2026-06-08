@@ -1793,6 +1793,9 @@ def _external_corpus_manifest_entry_reasons(entry: Any) -> list[str]:
         if not _is_repository_relative_report_path(normalized_path):
             reasons.append("path must be repository-relative")
 
+    if "id" in entry and not _is_non_empty_string(entry.get("id")):
+        reasons.append("id must be a non-empty string")
+
     source_backend = entry.get("sourceBackend")
     if source_backend is not None and not _is_non_empty_string(source_backend):
         reasons.append("sourceBackend must be a non-empty string")
