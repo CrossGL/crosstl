@@ -46,6 +46,48 @@ class TestHipCodeGen:
         assert "buffer_[gl_LocalInvocationID.x] = 1.0f;" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_public_rocm_module_api_unnamed_function_parameter_codegen_reparse(self):
+        # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+        # HIP-Basic/module_api/main.hip.
+        code = """
+        int main(int, char** argv) {
+            return argv[0][0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "i32 main(i32 _param0, ptr<ptr<i8>> argv)" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_unnamed_kernel_parameter_codegen_reparse(self):
+        code = """
+        __global__ void fill(float*, unsigned int n) {
+            if (threadIdx.x < n) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> _param0: array<f32>"
+            in result
+        )
+        assert "u32 n" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_public_hip_examples_qualified_method_conversion_reparse(self):
         code = """
         class RecursiveGaussian {

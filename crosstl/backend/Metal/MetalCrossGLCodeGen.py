@@ -3111,7 +3111,11 @@ class MetalToCrossGLConverter:
             if not isinstance(attr, AttributeNode):
                 continue
             name = attr.name
-            args = [str(a).strip() for a in attr.args] if attr.args else []
+            args = (
+                [self.format_metadata_argument(a) for a in attr.args]
+                if attr.args
+                else []
+            )
             key = f"{name}({args[0]})" if args else name
             if (
                 context_kind == "parameter"
@@ -3141,6 +3145,13 @@ class MetalToCrossGLConverter:
             if out:
                 outputs.append(f"@{out}")
         return " ".join(outputs)
+
+    def format_metadata_argument(self, arg):
+        """Render a Metal attribute argument as CrossGL metadata syntax."""
+        text = str(arg).strip()
+        while text.startswith("::"):
+            text = text[2:].lstrip()
+        return text
 
     def dynamic_fragment_output_semantic(self, name, args):
         if name == "color" and args and re.fullmatch(r"\d+", args[0]):

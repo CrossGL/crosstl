@@ -631,9 +631,9 @@ class MojoToCrossGLConverter:
 
         params_str = ", ".join(params) if params else ""
         if func.return_type:
-            return_type = self.map_type(func.return_type)
+            return_type = self.map_return_type(func.return_type)
         elif named_result:
-            return_type = self.map_type(named_result.vtype)
+            return_type = self.map_return_type(named_result.vtype)
         else:
             return_type = "void"
 
@@ -690,6 +690,11 @@ class MojoToCrossGLConverter:
             getattr(param, "name", None) == "self"
             and getattr(param, "parameter_convention", None) is not None
         )
+
+    def map_return_type(self, mojo_type):
+        if self.is_mojo_function_type_text(mojo_type):
+            return "Function"
+        return self.map_type(mojo_type)
 
     def current_named_result(self):
         if not self.named_result_stack:
@@ -1252,6 +1257,9 @@ class MojoToCrossGLConverter:
             args = []
             if hasattr(expr, "args") and expr.args:
                 args = [self.generate_expression(arg) for arg in expr.args]
+            if self.is_indirect_call_callee(expr.callee):
+                call_args = [callee] + args
+                return f"__mojo_indirect_call({', '.join(call_args)})"
             args_str = ", ".join(args)
             return f"{callee}({args_str})"
         elif isinstance(expr, MemberAccessNode):
@@ -1291,6 +1299,9 @@ class MojoToCrossGLConverter:
                 self.generate_expression(element) for element in index.elements
             )
         return self.generate_expression(index)
+
+    def is_indirect_call_callee(self, callee):
+        return isinstance(callee, FunctionCallNode)
 
     def is_mlir_type_literal_access(self, expr):
         return isinstance(expr.array, VariableNode) and expr.array.name in {

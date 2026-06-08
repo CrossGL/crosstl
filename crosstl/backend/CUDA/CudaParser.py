@@ -1763,6 +1763,100 @@ class CudaParser:
             "SEMICOLON",
         }
 
+    def is_shared_aggregate_declaration_start(self):
+        index = self.current_index
+        qualifiers = []
+
+        while index < len(self.tokens):
+            token_type, token_value = self.tokens[index]
+            if token_type in self.DECLARATION_PREFIX_TOKENS:
+                qualifiers.append(token_value)
+                index += 1
+                continue
+            if (
+                token_type == "VOLATILE"
+                and index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] in self.CUDA_STORAGE_QUALIFIER_TOKENS
+            ):
+                qualifiers.append(token_value)
+                index += 1
+                continue
+            break
+
+        if "__shared__" not in qualifiers:
+            return False
+
+        index = self.skip_alignment_attributes_at_index(index)
+        index = self.skip_gnu_attributes_at_index(index)
+        if index >= len(self.tokens) or self.tokens[index][0] not in {
+            "STRUCT",
+            "UNION",
+        }:
+            return False
+
+        index = self.skip_cuda_struct_attribute_prefix_at_index(index + 1)
+        if (
+            index < len(self.tokens)
+            and self.tokens[index][0] in self.NAME_COMPONENT_TOKENS
+        ):
+            index += 1
+            if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+                index = self.skip_template_at_index(index)
+                if index is None:
+                    return False
+
+        return index < len(self.tokens) and self.tokens[index][0] == "LBRACE"
+
+    def parse_shared_aggregate_declaration(self):
+        qualifiers = self.parse_declaration_prefixes()
+        self.parse_alignment_attributes()
+        self.skip_gnu_attributes()
+
+        self.eat(self.current_token[0])
+        attributes = self.parse_cuda_struct_attribute_prefix()
+
+        tag_name = None
+        if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
+            tag_name = self.parse_name_component()
+            if self.current_token[0] == "LESS_THAN":
+                tag_name += self.parse_template_suffix()
+
+        self.eat("LBRACE")
+        members = self.parse_struct_members()
+        self.eat("RBRACE")
+
+        declarators = []
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            name = self.parse_name_component()
+            array_suffix = self.parse_array_suffix()
+            declarators.append((name, array_suffix))
+            if self.current_token[0] == "ASSIGN":
+                self.eat("ASSIGN")
+                self.parse_expression()
+            elif self.current_token[0] == "LBRACE":
+                self.parse_initializer_list()
+            if self.current_token[0] != "COMMA":
+                break
+
+        self.eat("SEMICOLON")
+
+        if not tag_name:
+            first_name = declarators[0][0] if declarators else "union"
+            tag_name = f"__anonymous_shared_{first_name}_layout"
+
+        self.struct_names.add(tag_name)
+        nodes = [StructNode(tag_name, members, attributes=attributes)]
+        nodes.extend(
+            self.create_shared_memory_node(
+                f"{tag_name}{array_suffix}", name, qualifiers
+            )
+            for name, array_suffix in declarators
+        )
+        return nodes if len(nodes) > 1 else nodes[0]
+
     def skip_until_semicolon(self):
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             self.eat(self.current_token[0])
@@ -3077,6 +3171,8 @@ class CudaParser:
             declaration = self.parse_function_pointer_variable_declaration()
             self.eat("SEMICOLON")
             return declaration
+        elif self.is_shared_aggregate_declaration_start():
+            return self.parse_shared_aggregate_declaration()
         elif self.is_struct_or_class_declaration_start():
             return self.parse_struct()
         elif self.is_macro_block_invocation_start():

@@ -519,6 +519,26 @@ class HLSLParser:
             self.tokens[index][0]
         )
 
+    def is_macro_like_identifier(self, token):
+        token_type, value = token
+        if token_type != "IDENTIFIER":
+            return False
+        text = str(value)
+        return any(char.isalpha() for char in text) and text.upper() == text
+
+    def skip_unexpanded_member_macro(self):
+        if not self.is_macro_like_identifier(self.current_token):
+            return False
+        if self.peek()[0] not in {"LPAREN", "SEMICOLON", "RBRACE"}:
+            return False
+
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        return True
+
     def parse_identifier(self):
         if self.is_identifier_token(self.current_token[0]):
             token = self.current_token
@@ -1273,6 +1293,8 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
             if self.current_token_is_keyword("USING", "using"):
                 self.parse_using_directive()
                 continue
@@ -1377,6 +1399,8 @@ class HLSLParser:
             member_attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
             if self.current_token_is_keyword("USING", "using"):
                 self.parse_using_directive()
                 continue
@@ -1617,6 +1641,8 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
             if self.current_token_is_keyword("USING", "using"):
                 self.parse_using_directive()
                 continue
@@ -1810,6 +1836,8 @@ class HLSLParser:
                 continue
             member_attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,

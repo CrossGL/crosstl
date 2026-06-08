@@ -1186,6 +1186,46 @@ def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_cccl_cub_shared_union_temp_storage_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 6383b911c29ba6e8dc24ae3d33694fb2c54fde00
+    # path: cub/examples/block/example_block_scan.cu
+    source = """
+    using BlockLoad = cub::BlockLoad<int, 128, 4>;
+    using BlockScan = cub::BlockScan<int, 128>;
+
+    __global__ void scan_kernel(int* d_in, int* d_out) {
+        __shared__ union TempStorage {
+            typename BlockLoad::TempStorage load;
+            typename BlockScan::TempStorage scan;
+            int aggregate;
+        } temp_storage;
+
+        int data = d_in[threadIdx.x];
+        BlockLoad(temp_storage.load).Load(d_in, data);
+        int aggregate = BlockScan(temp_storage.scan).Sum(data);
+        temp_storage.aggregate = aggregate;
+        d_out[threadIdx.x] = temp_storage.aggregate;
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.kernels[0].body
+    crossgl = cuda_to_crossgl(source)
+
+    assert isinstance(body[0], StructNode)
+    assert body[0].name == "TempStorage"
+    assert [member.name for member in body[0].members] == ["load", "scan", "aggregate"]
+    assert isinstance(body[1], SharedMemoryNode)
+    assert body[1].vtype == "TempStorage"
+    assert body[1].name == "temp_storage"
+    assert "struct TempStorage {" in crossgl
+    assert "var<workgroup> temp_storage: TempStorage;" in crossgl
+    assert "BlockScan(temp_storage.scan).Sum(data)" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cccl_cub_parenthesized_std_max_call_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cccl

@@ -1559,6 +1559,43 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
+def test_codegen_skips_unsupported_tensor_arm_uniforms_from_vulkan_samples():
+    # Reduced from KhronosGroup/Vulkan-Samples
+    # shaders/tensor_and_data_graph/compute_shaders_with_tensors/glsl/postprocessing.comp.
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_ARM_tensors : enable
+
+        layout(set = 0, binding = 0) uniform tensorARM<float, 4> input_tensor;
+        layout(set = 0, binding = 1) writeonly uniform tensorARM<float, 4> output_tensor;
+
+        layout(push_constant) uniform push_constants
+        {
+            float time;
+        };
+
+        layout(local_size_x = 1, local_size_y = 1) in;
+        void main()
+        {
+            float value[3];
+            uint pixel_coords[4] = uint[](0, gl_GlobalInvocationID.y, gl_GlobalInvocationID.x, 0);
+            tensorReadARM(input_tensor, pixel_coords, value);
+            tensorWriteARM(output_tensor, pixel_coords, value);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "tensorARM" not in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "cbuffer push_constants @push_constant" in crossgl
+    assert "tensorReadARM(input_tensor, pixel_coords, value)" in crossgl
+    assert "tensorWriteARM(output_tensor, pixel_coords, value)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    GLSLParser(GLSLLexer(glsl).tokenize(), "compute").parse()
+
+
 def test_codegen_type_only_atomic_uint_layout_default_from_glslang_spec_examples():
     # Reduced from KhronosGroup/glslang Test/specExamples.vert.
     code = textwrap.dedent("""

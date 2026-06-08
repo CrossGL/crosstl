@@ -2775,6 +2775,25 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "constant Args args" not in regenerated
 
 
+def test_codegen_function_constant_parameter_strips_global_namespace_qualifier_from_apple_hdr_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant uint32_t kExposureModeIndex [[function_constant(AAPLFunctionConstantIndexExposureType)]];
+
+    fragment half4 BloomSetup(
+        texture2d<half> logLuminanceIn [[texture(1), function_constant(::kExposureModeIndex)]]) {
+        return half4(logLuminanceIn.get_width());
+    }
+    """
+    crossgl = convert(code)
+
+    assert "@function_constant(kExposureModeIndex)" in crossgl
+    assert "@function_constant(::kExposureModeIndex)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_argument_buffer_array_of_device_pointers_from_apple_sample():
     code = """
     #include <metal_stdlib>

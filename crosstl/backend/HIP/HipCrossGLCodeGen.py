@@ -4436,12 +4436,12 @@ class HipToCrossGLConverter:
             params = []
 
             if hasattr(node, "params") and node.params:
-                for param in node.params:
+                for index, param in enumerate(node.params):
                     param_name = (
                         param.get("name", "param")
                         if isinstance(param, dict)
                         else getattr(param, "name", "param")
-                    )
+                    ) or f"_param{index}"
                     raw_type = (
                         param.get("type", "int")
                         if isinstance(param, dict)
@@ -4523,13 +4523,14 @@ class HipToCrossGLConverter:
         self.push_identifier_name_scope()
         try:
             if hasattr(kernel, "params") and kernel.params:
-                for param in kernel.params:
+                for index, param in enumerate(kernel.params):
                     if isinstance(param, dict):
                         raw_type = param.get("type", "int")
                         param_name = param.get("name", "param")
                     else:
                         raw_type = getattr(param, "vtype", "int")
                         param_name = getattr(param, "name", "param")
+                    param_name = param_name or f"_param{index}"
 
                     if "*" in raw_type:
                         element_type = self.convert_hip_pointer_element_type(raw_type)

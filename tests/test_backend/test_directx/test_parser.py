@@ -1779,6 +1779,25 @@ def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
     ]
 
 
+def test_parse_unity_unexpanded_struct_member_macros_from_builtin_shaders():
+    ast = parse_code("""
+    struct SpeedTreeVB {
+        float4 vertex : POSITION;
+        UNITY_VERTEX_INPUT_INSTANCE_ID
+    };
+
+    struct TerrainInput {
+        float4 tc;
+        UNITY_FOG_COORDS(0)
+    };
+    """)
+
+    structs = {node.name: node for node in ast.structs if isinstance(node, StructNode)}
+
+    assert [member.name for member in structs["SpeedTreeVB"].members] == ["vertex"]
+    assert [member.name for member in structs["TerrainInput"].members] == ["tc"]
+
+
 def test_parse_compact_shaderlab_program_markers_import_embedded_hlsl():
     ast = parse_code("""
     Shader "Custom/CompactProgram" { SubShader { Pass { CGPROGRAM

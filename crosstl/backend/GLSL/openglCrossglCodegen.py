@@ -699,6 +699,11 @@ class GLSLToCrossGLConverter:
             )
         )
 
+    def _is_unsupported_extension_resource_type(self, type_name):
+        if not type_name:
+            return False
+        return str(self.convert_type(type_name)).startswith("tensorARM<")
+
     def resource_function_descriptor(self, name):
         if name in self.texture_function_operations:
             return {
@@ -2062,6 +2067,8 @@ class GLSLToCrossGLConverter:
         )
 
         for uniform in node.uniforms:
+            if self._is_unsupported_extension_resource_type(uniform.vtype):
+                continue
             self.uniform_vars.append(uniform)
 
         result = ""

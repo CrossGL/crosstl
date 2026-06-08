@@ -594,6 +594,28 @@ def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
 
 
+def test_codegen_skips_unexpanded_struct_member_macros_from_unity_builtins():
+    hlsl = textwrap.dedent("""
+        struct SpeedTreeVB {
+            float4 vertex : POSITION;
+            UNITY_VERTEX_INPUT_INSTANCE_ID
+        };
+
+        struct TerrainInput {
+            float4 tc;
+            UNITY_FOG_COORDS(0)
+        };
+        """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+    parse_crossgl(crossgl)
+
+    assert "UNITY_VERTEX_INPUT_INSTANCE_ID" not in crossgl
+    assert "UNITY_FOG_COORDS" not in crossgl
+    assert "vec4 vertex @ Position;" in crossgl
+    assert "vec4 tc;" in crossgl
+
+
 def test_codegen_legacy_d3d9_fx_sampler_state_binding_imports_bound_texture_call():
     hlsl = textwrap.dedent("""
         texture g_MeshTexture;

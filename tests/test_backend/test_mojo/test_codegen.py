@@ -260,6 +260,29 @@ def test_autotune_binding_arrow_codegen_reparses_from_ksandvik_memset():
     parse_crossgl(generated_code)
 
 
+def test_indirect_call_codegen_reparses_from_modular_coroutine():
+    # Reduced from modular/modular commit
+    # 30d351c58441f196471c59211dad6e9ad91c1235,
+    # mojo/stdlib/std/builtin/coroutine.mojo _coro_resume_fn.
+    code = """
+    def _coro_get_resume_fn(handle: AnyCoroutine) -> def(AnyCoroutine) thin -> None:
+        return MLIR_Op_co_resume_type_def_AnyCoroutine_thin_None(handle)
+
+    def _coro_resume_fn(handle: AnyCoroutine):
+        _coro_get_resume_fn(handle)(handle)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Function _coro_get_resume_fn(AnyCoroutine handle)" in generated_code
+    assert "__mojo_indirect_call(_coro_get_resume_fn(handle), handle);" in (
+        generated_code
+    )
+    assert "def(AnyCoroutine) thin -> None _coro_get_resume_fn" not in generated_code
+    assert "_coro_get_resume_fn(handle)(handle);" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_function_type_with_raises_error_codegen_reparses_from_modular_cublaslt():
     # Reduced from Modular max/kernels/src/_cublas/cublaslt.mojo.
     code = """
