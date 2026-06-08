@@ -130,6 +130,8 @@ Emit the same scan-only portability report with an explicit output path:
 Scan and report commands exit nonzero when the generated report contains error
 diagnostics, while still writing the JSON report to stdout or the requested
 output file.
+Use ``--output -`` on project report, validation, and inspection commands when
+stdout should be selected explicitly in scripts.
 
 Translate every discovered unit to one or more targets:
 

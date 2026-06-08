@@ -14453,6 +14453,38 @@ def test_project_cli_report_records_include_dir_and_define_overrides(tmp_path):
     assert payload["artifactMatrix"]["complete"] is False
 
 
+def test_project_cli_report_writes_json_to_stdout_for_dash_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "report",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output",
+            "-",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert "Wrote" not in result.stdout
+    assert payload["kind"] == project_pipeline.REPORT_KIND
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 1
+
+
 def test_project_cli_report_records_variant_metadata(tmp_path):
     repo = tmp_path / "repo"
     output = tmp_path / "portability-report.json"
@@ -15462,6 +15494,34 @@ def test_project_cli_validate_project_writes_selected_format_to_output(
     assert result.stdout == f"Wrote {output_path}\n"
     assert expected_text in output_text
     assert expected_text not in result.stdout
+
+
+def test_project_cli_validate_project_text_writes_stdout_for_dash_output(tmp_path):
+    report_path = _write_failed_artifact_report(tmp_path / "repo")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "validate-project",
+            str(report_path),
+            "--format",
+            "text",
+            "--output",
+            "-",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Wrote" not in result.stdout
+    assert f"Project validation report: {report_path}" in result.stdout
+    assert "Status: failed" in result.stdout
+    assert "Validation diagnostics:" in result.stdout
 
 
 def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_path):

@@ -221,15 +221,19 @@ def _legacy_parser():
     return parser
 
 
-def _write_json_payload(payload, output_path=None):
-    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    if output_path:
+def _write_text_payload(text, output_path=None):
+    if output_path and output_path != "-":
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         print(f"Wrote {path}")
     else:
         print(text, end="")
+
+
+def _write_json_payload(payload, output_path=None):
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    _write_text_payload(text, output_path)
 
 
 def _parse_project_define_overrides(values):
@@ -400,14 +404,7 @@ def _run_validate_project(args):
     if args.format == "sarif":
         _write_json_payload(_format_project_diagnostics_sarif(payload), args.output)
     elif args.format == "text":
-        text = _format_project_validation_report(payload)
-        if args.output:
-            path = Path(args.output)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-            print(f"Wrote {path}")
-        else:
-            print(text, end="")
+        _write_text_payload(_format_project_validation_report(payload), args.output)
     else:
         _write_json_payload(payload, args.output)
     return 0 if payload["success"] else 1
@@ -2992,14 +2989,7 @@ def _run_inspect_report(args):
             args.output,
         )
     elif args.format == "text":
-        text = _format_project_report_inspection(payload)
-        if args.output:
-            path = Path(args.output)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-            print(f"Wrote {path}")
-        else:
-            print(text, end="")
+        _write_text_payload(_format_project_report_inspection(payload), args.output)
     else:
         _write_json_payload(payload, args.output)
     return 0 if payload["success"] else 1
@@ -3051,7 +3041,9 @@ def _build_parser():
         help="Target backend to include in the scan report; repeatable",
     )
     _add_project_variant_args(scan_parser, action_label="scan")
-    scan_parser.add_argument("--output", "-o", help="Write JSON report to this path")
+    scan_parser.add_argument(
+        "--output", "-o", help="Write JSON report to this path; use '-' for stdout"
+    )
     scan_parser.set_defaults(func=_run_project_scan)
 
     translate_project_parser = subparsers.add_parser(
@@ -3105,7 +3097,9 @@ def _build_parser():
         default="json",
         help="Validation output format",
     )
-    validate_parser.add_argument("--output", "-o", help="Write validation output")
+    validate_parser.add_argument(
+        "--output", "-o", help="Write validation output; use '-' for stdout"
+    )
     validate_parser.add_argument(
         "--run-toolchains",
         action="store_true",
@@ -3123,7 +3117,9 @@ def _build_parser():
         default="json",
         help="Inspection output format",
     )
-    inspect_parser.add_argument("--output", "-o", help="Write inspection output")
+    inspect_parser.add_argument(
+        "--output", "-o", help="Write inspection output; use '-' for stdout"
+    )
     inspect_parser.add_argument(
         "--max-diagnostics",
         type=_non_negative_int,
@@ -3214,7 +3210,9 @@ def _build_parser():
         help="Target backend to include in the report; repeatable",
     )
     _add_project_variant_args(report_parser, action_label="report")
-    report_parser.add_argument("--output", "-o", help="Write JSON report to this path")
+    report_parser.add_argument(
+        "--output", "-o", help="Write JSON report to this path; use '-' for stdout"
+    )
     report_parser.set_defaults(func=_run_project_scan)
     return parser
 
