@@ -14201,6 +14201,40 @@ def test_project_cli_translate_project_writes_report(tmp_path):
     assert (repo / "out" / "opengl" / "simple.glsl").exists()
 
 
+def test_project_cli_translate_project_writes_report_to_stdout_for_dash(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output-dir",
+            "out",
+            "--report",
+            "-",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert "Wrote" not in result.stdout
+    assert payload["kind"] == project_pipeline.REPORT_KIND
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["artifacts"][0]["path"] == "out/cgl/simple.cgl"
+    assert (repo / "out" / "cgl" / "simple.cgl").exists()
+
+
 def test_project_cli_translate_project_validate_records_artifact_checks(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

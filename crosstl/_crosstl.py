@@ -389,8 +389,7 @@ def _run_translate_project(args):
     )
     payload = report.to_json()
     if args.report:
-        report.write_json(Path(args.report))
-        print(f"Wrote {args.report}")
+        _write_json_payload(payload, args.report)
     else:
         _write_json_payload(payload)
     summary = payload["summary"]
@@ -3067,7 +3066,8 @@ def _build_parser():
         help="Named project variant to translate; repeatable",
     )
     translate_project_parser.add_argument(
-        "--report", help="Write project portability JSON report to this path"
+        "--report",
+        help="Write project portability JSON report to this path; use '-' for stdout",
     )
     translate_project_parser.add_argument(
         "--validate",
