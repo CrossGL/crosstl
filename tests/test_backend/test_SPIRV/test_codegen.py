@@ -565,6 +565,62 @@ spv.1.4.OpEntryPoint.frag
                               FunctionEnd
 """
 
+SPIRV_GLSLANG_LEGACY_MULTIMODULE_ID_COLLISION_ASSEMBLY = """
+// Source repo: https://github.com/KhronosGroup/glslang
+// Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+// Source path: Test/baseResults/vk.relaxed.changeSet.vert.out
+// Reduced from two glslang disassembly modules that both reuse numeric ids.
+// Module Version 10000
+Capability Shader
+1: ExtInstImport "GLSL.std.450"
+MemoryModel Logical GLSL450
+EntryPoint Vertex 4 "main" 9 11
+Name 4 "main"
+Name 9 "Color"
+Name 11 "aColor"
+Decorate 9(Color) Location 0
+Decorate 11(aColor) Location 2
+2: TypeVoid
+3: TypeFunction 2
+6: TypeFloat 32
+7: TypeVector 6(float) 4
+8: TypePointer Output 7(fvec4)
+9(Color): 8(ptr) Variable Output
+10: TypePointer Input 7(fvec4)
+11(aColor): 10(ptr) Variable Input
+4(main): 2 Function None 3
+5: Label
+12: 7(fvec4) Load 11(aColor)
+Store 9(Color) 12
+Return
+FunctionEnd
+// Module Version 10000
+Capability Shader
+1: ExtInstImport "GLSL.std.450"
+MemoryModel Logical GLSL450
+EntryPoint Fragment 4 "main" 9 11
+ExecutionMode 4 OriginUpperLeft
+Name 4 "main"
+Name 9 "fragColor"
+Name 11 "Color"
+Decorate 9(fragColor) Location 0
+Decorate 11(Color) Location 0
+2: TypeVoid
+3: TypeFunction 2
+6: TypeFloat 32
+7: TypeVector 6(float) 4
+8: TypePointer Output 7(fvec4)
+9(fragColor): 8(ptr) Variable Output
+10: TypePointer Input 7(fvec4)
+11(Color): 10(ptr) Variable Input
+4(main): 2 Function None 3
+5: Label
+12: 7(fvec4) Load 11(Color)
+Store 9(fragColor) 12
+Return
+FunctionEnd
+"""
+
 SPIRV_GLSLANG_SIMPLE_MAT_MATRIX_TIMES_VECTOR_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -5774,6 +5830,20 @@ def test_glslang_legacy_numeric_id_disassembly_codegen_reparse():
         in generated_code
     )
     assert "value_" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_legacy_multimodule_numeric_ids_do_not_merge_locations():
+    tokens = tokenize_code(SPIRV_GLSLANG_LEGACY_MULTIMODULE_ID_COLLISION_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 Color @output @location(0);" in generated_code
+    assert "float4 aColor @input @location(2);" in generated_code
+    assert "float4 Color @input @location(0);" in generated_code
+    assert "Color @input @location(2) @location(0)" not in generated_code
+    assert "fragColor = Color;" in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

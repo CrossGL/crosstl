@@ -5040,6 +5040,10 @@ class HipToCrossGLConverter:
         if unique_ptr_init is not None:
             return unique_ptr_init
 
+        numeric_limits_call = self.format_std_numeric_limits_call(func_name, args)
+        if numeric_limits_call is not None:
+            return numeric_limits_call
+
         hip_intrinsic = self.format_hip_intrinsic_call(func_name, args)
         if hip_intrinsic is not None:
             return hip_intrinsic
@@ -5076,6 +5080,58 @@ class HipToCrossGLConverter:
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_std_numeric_limits_call(self, function_name, args):
+        parsed = self.parse_cpp_template_static_member(function_name)
+        if parsed is None:
+            return None
+
+        base_name, template_args, member_name = parsed
+        if base_name not in {"std::numeric_limits", "cuda::std::numeric_limits"}:
+            return None
+        if len(template_args) != 1 or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", member_name
+        ):
+            return None
+
+        value_type = self.convert_hip_type_to_crossgl(template_args[0])
+        args_str = ", ".join(args)
+        return f"numeric_limits_{member_name}<{value_type}>({args_str})"
+
+    def parse_cpp_template_static_member(self, text):
+        if not isinstance(text, str):
+            return None
+
+        normalized = text[2:] if text.startswith("::") else text
+        scope_index = self.find_last_scope_operator_outside_templates(normalized)
+        if scope_index is None:
+            return None
+
+        template_name = normalized[:scope_index]
+        member_name = normalized[scope_index + 2 :]
+        if not member_name:
+            return None
+
+        base_name, template_args = self.parse_cpp_template(template_name)
+        if not template_args:
+            return None
+        return base_name, template_args, member_name
+
+    def find_last_scope_operator_outside_templates(self, text):
+        depth = 0
+        last_scope = None
+        index = 0
+        while index + 1 < len(text):
+            char = text[index]
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth = max(0, depth - 1)
+            elif char == ":" and text[index + 1] == ":" and depth == 0:
+                last_scope = index
+                index += 1
+            index += 1
+        return last_scope
 
     def format_hip_intrinsic_call(self, function_name, args):
         fp16_intrinsic = self.format_hip_fp16_intrinsic_call(function_name, args)
@@ -7034,6 +7090,8 @@ class HipToCrossGLConverter:
             "short": "i16",
             "unsigned short": "u16",
             "int": "i32",
+            "signed": "i32",
+            "unsigned": "u32",
             "signed int": "i32",
             "uint": "u32",
             "unsigned int": "u32",

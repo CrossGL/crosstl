@@ -1924,13 +1924,13 @@ class CudaParser:
                 return False
 
         saw_scope = False
-        while (
-            index + 1 < len(self.tokens)
-            and self.tokens[index][0] == "SCOPE"
-            and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
-        ):
+        while index < len(self.tokens) and self.tokens[index][0] == "SCOPE":
+            member_end = self.scoped_member_name_component_end_index_at(index + 1)
+            if member_end is None:
+                return False
+
             saw_scope = True
-            index += 2
+            index = member_end
             if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
                 index = self.skip_template_at_index(index)
                 if index is None:
@@ -1939,6 +1939,30 @@ class CudaParser:
         return (
             saw_scope and index < len(self.tokens) and self.tokens[index][0] == "LPAREN"
         )
+
+    def scoped_member_name_component_end_index_at(self, index):
+        if index < len(self.tokens) and self.tokens[index][0] == "TEMPLATE":
+            index += 1
+
+        if index >= len(self.tokens):
+            return None
+
+        token_type, token_value = self.tokens[index]
+        if token_type == "IDENTIFIER" and token_value == "operator":
+            return self.operator_function_name_end_index_at(index)
+
+        if token_type == "BITWISE_NOT":
+            return (
+                index + 2
+                if index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
+                else None
+            )
+
+        if token_type in self.NAME_COMPONENT_TOKENS:
+            return index + 1
+
+        return None
 
     def skip_out_of_class_member_definition(self):
         while self.current_token[0] not in {"LPAREN", "SEMICOLON", "EOF"}:

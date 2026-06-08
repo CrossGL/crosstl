@@ -1846,7 +1846,7 @@ def test_codegen_struct_template_methods_semantic_case_from_dxc_spirv():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk::binding(0, 0)" in output
+    assert "@ vk_binding(0, 0)" in output
     assert "ByteAddressBuffer babuf[];" in output
     assert "RWByteAddressBuffer rwbuf[];" in output
     assert "ConstantBuffer<Data> cbuf;" in output
@@ -1873,8 +1873,8 @@ def test_codegen_post_name_vk_binding_attributes_on_byte_address_resources():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk::binding(0, 1)" in output
-    assert "@ vk::binding(1, 1)" in output
+    assert "@ vk_binding(0, 1)" in output
+    assert "@ vk_binding(1, 1)" in output
     assert "@ register(t0, space1)" in output
     assert "@ register(u0, space1)" in output
     assert "ByteAddressBuffer inputBytes;" in output
@@ -2635,7 +2635,7 @@ def test_codegen_cxx11_namespaced_resource_attribute_passthrough():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk::binding(3, 1)" in output
+    assert "@ vk_binding(3, 1)" in output
     assert "@ register(t0, space0)" in output
     assert "sampler2D texture2;" in output
 
@@ -2677,7 +2677,7 @@ def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
 
     output = generate_crossgl(hlsl)
 
-    assert "@ vk::push_constant" in output
+    assert "@ vk_push_constant" in output
     assert "@ register(b0, space1)" in output
     assert "cbuffer PushConstants" in output
     assert "vec4 tint;" in output

@@ -126,7 +126,10 @@ EXTERNAL_SAMPLES = [
     {
         "repo": "https://github.com/cupy/cupy",
         "commit": "ba594a4aebbfda022ba20575a161b88d9d54665a",
-        "paths": ["cupy/_core/include/cupy/carray.cuh"],
+        "paths": [
+            "cupy/_core/include/cupy/carray.cuh",
+            "cupy/_core/include/cupy/complex/complex_inl.h",
+        ],
     },
 ]
 
@@ -293,6 +296,36 @@ def test_cupy_carray_post_return_device_struct_methods_are_skipped():
     assert ast.structs[0].members == []
     assert "struct CIndexer" in crossgl
     assert "_log2" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cupy_complex_scoped_operator_member_definitions_are_skipped():
+    # Upstream source:
+    # repo: https://github.com/cupy/cupy
+    # commit: ba594a4aebbfda022ba20575a161b88d9d54665a
+    # path: cupy/_core/include/cupy/complex/complex_inl.h
+    source = """
+    template <typename T>
+    inline __host__ __device__ complex<T>& complex<T>::operator=(const T& re) {
+      real(re);
+      imag(T());
+      return *this;
+    }
+
+    template <typename T>
+    __host__ __device__ inline complex<T>& complex<T>::operator+=(const complex<T> z) {
+      *this = *this + z;
+      return *this;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions == []
+    assert ast.structs == []
+    assert "operator=" not in crossgl
+    assert "operator+=" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

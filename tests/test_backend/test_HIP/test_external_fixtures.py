@@ -800,6 +800,25 @@ def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse()
     assert "1024ul" not in crossgl
 
 
+def test_external_rocm_vulkan_interop_numeric_limits_max_codegen_reparse():
+    # Upstream: https://github.com/ROCm/rocm-examples
+    # Commit: adaf64a066eecb4ad90036dfd1838fc95bed9914
+    # Path: HIP-Basic/vulkan_interop/main.hip
+    source = """
+    constexpr uint64_t frame_timeout = std::numeric_limits<uint64_t>::max();
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    declaration = ast.statements[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert declaration.name == "frame_timeout"
+    assert declaration.vtype == "uint64_t"
+    assert declaration.value.name == "std::numeric_limits<uint64_t>::max"
+    assert "var frame_timeout: u64 = numeric_limits_max<u64>();" in crossgl
+    assert "std::numeric_limits<uint64_t>::max()" not in crossgl
+
+
 def test_external_rocm_graph_api_variable_template_constant_crossgl_reparse():
     source = """
     __global__ void filter_creation_kernel(float* __restrict__ r,

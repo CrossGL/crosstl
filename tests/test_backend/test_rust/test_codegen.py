@@ -242,6 +242,23 @@ def test_rust_gpu_function_pointer_parameter_reparse():
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_bevy_higher_ranked_function_pointer_tuple_struct_field_reparse():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # 67f441da62424f83a1bb6e3f5145034e0583d495,
+    # crates/bevy_render/src/error_handler.rs.
+    code = """
+    pub struct RenderErrorHandler(
+        pub for<'a> fn(&'a RenderError, &'a mut World, &'a mut World) -> RenderErrorPolicy,
+    );
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto field0;" in result
+    assert "for<'a> fn" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_value_returning_function_uses_final_literal_expression_as_return():
     code = r"""
     fn zero() -> u32 {

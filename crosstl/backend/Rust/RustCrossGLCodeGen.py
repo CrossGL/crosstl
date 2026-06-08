@@ -10017,6 +10017,10 @@ class RustToCrossGLConverter:
         if not rust_type:
             return "void"
 
+        higher_ranked_type = self.strip_higher_ranked_type(rust_type)
+        if higher_ranked_type != rust_type:
+            return self.map_type(higher_ranked_type)
+
         lifetime_stripped_type = self.strip_lifetime_type_syntax(rust_type)
         if lifetime_stripped_type != rust_type:
             return self.map_type(lifetime_stripped_type)
@@ -10713,6 +10717,25 @@ class RustToCrossGLConverter:
         if arg:
             args.append(arg)
         return args
+
+    def strip_higher_ranked_type(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+
+        stripped = type_name.strip()
+        if not stripped.startswith("for<"):
+            return type_name
+
+        depth = 0
+        for index, char in enumerate(stripped[3:], start=3):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+                if depth == 0:
+                    return stripped[index + 1 :].strip()
+
+        return type_name
 
     def strip_lifetime_type_syntax(self, type_name):
         if not isinstance(type_name, str) or "'" not in type_name:

@@ -2129,6 +2129,23 @@ def test_function_pointer_type_parsing():
     assert ast.functions[0].params[0].vtype == "fn(&Position) -> u32"
 
 
+def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handler():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # 67f441da62424f83a1bb6e3f5145034e0583d495,
+    # crates/bevy_render/src/error_handler.rs.
+    code = """
+    pub struct RenderErrorHandler(
+        pub for<'a> fn(&'a RenderError, &'a mut World, &'a mut World) -> RenderErrorPolicy,
+    );
+    """
+
+    ast = parse_code(code)
+
+    assert ast.structs[0].members[0].vtype == (
+        "for<'a> fn(&RenderError, &mut World, &mut World) -> RenderErrorPolicy"
+    )
+
+
 def test_double_reference_type_and_expression_parsing():
     code = """
     fn take_slice(value: &&[u32]) {

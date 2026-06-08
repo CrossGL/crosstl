@@ -5510,7 +5510,14 @@ class VulkanParser:
 
     def normalize_legacy_glslang_spirv_disassembly(self, code):
         normalized_lines = []
+        module_index = -1
+        id_namespace = None
         for raw_line in code.splitlines():
+            if re.match(r"\s*//\s*Module Version\b", raw_line):
+                module_index += 1
+                id_namespace = f"m{module_index}_"
+                continue
+
             line = raw_line.split("//", 1)[0].strip()
             if not line:
                 continue
@@ -5525,7 +5532,9 @@ class VulkanParser:
                     ) from error
                 continue
 
-            instruction = self.normalize_legacy_glslang_spirv_instruction(parts)
+            instruction = self.normalize_legacy_glslang_spirv_instruction(
+                parts, id_namespace=id_namespace
+            )
             if instruction is not None:
                 normalized_lines.append(instruction)
 
@@ -5551,13 +5560,15 @@ class VulkanParser:
             )
         )
 
-    def normalize_legacy_glslang_spirv_instruction(self, parts):
+    def normalize_legacy_glslang_spirv_instruction(self, parts, id_namespace=None):
         if not parts:
             return None
 
         result_id = None
         if self.is_legacy_glslang_spirv_result_token(parts[0]):
-            result_id = self.legacy_glslang_spirv_id(parts.pop(0))
+            result_id = self.legacy_glslang_spirv_id(
+                parts.pop(0), namespace=id_namespace
+            )
         if not parts:
             return None
 
@@ -5571,17 +5582,21 @@ class VulkanParser:
         if result_id is not None and parts[0] in known_opcodes:
             opcode = parts.pop(0)
             operands = [
-                self.normalize_legacy_glslang_spirv_operand(opcode, index, operand)
+                self.normalize_legacy_glslang_spirv_operand(
+                    opcode, index, operand, id_namespace=id_namespace
+                )
                 for index, operand in enumerate(parts)
             ]
         elif result_id is not None and len(parts) >= 2 and parts[1] in known_opcodes:
-            result_type = self.legacy_glslang_spirv_id(parts.pop(0))
+            result_type = self.legacy_glslang_spirv_id(
+                parts.pop(0), namespace=id_namespace
+            )
             opcode = parts.pop(0)
             operands = [
                 result_type,
                 *[
                     self.normalize_legacy_glslang_spirv_operand(
-                        opcode, index + 1, operand
+                        opcode, index + 1, operand, id_namespace=id_namespace
                     )
                     for index, operand in enumerate(parts)
                 ],
@@ -5589,7 +5604,9 @@ class VulkanParser:
         else:
             opcode = parts.pop(0)
             operands = [
-                self.normalize_legacy_glslang_spirv_operand(opcode, index, operand)
+                self.normalize_legacy_glslang_spirv_operand(
+                    opcode, index, operand, id_namespace=id_namespace
+                )
                 for index, operand in enumerate(parts)
             ]
 
@@ -5603,17 +5620,20 @@ class VulkanParser:
     def is_legacy_glslang_spirv_result_token(self, token):
         return bool(re.match(r"\d+(?:\([^)]*\))?:$", str(token)))
 
-    def legacy_glslang_spirv_id(self, token):
+    def legacy_glslang_spirv_id(self, token, namespace=None):
+        namespace = namespace or ""
         match = re.match(r"(\d+)(?:\([^)]*\))?:?$", str(token))
         if match:
-            return f"%{match.group(1)}"
+            return f"%{namespace}{match.group(1)}"
         if re.match(r"\d+$", str(token)):
-            return f"%{token}"
+            return f"%{namespace}{token}"
         return token
 
-    def normalize_legacy_glslang_spirv_operand(self, opcode, operand_index, operand):
+    def normalize_legacy_glslang_spirv_operand(
+        self, opcode, operand_index, operand, id_namespace=None
+    ):
         if self.is_legacy_glslang_spirv_id_operand(opcode, operand_index):
-            return self.legacy_glslang_spirv_id(operand)
+            return self.legacy_glslang_spirv_id(operand, namespace=id_namespace)
         return operand
 
     def is_legacy_glslang_spirv_id_operand(self, opcode, operand_index):

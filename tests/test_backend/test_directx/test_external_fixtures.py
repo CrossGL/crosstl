@@ -47,6 +47,7 @@ DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a
 DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
@@ -245,6 +246,29 @@ EXTERNAL_FIXTURES = [
             "geometry {",
             "void gs_main(GSOut points[2], inout pointStream stream) @ stage_entry",
             "buffer_append(stream, points[0]);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_inline_spirv_scoped_capability_attributes",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/inline-spirv/spv.inline.capability.hlsl",
+        code=textwrap.dedent("""
+            [[vk::ext_capability(39)]]
+            typedef vk::SpirvType<21, 8, 8, vk::Literal<vk::integral_constant<uint, 8> >, vk::Literal<vk::integral_constant<bool, false> > > uint8_t;
+
+            [[vk::ext_capability(4447)]]
+            uint8_t val;
+
+            [[vk::ext_capability(4428)]]
+            void main() {
+            }
+        """).strip(),
+        contains=(
+            "vk_SpirvType uint8_t;",
+            "@ vk_ext_capability(4447)",
+            "uint8_t val;",
+            "@ vk_ext_capability(4428)",
         ),
     ),
     ExternalFixture(

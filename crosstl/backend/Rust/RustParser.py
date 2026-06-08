@@ -1396,6 +1396,9 @@ class RustParser:
             self.eat("IMPL")
             return self.parse_type_bound_suffix(f"impl {self.parse_type()}")
 
+        if self.current_token[0] == "FOR":
+            return self.parse_higher_ranked_type()
+
         if self.current_token[0] == "FN":
             return self.parse_function_pointer_type()
 
@@ -1488,6 +1491,13 @@ class RustParser:
             return f"?{self.parse_type()}"
 
         return self.parse_type()
+
+    def parse_higher_ranked_type(self):
+        self.eat("FOR")
+        self.eat("LESS_THAN")
+        binders = self.collect_token_text_until({"GREATER_THAN"})
+        self.eat("GREATER_THAN")
+        return f"for<{binders}> {self.parse_type()}"
 
     def is_callable_trait_type(self, type_parts):
         return type_parts[-1] in {"Fn", "FnMut", "FnOnce"}

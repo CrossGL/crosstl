@@ -1563,6 +1563,7 @@ class HLSLToCrossGLConverter:
             attr_name = str(getattr(attr, "name", ""))
             if attr_name.lower() in skip_names:
                 continue
+            attr_name = self.crossgl_attribute_name(attr_name)
             prefix = "@" if attr_name.lower() == "domain" else "@ "
             args = getattr(attr, "args", getattr(attr, "arguments", []))
             if args:
@@ -1571,6 +1572,15 @@ class HLSLToCrossGLConverter:
             else:
                 lines += "    " * indent + f"{prefix}{attr_name}\n"
         return lines
+
+    def crossgl_attribute_name(self, attr_name):
+        """Return a CrossGL-lexer-safe identifier for HLSL/DXC attributes."""
+        safe_name = re.sub(r"\W+", "_", str(attr_name)).strip("_")
+        if not safe_name:
+            return "attribute"
+        if safe_name[0].isdigit():
+            return f"attr_{safe_name}"
+        return safe_name
 
     def format_subpass_input_attributes(self, attributes, indent):
         normalized_attributes = []

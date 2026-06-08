@@ -340,7 +340,8 @@ class VulkanLexer:
     ):
         """Initialize the lexer and optionally preprocess Vulkan source text."""
         code = code.lstrip("\ufeff")
-        if preprocess:
+        self.is_spirv_assembly = self._looks_like_spirv_assembly(code)
+        if not self.is_spirv_assembly and preprocess:
             preprocessor = VulkanPreprocessor(
                 include_paths=include_paths,
                 defines=defines,
@@ -348,7 +349,7 @@ class VulkanLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
-        self.is_spirv_assembly = self._looks_like_spirv_assembly(code)
+            self.is_spirv_assembly = self._looks_like_spirv_assembly(code)
         if self.is_spirv_assembly:
             self._token_patterns = []
             self.code = code
