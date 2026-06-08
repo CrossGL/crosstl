@@ -1042,6 +1042,22 @@ def test_postfix_transfer_marker_codegen_from_life_examples():
     assert "grid^" not in generated_code
 
 
+def test_postfix_transfer_marker_before_member_call_codegen_from_modular_primitives():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/src/graph_compiler/builtin_primitives/primitives.mojo.
+    code = """
+    def make_buffer(buf: ByteBuffer, shape: Shape) -> MutByteBuffer:
+        return MutByteBuffer(buf^.take_ptr(), shape)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "return MutByteBuffer(buf.take_ptr(), shape);" in generated_code
+    assert "^.take_ptr" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
     code = """
     from std.sys import has_accelerator

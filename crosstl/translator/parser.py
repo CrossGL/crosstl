@@ -2324,6 +2324,9 @@ class Parser:
             ):
                 generic_args = self.parse_square_generic_arguments()
 
+            while self.current_token[0] == "LPAREN":
+                name = f"{name}({self.parse_balanced_parenthesized_token_text()})"
+
             base_type = NamedType(name, generic_args)
 
         elif self.current_token[0] == "LBRACKET":
@@ -2382,10 +2385,18 @@ class Parser:
         generic_params = []
         if self.current_token[0] == "LBRACKET":
             generic_params = self.parse_square_generic_arguments()
+            generic_params = [
+                param
+                for param in generic_params
+                if not (isinstance(param, IdentifierNode) and param.name == "*")
+            ]
 
         self.eat("LPAREN")
         param_types = []
         while self.current_token[0] != "RPAREN":
+            if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
+                self.parse_binding_identifier()
+                self.eat("COLON")
             param_types.append(self.parse_type())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
@@ -2478,9 +2489,12 @@ class Parser:
             self.eat("DOT")
             return IdentifierNode("...")
 
-        if self.current_token[0] == "IDENTIFIER" and self.peek()[0] == "COLON":
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+        if self.current_token[0] == "MULTIPLY":
+            self.eat("MULTIPLY")
+            return IdentifierNode("*")
+
+        if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
+            name = self.parse_binding_identifier()
             self.eat("COLON")
 
             constraints = [self.parse_type()]
@@ -2751,13 +2765,18 @@ class Parser:
 
     def format_type_argument(self, type_node):
         """Format a parsed type node back into a compact type argument string."""
-        if hasattr(type_node, "value"):
-            value = type_node.value
-            return str(value).lower() if isinstance(value, bool) else str(value)
         if isinstance(type_node, AssignmentNode):
             left = self.format_type_argument(type_node.left)
             right = self.format_type_argument(type_node.right)
             return f"{left} = {right}"
+        if isinstance(type_node, ArrayLiteralNode):
+            elements = ", ".join(
+                self.format_type_argument(element) for element in type_node.elements
+            )
+            return f"[{elements}]"
+        if hasattr(type_node, "value"):
+            value = type_node.value
+            return str(value).lower() if isinstance(value, bool) else str(value)
         if isinstance(type_node, ArrayAccessNode):
             array = self.format_type_argument(type_node.array)
             index = self.format_type_argument(type_node.index)
@@ -3589,6 +3608,13 @@ class Parser:
                 self.eat("RANGE")
                 self.eat("DOT")
                 args.append(IdentifierNode("..."))
+            elif self.current_token[0] == "MULTIPLY":
+                self.eat("MULTIPLY")
+                args.append(IdentifierNode("*"))
+            elif (
+                self.current_token_is_binding_identifier() and self.peek()[0] == "COLON"
+            ):
+                args.append(self.parse_square_generic_argument())
             elif (
                 self.current_token_is_binding_identifier()
                 and self.peek()[0] == "EQUALS"
@@ -3619,6 +3645,7 @@ class Parser:
         paren_depth = 0
         brace_depth = 0
         saw_generic_separator = False
+        ternary_depth = 0
 
         while index < len(self.tokens):
             token_type = self.tokens[index][0]
@@ -3648,6 +3675,23 @@ class Parser:
                 and token_type in {"COMMA", "EQUALS"}
             ):
                 saw_generic_separator = True
+            elif (
+                bracket_depth == 1
+                and paren_depth == 0
+                and brace_depth == 0
+                and token_type == "QUESTION"
+            ):
+                ternary_depth += 1
+            elif (
+                bracket_depth == 1
+                and paren_depth == 0
+                and brace_depth == 0
+                and token_type == "COLON"
+            ):
+                if ternary_depth:
+                    ternary_depth -= 1
+                else:
+                    saw_generic_separator = True
 
             index += 1
 
@@ -3939,6 +3983,13 @@ class Parser:
 
     def parse_primary_expression(self):
         """Parse identifiers, literals, parenthesized expressions, and arrays."""
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "def"
+            and self.peek()[0] in {"LBRACKET", "LPAREN"}
+        ):
+            return self.parse_callable_type()
+
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
@@ -3961,9 +4012,35 @@ class Parser:
 
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
+            if self.current_token[0] == "RPAREN":
+                self.eat("RPAREN")
+                return ArrayLiteralNode([])
             expr = self.parse_expression()
+            if self.current_token[0] == "COMMA":
+                elements = [expr]
+                while self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    if self.current_token[0] == "RPAREN":
+                        break
+                    elements.append(self.parse_expression())
+                self.eat("RPAREN")
+                return ArrayLiteralNode(elements)
             self.eat("RPAREN")
             return expr
+
+        elif self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            elements = []
+            while self.current_token[0] != "RBRACKET":
+                elements.append(self.parse_expression())
+                if self.current_token[0] == "COMMA":
+                    self.eat("COMMA")
+                    if self.current_token[0] == "RBRACKET":
+                        break
+                    continue
+                break
+            self.eat("RBRACKET")
+            return ArrayLiteralNode(elements)
 
         elif self.current_token[0] == "MATCH":
             if self.peek()[0] in {
@@ -4429,6 +4506,38 @@ class Parser:
                     elif self.current_token[0] == "RBRACKET":
                         bracket_depth -= 1
                     self.eat(self.current_token[0])
+
+            while self.current_token[0] == "LPAREN":
+                self.parse_balanced_parenthesized_token_text()
+
+    def parse_balanced_parenthesized_token_text(self):
+        """Consume a parenthesized token payload and return compact source text."""
+        self.eat("LPAREN")
+        payload_tokens = []
+        depth = 1
+
+        while depth and self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+
+            if token_type == "LPAREN":
+                depth += 1
+                payload_tokens.append((token_type, token_value))
+                self.eat("LPAREN")
+                continue
+
+            if token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("RPAREN")
+                    break
+                payload_tokens.append((token_type, token_value))
+                self.eat("RPAREN")
+                continue
+
+            payload_tokens.append((token_type, token_value))
+            self.eat(token_type)
+
+        return self.format_raw_lambda_tokens(payload_tokens)
 
     def skip_unknown_token(self):
         """Consume one token when recovering from unsupported syntax."""

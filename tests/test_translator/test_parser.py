@@ -5,6 +5,7 @@ import pytest
 
 from crosstl.translator.ast import (
     ArrayAccessNode,
+    ArrayLiteralNode,
     ArrayType,
     AssignmentNode,
     ConstructorNode,
@@ -180,6 +181,38 @@ def test_square_bracket_generic_type_arguments_accept_expression_values():
     assert isinstance(statements[1].expression, FunctionCallNode)
 
 
+def test_square_bracket_expression_specializations_accept_colon_parameters():
+    code = """
+    shader ExpressionSquareGenericColonShader {
+        void main() {
+            specialize[param:Type, value=2]();
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    call = ast.functions[0].body.statements[0].expression
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.function.name == "specialize[param:Type, value = 2]"
+
+
+def test_ternary_array_indices_are_not_square_generic_specializations():
+    code = """
+    shader TernaryIndexShader {
+        sampler2D textures[];
+        vec4 main(bool choose) {
+            return texture(textures[choose ? 4 : 2], vec2(0.0, 1.0));
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    texture_call = ast.functions[0].body.statements[0].value
+
+    assert isinstance(texture_call.arguments[0], ArrayAccessNode)
+
+
 def test_square_bracket_generic_type_arguments_accept_ellipsis_only_lists():
     code = """
     shader EllipsisSquareGenericShader {
@@ -212,6 +245,140 @@ def test_dotted_type_names_parse_as_single_named_type():
 
     assert parameters[0].param_type.name == "Self.tensor_type"
     assert parameters[1].param_type.name == "Self.SharedMemTileType"
+
+
+def test_type_helper_call_return_types_parse_as_named_types():
+    code = """
+    shader TypeHelperReturnShader {
+        type_of(x) add_const_fn(SIMD x) {
+            return x;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+
+    assert function.name == "add_const_fn"
+    assert isinstance(function.return_type, NamedType)
+    assert function.return_type.name == "type_of(x)"
+    assert function.parameters[0].param_type.name == "SIMD"
+
+
+def test_def_identifier_remains_valid_expression_name():
+    code = """
+    shader DefIdentifierShader {
+        vec4 main(vec4 red) {
+            vec4 def = red;
+            return def + red;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+
+    assert function.body.statements[0].name == "def"
+    assert function.body.statements[1].value.left.name == "def"
+
+
+def test_callable_type_values_accept_keyword_only_generic_separator():
+    code = """
+    shader CallableValueShader {
+        let epilogue_func_type =
+            def[dtype:DType, width:SIMDSize, *, alignment:Int=1]
+                (SIMD[dtype, width]) capturing -> SIMD[dtype, width];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    callable_type = ast.global_variables[0].initial_value
+
+    assert isinstance(callable_type, FunctionType)
+    assert callable_type.annotations["effects"] == ["capturing"]
+    assert [param.name for param in callable_type.annotations["generic_params"]] == [
+        "dtype",
+        "width",
+        "alignment",
+    ]
+    assert callable_type.annotations["generic_params"][2].default_type.value == 1
+
+
+def test_callable_type_values_accept_named_parameters():
+    code = """
+    shader CallableNamedParameterValueShader {
+        let elementwise_epilogue_type =
+            def[rank:Int](coords:IndexList[rank], f_size:Int)
+                capturing -> None;
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    callable_type = ast.global_variables[0].initial_value
+
+    assert isinstance(callable_type, FunctionType)
+    assert [param.name for param in callable_type.annotations["generic_params"]] == [
+        "rank"
+    ]
+    assert isinstance(callable_type.param_types[0], ArrayType)
+    assert callable_type.param_types[0].element_type.name == "IndexList"
+    assert callable_type.param_types[0].size.name == "rank"
+    assert callable_type.param_types[1].name == "Int"
+
+
+def test_parenthesized_tuple_and_square_list_literals_parse_as_array_literals():
+    code = """
+    shader LiteralShapeShader {
+        let SF_ATOM_M = (32, 4);
+        List[Path] CUDA_CUDNN_LIBRARY_PATHS = ["libcudnn.so", "libcudnn.so.9"];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    tuple_literal = ast.global_variables[0].initial_value
+    list_literal = ast.global_variables[1].initial_value
+
+    assert isinstance(tuple_literal, ArrayLiteralNode)
+    assert [element.value for element in tuple_literal.elements] == [32, 4]
+    assert isinstance(list_literal, ArrayLiteralNode)
+    assert [element.value for element in list_literal.elements] == [
+        "libcudnn.so",
+        "libcudnn.so.9",
+    ]
+
+
+def test_square_expression_specialization_formats_array_literal_arguments():
+    code = """
+    shader ArrayLiteralSpecializationShader {
+        void main() {
+            let func_alias = empty_kernel_many_params[
+                Layout([1, 2], [3, 3]),
+                Layout([1, 2], [3, 3])
+            ];
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    alias = ast.functions[0].body.statements[0].initial_value
+
+    assert alias.name == (
+        "empty_kernel_many_params" "[Layout([1, 2], [3, 3]), Layout([1, 2], [3, 3])]"
+    )
+
+
+def test_square_generic_parameters_accept_keyword_like_names():
+    code = """
+    shader KeywordLikeSquareGenericShader {
+        let GlobalTensor[dtype:DType, layout:Layout] =
+            LayoutTensor[dtype, layout_, MutAnyOrigin];
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    variable = ast.global_variables[0]
+
+    assert [param.name for param in variable.generic_params] == ["dtype", "layout"]
 
 
 def test_square_bracket_generic_parameters_parse_on_variable_declarations():

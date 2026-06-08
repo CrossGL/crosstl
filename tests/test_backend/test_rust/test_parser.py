@@ -4636,6 +4636,32 @@ def test_unsafe_extern_function_and_block_parsing():
         pytest.fail(f"Unsafe extern function and block parsing failed: {e}")
 
 
+def test_local_unsafe_extern_block_parsing_from_rust_cuda_thread_intrinsic():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/cuda_std/src/thread.rs __nvvm_warp_size declaration.
+    code = """
+    pub fn warp_size() -> u32 {
+        unsafe extern "C" {
+            fn __nvvm_warp_size() -> u32;
+        }
+
+        unsafe {
+            __nvvm_warp_size()
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "warp_size"
+    assert len(function.body) == 1
+    unsafe_block = function.body[0]
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert unsafe_block.block.expression.name == "__nvvm_warp_size"
+
+
 def test_const_function_and_block_parsing():
     code = """
     pub const SCALE: i32 = 2;

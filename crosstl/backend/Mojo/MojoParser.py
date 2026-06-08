@@ -2476,6 +2476,7 @@ class MojoParser:
     def is_postfix_transfer_marker(self):
         return self.peek_token()[0] in self.STATEMENT_END_TOKENS | {
             "COMMA",
+            "DOT",
             "RPAREN",
             "RBRACKET",
             "COLON",

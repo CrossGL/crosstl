@@ -2803,6 +2803,30 @@ def test_postfix_transfer_marker_parse_from_life_examples():
     assert xor_value.body[0].value.op == "^"
 
 
+def test_postfix_transfer_marker_before_member_call_parse_from_modular_primitives():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/src/graph_compiler/builtin_primitives/primitives.mojo.
+    code = """
+    def make_buffer(buf: ByteBuffer, shape: Shape) -> MutByteBuffer:
+        return MutByteBuffer(buf^.take_ptr(), shape)
+
+    def xor_value(a: Int, b: Int) -> Int:
+        return a ^ b
+    """
+    ast = parse_code(tokenize_code(code))
+    make_buffer = find_function(ast, "make_buffer")
+    xor_value = find_function(ast, "xor_value")
+
+    transferred_call = make_buffer.body[0].value.args[0]
+    assert isinstance(transferred_call, MethodCallNode)
+    assert transferred_call.method == "take_ptr"
+    assert transferred_call.object.name == "buf"
+    assert getattr(transferred_call.object, "is_transfer", False)
+    assert isinstance(xor_value.body[0].value, BinaryOpNode)
+    assert xor_value.body[0].value.op == "^"
+
+
 def test_type_member_expression_parse_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:

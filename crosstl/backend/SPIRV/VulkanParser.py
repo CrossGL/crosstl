@@ -860,6 +860,26 @@ class VulkanParser:
                     "column_type": operands[0],
                     "column_count": operands[1],
                 }
+            elif (
+                result_id
+                and opcode
+                in {
+                    "OpTypeCooperativeMatrixKHR",
+                    "OpTypeCooperativeMatrixNV",
+                }
+                and len(operands) >= 4
+            ):
+                types[result_id] = {
+                    "kind": "cooperative_matrix",
+                    "name": self.spirv_cooperative_matrix_type_name(
+                        opcode, operands, types, constants
+                    ),
+                    "component_type": operands[0],
+                    "scope": operands[1],
+                    "rows": operands[2],
+                    "columns": operands[3],
+                    "use": operands[4] if len(operands) >= 5 else None,
+                }
             elif result_id and opcode == "OpTypeArray" and len(operands) >= 2:
                 types[result_id] = {
                     "kind": "array",
@@ -979,7 +999,7 @@ class VulkanParser:
                 if len(operands) >= 2:
                     constant_types[result_id] = operands[0]
                     constants[result_id] = self.spirv_spec_constant_op_expression(
-                        operands[1], operands[2:], names, constants
+                        operands[1], operands[2:], names, constants, types
                     )
                     spec_constant_ids.append(result_id)
             elif result_id and opcode == "OpExtInstImport" and operands:
@@ -5667,7 +5687,22 @@ class VulkanParser:
         ]
         return FunctionCallNode(type_name or "spirv_constant_composite", args)
 
-    def spirv_spec_constant_op_expression(self, operation, operands, names, constants):
+    def spirv_spec_constant_op_expression(
+        self, operation, operands, names, constants, types
+    ):
+        if (
+            operation
+            in {
+                "CooperativeMatrixLengthKHR",
+                "CooperativeMatrixLengthNV",
+            }
+            and operands
+        ):
+            length = self.spirv_cooperative_matrix_length(operands[0], types, constants)
+            if length is not None:
+                return str(length)
+            return "1"
+
         args = [
             self.spirv_constant_operand_expression(operand, names, constants)
             for operand in operands
@@ -6119,6 +6154,57 @@ class VulkanParser:
         if row_count == column_count:
             return f"{prefix}{column_count}"
         return f"{prefix}{column_count}x{row_count}"
+
+    def spirv_cooperative_matrix_type_name(self, opcode, operands, types, constants):
+        component_type = self.spirv_type_name(operands[0], types) or operands[0]
+        variant = "khr" if opcode.endswith("KHR") else "nv"
+        parts = [
+            "spirvCoopMat",
+            variant,
+            component_type,
+            "scope",
+            self.spirv_cooperative_matrix_dimension_name(operands[1], constants),
+            "rows",
+            self.spirv_cooperative_matrix_dimension_name(operands[2], constants),
+            "cols",
+            self.spirv_cooperative_matrix_dimension_name(operands[3], constants),
+        ]
+        if len(operands) >= 5:
+            parts.extend(
+                [
+                    "use",
+                    self.spirv_cooperative_matrix_dimension_name(
+                        operands[4], constants
+                    ),
+                ]
+            )
+        return "_".join(self.spirv_fallback_identifier(part, "part") for part in parts)
+
+    def spirv_cooperative_matrix_dimension_name(self, operand, constants):
+        value = constants.get(operand, operand)
+        text = self.spirv_constant_expression_text(value)
+        return self.spirv_fallback_identifier(text, "value")
+
+    def spirv_cooperative_matrix_length(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        if type_info.get("kind") != "cooperative_matrix":
+            return None
+        rows = self.spirv_cooperative_matrix_static_dimension(
+            type_info.get("rows"), constants
+        )
+        columns = self.spirv_cooperative_matrix_static_dimension(
+            type_info.get("columns"), constants
+        )
+        if rows is None or columns is None:
+            return None
+        return rows * columns
+
+    def spirv_cooperative_matrix_static_dimension(self, operand, constants):
+        value = constants.get(operand, operand)
+        try:
+            return int(str(value), 0)
+        except (TypeError, ValueError):
+            return None
 
     def spirv_float_type_name(self, width):
         if width == "16":

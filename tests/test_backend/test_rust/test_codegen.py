@@ -9285,6 +9285,30 @@ def test_unsafe_extern_transparent_conversion():
         pytest.fail(f"Unsafe extern transparent conversion failed: {e}")
 
 
+def test_local_unsafe_extern_block_codegen_reparse_from_rust_cuda_thread_intrinsic():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/cuda_std/src/thread.rs __nvvm_warp_size declaration.
+    code = """
+    pub fn warp_size() -> u32 {
+        unsafe extern "C" {
+            fn __nvvm_warp_size() -> u32;
+        }
+
+        unsafe {
+            __nvvm_warp_size()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint warp_size()" in result
+    assert "return __nvvm_warp_size();" in result
+    assert "extern" not in result
+    crosstl.translator.parse(result)
+
+
 def test_unsafe_block_assignment_conversion():
     code = """
     fn decode(value: i32) -> i32 {

@@ -8764,5 +8764,52 @@ def test_double_dtype_codegen():
         pytest.fail("Double data type parsing or code generation not implemented.")
 
 
+SPIRV_GLSLANG_COOPERATIVE_MATRIX_LENGTH_ASSEMBLY = """
+; Reduced from KhronosGroup/glslang Test/spv.coopmat.comp at commit 98beacd.
+OpCapability Shader
+OpCapability CooperativeMatrixNV
+OpExtension "SPV_NV_cooperative_matrix"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %main "main"
+OpName %matrix "matrix"
+OpName %values "values"
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%half = OpTypeFloat 16
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%uint_3 = OpConstant %uint 3
+%uint_8 = OpConstant %uint 8
+%uint_16 = OpConstant %uint 16
+%int_0 = OpConstant %int 0
+%coop = OpTypeCooperativeMatrixNV %half %uint_3 %uint_16 %uint_8
+%ptr_function_coop = OpTypePointer Function %coop
+%length = OpSpecConstantOp %uint CooperativeMatrixLengthNV %coop
+%array_length = OpSpecConstantOp %int IAdd %length %int_0
+%array = OpTypeArray %coop %array_length
+%ptr_function_array = OpTypePointer Function %array
+%main = OpFunction %void None %fn
+%label = OpLabel
+%matrix = OpVariable %ptr_function_coop Function
+%values = OpVariable %ptr_function_array Function
+OpReturn
+OpFunctionEnd
+"""
+
+
+def test_glslang_cooperative_matrix_length_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_COOPERATIVE_MATRIX_LENGTH_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "spirvCoopMat_nv_half_scope_value_3_rows_value_16_cols_value_8" in (
+        generated_code
+    )
+    assert "spirv_CooperativeMatrixLengthNV" not in generated_code
+    parse_crossgl(generated_code)
+
+
 if __name__ == "__main__":
     pytest.main()

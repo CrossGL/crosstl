@@ -3476,7 +3476,14 @@ class RustParser:
         )
 
     def current_starts_local_item(self):
-        return self.current_token[0] in {"STRUCT", "ENUM", "TRAIT", "TYPE", "IMPL"}
+        return self.current_token[0] in {
+            "STRUCT",
+            "ENUM",
+            "TRAIT",
+            "TYPE",
+            "IMPL",
+            "EXTERN",
+        } or (self.current_token[0] == "UNSAFE" and self.peek_token_type() == "EXTERN")
 
     def parse_local_item(self):
         if self.current_token[0] == "STRUCT":
@@ -3489,6 +3496,11 @@ class RustParser:
             self.parse_type_alias()
         elif self.current_token[0] == "IMPL":
             self.parse_impl_block()
+        elif self.current_token[0] == "EXTERN":
+            self.skip_extern_block()
+        elif self.current_token[0] == "UNSAFE" and self.peek_token_type() == "EXTERN":
+            self.eat("UNSAFE")
+            self.skip_extern_block()
         else:
             raise SyntaxError(f"Expected local item, got {self.current_token[0]}")
 
