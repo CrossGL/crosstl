@@ -15917,6 +15917,7 @@ def test_inspect_project_report_emits_closed_inspection_report_schema(tmp_path):
     assert payload["kind"] == project_pipeline.REPORT_INSPECTION_KIND
     assert payload["sourceReport"] == str(report_path)
     assert isinstance(payload["generatedAt"], int)
+    assert payload["report"]["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
 
 
 def test_inspect_project_report_samples_migration_actions(tmp_path):
@@ -16603,6 +16604,18 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     )
     generator = payload["report"]["generator"]
     assert f"Inspection schema version: {payload['schemaVersion']}" in result.stdout
+    assert f"Inspection kind: {payload['kind']}" in result.stdout
+    inspection_generated_lines = [
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("Inspection generated at: ")
+    ]
+    assert len(inspection_generated_lines) == 1
+    assert int(inspection_generated_lines[0].split(": ", 1)[1]) >= 0
+    assert (
+        f"Source report schema version: {payload['report']['schemaVersion']}"
+        in result.stdout
+    )
     assert f"Source report kind: {payload['report']['kind']}" in result.stdout
     assert f"Report generated at: {payload['report']['generatedAt']}" in result.stdout
     assert (

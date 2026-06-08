@@ -2130,6 +2130,44 @@ def _format_inspection_schema_version(payload):
     return f"Inspection schema version: {schema_version}"
 
 
+def _format_inspection_kind(payload):
+    if not isinstance(payload, Mapping):
+        return None
+
+    kind = payload.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return None
+    return f"Inspection kind: {kind}"
+
+
+def _format_inspection_generated_at(payload):
+    if not isinstance(payload, Mapping):
+        return None
+
+    generated_at = payload.get("generatedAt")
+    if (
+        not isinstance(generated_at, int)
+        or isinstance(generated_at, bool)
+        or generated_at < 0
+    ):
+        return None
+    return f"Inspection generated at: {generated_at}"
+
+
+def _format_source_report_schema_version(report):
+    if not isinstance(report, Mapping):
+        return None
+
+    schema_version = report.get("schemaVersion")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 0
+    ):
+        return None
+    return f"Source report schema version: {schema_version}"
+
+
 def _format_source_report_kind(report):
     if not isinstance(report, Mapping):
         return None
@@ -2216,6 +2254,9 @@ def _format_project_report_inspection(payload):
     lines = [f"Project report: {payload.get('sourceReport')}"]
     for header_line in (
         _format_inspection_schema_version(payload),
+        _format_inspection_kind(payload),
+        _format_inspection_generated_at(payload),
+        _format_source_report_schema_version(report),
         _format_source_report_kind(report),
         _format_project_config_path(project),
         _format_project_root_path(project),

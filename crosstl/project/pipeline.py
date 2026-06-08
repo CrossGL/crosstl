@@ -5655,6 +5655,7 @@ def inspect_project_report(
     payload["report"] = {
         "available": True,
         "valid": report_is_valid,
+        "schemaVersion": report.get("schemaVersion"),
         "kind": report.get("kind"),
         "generatedAt": report.get("generatedAt"),
         "generator": dict(generator) if isinstance(generator, Mapping) else {},
