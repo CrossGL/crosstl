@@ -525,6 +525,31 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_static_member_definition",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/static_member_var.hlsl",
+        code=textwrap.dedent("""
+            struct PSInput
+            {
+                static const uint Val;
+                uint Func() { return Val; }
+            };
+
+            static const uint PSInput::Val = 3;
+
+            uint PSMain(PSInput input) : SV_Target0
+            {
+                return input.Func();
+            }
+        """).strip(),
+        contains=(
+            "static const uint PSInput_Val = 3;",
+            "uint PSMain(PSInput input) @ gl_FragData[0]",
+            "return input.Func();",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_native_16bit_scalar_types",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,

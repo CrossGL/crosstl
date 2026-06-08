@@ -325,6 +325,12 @@ def _load_hip():
     return HipLexer, HipParser
 
 
+def _load_opencl():
+    from crosstl.backend.OpenCL import OpenCLLexer, OpenCLParser
+
+    return OpenCLLexer, OpenCLParser
+
+
 def _reverse_directx():
     from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
@@ -461,6 +467,12 @@ def _reverse_hip():
     from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
     return HipToCrossGLConverter()
+
+
+def _reverse_opencl():
+    from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
+
+    return OpenCLToCrossGLConverter()
 
 
 def register_default_sources() -> None:
@@ -607,5 +619,14 @@ def register_default_sources() -> None:
             load_lexer_parser=_load_hip,
             reverse_codegen_factory=_reverse_hip,
             aliases=("hip",),
+        )
+    )
+    _register(
+        SourceSpec(
+            name="opencl",
+            extensions=(".cl", ".opencl"),
+            load_lexer_parser=_load_opencl,
+            reverse_codegen_factory=_reverse_opencl,
+            aliases=("opencl", "cl"),
         )
     )

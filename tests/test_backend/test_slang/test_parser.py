@@ -4086,5 +4086,43 @@ def test_comma_separated_expression_statement_from_slang_shaders():
     assert if_body[2].operator == "*="
 
 
+def test_generic_prefix_struct_from_official_compute_tests_parse():
+    code = """
+    __generic<T>
+    struct GenStruct
+    {
+        T x;
+        T y;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "GenStruct"
+    assert struct.generic_parameters == "<T>"
+    assert [member.name for member in struct.members] == ["x", "y"]
+    assert [member.vtype for member in struct.members] == ["T", "T"]
+
+
+def test_numeric_bitfield_members_from_official_language_tests_parse():
+    code = """
+    struct S
+    {
+        int foo : 8;
+        uint bar : 24;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert [member.name for member in struct.members] == ["foo", "bar"]
+    assert [member.vtype for member in struct.members] == ["int", "uint"]
+    assert [member.semantic for member in struct.members] == [None, None]
+
+
 if __name__ == "__main__":
     pytest.main()

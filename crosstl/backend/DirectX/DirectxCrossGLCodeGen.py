@@ -440,6 +440,7 @@ class HLSLToCrossGLConverter:
         self.integer_constant_values = {}
         self.suppress_storage_image_index_lowering = False
         self.function_identifier_renames = {}
+        self.global_identifier_renames = {}
         self.legacy_sampler_bindings = {}
         self.legacy_sampler_declaration_ids = set()
         self.legacy_bound_texture_types = {}
@@ -1406,7 +1407,9 @@ class HLSLToCrossGLConverter:
         """Return the active CrossGL spelling for a user-declared identifier."""
         if not isinstance(name, str):
             return name
-        return self.current_identifier_renames.get(name, name)
+        if name in self.current_identifier_renames:
+            return self.current_identifier_renames[name]
+        return self.global_identifier_renames.get(name, name)
 
     def function_parameter_renames(self, params):
         reserved_names = {param.name for param in params if param.name}
@@ -1446,6 +1449,37 @@ class HLSLToCrossGLConverter:
             if not name.isidentifier() or name not in self.crossgl_reserved_identifiers:
                 continue
             candidate = f"{name}_"
+            while candidate in used_names or candidate in renames.values():
+                candidate = f"{candidate}_"
+            renames[name] = candidate
+            used_names.add(candidate)
+        return renames
+
+    def collect_global_identifier_renames(self, ast):
+        declared_names = {
+            name
+            for nodes in (
+                getattr(ast, "structs", []) or [],
+                getattr(ast, "global_variables", []) or [],
+                getattr(ast, "functions", []) or [],
+                getattr(ast, "typedefs", []) or [],
+                getattr(ast, "enums", []) or [],
+            )
+            for node in nodes
+            for name in [getattr(node, "name", None)]
+            if isinstance(name, str) and name
+        }
+        used_names = {
+            self.function_identifier_renames.get(name, name) for name in declared_names
+        }
+        renames = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            name = getattr(node, "name", None)
+            if not isinstance(name, str) or "::" not in name:
+                continue
+            candidate = self.sanitize_scoped_identifier_name(name)
+            if candidate in self.crossgl_reserved_identifiers:
+                candidate = f"{candidate}_"
             while candidate in used_names or candidate in renames.values():
                 candidate = f"{candidate}_"
             renames[name] = candidate
@@ -2838,6 +2872,7 @@ class HLSLToCrossGLConverter:
         self.function_identifier_renames = self.collect_function_identifier_renames(
             ast.functions
         )
+        self.global_identifier_renames = self.collect_global_identifier_renames(ast)
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []

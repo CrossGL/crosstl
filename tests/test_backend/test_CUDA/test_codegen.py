@@ -10017,9 +10017,10 @@ class TestCudaCodeGen:
 
         assert "var c: i8 = 'x';" in result
         assert "var escaped: i8 = '\\n';" in result
-        assert "var hex: i8 = '\\x7f';" in result
-        assert "var oct: i8 = '\\377';" in result
+        assert "var hex: i8 = 127;" in result
+        assert "var oct: i8 = 255;" in result
         assert "return c;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_long_long_type_conversion(self):
         code = """

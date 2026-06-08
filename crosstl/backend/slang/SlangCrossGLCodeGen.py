@@ -587,7 +587,7 @@ class SlangToCrossGLConverter:
             if self.is_forward_struct_declaration(node):
                 continue
             if isinstance(node, StructNode):
-                code += f"    struct {node.name} {{\n"
+                code += f"    struct {self.format_struct_declaration_name(node)} {{\n"
                 for member in node.members:
                     code += f"        {self.generate_struct_member(node, member)};\n"
                 code += "    }\n"
@@ -784,6 +784,12 @@ class SlangToCrossGLConverter:
                 return scope[name]
         return name
 
+    def format_struct_declaration_name(self, node):
+        generic_parameters = ""
+        if getattr(node, "generic_parameters_from_prefix", False):
+            generic_parameters = getattr(node, "generic_parameters", None) or ""
+        return f"{self.format_identifier(node.name)}{generic_parameters}"
+
     def collect_struct_member_name_maps(self, ast):
         maps = {}
         for struct in getattr(ast, "structs", []) or []:
@@ -858,7 +864,7 @@ class SlangToCrossGLConverter:
         if isinstance(item, StructNode):
             if self.is_forward_struct_declaration(item):
                 return ""
-            code = f"    struct {item.name} {{\n"
+            code = f"    struct {self.format_struct_declaration_name(item)} {{\n"
             for member in item.members:
                 code += f"        {self.generate_struct_member(item, member)};\n"
             code += "    }\n"
@@ -900,7 +906,7 @@ class SlangToCrossGLConverter:
         return getattr(node, "glsl_block_kind", None) == "buffer"
 
     def generate_glsl_storage_block(self, node):
-        code = f"    struct {node.name} {{\n"
+        code = f"    struct {self.format_struct_declaration_name(node)} {{\n"
         for member in node.members:
             code += f"        {self.generate_struct_member(node, member)};\n"
         code += "    }\n"

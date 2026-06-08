@@ -230,6 +230,114 @@ def test_cuda_native_saxpy_round_trip_regenerates_native_cuda(tmp_path):
     compile_cuda_if_nvcc_available(regenerated_cuda, tmp_path)
 
 
+def test_cuda_samples_eglstream_elaborated_struct_types_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/EGLStream_CUDA_CrossGPU/eglstrm_common.h
+    source = """
+    static double getMicrosecond(struct timespec t) {
+        return (t.tv_sec * 1000000.0);
+    }
+
+    static inline void getTime(struct timespec *t) {
+        clock_gettime(clock_id, t);
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "f64 getMicrosecond(timespec t)" in crossgl
+    assert "void getTime(ptr<timespec> t)" in crossgl
+    assert "struct timespec" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_interval_buffer_parameter_keyword_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/2_Concepts_and_Techniques/interval/cuda_interval.h
+    source = """
+    template <typename T>
+    __global__ void bisect(T* buffer, int index) {
+        buffer[threadIdx.x] = index;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "buffer_: array<T>" in crossgl
+    assert "buffer_[gl_LocalInvocationID.x] = index;" in crossgl
+    assert " buffer:" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_nvrtc_char_escape_literals_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/9_CUDA_Tile/tileMatmulAutotuner/backend_nvrtc.h
+    source = r"""
+    void clear(char* memBlock, unsigned int inputSize) {
+        memBlock[inputSize] = '\x0';
+        memBlock[0] = '\101';
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "memBlock[inputSize] = 0;" in crossgl
+    assert "memBlock[0] = 65;" in crossgl
+    assert "'\\x0'" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cutlass_static_member_value_expression_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: d80a4e53b52b42550659a8696dab32705265e324
+    # path: include/cute/numeric/integral_constant.hpp
+    source = """
+    template <class T>
+    constexpr bool is_integral_v = is_integral<T>::value;
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "var is_integral_v: bool = is_integral_T_value;" in crossgl
+    assert "::value" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cutlass_empty_initializer_list_return_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: d80a4e53b52b42550659a8696dab32705265e324
+    # path: include/cute/numeric/integral_constant.hpp
+    source = """
+    template <auto v> struct C { static constexpr auto value = v; };
+
+    template <auto t>
+    C<(+t)> operator+(C<t>) {
+        return {};
+    }
+
+    int zero() {
+        return {0};
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "C_t operator_add(C<t> _unused_param_0)" in crossgl
+    assert "return 0 /* CUDA initializer list return */;" in crossgl
+    assert "i32 zero()" in crossgl
+    assert "return {};" not in crossgl
+    assert "return {0};" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_tiny_cuda_nn_unroll_macro_markers_before_for_loops_parse_and_codegen():
     # Upstream source:
     # repo: https://github.com/NVlabs/tiny-cuda-nn

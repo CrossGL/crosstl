@@ -185,9 +185,22 @@ VULKAN_MEMORY_MODEL_QUALIFIERS = {
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= VULKAN_MEMORY_MODEL_QUALIFIERS
-IDENTIFIER_QUALIFIERS |= {"nonuniformEXT", "spirv_by_reference", "tileImageEXT"}
+IDENTIFIER_QUALIFIERS |= {
+    "nonuniformEXT",
+    "spirv_by_reference",
+    "spirv_literal",
+    "tileImageEXT",
+}
 CONTEXTUAL_QUALIFIERS = {"static"}
-DECLARATION_ANNOTATION_PREFIXES = {"spirv_instruction"}
+DECLARATION_ANNOTATION_PREFIXES = {
+    "spirv_decorate",
+    "spirv_decorate_id",
+    "spirv_decorate_string",
+    "spirv_instruction",
+    "spirv_storage_class",
+}
+STANDALONE_DECLARATION_ANNOTATIONS = {"spirv_execution_mode"}
+TYPE_ANNOTATION_NAMES = {"spirv_type"}
 TEMPLATE_TYPE_NAMES = {"vector"}
 TEMPLATE_DECLARATION_TYPE_NAMES = {
     "coopmat",
@@ -485,6 +498,10 @@ class GLSLParser:
                 precision_stmt = self.parse_precision_statement()
                 if precision_stmt:
                     preprocessor.append(precision_stmt)
+                continue
+
+            if self.is_standalone_declaration_annotation():
+                self.skip_standalone_declaration_annotation()
                 continue
 
             if self.current_token[0] == "STRUCT":
@@ -948,6 +965,22 @@ class GLSLParser:
 
         return qualifiers, layout
 
+    def is_standalone_declaration_annotation(self):
+        if (
+            self.current_token[0] != "IDENTIFIER"
+            or self.current_token[1] not in STANDALONE_DECLARATION_ANNOTATIONS
+            or self.peek()[0] != "LPAREN"
+        ):
+            return False
+        end_index = self.skip_balanced_suffix(self.index + 1, "LPAREN", "RPAREN")
+        return self.token_at(self.skip_newline_index(end_index))[0] == "SEMICOLON"
+
+    def skip_standalone_declaration_annotation(self):
+        self.eat("IDENTIFIER")
+        self.skip_balanced_parentheses()
+        self.skip_newlines()
+        self.eat("SEMICOLON")
+
     def is_macro_declaration_prefix(self):
         if self.current_token[0] != "IDENTIFIER":
             return False
@@ -973,6 +1006,14 @@ class GLSLParser:
     def can_follow_macro_declaration_prefix(self, token):
         token_type, token_value = token
         if token_type in TYPE_TOKENS or token_type in QUALIFIER_TOKENS | {"LAYOUT"}:
+            return True
+        if token_type == "IDENTIFIER" and token_value in (
+            DECLARATION_ANNOTATION_PREFIXES | TYPE_ANNOTATION_NAMES
+        ):
+            return True
+        if token_type == "IDENTIFIER" and self.is_explicit_arithmetic_type_name(
+            token_value
+        ):
             return True
         if token_type == "IDENTIFIER" and self.is_uppercase_macro_identifier(
             token_value
@@ -1066,6 +1107,15 @@ class GLSLParser:
         if self.current_token[0] in TYPE_TOKENS:
             type_name = self.current_token[1]
             self.advance()
+            return type_name + self.parse_type_template_suffix()
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in TYPE_ANNOTATION_NAMES
+            and self.peek()[0] == "LPAREN"
+        ):
+            type_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.skip_balanced_parentheses()
             return type_name + self.parse_type_template_suffix()
         if self.current_token[0] == "IDENTIFIER":
             type_name = self.current_token[1]
@@ -1183,6 +1233,14 @@ class GLSLParser:
         if self.current_token[0] in TYPE_TOKENS:
             index = self.skip_type_template_suffix_index(self.index + 1)
             index = self.skip_array_suffixes_index(index)
+            return self.is_name_token_at(index)
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in TYPE_ANNOTATION_NAMES
+            and self.peek()[0] == "LPAREN"
+        ):
+            index = self.skip_balanced_suffix(self.index + 1, "LPAREN", "RPAREN")
+            index = self.skip_array_suffixes_index(self.skip_newline_index(index))
             return self.is_name_token_at(index)
         if (
             self.current_token[0] == "IDENTIFIER"

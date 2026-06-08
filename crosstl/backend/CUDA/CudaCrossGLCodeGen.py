@@ -226,7 +226,7 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    CROSSGL_RESERVED_IDENTIFIERS = {"in", "var"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "var"}
 
     def __init__(self):
         self.indent_level = 0
@@ -283,6 +283,12 @@ class CudaToCrossGLConverter:
         if isinstance(node, str):
             if self.is_cuda_numeric_literal_text(node):
                 return node.replace("'", "")
+            if self.is_cuda_char_literal_text(node):
+                return self.convert_cuda_char_literal_to_crossgl(node)
+            if self.is_cuda_string_literal_text(node):
+                return self.convert_cuda_string_literal_to_crossgl(node)
+            if self.is_cuda_qualified_identifier_text(node):
+                return self.sanitize_crossgl_type_identifier(node)
             return self.output_identifier_name(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
@@ -294,6 +300,39 @@ class CudaToCrossGLConverter:
         return (
             "'" in text and bool(text) and (text[0].isdigit() or text.startswith("."))
         )
+
+    def is_cuda_char_literal_text(self, value):
+        return re.fullmatch(r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'", str(value)) is not None
+
+    def convert_cuda_char_literal_to_crossgl(self, value):
+        text = str(value)
+        match = re.fullmatch(r"(?:u8|u|U|L)?'(.*)'", text)
+        if match is None:
+            return text
+
+        content = match.group(1)
+        hex_match = re.fullmatch(r"\\x([0-9A-Fa-f]+)", content)
+        if hex_match is not None:
+            return str(int(hex_match.group(1), 16))
+
+        octal_match = re.fullmatch(r"\\([0-7]+)", content)
+        if octal_match is not None:
+            return str(int(octal_match.group(1), 8))
+
+        return f"'{content}'"
+
+    def is_cuda_string_literal_text(self, value):
+        return re.fullmatch(r'(?:u8|u|U|L)?"(?:[^"\\]|\\.)*"', str(value)) is not None
+
+    def convert_cuda_string_literal_to_crossgl(self, value):
+        match = re.fullmatch(r'(?:u8|u|U|L)?(".*")', str(value))
+        return match.group(1) if match is not None else str(value)
+
+    def is_cuda_qualified_identifier_text(self, value):
+        text = str(value)
+        if not text or text[0] in "\"'":
+            return False
+        return "::" in text and "<" in text and ">" in text
 
     def emit(self, code):
         if code.strip():
@@ -402,6 +441,12 @@ class CudaToCrossGLConverter:
         if normalized_type.startswith("enum "):
             type_name = normalized_type[len("enum ") :].strip()
             return self.convert_cuda_type_to_crossgl(type_name)
+        for prefix in ("struct ", "union "):
+            if normalized_type.startswith(prefix):
+                type_name = normalized_type[len(prefix) :].strip()
+                if "*" in type_name:
+                    return self.convert_cuda_pointer_type(type_name)
+                return self.sanitize_crossgl_type_identifier(type_name)
         return None
 
     def convert_cuda_scoped_type_to_crossgl(self, cuda_type):
@@ -3914,7 +3959,8 @@ class CudaToCrossGLConverter:
             member_type = self.convert_cuda_struct_member_type_to_crossgl(
                 node.name, member.vtype, member.name
             )
-            self.emit(f"{member_type} {member.name};")
+            member_name = self.sanitize_identifier_name(member.name)
+            self.emit(f"{member_type} {member_name};")
 
         self.indent_level -= 1
         self.emit("};")
@@ -3938,9 +3984,10 @@ class CudaToCrossGLConverter:
 
             if member_value is not None:
                 value = self.visit(member_value)
+                member_name = self.sanitize_identifier_name(member_name)
                 self.emit(f"{member_name} = {value},")
             else:
-                self.emit(f"{member_name},")
+                self.emit(f"{self.sanitize_identifier_name(member_name)},")
 
         self.indent_level -= 1
         self.emit("};")
@@ -5896,7 +5943,9 @@ class CudaToCrossGLConverter:
 
     def visit_TypeAliasNode(self, node):
         self.register_type_alias(node.name, node.alias_type)
-        if self.is_decltype_type_name(node.alias_type):
+        if str(node.alias_type).strip().startswith(("struct ", "union ")):
+            alias_type = node.alias_type
+        elif self.is_decltype_type_name(node.alias_type):
             alias_type = node.alias_type
         else:
             alias_type = self.convert_cuda_type_to_crossgl(node.alias_type)
@@ -6003,7 +6052,8 @@ class CudaToCrossGLConverter:
         operator = "->" if getattr(node, "is_pointer", False) else "."
         if node.member == "x" and operator == "." and self.is_vector1_name(node.object):
             return obj
-        return f"{obj}{operator}{node.member}"
+        member = self.sanitize_identifier_name(node.member)
+        return f"{obj}{operator}{member}"
 
     def visit_ArrayAccessNode(self, node):
         array = self.visit(node.array)
@@ -6166,6 +6216,12 @@ class CudaToCrossGLConverter:
                 for comment in comments:
                     self.emit(comment)
                 self.emit(f"return {value};")
+                return
+
+            if isinstance(node.value, InitializerListNode):
+                elements = getattr(node.value, "elements", None) or []
+                fallback = self.visit(elements[0]) if len(elements) == 1 else "0"
+                self.emit(f"return {fallback} /* CUDA initializer list return */;")
                 return
 
             value = self.visit(node.value)
@@ -6355,6 +6411,12 @@ class CudaToCrossGLConverter:
         if self.is_decltype_type_name(cuda_type):
             return "auto"
 
+        expression_template_type = (
+            self.convert_cuda_expression_template_type_to_crossgl(cuda_type)
+        )
+        if expression_template_type is not None:
+            return expression_template_type
+
         template_type = None
         if cuda_type in self.cuda_record_names:
             template_type = self.convert_unknown_cuda_template_type_to_crossgl(
@@ -6380,6 +6442,19 @@ class CudaToCrossGLConverter:
 
     def strip_dependent_template_disambiguators(self, type_name):
         return str(type_name).replace("::template ", "::")
+
+    def convert_cuda_expression_template_type_to_crossgl(self, cuda_type):
+        _, template_args = self.parse_cpp_template(cuda_type)
+        if not template_args:
+            return None
+        if not any(
+            self.is_crossgl_unsafe_template_argument(arg) for arg in template_args
+        ):
+            return None
+        return self.convert_unknown_cuda_template_type_to_crossgl(cuda_type)
+
+    def is_crossgl_unsafe_template_argument(self, arg):
+        return re.search(r"[()+\-*/%~!=|&?]", str(arg)) is not None
 
     def is_decltype_type_name(self, type_name):
         return isinstance(type_name, str) and type_name.strip().startswith("decltype(")

@@ -211,7 +211,10 @@ class SlangParser:
                 exports.append(self.parse_export(attributes=pending_attributes))
             elif declaration_token == "INTERFACE":
                 interfaces.append(self.parse_interface())
-            elif declaration_token == "STRUCT":
+            elif (
+                declaration_token == "STRUCT"
+                or self.is_generic_prefixed_struct_declaration_start()
+            ):
                 structs.append(self.parse_struct())
             elif declaration_token == "EXTENSION":
                 extensions.append(self.parse_extension())
@@ -687,6 +690,14 @@ class SlangParser:
             "TYPEDEF",
             "TYPEALIAS",
         }
+
+    def is_generic_prefixed_struct_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return (
+            current_pos < len(self.tokens) and self.tokens[current_pos][0] == "STRUCT"
+        )
 
     def parse_qualifiers(self):
         qualifiers = []
@@ -1380,7 +1391,10 @@ class SlangParser:
         declaration_token = self.peek_declaration_token_type()
         if declaration_token == "INTERFACE":
             exported_item = self.parse_interface()
-        elif declaration_token == "STRUCT":
+        elif (
+            declaration_token == "STRUCT"
+            or self.is_generic_prefixed_struct_declaration_start()
+        ):
             exported_item = self.parse_struct()
         elif declaration_token == "EXTENSION":
             exported_item = self.parse_extension()
@@ -1486,15 +1500,19 @@ class SlangParser:
         return node
 
     def parse_struct(self):
-        qualifiers = self.parse_qualifiers()
+        qualifiers, prefix_generic_parameters, prefix_generic_constraints = (
+            self.parse_typedef_prefixes()
+        )
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        generic_parameters = None
+        generic_parameters = prefix_generic_parameters
+        generic_parameters_from_prefix = prefix_generic_parameters is not None
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
-        generic_constraints = self.parse_generic_constraint_clauses()
+        generic_constraints = prefix_generic_constraints
+        generic_constraints.extend(self.parse_generic_constraint_clauses())
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             node = StructNode(name, [])
@@ -1503,6 +1521,7 @@ class SlangParser:
             node.enums = []
             node.structs = []
             node.generic_parameters = generic_parameters
+            node.generic_parameters_from_prefix = generic_parameters_from_prefix
             node.generic_constraints = generic_constraints
             node.conformances = conformances
             node.qualifiers = qualifiers
@@ -1543,7 +1562,10 @@ class SlangParser:
             if declaration_token == "ENUM":
                 enums.append(self.parse_enum())
                 continue
-            if declaration_token == "STRUCT":
+            if (
+                declaration_token == "STRUCT"
+                or self.is_generic_prefixed_struct_declaration_start()
+            ):
                 structs.append(self.parse_struct())
                 continue
             if self.is_constructor():
@@ -1593,6 +1615,7 @@ class SlangParser:
         node.enums = enums
         node.structs = structs
         node.generic_parameters = generic_parameters
+        node.generic_parameters_from_prefix = generic_parameters_from_prefix
         node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
@@ -1621,7 +1644,10 @@ class SlangParser:
             array_sizes = self.parse_array_suffixes()
             semantic = None
             if self.current_token[0] == "COLON":
-                semantic = self.parse_semantic_annotations()
+                if self.is_numeric_bitfield_width_start():
+                    self.parse_bitfield_width()
+                else:
+                    semantic = self.parse_semantic_annotations()
             value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
@@ -1642,6 +1668,17 @@ class SlangParser:
             self.eat("COMMA")
         self.eat("SEMICOLON")
         return members
+
+    def is_numeric_bitfield_width_start(self):
+        return (
+            self.current_token[0] == "COLON"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] in {"NUMBER", "FLOAT_NUMBER"}
+        )
+
+    def parse_bitfield_width(self):
+        self.eat("COLON")
+        self.parse_expression()
 
     def is_property_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)

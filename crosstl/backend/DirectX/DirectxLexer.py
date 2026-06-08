@@ -603,6 +603,7 @@ class HLSLLexer:
             for macro in DEFAULT_PREPROCESSOR_MACROS:
                 preprocessor.macros.setdefault(macro.name, macro)
             code = preprocessor.preprocess(code, file_path=file_path)
+        code = code.replace("\ufeff", "")
         self.code = code
         self._length = len(code)
 
@@ -713,9 +714,14 @@ class HLSLLexer:
     @classmethod
     def from_file(cls, filepath: str) -> "HLSLLexer":
         """Create a lexer instance from a source file."""
-        with open(filepath, encoding="utf-8", errors="replace") as f:
-            base_dir = os.path.dirname(filepath)
-            return cls(f.read(), file_path=filepath, include_paths=[base_dir])
+        with open(filepath, "rb") as f:
+            data = f.read()
+        if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+            code = data.decode("utf-16", errors="replace")
+        else:
+            code = data.decode("utf-8-sig", errors="replace")
+        base_dir = os.path.dirname(filepath)
+        return cls(code, file_path=filepath, include_paths=[base_dir])
 
 
 class Lexer:

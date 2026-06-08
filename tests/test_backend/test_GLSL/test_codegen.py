@@ -178,6 +178,73 @@ def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar()
     assert "layout(location = 0) in vec3 position;" in glsl
 
 
+def test_codegen_spirv_intrinsics_annotations_roundtrip_from_glslang():
+    # Reduced from KhronosGroup/glslang GL_EXT_spirv_intrinsics tests.
+    code = textwrap.dedent("""
+        #version 460 core
+        #extension GL_EXT_spirv_intrinsics : require
+
+        layout(local_size_x = 1) in;
+        spirv_execution_mode(5027);
+
+        spirv_decorate_string(extensions = ["SPV_GOOGLE_hlsl_functionality1"], 5635, "foobar")
+        spirv_decorate(0)
+        float annotatedValue = 0.5;
+
+        spirv_instruction(id = 61)
+        uint loadUint(spirv_type(id = 32, uint) pointer, spirv_literal uint memoryOperands);
+
+        void accept(spirv_type(id = 30) payload) {}
+
+        void main() {
+            spirv_type(id = 30) dummy;
+            annotatedValue = float(loadUint(dummy, 0x2));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "float annotatedValue = 0.5;" in crossgl
+    assert "uint loadUint(spirv_type pointer, uint memoryOperands)" in crossgl
+    assert "spirv_type dummy;" in crossgl
+
+
+def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang():
+    # Reduced from KhronosGroup/glslang spv.float16.frag and bfloat struct
+    # constructor coverage.
+    code = textwrap.dedent("""
+        #version 450 core
+        #extension GL_AMD_gpu_shader_half_float : enable
+        #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+        #extension GL_ARB_gpu_shader_int64 : enable
+
+        layout(local_size_x = 1) in;
+
+        struct S {
+            float16_t x;
+        };
+
+        layout(row_major, std430) buffer B2 {
+            S v[2];
+        };
+
+        const S sc = S(0.125hf);
+        const int64_t signedLong = -10L;
+        const uint64_t unsignedLong = 0xFFFFFFFFul;
+
+        void main() {}
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "const S sc = S(0.125);" in crossgl
+    assert "S{" not in crossgl
+    assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
+    assert "0.125hf" not in crossgl
+    assert "const int64_t signedLong = (-10);" in crossgl
+    assert "const uint64_t unsignedLong = 0xFFFFFFFFu;" in crossgl
+
+
 def test_codegen_unary_rhs_after_newline_from_crt_royale_roundtrip():
     # Reduced from libretro/glsl-shaders crt-royale-geometry-aa-last-pass.glsl,
     # which has a parenthesized return expression with "+\n -term".
@@ -350,7 +417,7 @@ def test_codegen_for_init_custom_struct_declaration_from_glsl_460_grammar():
     output = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
 
     assert (
-        "for (Cursor cursor = Cursor{0}; (cursor.value < 2); (cursor.value++))"
+        "for (Cursor cursor = Cursor(0); (cursor.value < 2); (cursor.value++))"
         in output
     )
     assert "cursor.value += 1;" in output
@@ -1812,7 +1879,7 @@ def test_codegen_reserved_helper_name_from_glslang_struct_sample_roundtrip():
     assert "compute_(vec4(1.0))" in crossgl
     assert "S compute(" not in crossgl
     assert " compute(vec4" not in crossgl
-    assert "S{value}" in crossgl
+    assert "S(value)" in crossgl
 
 
 def test_codegen_do_while_continue_roundtrip_preserves_condition_check():

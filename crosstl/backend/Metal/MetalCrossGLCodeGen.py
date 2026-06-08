@@ -1071,16 +1071,16 @@ class MetalToCrossGLConverter:
         self.struct_member_types = self.collect_struct_member_types(structs)
         enums = getattr(ast, "enums", []) or []
         emitted_typedefs = [
-            alias
+            declaration
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
-            and not self.is_resource_type_alias(alias)
-            and not getattr(alias, "is_function_type", False)
+            for declaration in [self.format_type_alias_declaration(alias)]
+            if declaration is not None
         ]
         if emitted_typedefs:
             code += "    // Typedefs\n"
-            for alias in emitted_typedefs:
-                code += f"    typedef {self.map_type_alias(alias)} {alias.name};\n"
+            for declaration in emitted_typedefs:
+                code += f"    {declaration}\n"
             code += "\n"
 
         if enums:
@@ -2352,7 +2352,23 @@ class MetalToCrossGLConverter:
 
         mapped = self.type_map.get(base, base)
         mapped = self.struct_name_map.get(mapped, mapped)
+        if mapped == base:
+            mapped = self.map_scoped_type_name(mapped)
         return f"{mapped}{suffix}"
+
+    def format_type_alias_declaration(self, alias):
+        if getattr(alias, "is_function_type", False) or self.is_resource_type_alias(
+            alias
+        ):
+            return None
+
+        mapped_type = self.map_type_alias(alias)
+        alias_name = self.sanitize_identifier(alias.name)
+        if not mapped_type or not alias_name or mapped_type == alias_name:
+            return None
+        if not self.is_crossgl_typedef_source_type(mapped_type):
+            return None
+        return f"typedef {mapped_type} {alias_name};"
 
     def map_type_alias(self, alias):
         storage_type = self.map_storage_texture_type(alias.alias_type)
@@ -2361,6 +2377,41 @@ class MetalToCrossGLConverter:
         if self.normalized_metal_type(alias.alias_type) == "half":
             return "f16"
         return self.map_type(alias.alias_type)
+
+    def is_crossgl_typedef_source_type(self, mapped_type):
+        mapped_type = str(mapped_type).strip()
+        if not mapped_type or "::" in mapped_type:
+            return False
+        if any(char in mapped_type for char in "*&[]"):
+            return False
+        if re.fullmatch(r"(?:matrix|vec|vector)<[^{};]+>", mapped_type):
+            return True
+        return mapped_type in self.crossgl_typedef_source_types()
+
+    def crossgl_typedef_source_types(self):
+        return set(self.type_map.values()) | {
+            "f16",
+            "bfloat",
+            "mat2",
+            "mat3",
+            "mat4",
+            "mat2x3",
+            "mat2x4",
+            "mat3x2",
+            "mat3x4",
+            "mat4x2",
+            "mat4x3",
+        }
+
+    def map_scoped_type_name(self, type_name):
+        if "::" not in str(type_name):
+            return type_name
+
+        base_name, _generic_args = self.generic_type_parts(type_name)
+        if base_name and "::" in base_name:
+            return type_name
+
+        return self.sanitize_identifier(str(type_name).split("::")[-1])
 
     def is_resource_type_alias(self, alias):
         return self.is_metal_resource_type(alias.alias_type)

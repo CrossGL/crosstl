@@ -17217,3 +17217,30 @@ class TestHipCodeGen:
             "InDataType, WeiDataType> ComputeType;"
         ) in result
         assert "if ((s.log_level_ > 0)) {" in result
+
+    def test_public_rocm_top_level_conditional_member_alias_codegen_reparse(self):
+        # Reduced from ROCm/HIP docs/tools/example_codes/
+        # template_warp_size_reduction.hip.
+        code = """
+        template<std::uint32_t WarpSize>
+        using lane_mask_t = typename std::conditional<
+            WarpSize == 32,
+            std::uint32_t,
+            std::uint64_t>::type;
+
+        template<std::uint32_t WarpSize>
+        __global__ void block_reduce(lane_mask_t<WarpSize>* mask) {
+            lane_mask_t<WarpSize> value = mask[threadIdx.x];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "typedef conditional_t<WarpSize==32, u32, u64> lane_mask_t;" in result
+        assert "array<lane_mask_t<WarpSize>>" in result

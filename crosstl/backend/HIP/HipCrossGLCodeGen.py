@@ -6460,7 +6460,86 @@ class HipToCrossGLConverter:
             alias_type = node.alias_type
         else:
             alias_type = self.convert_hip_type_to_crossgl(node.alias_type)
+        if self.indent_level == 0:
+            alias_type = self.normalize_top_level_type_alias(alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
+
+    def normalize_top_level_type_alias(self, alias_type):
+        """Keep C++ trait aliases reparsable by CrossGL's top-level typedef parser."""
+        member_alias = self.convert_type_member_alias(alias_type)
+        if member_alias is not None:
+            return member_alias
+
+        template_alias = self.convert_reparsable_std_template_alias(alias_type)
+        if template_alias is not None:
+            return template_alias
+
+        return alias_type
+
+    def convert_type_member_alias(self, alias_type):
+        parsed = self.parse_cpp_template_member_type(alias_type)
+        if parsed is None:
+            return None
+
+        base_name, template_args = parsed
+        if not base_name.startswith("std::"):
+            return None
+
+        alias_base = f"{base_name.rsplit('::', 1)[-1]}_t"
+        converted_args = [
+            self.convert_top_level_alias_template_arg(arg) for arg in template_args
+        ]
+        return f"{alias_base}<{', '.join(converted_args)}>"
+
+    def convert_reparsable_std_template_alias(self, alias_type):
+        base_name, template_args = self.parse_cpp_template(alias_type)
+        if not template_args or not base_name.startswith("std::"):
+            return None
+
+        alias_base = base_name.rsplit("::", 1)[-1]
+        converted_args = [
+            self.convert_top_level_alias_template_arg(arg) for arg in template_args
+        ]
+        return f"{alias_base}<{', '.join(converted_args)}>"
+
+    def convert_top_level_alias_template_arg(self, arg):
+        member_alias = self.convert_type_member_alias(arg)
+        if member_alias is not None:
+            return member_alias
+
+        template_alias = self.convert_reparsable_std_template_alias(arg)
+        if template_alias is not None:
+            return template_alias
+
+        return self.convert_hip_type_to_crossgl(arg)
+
+    def parse_cpp_template_member_type(self, text):
+        if not isinstance(text, str):
+            return None
+
+        text = text.strip()
+        start = text.find("<")
+        if start == -1:
+            return None
+
+        depth = 0
+        end = None
+        for index in range(start, len(text)):
+            char = text[index]
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+
+        if end is None or text[end + 1 :].strip() != "::type":
+            return None
+
+        base_name = text[:start].strip()
+        template_args = self.split_cpp_template_args(text[start + 1 : end])
+        return base_name, template_args
 
     def visit_MemberAccessNode(self, node):
         if self.suppress_device_property_member_access == 0:

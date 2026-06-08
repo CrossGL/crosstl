@@ -3133,6 +3133,67 @@ def test_codegen_enum_and_typedef():
     assert "enum Mode" in result
 
 
+def test_codegen_omits_user_type_aliases_from_public_metal_headers():
+    # Reduced from MetalPetal's MTIShaderLib.h: CrossGL can use the user type
+    # directly, but cannot parse a typedef whose source is another user type.
+    code = """
+    typedef MTIVertex VertexIn;
+
+    struct MTIVertex {
+        float4 position;
+    };
+
+    fragment float4 passthrough(VertexIn in [[stage_in]]) {
+        return in.position;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef MTIVertex VertexIn;" not in crossgl
+    assert "VertexIn in_" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_omits_namespace_self_alias_from_mlx_logging_header():
+    # Reduced from MLX logging.h: `using os_log = metal::os_log` maps to the
+    # same CrossGL type/name pair and should not emit `typedef os_log os_log`.
+    code = """
+    namespace mlx {
+    using os_log = metal::os_log;
+
+    struct os_log {
+    };
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef os_log os_log;" not in crossgl
+    assert "struct os_log" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_sanitizes_scoped_types_from_public_shader_headers():
+    # Reduced from Blender and tinygrad shader headers that reference C++
+    # namespace-scoped helper types in typedefs and function signatures.
+    code = """
+    typedef gbuffer::ClosurePacking ClosurePacking;
+    typedef ducks::rv_layout::align align_l;
+
+    void consume(shader::Type type, gbuffer::Header header) {
+        type = shader::Type::float_t;
+        header.value = 1u;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef ClosurePacking ClosurePacking;" not in crossgl
+    assert "typedef align align_l;" not in crossgl
+    assert "shader::Type" not in crossgl
+    assert "gbuffer::Header" not in crossgl
+    assert "void consume(Type type, Header header)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_local_enum_declaration_from_metal_function_body():
     code = """
     fragment float4 local_enum_frag(float4 color [[stage_in]]) {

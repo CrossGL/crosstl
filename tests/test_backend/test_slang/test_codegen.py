@@ -3851,5 +3851,33 @@ def test_official_pointer_address_of_and_arrow_member_codegen():
     assert "return pNext.a + pNext.a + (*pNext2).a + pNext2[0].a;" in generated_code
 
 
+def test_generic_prefix_struct_and_bitfield_codegen_from_official_tests_reparse():
+    code = """
+    __generic<T>
+    struct GenStruct
+    {
+        T x;
+        T y;
+    };
+
+    struct S
+    {
+        int foo : 8;
+        uint bar : 24;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct GenStruct<T>" in generated_code
+    assert "int foo;" in generated_code
+    assert "uint bar;" in generated_code
+    assert "foo : 8" not in generated_code
+    assert "bar : 24" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 if __name__ == "__main__":
     pytest.main()

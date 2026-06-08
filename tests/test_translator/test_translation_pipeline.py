@@ -41,6 +41,10 @@ NATIVE_SOURCE_SNIPPETS = {
         "shader.hip",
         "__global__ void main(float* out) { int i = threadIdx.x; out[i] = 1.0f; }",
     ),
+    "opencl": (
+        "shader.cl",
+        "kernel void main(global float* out) { uint i = get_global_id(0); out[i] = 1.0f; }",
+    ),
     "mojo": ("shader.mojo", "fn main() -> None:\n    return\n"),
     "rust": ("shader.rs", "fn main() { let x: f32 = 1.0; }"),
     "vulkan": (
@@ -74,6 +78,10 @@ NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     "metal_msl": (
         "shader.msl",
         NATIVE_SOURCE_SNIPPETS["metal"][1],
+    ),
+    "opencl_long": (
+        "shader.opencl",
+        NATIVE_SOURCE_SNIPPETS["opencl"][1],
     ),
 }
 

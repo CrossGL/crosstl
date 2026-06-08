@@ -39,12 +39,23 @@ CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
 SHORT_INTEGER_LITERAL_SUFFIX_RE = re.compile(
     r"^(?P<body>(?:0[xX][0-9a-fA-F]+|\d+))(?P<suffix>[uU][sS]|[sS])$"
 )
+LONG_INTEGER_LITERAL_SUFFIX_RE = re.compile(
+    r"^(?P<body>(?:0[xX][0-9a-fA-F]+|0[0-7]*|\d+))"
+    r"(?P<suffix>[uU][lL]{1,2}|[lL]{1,2}[uU]?)$"
+)
 DOUBLE_FLOAT_LITERAL_SUFFIX_RE = re.compile(
     r"^(?P<body>"
     r"0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+"
     r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
     r"|\d+[eE][+-]?\d+"
     r")[lL][fF]$"
+)
+HALF_FLOAT_LITERAL_SUFFIX_RE = re.compile(
+    r"^(?P<body>"
+    r"0[xX](?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?|\.[0-9a-fA-F]+)[pP][+-]?\d+"
+    r"|(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?"
+    r"|\d+[eE][+-]?\d+"
+    r")[hH][fF]$"
 )
 
 
@@ -1069,7 +1080,7 @@ class GLSLToCrossGLConverter:
         if struct is None:
             return None
         return self.generate_variable_declaration(
-            var
+            var, array_before_attributes=True
         ) + self.ssbo_block_attribute_suffix(var)
 
     def structured_buffer_type(self, var, member):
@@ -2946,6 +2957,15 @@ class GLSLToCrossGLConverter:
         double_float_match = DOUBLE_FLOAT_LITERAL_SUFFIX_RE.match(text)
         if double_float_match:
             return double_float_match.group("body")
+        half_float_match = HALF_FLOAT_LITERAL_SUFFIX_RE.match(text)
+        if half_float_match:
+            return half_float_match.group("body")
+        long_integer_match = LONG_INTEGER_LITERAL_SUFFIX_RE.match(text)
+        if long_integer_match:
+            suffix = long_integer_match.group("suffix")
+            if "u" in suffix.lower():
+                return f"{long_integer_match.group('body')}u"
+            return long_integer_match.group("body")
         match = SHORT_INTEGER_LITERAL_SUFFIX_RE.match(text)
         if not match:
             return text
@@ -3024,7 +3044,7 @@ class GLSLToCrossGLConverter:
 
         if name in self.structs_by_name:
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
-            return f"{name}{{{args}}}"
+            return f"{name}({args})"
 
         descriptor = self.resource_function_descriptor(name)
         mapped_name = self.mapped_function_name(name, node.args, descriptor)
