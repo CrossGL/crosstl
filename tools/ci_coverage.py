@@ -19,6 +19,7 @@ from typing import Any
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 ROOT = Path(os.environ.get("CROSSGL_CI_COVERAGE_ROOT", DEFAULT_ROOT)).resolve()
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
+ACTIONS_DIR = ROOT / ".github" / "actions"
 BACKENDS_PATH = ROOT / "support" / "backends.json"
 NODE24_ACTION_RUNTIME_ENV = "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"
 
@@ -665,6 +666,13 @@ def all_workflow_texts() -> dict[str, str]:
     return workflows
 
 
+def local_action_text(name: str) -> str:
+    path = ACTIONS_DIR / name / "action.yml"
+    if not path.exists():
+        return ""
+    return read_text(path)
+
+
 def parse_matrix_values(raw: str) -> list[str]:
     raw = raw.strip().strip("[]")
     values = []
@@ -906,15 +914,21 @@ def matrix_failure_summary_report(
     }
 
 
-def full_suite_report(workflow: str) -> dict[str, Any]:
+def full_suite_report(workflow: str, action_texts: str = "") -> dict[str, Any]:
+    full_suite_ci_surface = workflow + "\n" + action_texts
     required_markers = {
         marker: marker in workflow for marker in FULL_SUITE_REQUIRED_MARKERS
     }
     required_tools = {tool: tool in workflow for tool in FULL_SUITE_REQUIRED_TOOLS}
     download_retries = {
         "dxc_linux": (
-            "curl -fsSL --retry 5 --retry-all-errors --retry-delay 10" in workflow
-            and "linux_dxc_2026_02_20.x86_64.tar.gz" in workflow
+            "curl -fsSLo" in full_suite_ci_surface
+            and "--retry 8" in full_suite_ci_surface
+            and "--retry-all-errors" in full_suite_ci_surface
+            and "--retry-connrefused" in full_suite_ci_surface
+            and "--retry-delay 10" in full_suite_ci_surface
+            and "linux_dxc_2026_05_26.x86_64.tar.gz" in full_suite_ci_surface
+            and "linux_dxc_2026_02_20.x86_64.tar.gz" in full_suite_ci_surface
         ),
         "dxc_windows": (
             "$dxcUri = "
@@ -1415,6 +1429,7 @@ def build_report() -> dict[str, Any]:
     docs_workflow = workflow_texts["docs.yml"]
     examples_workflow = workflow_texts["examples-test.yml"]
     full_workflow = workflow_texts["full-tests.yml"]
+    full_workflow_action_text = local_action_text("install-linux-dxc")
     support_matrix_workflow = workflow_texts["support-matrix.yml"]
     support_issue_workflow = workflow_texts["support-issue-sync.yml"]
     pr_issue_links_workflow = workflow_texts["pr-issue-links.yml"]
@@ -1445,7 +1460,10 @@ def build_report() -> dict[str, Any]:
             ),
             "docs": docs_report(docs_workflow),
             "examples": examples_report(examples_workflow, backend_ids),
-            "full_tests": full_suite_report(full_workflow),
+            "full_tests": full_suite_report(
+                full_workflow,
+                full_workflow_action_text,
+            ),
             "support_matrix": support_matrix_report(support_matrix_workflow),
             "support_issue_sync": support_issue_sync_report(support_issue_workflow),
             "pr_issue_links": pr_issue_links_report(pr_issue_links_workflow),

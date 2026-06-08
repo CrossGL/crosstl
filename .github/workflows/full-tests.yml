@@ -143,13 +143,7 @@ jobs:
 
       - name: Install DirectX Shader Compiler (Linux)
         if: runner.os == 'Linux'
-        run: |
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/dxc.tar.gz" \
-            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/linux_dxc_2026_02_20.x86_64.tar.gz
-          mkdir -p "$RUNNER_TEMP/dxc"
-          tar -xzf "$RUNNER_TEMP/dxc.tar.gz" -C "$RUNNER_TEMP/dxc"
-          echo "$RUNNER_TEMP/dxc/bin" >> "$GITHUB_PATH"
-          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/dxc/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+        uses: ./.github/actions/install-linux-dxc
 
       - name: Install DirectX Shader Compiler (Windows)
         if: runner.os == 'Windows'
@@ -234,13 +228,7 @@ jobs:
           sudo apt-get install -y glslang-tools spirv-tools
 
       - name: Install DirectX Shader Compiler
-        run: |
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$RUNNER_TEMP/dxc.tar.gz" \
-            https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/linux_dxc_2026_02_20.x86_64.tar.gz
-          mkdir -p "$RUNNER_TEMP/dxc"
-          tar -xzf "$RUNNER_TEMP/dxc.tar.gz" -C "$RUNNER_TEMP/dxc"
-          echo "$RUNNER_TEMP/dxc/bin" >> "$GITHUB_PATH"
-          echo "LD_LIBRARY_PATH=$RUNNER_TEMP/dxc/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+        uses: ./.github/actions/install-linux-dxc
 
       - name: Install Slang compiler
         run: |

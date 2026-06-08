@@ -1,0 +1,58 @@
+name: Install Linux DirectX Shader Compiler
+description: Install the Linux DirectX Shader Compiler from official release assets.
+
+runs:
+  using: composite
+  steps:
+    - name: Download and activate DXC
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        archive="$RUNNER_TEMP/dxc.tar.gz"
+        dxc_root="$RUNNER_TEMP/dxc"
+        urls=(
+          "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/linux_dxc_2026_05_26.x86_64.tar.gz"
+          "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/linux_dxc_2026_02_20.x86_64.tar.gz"
+          "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/linux_dxc_2025_07_14.x86_64.tar.gz"
+        )
+
+        download_ok=false
+        for url in "${urls[@]}"; do
+          echo "Downloading DXC from $url"
+          if curl -fsSLo "$archive" \
+            --retry 8 \
+            --retry-all-errors \
+            --retry-connrefused \
+            --retry-delay 10 \
+            --retry-max-time 240 \
+            --connect-timeout 30 \
+            "$url"; then
+            if tar -tzf "$archive" >/dev/null; then
+              download_ok=true
+              break
+            fi
+            echo "Downloaded DXC archive is invalid: $url" >&2
+          else
+            echo "DXC download failed: $url" >&2
+          fi
+          rm -f "$archive"
+        done
+
+        if [ "$download_ok" != true ]; then
+          echo "Unable to download a valid Linux DXC archive." >&2
+          exit 1
+        fi
+
+        rm -rf "$dxc_root"
+        mkdir -p "$dxc_root"
+        tar -xzf "$archive" -C "$dxc_root"
+
+        if [ ! -x "$dxc_root/bin/dxc" ]; then
+          echo "dxc was not found in the extracted archive" >&2
+          find "$dxc_root" -maxdepth 3 -type f | sort >&2
+          exit 1
+        fi
+
+        echo "$dxc_root/bin" >> "$GITHUB_PATH"
+        echo "LD_LIBRARY_PATH=$dxc_root/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
