@@ -2188,79 +2188,27 @@ def _format_report_status(report, validation_diagnostic_codes):
 
 
 def _format_report_generated_at(report):
-    if not isinstance(report, Mapping):
-        return None
-
-    generated_at = report.get("generatedAt")
-    if (
-        not isinstance(generated_at, int)
-        or isinstance(generated_at, bool)
-        or generated_at < 0
-    ):
-        return None
-    return f"Report generated at: {generated_at}"
+    return _format_payload_generated_at(report, "Report generated at")
 
 
 def _format_inspection_schema_version(payload):
-    if not isinstance(payload, Mapping):
-        return None
-
-    schema_version = payload.get("schemaVersion")
-    if (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version < 0
-    ):
-        return None
-    return f"Inspection schema version: {schema_version}"
+    return _format_payload_schema_version(payload, "Inspection schema version")
 
 
 def _format_inspection_kind(payload):
-    if not isinstance(payload, Mapping):
-        return None
-
-    kind = payload.get("kind")
-    if not isinstance(kind, str) or not kind:
-        return None
-    return f"Inspection kind: {kind}"
+    return _format_payload_kind(payload, "Inspection kind")
 
 
 def _format_inspection_generated_at(payload):
-    if not isinstance(payload, Mapping):
-        return None
-
-    generated_at = payload.get("generatedAt")
-    if (
-        not isinstance(generated_at, int)
-        or isinstance(generated_at, bool)
-        or generated_at < 0
-    ):
-        return None
-    return f"Inspection generated at: {generated_at}"
+    return _format_payload_generated_at(payload, "Inspection generated at")
 
 
 def _format_source_report_schema_version(report):
-    if not isinstance(report, Mapping):
-        return None
-
-    schema_version = report.get("schemaVersion")
-    if (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version < 0
-    ):
-        return None
-    return f"Source report schema version: {schema_version}"
+    return _format_payload_schema_version(report, "Source report schema version")
 
 
 def _format_source_report_kind(report):
-    if not isinstance(report, Mapping):
-        return None
-
-    kind = report.get("kind")
-    if not isinstance(kind, str) or not kind:
-        return None
-    return f"Source report kind: {kind}"
+    return _format_payload_kind(report, "Source report kind")
 
 
 def _format_report_generator(report):
