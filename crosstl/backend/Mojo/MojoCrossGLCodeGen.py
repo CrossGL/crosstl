@@ -1210,7 +1210,7 @@ class MojoToCrossGLConverter:
                 if simd_type and len(args) == 1:
                     return f"{simd_type}({args_str})"
 
-            obj = self.generate_expression(expr.object)
+            obj = self.generate_member_receiver_expression(expr.object)
             method_name = self.map_member_name(expr.method)
             full_name = f"{obj}.{method_name}"
             if self.is_scoped_value_name(obj):
@@ -1227,7 +1227,7 @@ class MojoToCrossGLConverter:
             args_str = ", ".join(args)
             return f"{callee}({args_str})"
         elif isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
+            obj = self.generate_member_receiver_expression(expr.object)
             return f"{obj}.{self.map_member_name(expr.member)}"
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_nested_expression(expr.condition)
@@ -1259,6 +1259,18 @@ class MojoToCrossGLConverter:
                 self.generate_expression(element) for element in index.elements
             )
         return self.generate_expression(index)
+
+    def generate_member_receiver_expression(self, expr):
+        if self.is_empty_array_access(expr):
+            return self.generate_expression(expr.array)
+        return self.generate_expression(expr)
+
+    def is_empty_array_access(self, expr):
+        return (
+            isinstance(expr, ArrayAccessNode)
+            and isinstance(expr.index, TupleNode)
+            and not expr.index.elements
+        )
 
     def map_simd_type_expression(self, node):
         if not isinstance(node, ArrayAccessNode):
@@ -1357,6 +1369,11 @@ class MojoToCrossGLConverter:
         if not isinstance(mojo_type, str):
             return mojo_type
         mojo_type = re.sub(r"(?<=[\[,])\s*\*(?=[A-Za-z_`])", "", mojo_type)
+        mojo_type = re.sub(
+            r"(?<=[A-Za-z0-9_\]])\[\](?=(?:\.|\)|,|\]|\s|$))",
+            "",
+            mojo_type,
+        )
         mojo_type = re.sub(r"(?<=[\[,])\s*//\s*(?=,|\])", " /", mojo_type)
         mojo_type = re.sub(r"\s*//\s*", " / ", mojo_type)
         mojo_type = self.normalize_mlir_type_expressions(mojo_type)

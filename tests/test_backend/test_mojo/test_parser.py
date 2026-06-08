@@ -1896,6 +1896,49 @@ def test_multiline_parenthesized_inline_if_parsing_from_mojo_gpu_puzzles():
     assert inline_if.false_expr.name == "series_correction"
 
 
+def test_multiline_inline_if_else_chain_parse_from_modular_dtype_helpers():
+    # Reduced from Modular stdlib DType/unsafe helpers with fmt-off inline-if chains.
+    code = """
+    def _llvm_bitwidth(dtype: DType) -> Int:
+        return (
+            1 if dtype == DType._uint1 else
+            2 if dtype == DType._uint2 else
+            4 if dtype == DType._uint4 else
+            8
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    result = find_function(ast, "_llvm_bitwidth").body[0].value
+
+    assert isinstance(result, TernaryOpNode)
+    assert result.true_expr == "1"
+    assert isinstance(result.false_expr, TernaryOpNode)
+    assert result.false_expr.true_expr == "2"
+    assert isinstance(result.false_expr.false_expr, TernaryOpNode)
+    assert result.false_expr.false_expr.true_expr == "4"
+    assert result.false_expr.false_expr.false_expr == "8"
+
+
+def test_multiline_parenthesized_operator_rhs_parse_from_modular_conv():
+    code = """
+    def get_input_idx(self, q: Int, r: Int, s: Int):
+        return (
+            Index(n, do, ho, wo) * self.stride
+            +
+            (Index(q, r, s) * self.dilation)
+            -
+            self.padding
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    result = find_function(ast, "get_input_idx").body[0].value
+
+    assert isinstance(result, BinaryOpNode)
+    assert result.op == "-"
+    assert isinstance(result.left, BinaryOpNode)
+    assert result.left.op == "+"
+
+
 def test_multiline_parenthesized_string_concat_parse_from_modular_asserts():
     # Reduced from Modular layout/matmul comptime assert diagnostic strings.
     code = """
@@ -2656,6 +2699,24 @@ def test_tuple_assignment_with_mixed_targets_and_ref_binding_parse():
     assert count_target.name == "count"
     assert chars_target.name == "chars"
     assert getattr(chars_target, "target_convention", None) == "ref"
+
+
+def test_empty_tuple_expression_parse_from_variadic_and_unsafe_union():
+    code = """
+    def main():
+        var empty = ()
+        var u = UnsafeUnion[Int32, Float32](unsafe_uninitialized=())
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    empty = function.body[0].initial_value
+    unsafe_union = function.body[1].initial_value
+
+    assert isinstance(empty, TupleNode)
+    assert empty.elements == []
+    assert isinstance(unsafe_union, VectorConstructorNode)
+    assert isinstance(unsafe_union.args[0].right, TupleNode)
+    assert unsafe_union.args[0].right.elements == []
 
 
 def test_parenthesized_tuple_var_declaration_parse_from_modular_sm90_matmul():

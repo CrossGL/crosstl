@@ -2791,6 +2791,13 @@ class HLSLToCrossGLConverter:
         ) = self.collect_legacy_sampler_bindings(ast)
         self.legacy_bound_texture_types = self.collect_legacy_bound_texture_types(ast)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
+        self.struct_type_names = {
+            node.name
+            for node in getattr(ast, "structs", []) or []
+            if isinstance(node, StructNode)
+            and not getattr(node, "is_forward_declaration", False)
+            and getattr(node, "name", None)
+        }
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
@@ -3037,8 +3044,16 @@ class HLSLToCrossGLConverter:
         initializer = ""
         if getattr(node, "value", None) is not None:
             initializer = f" = {self.generate_expression(node.value)}"
+        declaration_prefix = f"{storage_prefix}{precise_prefix}"
+        if (
+            getattr(node, "attributes", None)
+            and not declaration_prefix
+            and str(getattr(node, "vtype", ""))
+            in getattr(self, "struct_type_names", set())
+        ):
+            declaration_prefix = "var "
         return (
-            code + f"    {storage_prefix}{precise_prefix}{variable_type} "
+            code + f"    {declaration_prefix}{variable_type} "
             f"{variable_name}{array_suffix}{initializer};\n"
         )
 

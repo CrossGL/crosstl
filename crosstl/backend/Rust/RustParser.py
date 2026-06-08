@@ -2486,6 +2486,9 @@ class RustParser:
         if self.current_token[0] == "LBRACKET":
             return self.parse_match_array_pattern()
 
+        if self.current_token[0] == "DOUBLE_COLON":
+            return self.parse_absolute_match_path_or_call()
+
         if self.current_token[0] == "AMPERSAND":
             self.eat("AMPERSAND")
             is_mutable = False
@@ -2609,6 +2612,24 @@ class RustParser:
         } | self.PRIMITIVE_PATH_SEGMENT_TOKENS
 
     def parse_match_path_or_call(self):
+        first_segment = self.current_token[1]
+        self.eat(self.current_token[0])
+        path = self.parse_path_expression(first_segment)
+
+        if self.current_token[0] == "LPAREN":
+            return FunctionCallNode(path, self.parse_match_pattern_arguments())
+        if self.current_token[0] == "LBRACE":
+            return self.parse_match_struct_pattern(path)
+
+        return path
+
+    def parse_absolute_match_path_or_call(self):
+        self.eat("DOUBLE_COLON")
+        if self.current_token[0] not in self.match_pattern_path_tokens():
+            raise SyntaxError(
+                f"Expected absolute pattern path segment, got {self.current_token[0]}"
+            )
+
         first_segment = self.current_token[1]
         self.eat(self.current_token[0])
         path = self.parse_path_expression(first_segment)

@@ -1096,6 +1096,50 @@ def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
     assert "var tile = iter[];" in generated_code
 
 
+def test_empty_specialization_member_receiver_codegen_from_mxfp4_metadata_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/src/linalg/matmul/gpu/amd/mxfp4_moe_matmul_amd.mojo.
+    code = """
+    @__llvm_metadata(
+        MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
+            Int32(MXFP4MoERoutedMatmul[].num_threads)
+        )
+    )
+    def kernel():
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "MXFP4MoERoutedMatmul.num_threads" in generated_code
+    assert "MXFP4MoERoutedMatmul[]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_empty_index_in_type_expression_codegen_from_async_context_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # mojo/stdlib/std/runtime/asyncrt.mojo and std/iter/__init__.mojo.
+    code = """
+    def get_chain(
+        ctx: UnsafePointer[mut=True, _AsyncContext, _]
+    ) -> UnsafePointer[_Chain, origin_of(ctx[].chain)]:
+        pass
+
+    def peek(
+        self: Self
+    ) -> Optional[Pointer[Self.Element, ImmutOrigin(origin_of(self._next[]))]]:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "origin_of(ctx.chain)" in generated_code
+    assert "origin_of(self._next)" in generated_code
+    assert "ctx[]" not in generated_code
+    assert "self._next[]" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,

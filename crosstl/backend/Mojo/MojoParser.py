@@ -109,6 +109,10 @@ class MojoParser:
         if self.expression_layout_depth:
             self.skip_layout_tokens()
 
+    def parse_expression_continuation(self, parse_operand):
+        self.skip_expression_layout()
+        return parse_operand()
+
     def consume_statement_terminator(self):
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -1974,21 +1978,21 @@ class MojoParser:
         if self.current_token[0] in self.ASSIGNMENT_OPERATOR_TOKENS:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_assignment()
+            right = self.parse_expression_continuation(self.parse_assignment)
             return AssignmentNode(left, right, op)
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
-            true_expr = self.parse_expression()
+            true_expr = self.parse_expression_continuation(self.parse_expression)
             self.eat("COLON")
-            false_expr = self.parse_expression()
+            false_expr = self.parse_expression_continuation(self.parse_expression)
             left = TernaryOpNode(left, true_expr, false_expr)
         self.skip_expression_layout()
         if self.current_token[0] == "IF" and self.is_inline_if_expression():
             true_expr = left
             self.eat("IF")
-            condition = self.parse_expression()
+            condition = self.parse_expression_continuation(self.parse_expression)
             self.eat("ELSE")
-            false_expr = self.parse_expression()
+            false_expr = self.parse_expression_continuation(self.parse_expression)
             left = TernaryOpNode(condition, true_expr, false_expr)
         return left
 
@@ -2021,7 +2025,7 @@ class MojoParser:
         while self.current_token[0] == "OR":
             op = self.current_token[1]
             self.eat("OR")
-            right = self.parse_logical_and()
+            right = self.parse_expression_continuation(self.parse_logical_and)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2032,7 +2036,7 @@ class MojoParser:
         while self.current_token[0] == "AND":
             op = self.current_token[1]
             self.eat("AND")
-            right = self.parse_bitwise_or()
+            right = self.parse_expression_continuation(self.parse_bitwise_or)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2043,7 +2047,7 @@ class MojoParser:
         while self.current_token[0] == "BITWISE_OR":
             op = self.current_token[1]
             self.eat("BITWISE_OR")
-            right = self.parse_bitwise_xor()
+            right = self.parse_expression_continuation(self.parse_bitwise_xor)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2054,7 +2058,7 @@ class MojoParser:
         while self.current_token[0] == "BITWISE_XOR":
             op = self.current_token[1]
             self.eat("BITWISE_XOR")
-            right = self.parse_bitwise_and()
+            right = self.parse_expression_continuation(self.parse_bitwise_and)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2065,7 +2069,7 @@ class MojoParser:
         while self.current_token[0] == "BITWISE_AND":
             op = self.current_token[1]
             self.eat("BITWISE_AND")
-            right = self.parse_equality()
+            right = self.parse_expression_continuation(self.parse_equality)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2076,7 +2080,7 @@ class MojoParser:
         while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_relational()
+            right = self.parse_expression_continuation(self.parse_relational)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2104,7 +2108,7 @@ class MojoParser:
             else:
                 op = self.current_token[1]
                 self.eat(self.current_token[0])
-            right = self.parse_shift()
+            right = self.parse_expression_continuation(self.parse_shift)
             comparisons.append((left, op, right))
             left = right
             self.skip_expression_layout()
@@ -2145,7 +2149,7 @@ class MojoParser:
         while self.current_token[0] in ["SHIFT_LEFT", "SHIFT_RIGHT"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_additive()
+            right = self.parse_expression_continuation(self.parse_additive)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2156,7 +2160,7 @@ class MojoParser:
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_multiplicative()
+            right = self.parse_expression_continuation(self.parse_multiplicative)
             self.skip_expression_layout()
             right = self.parse_adjacent_string_literals(right)
             left = BinaryOpNode(left, op, right)
@@ -2175,7 +2179,7 @@ class MojoParser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_unary()
+            right = self.parse_expression_continuation(self.parse_unary)
             left = BinaryOpNode(left, op, right)
             self.skip_expression_layout()
         return left
@@ -2213,7 +2217,7 @@ class MojoParser:
         if self.current_token[0] == "POWER":
             op = self.current_token[1]
             self.eat("POWER")
-            right = self.parse_unary()
+            right = self.parse_expression_continuation(self.parse_unary)
             return BinaryOpNode(left, op, right)
         return left
 
@@ -2258,6 +2262,9 @@ class MojoParser:
         elif self.current_token[0] == "LPAREN":
             self.eat("LPAREN")
             self.skip_layout_tokens()
+            if self.current_token[0] == "RPAREN":
+                self.eat("RPAREN")
+                return self.parse_postfix_suffixes(TupleNode([]))
             self.expression_layout_depth += 1
             try:
                 expr = self.parse_expression()

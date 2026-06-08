@@ -3342,6 +3342,29 @@ def test_let_condition_chain_parsing():
         pytest.fail(f"Let condition chain parsing failed: {e}")
 
 
+def test_absolute_path_if_let_pattern_parses_from_rust_cuda_codegen_backend():
+    code = """
+    fn synthesize_features(args: Args) {
+        let mut features = vec![];
+        for opt in &args.nvvm_options {
+            if let ::nvvm::NvvmOption::Arch(arch) = opt {
+                features.extend(arch.all_target_features());
+            }
+        }
+    }
+    """
+    ast = parse_code(code)
+    loop = ast.functions[0].body[1]
+
+    assert isinstance(loop, ForNode)
+    condition = loop.body[0].condition
+    assert isinstance(condition, LetPatternConditionNode)
+    assert isinstance(condition.pattern, FunctionCallNode)
+    assert condition.pattern.name == "nvvm::NvvmOption::Arch"
+    assert condition.pattern.args == ["arch"]
+    assert condition.expression == "opt"
+
+
 def test_closure_expression_parsing():
     code = """
     fn test_closures(values: Values) {
