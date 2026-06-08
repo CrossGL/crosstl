@@ -140,6 +140,7 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "artifactProvenanceByPipeline",
         "artifactProvenanceByIntermediate",
         "artifactProvenanceIntermediateBySourceBackend",
+        "artifactProvenanceIntermediateByTarget",
         "artifactProvenanceIntermediateByVariant",
         "sourceMapCount",
         "fineGrainedSourceMapCount",
@@ -1378,6 +1379,28 @@ def _artifact_provenance_intermediate_counts_by_source_backend(
     }
 
 
+def _artifact_provenance_intermediate_counts_by_target(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {}
+    for artifact in artifacts:
+        target = artifact.get("target")
+        target_key = target if _is_non_empty_string(target) else "unknown"
+        provenance = artifact.get("provenance")
+        if not isinstance(provenance, Mapping):
+            intermediate_key = "unknown"
+        elif provenance.get("intermediate") is None:
+            intermediate_key = "none"
+        else:
+            intermediate = provenance.get("intermediate")
+            intermediate_key = (
+                intermediate if _is_non_empty_string(intermediate) else "unknown"
+            )
+        row = counts.setdefault(target_key, {})
+        row[intermediate_key] = row.get(intermediate_key, 0) + 1
+    return {target: dict(sorted(row.items())) for target, row in sorted(counts.items())}
+
+
 def _artifact_provenance_intermediate_counts_by_variant(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, dict[str, int]]:
@@ -1415,6 +1438,9 @@ def _artifact_provenance_rollups(
         ),
         "artifactProvenanceIntermediateBySourceBackend": (
             _artifact_provenance_intermediate_counts_by_source_backend(artifacts)
+        ),
+        "artifactProvenanceIntermediateByTarget": (
+            _artifact_provenance_intermediate_counts_by_target(artifacts)
         ),
         "artifactProvenanceIntermediateByVariant": (
             _artifact_provenance_intermediate_counts_by_variant(artifacts)
@@ -6716,6 +6742,7 @@ def _inspection_artifact_provenance_summary(
     intermediate_by_source_backend = summary.get(
         "artifactProvenanceIntermediateBySourceBackend"
     )
+    intermediate_by_target = summary.get("artifactProvenanceIntermediateByTarget")
     intermediate_by_variant = summary.get("artifactProvenanceIntermediateByVariant")
     if not isinstance(by_pipeline, Mapping) or not isinstance(by_intermediate, Mapping):
         return {"available": False}
@@ -6758,6 +6785,15 @@ def _inspection_artifact_provenance_summary(
                 if isinstance(source_backend, str) and isinstance(counts, Mapping)
             }
             if isinstance(intermediate_by_source_backend, Mapping)
+            else {}
+        ),
+        "intermediateByTarget": (
+            {
+                target: dict(counts)
+                for target, counts in intermediate_by_target.items()
+                if isinstance(target, str) and isinstance(counts, Mapping)
+            }
+            if isinstance(intermediate_by_target, Mapping)
             else {}
         ),
         "intermediateByVariant": (
@@ -10584,6 +10620,14 @@ def _summary_contract_reasons(
                 artifact_provenance_rollups[
                     "artifactProvenanceIntermediateBySourceBackend"
                 ],
+                "artifact provenance",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.artifactProvenanceIntermediateByTarget",
+                summary.get("artifactProvenanceIntermediateByTarget"),
+                artifact_provenance_rollups["artifactProvenanceIntermediateByTarget"],
                 "artifact provenance",
             )
         )

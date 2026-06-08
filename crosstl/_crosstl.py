@@ -2339,6 +2339,11 @@ def _format_project_report_inspection(payload):
             include_zero=False,
         ),
         _format_nested_count_rollup(
+            "Artifact provenance by target and intermediate",
+            summary.get("artifactProvenanceIntermediateByTarget"),
+            include_zero=False,
+        ),
+        _format_nested_count_rollup(
             "Artifact provenance by variant and intermediate",
             summary.get("artifactProvenanceIntermediateByVariant"),
             include_zero=False,

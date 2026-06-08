@@ -5889,6 +5889,9 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["artifactProvenanceIntermediateBySourceBackend"] == {
         "cgl": {"none": 1}
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByTarget"] == {
+        "opengl": {"none": 1}
+    }
     assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {}
     assert payload["project"]["sourceRootCount"] == 1
     assert payload["project"]["includePatternCount"] == 0
@@ -6029,6 +6032,9 @@ def test_translate_project_records_bridge_artifact_provenance_rollups(
     assert payload["summary"]["artifactProvenanceIntermediateBySourceBackend"] == {
         "rust": {"crossgl": 1}
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByTarget"] == {
+        "opengl": {"crossgl": 1}
+    }
     assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {}
 
 
@@ -6091,6 +6097,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     assert provenance["truncatedDirectArtifactCount"] == 0
     assert provenance["bridgedArtifactCount"] == 1
     assert provenance["truncatedBridgedArtifactCount"] == 0
+    assert provenance["intermediateByTarget"] == {"opengl": {"crossgl": 1, "none": 1}}
     assert direct_artifact["source"] == "direct.cgl"
     assert direct_artifact["intermediate"] == "none"
     assert direct_artifact["sourceHashAlgorithm"] == direct_source_hash["algorithm"]
@@ -6126,6 +6133,9 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     )
 
     assert result.returncode == 0
+    assert (
+        "Artifact provenance by target and intermediate: " "opengl=(crossgl=1, none=1)"
+    ) in result.stdout
     assert "Artifact provenance samples:" in result.stdout
     assert "Direct artifact provenance samples:" in result.stdout
     direct_source_hash_preview = crosstl_cli._format_hash_preview(
@@ -6407,6 +6417,12 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         "debug": {"none": 1},
         "release": {"none": 1},
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByTarget"] == {
+        "cgl": {"none": 2}
+    }
+    assert inspection["artifactProvenance"]["intermediateByTarget"] == {
+        "cgl": {"none": 2}
+    }
     assert inspection["artifactProvenance"]["intermediateByVariant"] == {
         "debug": {"none": 1},
         "release": {"none": 1},
@@ -6505,6 +6521,9 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
     assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {
         "qa/profile": {"none": 1}
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByTarget"] == {
+        "cgl": {"none": 1}
+    }
     assert validation["artifactStatusByVariant"] == {
         "qa/profile": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }
@@ -6513,6 +6532,9 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
     assert inspection["sourceMaps"]["sourceRemapsByVariant"] == {"qa/profile": 1}
     assert inspection["artifactProvenance"]["intermediateByVariant"] == {
         "qa/profile": {"none": 1}
+    }
+    assert inspection["artifactProvenance"]["intermediateByTarget"] == {
+        "cgl": {"none": 1}
     }
     assert (repo / expected_artifact_path).exists()
     assert (repo / expected_remap_path).exists()
@@ -12277,6 +12299,7 @@ def test_validate_project_report_rejects_missing_artifact_provenance_source_back
     report = translate_project(repo, targets=["cgl"], output_dir="out")
     payload = report.to_json()
     payload["summary"].pop("artifactProvenanceIntermediateBySourceBackend")
+    payload["summary"].pop("artifactProvenanceIntermediateByTarget")
     report_path = repo / "out" / "missing-provenance-rollup-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -12288,6 +12311,10 @@ def test_validate_project_report_rejects_missing_artifact_provenance_source_back
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "summary.artifactProvenanceIntermediateBySourceBackend must be an object"
+        in diagnostic["message"]
+    )
+    assert (
+        "summary.artifactProvenanceIntermediateByTarget must be an object"
         in diagnostic["message"]
     )
 
@@ -12482,6 +12509,7 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "artifactProvenanceIntermediateBySourceBackend": {
                         "cgl": {"crossgl": 1}
                     },
+                    "artifactProvenanceIntermediateByTarget": {"metal": {"crossgl": 1}},
                     "artifactProvenanceIntermediateByVariant": {
                         "debug": {"crossgl": 1}
                     },
@@ -12571,6 +12599,10 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     )
     assert (
         "summary.artifactProvenanceIntermediateBySourceBackend must match "
+        "artifact provenance"
+    ) in diagnostic["message"]
+    assert (
+        "summary.artifactProvenanceIntermediateByTarget must match "
         "artifact provenance"
     ) in diagnostic["message"]
     assert (
@@ -15542,6 +15574,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byPipeline": {"single-file-translate": 1},
         "byIntermediate": {"none": 1},
         "intermediateBySourceBackend": {"cgl": {"none": 1}},
+        "intermediateByTarget": {"cgl": {"none": 1}},
         "intermediateByVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
@@ -16233,6 +16266,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "byPipeline": {"single-file-translate": 1},
         "byIntermediate": {"none": 1},
         "intermediateBySourceBackend": {"cgl": {"none": 1}},
+        "intermediateByTarget": {"cgl": {"none": 1}},
         "intermediateByVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,

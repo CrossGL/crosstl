@@ -1207,8 +1207,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         ) in backend_support["notes"]
         assert (
             "artifact provenance summary rollups by pipeline, intermediate "
-            "marker, source backend with intermediate marker, and variant "
-            "with intermediate marker"
+            "marker, source backend with intermediate marker, target with "
+            "intermediate marker, and variant with intermediate marker"
         ) in backend_support["notes"]
         assert (
             "bounded direct, bridged, and combined artifact provenance "
@@ -1491,7 +1491,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "required and canonical artifact provenance" in backend_support["notes"]
         assert "required translated artifact source maps" in backend_support["notes"]
         assert "source-map summary rollups" in backend_support["notes"]
-        assert "artifact provenance source-backend and variant rollups" in (
+        assert "artifact provenance source-backend, target, and variant rollups" in (
             backend_support["notes"]
         )
         assert "failed artifact-provenance validation metadata" in (

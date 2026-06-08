@@ -464,8 +464,8 @@ Project reports are JSON documents with:
   include dependency status, include dependency source backend, include
   dependency source-backend status, include dependency resolution source,
   include dependency variant, artifact provenance pipeline, intermediate,
-  source backend plus intermediate, variant plus intermediate, diagnostic code
-  (``diagnosticsByCode``), and missing capability
+  source backend plus intermediate, target plus intermediate, variant plus
+  intermediate, diagnostic code (``diagnosticsByCode``), and missing capability
   (``missingCapabilityCounts``).
 - ``units``: discovered translation units with stable repository-relative POSIX
   paths,
@@ -539,9 +539,10 @@ Project reports are JSON documents with:
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL
   bridge. Report summaries and inspections include provenance rollups by
-  pipeline, intermediate marker, source backend with intermediate marker, and
-  variant with intermediate marker, plus bounded artifact provenance samples for
-  direct and bridge artifacts. Inspection samples include failed validation
+  pipeline, intermediate marker, source backend with intermediate marker,
+  target with intermediate marker, and variant with intermediate marker, plus
+  bounded artifact provenance samples for direct and bridge artifacts.
+  Inspection samples include failed validation
   status, existence, hash, source-map, and source-remap status metadata when the
   validated artifact no longer matches the report.
   Full reports require failed artifacts to carry an actionable error string and
@@ -604,9 +605,9 @@ Project reports are JSON documents with:
   source-remap granularity, target, source-backend, and variant rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact
   error metadata rejection, required artifact provenance and provenance value
-  checks, artifact provenance source-backend and variant rollup checks, failed
-  artifact generated metadata rejection, required translated artifact source
-  maps, required CrossGL artifact source remaps, source-map
+  checks, artifact provenance source-backend, target, and variant rollup checks,
+  failed artifact generated metadata rejection, required translated artifact
+  source maps, required CrossGL artifact source remaps, source-map
   record shape, non-empty mapping list, file-level mapping cardinality,
   positive-length finer-grained mappings, finer-grained mapping containment
   within artifact-level anchors, span consistency, anchor consistency, current
