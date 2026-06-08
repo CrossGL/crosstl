@@ -1476,6 +1476,49 @@ def test_load_pytest_failure_report_rejects_malformed_summary_contract(tmp_path)
     )
 
 
+def test_load_pytest_failure_report_rejects_mismatched_summary_accounting(tmp_path):
+    module = load_signals_module()
+    mismatched = tmp_path / "mismatched-summary.json"
+    mismatched.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generator": "tools/pytest_failure_summary.py",
+                "summary": {
+                    "report_count": 1,
+                    "load_error_count": 0,
+                    "testcase_count": 0,
+                    "failure_count": 0,
+                    "error_count": 0,
+                    "skipped_count": 0,
+                    "failed_testcase_count": 0,
+                    "categories": {},
+                    "backends": {},
+                },
+                "reports": [
+                    {
+                        "path": "junit.xml",
+                        "load_error": {
+                            "type": "ParseError",
+                            "message": "invalid XML",
+                        },
+                    }
+                ],
+                "clean_workflow_runs": [],
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = module.load_pytest_failure_report(mismatched)
+
+    assert report["load_error"]["type"] == "InvalidPytestFailureSummary"
+    assert "summary.load_error_count must match reports" in (
+        report["load_error"]["message"]
+    )
+
+
 def test_pytest_failure_summary_propagates_nested_load_errors(tmp_path):
     module = load_signals_module()
     backends = {

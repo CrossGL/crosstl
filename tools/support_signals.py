@@ -1505,6 +1505,81 @@ def pytest_failure_summary_report_errors(index: int, report: Any) -> list[str]:
     return errors
 
 
+def pytest_failure_summary_loaded_reports(
+    reports: list[Any],
+) -> list[Mapping[str, Any]]:
+    return [
+        report
+        for report in reports
+        if isinstance(report, Mapping) and "load_error" not in report
+    ]
+
+
+def pytest_failure_summary_counter_mismatch_errors(
+    summary: Mapping[str, Any],
+    reports: list[Any],
+    failures: list[Any],
+) -> list[str]:
+    loaded_reports = pytest_failure_summary_loaded_reports(reports)
+    valid_failures = [failure for failure in failures if isinstance(failure, Mapping)]
+    expected_counts = {
+        "report_count": len(reports),
+        "load_error_count": sum(
+            1
+            for report in reports
+            if isinstance(report, Mapping) and report.get("load_error")
+        ),
+        "testcase_count": sum(
+            report.get("tests", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("tests"))
+        ),
+        "failure_count": sum(
+            report.get("failures", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("failures"))
+        ),
+        "error_count": sum(
+            report.get("errors", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("errors"))
+        ),
+        "skipped_count": sum(
+            report.get("skipped", 0)
+            for report in loaded_reports
+            if valid_non_negative_int(report.get("skipped"))
+        ),
+        "failed_testcase_count": len(valid_failures),
+    }
+    errors = []
+    for field_name, expected_count in expected_counts.items():
+        if (
+            valid_non_negative_int(summary.get(field_name))
+            and summary.get(field_name) != expected_count
+        ):
+            errors.append(f"summary.{field_name} must match reports")
+
+    categories = Counter(
+        failure.get("category")
+        for failure in valid_failures
+        if isinstance(failure.get("category"), str)
+    )
+    backends = Counter(
+        failure.get("backend")
+        for failure in valid_failures
+        if isinstance(failure.get("backend"), str)
+    )
+    if isinstance(summary.get("categories"), Mapping) and dict(
+        summary["categories"]
+    ) != dict(sorted(categories.items())):
+        errors.append("summary.categories must match failures")
+    if isinstance(summary.get("backends"), Mapping) and dict(
+        summary["backends"]
+    ) != dict(sorted(backends.items())):
+        errors.append("summary.backends must match failures")
+    return errors
+
+
 def pytest_failure_summary_contract_errors(report: Mapping[str, Any]) -> list[str]:
     errors = []
     for field_name in (
@@ -1579,6 +1654,10 @@ def pytest_failure_summary_contract_errors(report: Mapping[str, Any]) -> list[st
         errors.append(
             "report must include at least one parsed report, clean workflow run, "
             "or failure"
+        )
+    if isinstance(summary, Mapping):
+        errors.extend(
+            pytest_failure_summary_counter_mismatch_errors(summary, reports, failures)
         )
 
     return errors
