@@ -102,6 +102,8 @@ The legacy single-file command remains available:
 
    python -m crosstl._crosstl examples/graphics/SimpleShader.cgl --backend metal
 
+Legacy single-file options may appear before or after the input path.
+
 The explicit single-file subcommand is equivalent:
 
 .. code-block:: bash

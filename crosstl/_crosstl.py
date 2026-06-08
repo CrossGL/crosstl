@@ -3237,7 +3237,9 @@ def _use_legacy_cli(argv):
         "inspect-report",
         "report",
     }
-    return argv and argv[0] not in commands and not argv[0].startswith("-")
+    if not argv or argv[0] in {"-h", "--help"}:
+        return False
+    return argv[0] not in commands
 
 
 def main(argv=None):

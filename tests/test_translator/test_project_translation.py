@@ -18456,6 +18456,75 @@ def test_single_file_cli_writes_explicit_stdout(
     assert not (tmp_path / "-").exists()
 
 
+def test_legacy_single_file_cli_accepts_options_before_input(
+    tmp_path, monkeypatch, capsys
+):
+    shader = tmp_path / "kernel.shader"
+    output = tmp_path / "kernel.glsl"
+    include_dir = tmp_path / "include"
+    shader.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    include_dir.mkdir()
+    calls = []
+
+    def fake_translate(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        calls.append(
+            {
+                "file_path": file_path,
+                "backend": backend,
+                "save_shader": save_shader,
+                "format_output": format_output,
+                "source_backend": source_backend,
+                "include_paths": list(include_paths or []),
+                "defines": dict(defines or {}),
+            }
+        )
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(crosstl_cli, "translate", fake_translate)
+
+    exit_code = crosstl_cli.main(
+        [
+            "--backend",
+            "opengl",
+            "--output",
+            str(output),
+            "--no-format",
+            "--source-backend",
+            "cgl",
+            "--include-dir",
+            str(include_dir),
+            "--define",
+            "MODE=debug",
+            str(shader),
+        ]
+    )
+
+    assert exit_code == 0
+    assert "Successfully translated" in capsys.readouterr().out
+    assert calls == [
+        {
+            "file_path": str(shader),
+            "backend": "opengl",
+            "save_shader": str(output),
+            "format_output": False,
+            "source_backend": "cgl",
+            "include_paths": [str(include_dir)],
+            "defines": {"MODE": "debug"},
+        }
+    ]
+    assert output.read_text(encoding="utf-8") == "// translated\n"
+
+
 def test_legacy_single_file_cli_still_works(tmp_path):
     shader = tmp_path / "simple.cgl"
     output = tmp_path / "simple.glsl"
