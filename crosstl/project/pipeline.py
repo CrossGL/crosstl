@@ -1794,8 +1794,8 @@ def _external_corpus_manifest_entry_reasons(entry: Any) -> list[str]:
             reasons.append("path must be repository-relative")
 
     source_backend = entry.get("sourceBackend")
-    if source_backend is not None and not isinstance(source_backend, str):
-        reasons.append("sourceBackend must be a string")
+    if source_backend is not None and not _is_non_empty_string(source_backend):
+        reasons.append("sourceBackend must be a non-empty string")
 
     targets = entry.get("targets")
     if targets is not None:
