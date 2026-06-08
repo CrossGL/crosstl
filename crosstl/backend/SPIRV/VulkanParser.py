@@ -5729,9 +5729,31 @@ class VulkanParser:
         if operation == "CompositeExtract" and len(args) >= 2:
             expression = args[0]
             for index in args[1:]:
-                expression = ArrayAccessNode(expression, index)
+                extracted = self.spirv_static_composite_element(expression, index)
+                expression = (
+                    extracted
+                    if extracted is not None
+                    else ArrayAccessNode(expression, index)
+                )
             return expression
         return FunctionCallNode(f"spirv_{operation}", args)
+
+    def spirv_static_composite_element(self, expression, index):
+        try:
+            element_index = int(str(index), 0)
+        except (TypeError, ValueError):
+            return None
+
+        if isinstance(expression, FunctionCallNode):
+            elements = expression.args
+        elif isinstance(expression, InitializerListNode):
+            elements = expression.elements
+        else:
+            return None
+
+        if 0 <= element_index < len(elements):
+            return elements[element_index]
+        return None
 
     def spirv_constant_operand_expression(self, operand, names, constants):
         value = constants.get(operand)

@@ -2725,6 +2725,9 @@ class MojoParser:
         if self.current_token[0] in self.FUNCTION_TYPE_TOKENS:
             return self.parse_function_type()
 
+        if self.current_token[0] == "LPAREN":
+            return self.parse_parenthesized_type_group()
+
         if self.current_token[0] not in self.TYPE_START_TOKENS:
             raise SyntaxError(f"Expected type name, got {self.current_token[0]}")
 
@@ -2746,6 +2749,27 @@ class MojoParser:
             ):
                 type_name += f" {self.parse_type()}"
         return type_name
+
+    def parse_parenthesized_type_group(self):
+        self.eat("LPAREN")
+        self.skip_layout_tokens()
+
+        types = []
+        while self.current_token[0] != "RPAREN":
+            types.append(self.parse_type())
+            self.skip_layout_tokens()
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                self.skip_layout_tokens()
+                if self.current_token[0] == "RPAREN":
+                    break
+                continue
+            break
+
+        self.eat("RPAREN")
+        if len(types) == 1:
+            return types[0]
+        return f"Tuple[{', '.join(types)}]"
 
     def parse_function_type(self):
         type_name = self.current_token[1]

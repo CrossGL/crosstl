@@ -4857,6 +4857,42 @@ def test_rust_cuda_raw_pointer_parameter_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_lifetime_generic_type_arguments_codegen_reparse_from_corpus():
+    code = """
+    struct FunctionIter<'a> {
+        module: PhantomData<&'a &'a Module>,
+        next: Option<&'a Value>,
+    }
+
+    struct DebugCtx<'a> {
+        created_files: RefCell<UnordMap<Option<(StableSourceFileId, SourceFileHash)>, &'a File>>,
+    }
+
+    fn matrix_motion_transform_from_handle(
+        handle: TraversableHandle,
+    ) -> Option<&'static MatrixMotionTransform> {
+        let transform_ptr: *const MatrixMotionTransform;
+        core::mem::transmute(transform_ptr)
+    }
+
+    fn compute(debug_context: FunctionDebugContext<'_, '_>) {
+        debug_context.finalize();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "PhantomData<Module> module;" in result
+    assert "Option<Value> next;" in result
+    assert (
+        "RefCell<UnordMap<Option<Tuple<StableSourceFileId, SourceFileHash>>, "
+        "File>> created_files;" in result
+    )
+    assert "Option<MatrixMotionTransform> matrix_motion_transform_from_handle" in result
+    assert "void compute(FunctionDebugContext debug_context)" in result
+    crosstl.translator.parse(result)
+
+
 def test_function_call_conversion():
     code = """
     fn test_calls() {

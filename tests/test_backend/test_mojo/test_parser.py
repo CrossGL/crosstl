@@ -2876,6 +2876,36 @@ def test_comptime_tuple_declaration_parse_from_modular_grouped_matmul():
     assert declaration.initial_value.name == "divmod"
 
 
+def test_parenthesized_return_type_parse_from_modular_shared_memory():
+    # Reduced from Modular max/kernels/src/linalg/structuring.mojo and
+    # max/kernels/src/linalg/matmul/gpu/sm90/matmul_kernels.mojo.
+    code = """
+    def ptr() -> (
+        UnsafePointer[
+            Int8, MutExternalOrigin, address_space=AddressSpace.SHARED
+        ]
+    ):
+        pass
+
+    def common_kernel_init() -> (
+        Tuple[
+            Int,
+            Int,
+            Bool,
+        ]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    ptr = find_function(ast, "ptr")
+    common_kernel_init = find_function(ast, "common_kernel_init")
+
+    assert ptr.return_type == (
+        "UnsafePointer[Int8, MutExternalOrigin, " "address_space=AddressSpace.SHARED]"
+    )
+    assert common_kernel_init.return_type == "Tuple[Int, Int, Bool]"
+
+
 def test_type_member_expression_parse_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:

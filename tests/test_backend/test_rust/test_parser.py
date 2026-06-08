@@ -2070,6 +2070,26 @@ def test_lifetime_reference_type_parsing():
         pytest.fail(f"Lifetime reference type parsing failed: {e}")
 
 
+def test_lifetime_reference_generic_type_argument_spacing_from_corpus():
+    code = """
+    struct FunctionIter<'a> {
+        module: PhantomData<&'a &'a Module>,
+        next: Option<&'a Value>,
+    }
+
+    fn matrix_motion_transform_from_handle(
+        handle: TraversableHandle,
+    ) -> Option<&'static MatrixMotionTransform> {
+        return core::mem::transmute(handle);
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.structs[0].members[1].vtype == "Option<&'a Value>"
+    assert ast.functions[0].return_type == "Option<&'static MatrixMotionTransform>"
+
+
 def test_lifetime_receiver_parsing_from_rust_gpu_wgpu_runner():
     # Reduced from https://github.com/Rust-GPU/rust-gpu.git commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,

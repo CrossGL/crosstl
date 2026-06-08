@@ -10347,6 +10347,7 @@ class RustToCrossGLConverter:
                     changed = True
                     continue
                 stripped_arg = self.strip_lifetime_type_syntax(arg)
+                stripped_arg = self.normalize_lifetime_generic_argument(stripped_arg)
                 changed = changed or stripped_arg != arg
                 stripped_args.append(stripped_arg)
 
@@ -10356,6 +10357,37 @@ class RustToCrossGLConverter:
                 return f"{base_name}<{', '.join(stripped_args)}>"
 
         return self.strip_reference_lifetime(type_name)
+
+    def normalize_lifetime_generic_argument(self, type_name):
+        """Make lifetime-bearing generic args parseable after lifetime erasure."""
+        if not isinstance(type_name, str):
+            return type_name
+
+        normalized = type_name.strip()
+        previous = None
+        while normalized != previous:
+            previous = normalized
+            normalized = self.strip_reference_type(normalized)
+
+        tuple_elements = self.split_tuple_type(normalized)
+        if tuple_elements is not None:
+            if not tuple_elements:
+                return "()"
+            elements = [
+                self.normalize_lifetime_generic_argument(element)
+                for element in tuple_elements
+            ]
+            return f"Tuple<{', '.join(elements)}>"
+
+        generic = self.parse_generic_type(normalized)
+        if generic is None:
+            return normalized
+
+        base_name, args = generic
+        normalized_args = [
+            self.normalize_lifetime_generic_argument(arg) for arg in args
+        ]
+        return f"{base_name}<{', '.join(normalized_args)}>"
 
     def is_lifetime_type_argument(self, type_name):
         return bool(re.fullmatch(r"'[A-Za-z_][A-Za-z0-9_]*", type_name.strip()))

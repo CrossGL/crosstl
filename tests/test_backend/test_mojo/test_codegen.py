@@ -730,6 +730,70 @@ def test_positional_marker_in_alias_generic_codegen_reparses_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_variadic_pack_type_argument_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo stdlib elementwise and tuple helpers.
+    code = """
+    struct Kernel:
+        var shape: Coord[*Self.shape_0_types]
+
+    struct Tuple:
+        def reverse(self) -> Tuple[*Self.element_types.reverse()]:
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Coord[Self.shape_0_types] shape;" in generated_code
+    assert "Tuple[Self.element_types.reverse()] reverse()" in generated_code
+    assert "[*" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_variadic_pack_declaration_generic_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo stdlib reflection trait aliases.
+    code = """
+    alias AllWritable[*Ts: AnyType] = Ts.all_satisfies[predicate]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let AllWritable[Ts:AnyType] = Ts.all_satisfies[predicate]();" in (
+        generated_code
+    )
+    assert "AllWritable[*Ts:AnyType]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_parenthesized_return_type_codegen_reparses_crossgl():
+    # Reduced from Modular shared-memory helper signatures with grouped returns.
+    code = """
+    def ptr() -> (
+        UnsafePointer[
+            Int8, MutExternalOrigin, address_space=AddressSpace.SHARED
+        ]
+    ):
+        pass
+
+    def common_kernel_init() -> (
+        Tuple[
+            Int,
+            Int,
+            Bool,
+        ]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "UnsafePointer[Int8, MutExternalOrigin, address_space=AddressSpace.SHARED] "
+        "ptr()"
+    ) in generated_code
+    assert "Tuple[Int, Int, Bool] common_kernel_init()" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_example():
     code = """
     def main():

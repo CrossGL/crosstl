@@ -1686,6 +1686,41 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_WORKGROUP_SIZE_ARRAY_LENGTH_ASSEMBLY = """
+; Reduced from glslang Test/spv.noWorkgroup.comp and Test/web.comp. glslang
+; emits WorkgroupSize as an OpSpecConstantComposite, then uses CompositeExtract
+; results as OpTypeArray lengths for shared/local arrays.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 2 5 7
+OpName %keys "keys"
+OpDecorate %7 SpecId 18
+OpDecorate %8 SpecId 10
+OpDecorate %9 SpecId 19
+OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%7 = OpSpecConstant %uint 2
+%8 = OpSpecConstant %uint 5
+%9 = OpSpecConstant %uint 7
+%v3uint = OpTypeVector %uint 3
+%gl_WorkGroupSize = OpSpecConstantComposite %v3uint %7 %8 %9
+%x = OpSpecConstantOp %uint CompositeExtract %gl_WorkGroupSize 0
+%y = OpSpecConstantOp %uint CompositeExtract %gl_WorkGroupSize 1
+%xy = OpSpecConstantOp %uint IMul %x %y
+%inner = OpTypeArray %uint %xy
+%z = OpSpecConstantOp %uint CompositeExtract %gl_WorkGroupSize 2
+%outer = OpTypeArray %inner %z
+%ptr_workgroup_outer = OpTypePointer Workgroup %outer
+%keys = OpVariable %ptr_workgroup_outer Workgroup
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_WEB_COMP_BARRIER_ASSEMBLY = """
 ; Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
 ; Test/baseResults/web.comp.out OpControlBarrier/OpMemoryBarrier.
@@ -5749,6 +5784,19 @@ def test_spirv_assembly_specialization_constant_composite_and_op_codegen():
         "uint3(WORKGROUP_WIDTH, WORKGROUP_HEIGHT, 1);" in generated_code
     )
     assert "OpSpecConstant" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_workgroup_size_array_lengths_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_WORKGROUP_SIZE_ARRAY_LENGTH_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "groupshared uint keys[7][(2 * 5)];" in generated_code
+    assert "uint3(2, 5, 7)[0]" not in generated_code
+    assert "uint3(2, 5, 7)[1]" not in generated_code
+    assert "uint3(2, 5, 7)[2]" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

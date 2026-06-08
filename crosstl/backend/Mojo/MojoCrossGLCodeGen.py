@@ -1330,6 +1330,7 @@ class MojoToCrossGLConverter:
         """Normalize Mojo-only operators embedded in source-like type strings."""
         if not isinstance(mojo_type, str):
             return mojo_type
+        mojo_type = re.sub(r"(?<=[\[,])\s*\*(?=[A-Za-z_`])", "", mojo_type)
         mojo_type = re.sub(r"(?<=[\[,])\s*//\s*(?=,|\])", " /", mojo_type)
         return re.sub(r"\s*//\s*", " / ", mojo_type)
 

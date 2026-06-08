@@ -1809,6 +1809,8 @@ class RustParser:
             return False
         if previous in {"<", "[", "(", "::", ","}:
             return False
+        if isinstance(previous, str) and previous.startswith("'"):
+            return self.is_token_word(current)
         if current in {">", ">>", "]", ")", ",", "::", "<", "[", "(", ":"}:
             return False
         if previous.isdigit() and current == "D":
