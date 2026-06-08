@@ -15304,6 +15304,71 @@ def test_project_cli_scan_normalizes_explicit_config_path_separators(tmp_path):
     assert payload["project"]["outputDir"] == str(repo / "generated")
 
 
+def test_project_cli_scan_normalizes_path_override_separators(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu" / "shaders"
+    include_dir = repo / "gpu" / "include"
+    configured_dir = repo / "configured"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    configured_dir.mkdir()
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (configured_dir / "ignored.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["configured"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--source-root",
+            "gpu\\shaders",
+            "--include-dir",
+            "gpu\\include",
+            "--source-override",
+            "gpu\\shaders\\*.shader=cgl",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["project"]["sourceRoots"] == ["gpu/shaders"]
+    assert payload["project"]["sourceRootStatus"] == [
+        {
+            "path": "gpu/shaders",
+            "resolvedPath": str(shader_dir.resolve()),
+            "status": "active",
+            "scanVisible": True,
+        }
+    ]
+    assert payload["project"]["includeDirs"] == ["gpu/include"]
+    assert payload["project"]["includeDirStatus"] == [
+        {
+            "path": "gpu/include",
+            "resolvedPath": str(include_dir.resolve()),
+            "status": "active",
+            "frontendVisible": True,
+        }
+    ]
+    assert payload["project"]["sourceOverrides"] == {"gpu/shaders/*.shader": "cgl"}
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["unitsBySourceOverride"] == {"cgl": 1}
+    assert payload["units"][0]["path"] == "gpu/shaders/kernel.shader"
+    assert payload["units"][0]["sourceOverride"] == "cgl"
+
+
 def test_project_cli_scan_rejects_missing_explicit_config_path(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

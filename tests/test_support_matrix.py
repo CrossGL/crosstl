@@ -299,6 +299,9 @@ def test_project_repo_scan_documents_source_root_status():
             backend_support["notes"]
         )
         assert "rejects missing explicit config paths" in backend_support["notes"]
+        assert "CLI source-root, include-directory, and source-override separators" in (
+            backend_support["notes"]
+        )
         assert "project configuration scalar, list, and source override metadata" in (
             backend_support["notes"]
         )
@@ -354,6 +357,10 @@ def test_project_repo_scan_documents_source_root_status():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_scan_rejects_missing_explicit_config_path"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scan_normalizes_path_override_separators"
         ) in backend_support["evidence"]
 
 
@@ -540,7 +547,8 @@ def test_project_include_resolution_documents_status_reporting():
             backend_support["notes"]
         )
         assert (
-            "applies CLI include-directory overrides and rejects empty CLI "
+            "applies CLI include-directory overrides with normalized "
+            "repository-relative separators and rejects empty CLI "
             "include-directory overrides"
         ) in backend_support["notes"]
         assert "include-path processing status" in backend_support["notes"]
@@ -723,6 +731,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_scan_rejects_empty_include_dir_override"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scan_normalizes_path_override_separators"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

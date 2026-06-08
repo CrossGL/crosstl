@@ -287,6 +287,12 @@ def _parse_project_define_overrides(values):
     return defines
 
 
+def _normalize_project_cli_path(value):
+    from .project.pipeline import _normalize_project_relative_path
+
+    return _normalize_project_relative_path(value)
+
+
 def _parse_project_source_overrides(values):
     overrides = {}
     for value in values or []:
@@ -295,7 +301,7 @@ def _parse_project_source_overrides(values):
         backend = backend.strip()
         if not pattern or not separator or not backend:
             raise ValueError("--source-override entries must use PATTERN=BACKEND")
-        overrides[pattern] = backend
+        overrides[_normalize_project_cli_path(pattern)] = backend
     return overrides
 
 
@@ -305,7 +311,7 @@ def _parse_project_source_roots(values):
         source_root = value.strip()
         if not source_root:
             raise ValueError("--source-root entries must be non-empty")
-        source_roots.append(source_root)
+        source_roots.append(_normalize_project_cli_path(source_root))
     return tuple(source_roots)
 
 
@@ -315,7 +321,7 @@ def _parse_project_include_dirs(values):
         include_dir = value.strip()
         if not include_dir:
             raise ValueError("--include-dir entries must be non-empty")
-        include_dirs.append(include_dir)
+        include_dirs.append(_normalize_project_cli_path(include_dir))
     return tuple(include_dirs)
 
 
