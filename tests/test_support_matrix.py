@@ -182,9 +182,9 @@ def test_project_report_inspection_is_first_class_support_feature():
         ) in backend_support["notes"]
         assert (
             "validation status, diagnostic-code, missing-capability, "
-            "toolchain-status, toolchain-run target, source-backend, and variant "
-            "rollups plus artifact target, source-backend, and variant rollups"
-            in (backend_support["notes"])
+            "toolchain-status, toolchain-run target, source-backend, check-kind, "
+            "and variant rollups plus artifact target, source-backend, and "
+            "variant rollups" in (backend_support["notes"])
         )
         assert "configurable diagnostic and failed-artifact truncation" in (
             backend_support["notes"]
@@ -344,6 +344,10 @@ def test_project_report_inspection_documents_rollups():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_validation_variant_"
             "rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_summarizes_toolchain_run_failures"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
