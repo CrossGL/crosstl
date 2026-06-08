@@ -18583,6 +18583,63 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     ) in result.stdout
 
 
+def test_project_cli_inspect_report_text_includes_invalid_external_corpus_state(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps({"schemaVersion": 1, "entries": "not-a-list"}),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = inspect_project_report(report_path)
+
+    assert payload["externalCorpus"]["available"] is True
+    assert payload["externalCorpus"]["status"] == "invalid"
+    assert payload["externalCorpus"]["summary"] == (
+        project_pipeline._external_corpus_empty_summary()
+    )
+    assert payload["externalCorpus"]["missingEntryCount"] == 0
+    assert payload["externalCorpus"]["undiscoveredPresentEntryCount"] == 0
+    assert result.returncode == 0
+    assert "External corpus: invalid; 0 entries, 0 present, 0 missing" in (
+        result.stdout
+    )
+    assert (
+        "External corpus coverage: 0 discovered, 0 present but undiscovered; "
+        "0 manifest entries, 0 valid"
+    ) in result.stdout
+
+
 def test_project_cli_inspect_report_applies_external_corpus_sample_limit(tmp_path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)
