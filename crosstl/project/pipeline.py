@@ -2009,7 +2009,14 @@ def _external_corpus_report(
     for index, raw_entry in valid_manifest_entries:
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
-        source_backend = _external_corpus_source_backend(raw_entry.get("sourceBackend"))
+        unit = units_by_path.get(path)
+        manifest_source_backend = raw_entry.get("sourceBackend")
+        if _is_non_empty_string(manifest_source_backend):
+            source_backend = _external_corpus_source_backend(manifest_source_backend)
+        elif unit is not None:
+            source_backend = unit.source_backend
+        else:
+            source_backend = "unknown"
         entry_artifacts = [
             artifact
             for artifact in artifacts_by_source.get(path, [])
@@ -2021,7 +2028,7 @@ def _external_corpus_report(
             and _is_repository_relative_report_path(path)
             and entry_path.exists()
         )
-        discovered = path in units_by_path
+        discovered = unit is not None
         entry_payload = {
             "id": str(raw_entry.get("id") or path or f"entry-{index + 1}"),
             "path": path,
