@@ -693,7 +693,7 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     """
     result = parse_and_generate(code)
 
-    assert "typedef sampler2D Image2d;" in result
+    assert "typedef Image2d = sampler2D;" in result
     assert "fragment main_fs {" in result
     assert "Image2d sampled_tex @ set(2) @ binding(5)" in result
     assert "image2D storage_tex @ set(3) @ binding(1)" in result
@@ -1961,9 +1961,9 @@ def test_type_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef float Real;" in result
-        assert "typedef vec3 Color;" in result
-        assert "typedef float Weights[4];" in result
+        assert "typedef Real = float;" in result
+        assert "typedef Color = vec3;" in result
+        assert "typedef Weights = float[4];" in result
         assert "typedef" in result
         assert "Buffer" not in result
         assert "Vector" not in result
@@ -2011,7 +2011,7 @@ def test_module_path_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef float Real;" in result
+        assert "typedef Real = float;" in result
         assert "Real sample(Real x, vec3 normal)" in result
         assert "lifted = vec3(1.0, 2.0, 3.0);" in result
         assert "c = self::helper::CONST;" in result
@@ -5868,7 +5868,7 @@ def test_gpu_resource_method_calls_convert_on_resource_type_alias_receivers():
 
     result = parse_and_generate(code)
 
-    assert "typedef sampler2D ColorTexture;" in result
+    assert "typedef ColorTexture = sampler2D;" in result
     assert (
         "vec4 alias_resources(ColorTexture tex, sampler2D generic_tex, "
         "sampler2DShadow shadow, RWStructuredBuffer<int> values"
@@ -10401,6 +10401,61 @@ def test_rust_gpu_ash_runner_nested_block_statement_codegen():
         "device.queue_submit2("
     )
     assert "return Ok(());" in result
+
+
+def test_type_alias_codegen_reparse_from_rust_gpu_entry_interface():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/linker/entry_interface.rs.
+    code = """
+    type Id = Word;
+
+    fn use_id(value: Id) -> Id {
+        value
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "typedef Id = Word;" in result
+    crosstl.translator.parse(result)
+
+
+def test_tuple_typed_global_array_codegen_reparse_from_rust_gpu_libm_table():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/builder/libm_intrinsics.rs.
+    code = """
+    const LIBM_TABLE: &[(&str, LibmIntrinsic)] = &[
+        ("acos", LibmIntrinsic::GLOp(GLOp::Acos)),
+    ];
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "const Tuple<str, LibmIntrinsic> LIBM_TABLE[] = "
+        '{("acos", LibmIntrinsic::GLOp(GLOp::Acos))};'
+    ) in result
+    crosstl.translator.parse(result)
+
+
+def test_inline_block_use_comment_codegen_reparse_from_rust_gpu_symbols_table():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/symbols.rs.
+    code = """
+    const BUILTINS: &[(&str, BuiltIn)] = {
+        use BuiltIn::*;
+        &[("position", Position)]
+    };
+    """
+
+    result = parse_and_generate(code)
+
+    assert "/* use BuiltIn::* */" in result
+    assert "const Tuple<str, BuiltIn> BUILTINS[]" in result
+    crosstl.translator.parse(result)
 
 
 def test_error_handling():

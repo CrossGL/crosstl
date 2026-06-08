@@ -1515,11 +1515,13 @@ def test_not_in_membership_condition_codegen_from_mojo_gpu_puzzles_dispatch():
     generated_code = generate_code(ast)
 
     assert (
-        'if (((len(argv()) != 2) || (!(argv()[1] in ["--simple", "--block-boundary"]))))'
+        'if (((len(argv()) != 2) || (!contains(["--simple", "--block-boundary"], argv()[1]))))'
         in generated_code
     )
     assert " not in " not in generated_code
+    assert " in " not in generated_code
     assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
@@ -3738,6 +3740,20 @@ def test_at_attribute_codegen():
         assert "kernel()@ compute_shader" not in generated_code
     except SyntaxError:
         pytest.fail("Attribute parsing or code generation not implemented.")
+
+
+def test_reserved_attribute_name_codegen_reparses_crossgl():
+    code = """
+    @extern("nvshmemx_signal_op")
+    fn nvshmemx_signal_op(pe: Int):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert '@ extern_("nvshmemx_signal_op")' in generated_code
+    assert "@ extern(" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_bracket_attribute_codegen_uses_shader_stage():

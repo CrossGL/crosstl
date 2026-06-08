@@ -108,6 +108,22 @@ def test_opencl_host_embedded_source_string_is_skipped_in_crossgl():
     assert "not_a_top_level_kernel" not in crossgl
 
 
+def test_opencl_host_string_template_preprocessor_errors_are_inert():
+    crossgl = generate_crossgl("""
+        const char *SYMM_C_KERNEL = "
+        #if !defined(__SYMM_UPPER__)
+        #error Upper or Lower must be defined
+        #endif
+        __kernel void not_a_top_level_kernel(__global float *out) {
+            out[0] = 1.0f;
+        }
+        ";
+        """)
+
+    assert "// skipped host OpenCL source string: SYMM_C_KERNEL" in crossgl
+    assert "not_a_top_level_kernel" not in crossgl
+
+
 def test_opencl_standalone_real_alias_falls_back_to_f32():
     crossgl = generate_crossgl("""
         typedef real realV;

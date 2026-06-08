@@ -2328,6 +2328,30 @@ class Parser:
             while self.current_token[0] == "LPAREN":
                 name = f"{name}({self.parse_balanced_parenthesized_token_text()})"
 
+            while self.current_token[0] in {"DOT", "DOUBLE_COLON"}:
+                separator = self.current_token[1]
+                self.eat(self.current_token[0])
+                segment = self.parse_binding_identifier()
+
+                segment_generic_args = []
+                if self.current_token[0] == "LESS_THAN":
+                    segment_generic_args = self.parse_generic_arguments()
+                elif self.current_token[0] == "LBRACKET" and (
+                    self.square_brackets_form_type_arguments()
+                    or (
+                        generic_args
+                        and self.square_brackets_form_member_type_arguments()
+                    )
+                ):
+                    segment_generic_args = self.parse_square_generic_arguments()
+
+                if generic_args:
+                    name = f"{name}_{segment}"
+                    generic_args.extend(segment_generic_args)
+                else:
+                    name = f"{name}{separator}{segment}"
+                    generic_args = segment_generic_args
+
             base_type = NamedType(name, generic_args)
 
         elif self.current_token[0] == "LBRACKET":
@@ -2462,6 +2486,29 @@ class Parser:
                 and self.tokens[index + 1][0] == "DOT"
             ):
                 saw_generic_separator = True
+
+            index += 1
+
+        return False
+
+    def square_brackets_form_member_type_arguments(self):
+        """Return whether a post-generic member suffix has type arguments."""
+        if self.current_token[0] != "LBRACKET":
+            return False
+
+        index = self.pos + 1
+        depth = 1
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    return False
+            elif depth == 1 and token_type in {"DOT", "DOUBLE_COLON"}:
+                return True
 
             index += 1
 
@@ -3536,13 +3583,24 @@ class Parser:
 
     def parse_multiplicative_expression(self):
         """Parse multiplication, division, and modulo expressions."""
-        left = self.parse_unary_expression()
+        left = self.parse_power_expression()
 
         while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_unary_expression()
+            right = self.parse_power_expression()
             left = BinaryOpNode(left, op, right)
+
+        return left
+
+    def parse_power_expression(self):
+        """Parse exponentiation syntax into the canonical ``pow`` intrinsic."""
+        left = self.parse_unary_expression()
+
+        if self.current_token[0] == "POWER":
+            self.eat("POWER")
+            right = self.parse_power_expression()
+            return FunctionCallNode(IdentifierNode("pow"), [left, right])
 
         return left
 

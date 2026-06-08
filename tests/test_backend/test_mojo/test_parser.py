@@ -152,6 +152,38 @@ def test_bracketed_ref_parameter_convention_parse_from_modular_amd_helpers():
     ]
 
 
+def test_multiline_header_continuation_dedent_before_body_parses():
+    # Reduced from Practical-Mojo-Examples ml_algorithms and snake_game files,
+    # where the parameter continuation indentation is deeper than the body.
+    code = """
+    struct NormResult:
+        var data: List[Float64]
+        var min_val: Float64
+        var max_val: Float64
+
+        fn __init__(out self, var data: List[Float64],
+                    min_val: Float64, max_val: Float64):
+            self.data = data^
+            self.min_val = min_val
+            self.max_val = max_val
+
+    fn draw_cell(canvas: PythonObject, x: Int, y: Int,
+                 color: String, cell: Int) raises:
+        "Draw one grid cell as a filled rectangle."
+        var x1 = x * cell
+        var y1 = y * cell
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "NormResult")
+    init_method = struct_node.methods[0]
+    draw_cell = find_function(ast, "draw_cell")
+
+    assert len(init_method.body) == 3
+    assert all(isinstance(statement, AssignmentNode) for statement in init_method.body)
+    assert isinstance(draw_cell.body[0], PassNode)
+    assert [statement.name for statement in draw_cell.body[1:]] == ["x1", "y1"]
+
+
 def test_function_type_parameter_parsing_from_modular_gpu_reduction():
     # Reduced from https://github.com/modular/modular.git commit
     # daa47bb846cc213723a54c51844ea4e923eb5e13,

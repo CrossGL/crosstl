@@ -1196,8 +1196,10 @@ class MojoToCrossGLConverter:
             left = self.generate_nested_expression(expr.left)
             right = self.generate_nested_expression(expr.right)
             op = expr.op if hasattr(expr, "op") else "+"
+            if op == "in":
+                return f"contains({right}, {left})"
             if op == "not in":
-                return f"(!({left} in {right}))"
+                return f"(!contains({right}, {left}))"
             op = self.map_operator(op)
             return f"({left} {op} {right})"
         elif isinstance(expr, UnaryOpNode):
@@ -1652,7 +1654,7 @@ class MojoToCrossGLConverter:
         return " ".join(mapped_attributes)
 
     def map_attribute(self, attr):
-        name = self.semantic_map.get(attr.name, attr.name)
+        name = self.map_identifier_name(self.semantic_map.get(attr.name, attr.name))
         args = getattr(attr, "args", getattr(attr, "arguments", [])) or []
         if not args:
             return f"@ {name}"

@@ -103,6 +103,7 @@ class OpenCLLexer:
         """Initialize the lexer and optionally preprocess OpenCL source text."""
         code = code.lstrip("\ufeff")
         code = self._unwrap_cpp_raw_opencl_literal(code)
+        code = self._mask_host_embedded_source_strings(code)
         if preprocess:
             preprocessor = OpenCLPreprocessor(
                 include_paths=include_paths,
@@ -137,6 +138,29 @@ class OpenCLLexer:
         return (
             code[: match.start()] + "\n" + content + code[content_end + len(closing) :]
         )
+
+    def _mask_host_embedded_source_strings(self, code: str) -> str:
+        """Keep host-side OpenCL templates inert during preprocessing.
+
+        Some imported corpora store kernels in multi-line C string constants.
+        Their bodies can contain preprocessor directives such as ``#error`` that
+        belong to the eventual OpenCL build, not to the host source wrapper.
+        """
+
+        pattern = re.compile(
+            r"(?P<prefix>\b(?:static\s+)?const\s+char\s*\*\s*"
+            r"[A-Za-z_][A-Za-z0-9_]*\s*=\s*)"
+            r'"(?P<body>[\s\S]*?)"(?P<suffix>\s*;)',
+            re.MULTILINE,
+        )
+
+        def replace(match):
+            body = match.group("body")
+            if "\n" not in body or not self._looks_like_embedded_opencl(body):
+                return match.group(0)
+            return f'{match.group("prefix")}"\n"{match.group("suffix")}'
+
+        return pattern.sub(replace, code)
 
     def _looks_like_embedded_opencl(self, content: str) -> bool:
         return bool(

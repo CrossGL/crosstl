@@ -202,6 +202,25 @@ def test_square_bracket_generic_type_arguments_accept_binary_expression_values()
     assert accumulator_type.generic_args[2].operator == "/"
 
 
+def test_power_operator_reparses_as_pow_intrinsic_without_dropping_body():
+    code = """
+    shader PowerOperatorShader {
+        float my_pow(float base, float exp) {
+            return base ** exp;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+    statement = function.body.statements[0]
+
+    assert isinstance(statement, ReturnNode)
+    assert isinstance(statement.value, FunctionCallNode)
+    assert statement.value.function.name == "pow"
+    assert [argument.name for argument in statement.value.arguments] == ["base", "exp"]
+
+
 def test_square_bracket_expression_specializations_accept_colon_parameters():
     code = """
     shader ExpressionSquareGenericColonShader {
@@ -266,6 +285,31 @@ def test_dotted_type_names_parse_as_single_named_type():
 
     assert parameters[0].param_type.name == "Self.tensor_type"
     assert parameters[1].param_type.name == "Self.SharedMemTileType"
+
+
+def test_post_generic_member_types_reparse_as_flattened_named_types():
+    code = """
+    shader PostGenericMemberTypeShader {
+        struct Resources {
+            value: Foo<int>.Bar;
+            tensor: STMatrixLayout[Self.BM, Self.BN].TensorType[Self.dtype];
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    value, tensor = ast.structs[0].members
+
+    assert value.member_type.name == "Foo_Bar"
+    assert isinstance(value.member_type.generic_args[0], PrimitiveType)
+    assert value.member_type.generic_args[0].name == "int"
+
+    assert tensor.member_type.name == "STMatrixLayout_TensorType"
+    assert len(tensor.member_type.generic_args) == 3
+    assert all(
+        isinstance(argument, MemberAccessNode)
+        for argument in tensor.member_type.generic_args
+    )
 
 
 def test_type_helper_call_return_types_parse_as_named_types():

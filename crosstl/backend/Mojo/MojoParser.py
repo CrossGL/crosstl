@@ -1305,6 +1305,8 @@ class MojoParser:
 
     def parse_block(self):
         self.skip_newlines()
+        self.consume_block_header_continuation_dedents()
+        self.skip_newlines()
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
             statements = []
@@ -1343,6 +1345,24 @@ class MojoParser:
             ]:
                 statements.append(self.parse_statement())
             return statements
+
+    def consume_block_header_continuation_dedents(self):
+        while self.current_token[0] == "DEDENT" and self.has_pending_body_indent():
+            self.eat("DEDENT")
+            self.skip_newlines()
+
+    def has_pending_body_indent(self):
+        index = self.pos
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "NEWLINE":
+                index += 1
+                continue
+            if token_type == "DEDENT":
+                index += 1
+                continue
+            return token_type == "INDENT"
+        return False
 
     def is_block_clause_terminator(self):
         if self.current_token[0] in {"ELSE", "ELIF"}:
@@ -1430,6 +1450,8 @@ class MojoParser:
             return self.parse_trait()
         elif self.is_ellipsis_statement():
             return self.parse_ellipsis_statement()
+        elif self.current_token[0] == "STRING_LITERAL":
+            return self.parse_standalone_string_literal_statement()
         else:
             return self.parse_expression_statement()
 

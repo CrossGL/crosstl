@@ -2204,8 +2204,8 @@ class RustToCrossGLConverter:
         if getattr(alias, "generics", None) or not getattr(alias, "alias_type", None):
             return ""
 
-        declarator = self.format_typed_declarator(alias.alias_type, alias.name)
-        return f"    typedef {declarator};\n"
+        alias_type = self.map_type(alias.alias_type)
+        return f"    typedef {alias.name} = {alias_type};\n"
 
     def generate_function(self, func, indent=1, struct_name=None):
         """Render one Rust function node as a CrossGL function."""
@@ -9594,7 +9594,15 @@ class RustToCrossGLConverter:
         )
 
     def compact_generated_block(self, code):
-        return " ".join(line.strip() for line in code.splitlines() if line.strip())
+        lines = []
+        for line in code.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("//"):
+                stripped = f"/* {stripped[2:].strip()} */"
+            lines.append(stripped)
+        return " ".join(lines)
 
     def generate_matches_inline_condition(self, matches_node):
         condition = self.generate_match_pattern_condition(
@@ -10609,12 +10617,24 @@ class RustToCrossGLConverter:
         return f"{mapped_type} {name}"
 
     def format_global_declarator(self, type_name, name):
-        mapped_type = self.map_type(type_name)
+        mapped_type = self.map_global_declaration_type(type_name)
         array_parts = self.split_array_type(mapped_type)
         if array_parts:
             base_type, array_suffix = array_parts
             return f"{base_type} {name}{array_suffix}"
         return f"{mapped_type} {name}"
+
+    def map_global_declaration_type(self, type_name):
+        mapped_type = self.map_type(type_name)
+        array_parts = self.split_array_type(mapped_type)
+        if not array_parts:
+            return mapped_type
+
+        base_type, array_suffix = array_parts
+        tuple_type = self.map_tuple_type(base_type)
+        if tuple_type is None:
+            return mapped_type
+        return f"{tuple_type}{array_suffix}"
 
     def expand_repeated_array_literal(self, element, size):
         try:
