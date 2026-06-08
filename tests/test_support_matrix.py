@@ -1207,7 +1207,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         ) in backend_support["notes"]
         assert (
             "bounded direct, bridged, and combined artifact provenance "
-            "inspection samples with source and generated hash metadata"
+            "inspection samples with source and generated hash metadata, failed "
+            "validation status metadata"
         ) in backend_support["notes"]
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]
@@ -1265,6 +1266,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_inspect_project_report_groups_direct_and_bridged_artifact_"
             "provenance"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_validation_variant_"
+            "rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1483,6 +1489,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "artifact provenance source-backend and variant rollups" in (
             backend_support["notes"]
         )
+        assert "failed artifact-provenance validation metadata" in (
+            backend_support["notes"]
+        )
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "file-level source-map mapping cardinality" in backend_support["notes"]
         assert "fine-grained positive-length source-map mappings" in (
@@ -1580,6 +1589,11 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_records_toolchain_run_variant_rollups"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_includes_validation_variant_"
+            "rollups"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

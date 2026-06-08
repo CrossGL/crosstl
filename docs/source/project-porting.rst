@@ -240,7 +240,7 @@ target rollups, source-map count, granularity, target, and source-backend
 rollups, artifact matrix completion counts, target and variant completion
 rollups, sampled missing and extra artifact identities,
 bounded validation artifact and validation toolchain-run samples with
-truncation counts,
+truncation counts, failed validation metadata on artifact provenance samples,
 include-directory status counts, inactive source-root and include-directory
 record details, diagnostics, configurable diagnostic and failed-artifact
 truncation counts, external corpus rollups, sampled missing and
@@ -536,7 +536,9 @@ Project reports are JSON documents with:
   bridge. Report summaries and inspections include provenance rollups by
   pipeline, intermediate marker, source backend with intermediate marker, and
   variant with intermediate marker, plus bounded artifact provenance samples for
-  direct and bridge artifacts.
+  direct and bridge artifacts. Inspection samples include failed validation
+  status, existence, hash, source-map, and source-remap status metadata when the
+  validated artifact no longer matches the report.
   Full reports require failed artifacts to carry an actionable error string and
   reject failed artifacts that claim
   generated hashes or source-map records. Full reports also reject translated

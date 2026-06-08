@@ -16465,6 +16465,23 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
         "cgl": {"artifactCount": 2, "okCount": 1, "failedCount": 1}
     }
     assert payload["validation"]["artifactStatusByVariant"] == expected_payload
+    release_provenance = next(
+        artifact
+        for artifact in payload["artifactProvenance"]["artifacts"]
+        if artifact.get("variant") == "release"
+    )
+    assert release_provenance["validationStatus"] == "failed"
+    assert release_provenance["exists"] is True
+    assert release_provenance["sourceHashStatus"] == "ok"
+    assert release_provenance["generatedHashStatus"] == "mismatch"
+    assert release_provenance["sourceMapStatus"] == "not-checked"
+    assert release_provenance["sourceRemapStatus"] == "ok"
+    debug_provenance = next(
+        artifact
+        for artifact in payload["artifactProvenance"]["artifacts"]
+        if artifact.get("variant") == "debug"
+    )
+    assert "validationStatus" not in debug_provenance
     assert payload["failedArtifacts"] == [
         {
             "source": "simple.cgl",
@@ -16489,6 +16506,12 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
         "- simple.cgl -> cgl (variant: release) at "
         "out/cgl/release/simple.cgl: validation failed "
         "(generated hash: mismatch; source map: not-checked)"
+    ) in result.stdout
+    assert "Artifact provenance samples:" in result.stdout
+    assert (
+        "validation=failed, exists=true, sourceHashStatus=ok, "
+        "generatedHashStatus=mismatch, sourceMapStatus=not-checked, "
+        "sourceRemapStatus=ok"
     ) in result.stdout
     assert validation_text.returncode == 1
     assert (

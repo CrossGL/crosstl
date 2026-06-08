@@ -5496,6 +5496,7 @@ def inspect_project_report(
     payload["artifactProvenance"] = _inspection_artifact_provenance_summary(
         summary,
         report.get("artifacts"),
+        validation_artifacts=validation_artifacts,
         sample_limit=artifact_provenance_artifact_limit,
     )
     payload["defineProcessing"] = _inspection_define_processing_summary(
@@ -6510,8 +6511,35 @@ def _inspection_source_map_summary(
     return payload
 
 
+def _inspection_artifact_validation_metadata(
+    artifact: Mapping[str, Any],
+    validation_artifacts_by_key: Mapping[tuple[Any, ...], Mapping[str, Any]],
+) -> dict[str, Any]:
+    validation_artifact = validation_artifacts_by_key.get(
+        _inspection_failed_artifact_key(artifact)
+    )
+    if (
+        not isinstance(validation_artifact, Mapping)
+        or validation_artifact.get("status") != "failed"
+    ):
+        return {}
+
+    metadata: dict[str, Any] = {"validationStatus": "failed"}
+    for field_name in (
+        "exists",
+        "sourceHashStatus",
+        "generatedHashStatus",
+        "sourceMapStatus",
+        "sourceRemapStatus",
+    ):
+        if field_name in validation_artifact:
+            metadata[field_name] = validation_artifact.get(field_name)
+    return metadata
+
+
 def _inspection_artifact_provenance_artifact(
     artifact: Mapping[str, Any],
+    validation_artifacts_by_key: Mapping[tuple[Any, ...], Mapping[str, Any]],
 ) -> dict[str, Any] | None:
     provenance = artifact.get("provenance")
     if not isinstance(provenance, Mapping):
@@ -6548,6 +6576,12 @@ def _inspection_artifact_provenance_artifact(
             sample["generatedHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["generatedHash"] = hash_value
+    sample.update(
+        _inspection_artifact_validation_metadata(
+            artifact,
+            validation_artifacts_by_key,
+        )
+    )
     return {key: value for key, value in sample.items() if value is not None}
 
 
@@ -6568,6 +6602,7 @@ def _inspection_artifact_provenance_summary(
     summary: Any,
     artifacts: Any = None,
     *,
+    validation_artifacts: Any = None,
     sample_limit: int = ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     sample_limit = max(0, sample_limit)
@@ -6583,11 +6618,19 @@ def _inspection_artifact_provenance_summary(
     if not isinstance(by_pipeline, Mapping) or not isinstance(by_intermediate, Mapping):
         return {"available": False}
 
+    validation_artifacts_by_key = {
+        _inspection_failed_artifact_key(artifact): artifact
+        for artifact in _record_sequence(validation_artifacts)
+        if isinstance(artifact, Mapping)
+    }
     provenance_artifacts = []
     for artifact in _record_sequence(artifacts):
         if not isinstance(artifact, Mapping):
             continue
-        sample = _inspection_artifact_provenance_artifact(artifact)
+        sample = _inspection_artifact_provenance_artifact(
+            artifact,
+            validation_artifacts_by_key,
+        )
         if sample:
             provenance_artifacts.append(sample)
 

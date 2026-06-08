@@ -1176,6 +1176,24 @@ def _format_artifact_provenance_line(artifact):
     )
     if generated_hash_preview:
         details.append(f"generatedHash={generated_hash_preview}")
+    validation_status = artifact.get("validationStatus")
+    if isinstance(validation_status, str) and validation_status:
+        details.append(f"validation={validation_status}")
+    exists = artifact.get("exists")
+    if isinstance(exists, bool):
+        details.append(f"exists={'true' if exists else 'false'}")
+    source_hash_status = artifact.get("sourceHashStatus")
+    if isinstance(source_hash_status, str) and source_hash_status:
+        details.append(f"sourceHashStatus={source_hash_status}")
+    generated_hash_status = artifact.get("generatedHashStatus")
+    if isinstance(generated_hash_status, str) and generated_hash_status:
+        details.append(f"generatedHashStatus={generated_hash_status}")
+    source_map_status = artifact.get("sourceMapStatus")
+    if isinstance(source_map_status, str) and source_map_status:
+        details.append(f"sourceMapStatus={source_map_status}")
+    source_remap_status = artifact.get("sourceRemapStatus")
+    if isinstance(source_remap_status, str) and source_remap_status:
+        details.append(f"sourceRemapStatus={source_remap_status}")
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {path}{suffix}"
