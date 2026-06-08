@@ -358,6 +358,31 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return self.OPENCL_SCALAR_TYPE_MAPPING[normalized]
         return super().convert_hip_type_to_crossgl(normalized)
 
+    def convert_hip_pointer_element_type(self, hip_type):
+        pointer_array_element = self.convert_opencl_pointer_to_array_element_type(
+            hip_type
+        )
+        if pointer_array_element is not None:
+            return pointer_array_element
+        return super().convert_hip_pointer_element_type(hip_type)
+
+    def convert_opencl_pointer_to_array_element_type(self, hip_type):
+        if hip_type is None:
+            return None
+
+        normalized = self.strip_type_qualifiers(str(hip_type))
+        match = re.match(
+            r"^(?P<base>.+?)\s*"
+            r"\(\s*\*\s*(?:const|volatile|__restrict__|restrict)?\s*\)"
+            r"\s*(?P<dimensions>(?:\[[^\]]*\]\s*)+)$",
+            normalized,
+        )
+        if not match:
+            return None
+
+        array_type = f"{match.group('base').strip()}{match.group('dimensions')}"
+        return self.convert_hip_type_to_crossgl(array_type)
+
     def resolve_opencl_type_alias_chain(self, type_name):
         seen = set()
         resolved = self.strip_type_qualifiers(type_name)

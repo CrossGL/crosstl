@@ -156,3 +156,35 @@ def test_opencv_anonymous_enum_and_constant_array_codegen_reparse():
     assert "enum  {" not in crossgl
     assert "const i32 hsv_shift = 12;" in crossgl
     assert "sector_data: array<array<i32, 3>>" in crossgl
+
+
+def test_darktable_unsigned_char_pointer_to_array_kernel_param_codegen_reparse():
+    crossgl = generate_crossgl("""
+        static inline int FCxtrans(const int row,
+                                  const int col,
+                                  global const unsigned char (*const xtrans)[6]) {
+            return xtrans[row][col];
+        }
+
+        kernel void capture_xtrans(global float *out,
+                                   const int row,
+                                   const int col,
+                                   global const unsigned char (*const xtrans)[6]) {
+            out[0] = (float)FCxtrans(row, col, xtrans);
+        }
+        """)
+
+    assert "xtrans: array<array<u8, 6>>" in crossgl
+    assert "unsigned char ()" not in crossgl
+
+
+def test_darktable_float_pointer_to_array_kernel_param_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void rgblevels_sample(global float *out,
+                                     const float (*const levels)[3]) {
+            out[0] = levels[0][0];
+        }
+        """)
+
+    assert "levels: array<array<f32, 3>>" in crossgl
+    assert "float ()" not in crossgl

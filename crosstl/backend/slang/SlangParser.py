@@ -43,6 +43,7 @@ class SlangParser:
         "__postfix",
         "__exported",
         "__ref",
+        "__constref",
         "__func_extension",
         "expand",
         "each",

@@ -181,6 +181,67 @@ def test_impl_receiver_reference_generic_return_is_normalized_for_crossgl_repars
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_rust_gpu_unresolved_associated_static_calls_reparse():
+    # Reduced from Rust-GPU rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d compiletests:
+    # lang/core/ptr/allocate_const_scalar.rs and
+    # lang/core/mem/create_unitialized_memory.rs.
+    code = """
+    use spirv_std::spirv;
+    use core::mem::MaybeUninit;
+    use core::ptr::Unique;
+
+    const POINTER: Unique<()> = Unique::<()>::dangling();
+    const MAYBEI32: MaybeUninit<i32> = MaybeUninit::<&i32>::uninit();
+
+    #[spirv(fragment)]
+    pub fn main(output: &mut Unique<()>) {
+        *output = POINTER;
+        let maybei32 = MAYBEI32;
+        let _value = maybei32.assume_init();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Unique::dangling" not in result
+    assert "MaybeUninit::uninit" not in result
+    assert "Unique_dangling()" in result
+    assert "MaybeUninit_uninit()" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_rust_gpu_function_pointer_parameter_reparse():
+    # Reduced from Rust-GPU rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d
+    # tests/compiletests/ui/lang/issue-452.rs.
+    code = """
+    use spirv_std::spirv;
+
+    struct Position(u32);
+
+    fn use_cmp(cmp: fn(&Position) -> u32) {
+        let a = Position(0);
+        let b = Position(1);
+        if cmp(&a) <= cmp(&b) {
+            cmp(&a);
+        }
+    }
+
+    #[spirv(compute(threads(1)))]
+    pub fn main() {
+        use_cmp(|p| p.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void use_cmp(auto cmp)" in result
+    assert "fn(&Position) -> u32 cmp" not in result
+    assert "use_cmp(lambda(p, p.0));" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_value_returning_function_uses_final_literal_expression_as_return():
     code = r"""
     fn zero() -> u32 {

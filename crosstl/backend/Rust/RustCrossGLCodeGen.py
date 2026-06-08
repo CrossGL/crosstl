@@ -4135,6 +4135,12 @@ class RustToCrossGLConverter:
             )
             if primitive_bitcast_call is not None:
                 return args_code, primitive_bitcast_call
+            unresolved_associated_call = self.format_unresolved_associated_call(
+                expression.name,
+                args,
+            )
+            if unresolved_associated_call is not None:
+                return args_code, unresolved_associated_call
             return args_code, f"{self.map_function(expression.name)}({', '.join(args)})"
 
         name_code, name = self.generate_try_expression(
@@ -4711,6 +4717,59 @@ class RustToCrossGLConverter:
         if bitcast_info is None:
             return None
         return f"{bitcast_info['from_bits']}({args[0]})"
+
+    def format_unresolved_associated_call(self, function_name, args):
+        parsed = self.parse_top_level_associated_function_path(function_name)
+        if parsed is None:
+            return None
+
+        type_name, method_name, method_type_args = parsed
+        if not method_name:
+            return None
+        if "<" not in type_name:
+            return None
+
+        prefix_parts = [self.impl_function_prefix(type_name), method_name]
+        if method_type_args:
+            prefix_parts.extend(
+                self.impl_function_prefix(arg) for arg in method_type_args
+            )
+        function_identifier = self.crossgl_identifier("_".join(prefix_parts))
+        return f"{function_identifier}({', '.join(args)})"
+
+    def parse_top_level_associated_function_path(self, function_name):
+        if not isinstance(function_name, str) or "::" not in function_name:
+            return None
+
+        function_name = self.normalize_associated_type_path(function_name)
+        depth = 0
+        split_index = -1
+        pairs = {"<": ">", "(": ")", "[": "]", "{": "}"}
+        openers = set(pairs)
+        closers = {close: open_ for open_, close in pairs.items()}
+
+        for index, char in enumerate(function_name):
+            if char in openers:
+                depth += 1
+            elif char in closers:
+                depth = max(0, depth - 1)
+            elif (
+                char == ":"
+                and depth == 0
+                and index + 1 < len(function_name)
+                and function_name[index + 1] == ":"
+            ):
+                split_index = index
+
+        if split_index < 0:
+            return None
+
+        type_name = function_name[:split_index]
+        method_name = function_name[split_index + 2 :]
+        method_name, method_type_args = self.split_function_type_arguments(method_name)
+        if not type_name or not method_name:
+            return None
+        return type_name, method_name, method_type_args
 
     def infer_primitive_float_bitcast_associated_return_type(
         self,
@@ -8778,6 +8837,12 @@ class RustToCrossGLConverter:
                 )
                 if expression_call is not None:
                     return expression_call
+                unresolved_associated_call = self.format_unresolved_associated_call(
+                    expr.name,
+                    arg_values,
+                )
+                if unresolved_associated_call is not None:
+                    return unresolved_associated_call
                 func_name = self.map_function(expr.name)
                 args = ", ".join(arg_values)
             else:
@@ -9860,6 +9925,10 @@ class RustToCrossGLConverter:
         if trait_object_type != rust_type:
             return self.map_type(trait_object_type)
 
+        function_pointer_type = self.map_function_pointer_type(rust_type)
+        if function_pointer_type is not None:
+            return function_pointer_type
+
         callable_type = self.map_callable_trait_type(rust_type)
         if callable_type is not None:
             return callable_type
@@ -9941,6 +10010,13 @@ class RustToCrossGLConverter:
         if sanitized[0].isdigit():
             sanitized = f"_{sanitized}"
         return sanitized
+
+    def map_function_pointer_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+        if re.match(r"^fn\s*\(", rust_type.strip()):
+            return "auto"
+        return None
 
     def format_unmapped_crossgl_type(self, rust_type):
         if not isinstance(rust_type, str) or "::" not in rust_type:

@@ -366,6 +366,61 @@ EXTERNAL_FIXTURES = [
         "not_contains": ["float.Differential"],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/autodiff/constref-param.slang
+        "id": "slang_autodiff_constref_parameter_qualifier_reparse",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/autodiff/constref-param.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            struct NonDiff
+            {
+                float a;
+            }
+
+            [Differentiable]
+            float myFunc(__constref NonDiff fIn, float x, __constref no_diff float y)
+            {
+                return x * fIn.a + y;
+            }
+
+            [Differentiable]
+            float myFunc2(__constref NonDiff fIn, float x, no_diff __constref float y)
+            {
+                return x * fIn.a + y;
+            }
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID: SV_DispatchThreadID)
+            {
+                float a = 10.0;
+                NonDiff fIn = { a };
+                DifferentialPair<float> dpx = DifferentialPair<float>(4.0, 1.0);
+                float rs = __fwd_diff(myFunc)(fIn, dpx, 1.0).d;
+                float rs2 = __fwd_diff(myFunc2)(fIn, dpx, 1.0).d;
+
+                outputBuffer[0] = rs;
+                outputBuffer[1] = rs2;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "float myFunc(NonDiff fIn, float x, float y)",
+            "float myFunc2(NonDiff fIn, float x, float y)",
+            "float rs = __fwd_diff(myFunc)(fIn, dpx, 1.0).d;",
+            "outputBuffer[1] = rs2;",
+        ],
+        "not_contains": [
+            "__constref fIn NonDiff",
+            "__constref no_diff",
+            "no_diff __constref",
+        ],
+    },
+    {
         "id": "slang_generated_defer_scope_exit",
         "repo": "shader-slang/slang-current-2026-06-07",
         "path": (
