@@ -37,6 +37,14 @@ OPENCL_TOKENS = (
     ("ATOMICDEC", r"\batomic_dec\b"),
 )
 
+_HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
+_DECIMAL_DIGITS = r"\d(?:'?\d)*"
+OPENCL_HEX_FLOAT_LITERAL = (
+    rf"0[xX](?:{_HEX_DIGITS}(?:\.(?:{_HEX_DIGITS})?)?|\.(?:{_HEX_DIGITS}))"
+    rf"[pP][+-]?{_DECIMAL_DIGITS}[fFdDlL]*"
+)
+OPENCL_LITERAL_TOKENS = (("FLOAT", OPENCL_HEX_FLOAT_LITERAL),)
+
 NORMALIZED_VALUES = {
     "__DEVICE__": "__global__",
     "__SHARED__": "__shared__",
@@ -51,11 +59,19 @@ NORMALIZED_VALUES = {
 
 def _with_opencl_tokens():
     tokens = []
-    inserted = False
+    inserted_opencl_tokens = False
+    inserted_literal_tokens = False
     for token_type, pattern in HIP_TOKENS:
-        if not inserted and token_type == "IDENTIFIER":
+        if (
+            not inserted_literal_tokens
+            and token_type == "FLOAT"
+            and pattern != r"\bfloat\b"
+        ):
+            tokens.extend(OPENCL_LITERAL_TOKENS)
+            inserted_literal_tokens = True
+        if not inserted_opencl_tokens and token_type == "IDENTIFIER":
             tokens.extend(OPENCL_TOKENS)
-            inserted = True
+            inserted_opencl_tokens = True
         tokens.append((token_type, pattern))
     return tuple(tokens)
 

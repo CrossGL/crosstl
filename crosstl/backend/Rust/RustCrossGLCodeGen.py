@@ -227,6 +227,7 @@ class RustToCrossGLConverter:
         self.type_map = {
             # Rust primitive types to CrossGL
             "()": "void",
+            "!": "void",
             "f32": "float",
             "f64": "double",
             "i32": "int",

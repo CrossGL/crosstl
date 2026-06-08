@@ -2366,6 +2366,7 @@ class SlangParser:
             body,
             qualifiers=qualifiers,
             qualifier=shader_type,
+            semantic=None,
             is_generic=is_generic,
             generic_parameters=generic_parameters,
             generic_constraints=generic_constraints,

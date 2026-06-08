@@ -43,6 +43,7 @@ DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
 )
 DIRECTX_SHADER_COMPILER_NAMESPACE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
+DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -1407,6 +1408,31 @@ EXTERNAL_FIXTURES = [
             "@ numthreads(8, 8, 1)",
             "void main(uvec3 gl_GlobalInvocationID @ gl_GlobalInvocationID)",
             "s();",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_switch_case_label",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/cf.switch.ifstmt.hlsl",
+        code=textwrap.dedent("""
+            void main()
+            {
+              int b;
+
+              switch (b) {
+                case 6: {
+                case 7:
+                  break; }
+                default:
+                  break;
+              }
+            }
+        """).strip(),
+        contains=(
+            "case 6:",
+            "case 7:",
+            "default:",
         ),
     ),
 ]

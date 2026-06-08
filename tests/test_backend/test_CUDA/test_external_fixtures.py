@@ -167,6 +167,40 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
 
 
+def test_cccl_annotated_ptr_explicit_constexpr_constructor_is_skipped():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5a9ea633bfe63f113f4e99ecd505985ec2c38206
+    # path: libcudacxx/include/cuda/__annotated_ptr/annotated_ptr.h
+    source = """
+    template <typename _Tp, typename _Property>
+    class annotated_ptr : private ::cuda::__annotated_ptr_base<_Property>
+    {
+    private:
+      pointer __repr = nullptr;
+
+    public:
+      _CCCL_HOST_DEVICE_API explicit constexpr annotated_ptr(pointer __p) noexcept
+          : __repr{__p}
+      {
+        if constexpr (__is_smem) { return; }
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "annotated_ptr"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("pointer", "__repr")
+    ]
+    assert "struct annotated_ptr" in crossgl
+    assert "pointer __repr;" in crossgl
+    assert "explicit" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_interval_template_specializations_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

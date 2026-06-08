@@ -160,6 +160,10 @@ class CudaParser:
         "noexcept",
         "__noexcept",
     }
+    STRUCT_METHOD_IDENTIFIER_SPECIFIERS = {
+        "explicit",
+        "friend",
+    }
     STATEMENT_DIRECTIVE_FOLLOW_TOKENS = {
         "FOR",
         "IF",
@@ -2336,7 +2340,11 @@ class CudaParser:
             if (
                 token_type in self.FUNCTION_SPECIFIER_TOKENS
                 or token_type == "VIRTUAL"
-                or (token_type == "IDENTIFIER" and self.tokens[index][1] == "friend")
+                or (
+                    token_type == "IDENTIFIER"
+                    and self.tokens[index][1]
+                    in self.STRUCT_METHOD_IDENTIFIER_SPECIFIERS
+                )
                 or self.is_function_identifier_specifier_at_index(index)
             ):
                 if (
@@ -2345,6 +2353,16 @@ class CudaParser:
                     and self.tokens[index + 1][0] == "STRING"
                 ):
                     index += 2
+                    continue
+                if (
+                    token_type == "IDENTIFIER"
+                    and self.tokens[index][1] == "explicit"
+                    and index + 1 < len(self.tokens)
+                    and self.tokens[index + 1][0] == "LPAREN"
+                ):
+                    index = self.skip_balanced_tokens_at_index(
+                        index + 1, "LPAREN", "RPAREN"
+                    )
                     continue
                 index += 1
                 continue
@@ -2383,12 +2401,19 @@ class CudaParser:
         if self.is_cpp_attribute_specifier_start():
             self.skip_cpp_attribute_specifiers()
 
-        while self.current_token[0] not in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
-            self.eat(self.current_token[0])
+        while self.current_token[0] not in {"SEMICOLON", "RBRACE", "EOF"}:
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_parentheses()
+            elif self.current_token[0] == "LBRACKET":
+                self.skip_balanced_brackets()
+            elif self.current_token[0] == "LBRACE":
+                self.skip_balanced_brace_block()
+                if self.current_token[0] not in {"COMMA", "LBRACE"}:
+                    break
+            else:
+                self.eat(self.current_token[0])
 
-        if self.current_token[0] == "LBRACE":
-            self.skip_balanced_brace_block()
-        elif self.current_token[0] == "SEMICOLON":
+        if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
     def skip_balanced_brace_block(self):

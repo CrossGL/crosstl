@@ -1917,6 +1917,55 @@ def test_parse_godot_escaped_mode_define_fixture():
     parse_crossgl(crossgl)
 
 
+def test_parse_godot_canvas_occlusion_filters_inactive_stage_sections():
+    # Reduced from godotengine/godot drivers/gles3/shaders/canvas_occlusion.glsl
+    # at 070dc9897ea1b84ab2a7ec04b9bc1b94f38a0eaf. The full shader repeats
+    # uniform names in its vertex and fragment sections.
+    code = textwrap.dedent("""
+        #[vertex]
+
+        layout(location = 0) in vec3 vertex;
+
+        uniform highp mat4 projection;
+        uniform highp vec2 direction;
+
+        void main() {
+            vec4 vtx = vec4(vertex, 1.0);
+            gl_Position = projection * vtx;
+        }
+
+        #[fragment]
+
+        uniform highp mat4 projection;
+        uniform highp vec2 direction;
+        uniform highp float z_far;
+
+        layout(location = 0) out highp float out_buf;
+
+        void main() {
+            out_buf = z_far + direction.x;
+        }
+    """).strip()
+
+    ast = parse_glsl(code, "auto")
+
+    assert ast.shader_type == "vertex"
+    assert [(uniform.vtype, uniform.name) for uniform in ast.uniforms] == [
+        ("mat4", "projection"),
+        ("vec2", "direction"),
+    ]
+    assert [function.name for function in ast.functions] == ["main"]
+
+    crossgl = GLSLToCrossGLConverter(shader_type=None).generate(ast)
+
+    assert crossgl.count("mat4 projection;") == 1
+    assert crossgl.count("vec2 direction;") == 1
+    assert "float z_far;" not in crossgl
+    assert "out_buf" not in crossgl
+    assert "VertexOutput main(VertexInput input)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_parse_filament_instancing_highp_object_uniforms_fixture():
     fixture = next(
         item

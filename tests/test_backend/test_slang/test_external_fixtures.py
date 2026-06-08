@@ -20,6 +20,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "5230a81f2fe68afe5cb8d04a1b09d56476f6b960",
     },
+    "shader-slang/slang-main-2026-06-08": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "71e78588f73609a1d8d472629b3f3542a74e9199",
+    },
     "shader-slang/slang-property-2026-06-04": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
@@ -419,6 +423,53 @@ EXTERNAL_FIXTURES = [
             "__constref no_diff",
             "no_diff __constref",
         ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 71e78588f73609a1d8d472629b3f3542a74e9199
+        # Path: tests/autodiff/func-extension/apply-basic.slang
+        "id": "slang_autodiff_func_extension_apply_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-08",
+        "path": "tests/autodiff/func-extension/apply-basic.slang",
+        "source": (
+            """
+            float cube(float x) { return x * x * x; }
+
+            struct CubeContext
+            {
+                float sqr;
+                void operator()(out float dx, float dOut)
+                {
+                    dx = dOut * 3.0 * sqr;
+                }
+            };
+
+            __func_extension __apply(cube)(float x) -> Tuple<float, CubeContext>
+            {
+                let sqr = x * x;
+                return makeTuple(sqr * x, CubeContext(sqr));
+            }
+
+            RWStructuredBuffer<float> outputBuffer;
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 tid: SV_DispatchThreadID)
+            {
+                var dpx = diffPair(2.0, 0.0);
+                bwd_diff(cube)(dpx, 1.0);
+                outputBuffer[0] = dpx.d;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "float cube(float x)",
+            "Tuple<float, CubeContext> __apply_cube_(float x)",
+            "let sqr = x * x;",
+            "bwd_diff(cube)(dpx, 1.0);",
+            "outputBuffer[0] = dpx.d;",
+        ],
+        "not_contains": ["__func_extension", "__apply(cube)"],
     },
     {
         "id": "slang_generated_defer_scope_exit",

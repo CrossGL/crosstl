@@ -17,6 +17,10 @@ EXTERNAL_FIXTURE_SOURCES = {
         "url": "https://github.com/CNugteren/CLBlast",
         "path": "src/kernels/level3/xgemm_part2.opencl",
     },
+    "darktable": {
+        "url": "https://github.com/darktable-org/darktable",
+        "path": "data/kernels/noise_generator.h",
+    },
 }
 
 
@@ -82,3 +86,22 @@ def test_external_clblast_kernel_pattern_codegen_reparse():
     assert "gl_LocalInvocationID.x" in crossgl
     assert "gl_LocalInvocationID.y" in crossgl
     assert "gl_WorkGroupID.x" in crossgl
+
+
+def test_external_darktable_hex_float_literal_codegen_reparse():
+    source = """
+    static inline float uniform_noise(uint state[4]) {
+        uint result = state[0];
+        return (float)(result >> 8) * 0x1.0p-24f;
+    }
+
+    kernel void noise_probe(global float *out, global uint *state) {
+        uint local_state[4];
+        local_state[0] = state[0];
+        out[0] = uniform_noise(local_state);
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "0x1.0p-24f" in crossgl

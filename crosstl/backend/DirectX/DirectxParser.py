@@ -2948,7 +2948,12 @@ class HLSLParser:
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "CASE":
-                cases.append(self.parse_switch_case())
+                case = self.parse_switch_case()
+                cases.append(case)
+                cases.extend(getattr(case, "additional_cases", []))
+                nested_default = getattr(case, "additional_default_body", None)
+                if nested_default is not None:
+                    default_body = nested_default
             elif self.current_token[0] == "DEFAULT":
                 self.eat("DEFAULT")
                 self.eat("COLON")
@@ -2984,7 +2989,21 @@ class HLSLParser:
         self.eat("COLON")
 
         body = []
+        additional_cases = []
+        additional_default_body = None
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+            if self.current_token[0] == "LBRACE":
+                (
+                    block_body,
+                    block_cases,
+                    block_default_body,
+                ) = self.parse_switch_scoped_block()
+                body.extend(block_body)
+                additional_cases.extend(block_cases)
+                if block_default_body is not None:
+                    additional_default_body = block_default_body
+                continue
+
             stmt = self.parse_statement()
             if stmt is None:
                 continue
@@ -2993,7 +3012,72 @@ class HLSLParser:
             else:
                 body.append(stmt)
 
-        return CaseNode(value, body)
+        case = CaseNode(value, body)
+        case.additional_cases = additional_cases
+        case.additional_default_body = additional_default_body
+        return case
+
+    def parse_switch_scoped_block(self):
+        self.eat("LBRACE")
+        body = []
+        cases = []
+        default_body = None
+
+        while self.current_token[0] not in ["RBRACE", "EOF"]:
+            if self.current_token[0] == "CASE":
+                case = self.parse_switch_case()
+                body.extend(case.body)
+                cases.append(case)
+                cases.extend(getattr(case, "additional_cases", []))
+                nested_default = getattr(case, "additional_default_body", None)
+                if nested_default is not None:
+                    default_body = nested_default
+                continue
+
+            if self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                default_body = []
+                while self.current_token[0] not in [
+                    "CASE",
+                    "DEFAULT",
+                    "RBRACE",
+                    "EOF",
+                ]:
+                    if self.current_token[0] == "LBRACE":
+                        (
+                            block_body,
+                            block_cases,
+                            block_default_body,
+                        ) = self.parse_switch_scoped_block()
+                        default_body.extend(block_body)
+                        body.extend(block_body)
+                        cases.extend(block_cases)
+                        if block_default_body is not None:
+                            default_body = block_default_body
+                        continue
+
+                    stmt = self.parse_statement()
+                    if stmt is None:
+                        continue
+                    if isinstance(stmt, list):
+                        default_body.extend(stmt)
+                        body.extend(stmt)
+                    else:
+                        default_body.append(stmt)
+                        body.append(stmt)
+                continue
+
+            stmt = self.parse_statement()
+            if stmt is None:
+                continue
+            if isinstance(stmt, list):
+                body.extend(stmt)
+            else:
+                body.append(stmt)
+
+        self.eat("RBRACE")
+        return body, cases, default_body
 
     def parse_expression(self):
         return self.parse_assignment_expression()

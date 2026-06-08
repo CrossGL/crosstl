@@ -414,6 +414,7 @@ class GLSLParser:
         self.tokens = tokens or [("EOF", "")]
         self.shader_type = shader_type
         self.should_infer_shader_type = self.is_auto_shader_type(shader_type)
+        self.stage_marker_shader_type = None
         self.index = 0
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
@@ -479,7 +480,7 @@ class GLSLParser:
                 break
 
             if self.is_bracketed_stage_marker():
-                self.skip_bracketed_stage_marker()
+                self.handle_stage_marker(self.bracketed_stage_marker_name())
                 continue
 
             if self.is_godot_metadata_section_marker():
@@ -487,7 +488,7 @@ class GLSLParser:
                 continue
 
             if self.is_hash_bracketed_stage_marker():
-                self.skip_hash_bracketed_marker()
+                self.handle_stage_marker(self.hash_bracketed_marker_name())
                 continue
 
             if self.current_token[0] == "HASH":
@@ -634,7 +635,9 @@ class GLSLParser:
             layouts=layouts,
         )
         if self.should_infer_shader_type:
-            inferred_shader_type = self.infer_shader_type(shader)
+            inferred_shader_type = (
+                self.stage_marker_shader_type or self.infer_shader_type(shader)
+            )
             shader.shader_type = inferred_shader_type
             self.shader_type = inferred_shader_type
             self.apply_main_shader_type(shader, inferred_shader_type)
@@ -860,6 +863,11 @@ class GLSLParser:
             and self.peek_non_newline(2)[0] == "RBRACKET"
         )
 
+    def bracketed_stage_marker_name(self):
+        if self.is_bracketed_stage_marker():
+            return self.peek_non_newline()[1]
+        return None
+
     def skip_bracketed_stage_marker(self):
         self.eat("LBRACKET")
         self.eat("IDENTIFIER")
@@ -886,6 +894,37 @@ class GLSLParser:
         self.eat("LBRACKET")
         self.eat("IDENTIFIER")
         self.eat("RBRACKET")
+
+    def handle_stage_marker(self, shader_type):
+        if self.current_token[0] == "HASH":
+            self.skip_hash_bracketed_marker()
+        else:
+            self.skip_bracketed_stage_marker()
+
+        if not shader_type:
+            return
+
+        if self.should_infer_shader_type and self.stage_marker_shader_type is None:
+            self.stage_marker_shader_type = shader_type
+
+        selected_stage = (
+            self.stage_marker_shader_type
+            if self.should_infer_shader_type
+            else self.shader_type
+        )
+        if selected_stage and shader_type != selected_stage:
+            self.skip_inactive_stage_section()
+
+    def skip_inactive_stage_section(self):
+        while self.current_token[0] != "EOF":
+            self.skip_newlines()
+            if (
+                self.is_bracketed_stage_marker()
+                or self.is_hash_bracketed_stage_marker()
+                or self.is_godot_metadata_section_marker()
+            ):
+                return
+            self.advance()
 
     def skip_godot_metadata_section(self):
         self.skip_hash_bracketed_marker()

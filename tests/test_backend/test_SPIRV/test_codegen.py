@@ -6424,6 +6424,33 @@ def test_spirv_glslang_ray_query_convert_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_vulkan_samples_ray_tracing_hit_attribute_codegen_reparse():
+    code = """
+    // Reduced from SaschaWillems/Vulkan shaders/glsl/raytracingbasic/closesthit.rchit.
+    #version 460
+    #extension GL_EXT_ray_tracing : enable
+
+    layout(location = 0) rayPayloadInEXT vec3 hitValue;
+    hitAttributeEXT vec2 attribs;
+
+    void main()
+    {
+      const vec3 barycentricCoords = vec3(
+          1.0f - attribs.x - attribs.y,
+          attribs.x,
+          attribs.y);
+      hitValue = barycentricCoords;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    parse_crossgl(generated_code)
+    assert "float3 hitValue @location(0) @rayPayloadInEXT;" in generated_code
+    assert "float2 attribs @hitAttributeEXT;" in generated_code
+    assert "hitAttributeEXT float2 attribs;" not in generated_code
+
+
 def test_spirv_assembly_storage_image_format_codegen():
     tokens = tokenize_code(SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY)
     ast = parse_code(tokens)

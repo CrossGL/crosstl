@@ -32,6 +32,14 @@ from .VulkanAst import (
 class VulkanToCrossGLConverter:
     """Serialize Vulkan backend AST nodes back into CrossGL source."""
 
+    RAY_STORAGE_QUALIFIER_ATTRIBUTES = {
+        "callabledataext": "callableDataEXT",
+        "callabledatainext": "callableDataInEXT",
+        "hitattributeext": "hitAttributeEXT",
+        "raypayloadext": "rayPayloadEXT",
+        "raypayloadinext": "rayPayloadInEXT",
+    }
+
     def __init__(self):
         self.type_map = {
             "void": "void",
@@ -218,7 +226,7 @@ class VulkanToCrossGLConverter:
             elif isinstance(node, UniformNode):
                 code += self.generate_uniform(node)
             elif isinstance(node, VariableNode):
-                code += f"    {self.map_type(self.variable_type(node))} {node.name};\n"
+                code += f"    {self.generate_variable_declaration(node)};\n"
             elif isinstance(node, AssignmentNode):
                 code += f"    {self.generate_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
@@ -663,6 +671,12 @@ class VulkanToCrossGLConverter:
                     f"{self.interface_layout_attribute_suffix(node)};\n"
                 )
                 self.reserve_global_declaration_name(node.variable_name)
+        elif self.is_ray_storage_layout(node):
+            code += (
+                f"    {self.map_type(node.data_type)} {node.variable_name}"
+                f"{self.ray_storage_layout_attribute_suffix(node)};\n"
+            )
+            self.reserve_global_declaration_name(node.variable_name)
 
         return code
 
@@ -1041,9 +1055,20 @@ class VulkanToCrossGLConverter:
         return ""
 
     def generate_function_parameter(self, node):
+        type_name, ray_attributes = self.ray_storage_qualified_type_parts(
+            self.variable_type(node)
+        )
+        qualifier_attributes = [
+            attribute
+            for qualifier in getattr(node, "qualifiers", []) or []
+            if (attribute := self.ray_storage_attribute(qualifier)) is not None
+        ]
+        attributes = self.ray_storage_attribute_suffix(
+            [*qualifier_attributes, *ray_attributes]
+        )
         return (
             f"{self.parameter_qualifier_prefix(node)}"
-            f"{self.map_type(self.variable_type(node))} {node.name}"
+            f"{self.map_type(type_name)} {node.name}{attributes}"
         )
 
     def parameter_qualifier_prefix(self, node):
@@ -1062,7 +1087,7 @@ class VulkanToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                code += f"{self.map_type(self.variable_type(stmt))} {stmt.name};\n"
+                code += f"{self.generate_variable_declaration(stmt)};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt) + ";\n"
             elif isinstance(stmt, BinaryOpNode):
@@ -1104,11 +1129,74 @@ class VulkanToCrossGLConverter:
         operator = getattr(node, "operator", "=")
 
         if isinstance(lhs_node, VariableNode) and self.variable_type(lhs_node):
-            lhs = f"{self.map_type(self.variable_type(lhs_node))} {lhs_node.name}"
+            lhs = self.generate_variable_declaration(lhs_node)
         else:
             lhs = self.generate_expression(lhs_node)
 
         return f"{lhs} {operator} {rhs}"
+
+    def generate_variable_declaration(self, node, extra_attributes=None):
+        type_name, ray_attributes = self.ray_storage_qualified_type_parts(
+            self.variable_type(node)
+        )
+        attributes = self.ray_storage_attribute_suffix(
+            [*ray_attributes, *(extra_attributes or [])]
+        )
+        return f"{self.map_type(type_name)} {node.name}{attributes}"
+
+    def ray_storage_qualified_type_parts(self, type_name):
+        parts = str(type_name or "").split()
+        if not parts:
+            return type_name, []
+
+        remaining_parts = []
+        attributes = []
+        for part in parts:
+            attribute = self.ray_storage_attribute(part)
+            if attribute is None:
+                remaining_parts.append(part)
+            else:
+                attributes.append(attribute)
+
+        if not attributes:
+            return type_name, []
+        return " ".join(remaining_parts), attributes
+
+    def is_ray_storage_layout(self, node):
+        if not isinstance(node, LayoutNode):
+            return False
+        if not getattr(node, "data_type", None) or not getattr(
+            node, "variable_name", None
+        ):
+            return False
+        return any(
+            self.ray_storage_attribute(qualifier) is not None
+            for qualifier in getattr(node, "declaration_qualifiers", []) or []
+        )
+
+    def ray_storage_layout_attribute_suffix(self, node):
+        attributes = []
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if (
+                qualifier_name in {"location", "component", "index"}
+                and value is not None
+            ):
+                attributes.append(f"{qualifier_name}({value})")
+        attributes.extend(
+            attribute
+            for qualifier in getattr(node, "declaration_qualifiers", []) or []
+            if (attribute := self.ray_storage_attribute(qualifier)) is not None
+        )
+        return self.ray_storage_attribute_suffix(attributes)
+
+    def ray_storage_attribute_suffix(self, attributes):
+        if not attributes:
+            return ""
+        return f" {' '.join(f'@{attribute}' for attribute in attributes)}"
+
+    def ray_storage_attribute(self, qualifier):
+        return self.RAY_STORAGE_QUALIFIER_ATTRIBUTES.get(str(qualifier).lower())
 
     def generate_expression(self, expr):
         """Render a Vulkan backend expression node as CrossGL syntax."""

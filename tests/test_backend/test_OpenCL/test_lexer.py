@@ -37,3 +37,10 @@ def test_cpp_raw_opencl_helper_literal_without_kernel_is_unwrapped():
     assert ("IDENTIFIER", "INLINE_FUNC") in tokens
     assert ("IDENTIFIER", "helper") in tokens
     assert all(value != 'R"(' for _kind, value in tokens)
+
+
+def test_darktable_hex_float_literal_tokenizes_as_single_float():
+    tokens = token_pairs("float unit = 0x1.0p-24f;")
+
+    assert ("FLOAT", "0x1.0p-24f") in tokens
+    assert ("IDENTIFIER", "p") not in tokens

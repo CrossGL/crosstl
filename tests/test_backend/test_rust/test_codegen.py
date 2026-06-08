@@ -531,12 +531,33 @@ def test_rust_gpu_path_qualified_attribute_codegen():
             }
         }
     }
+
+    #[spirv_std_macros::gpu_only]
+    #[doc(alias = "OpEmitMeshTasksEXT")]
+    #[inline]
+    pub unsafe fn emit_mesh_tasks_ext(group_count_x: u32, group_count_y: u32, group_count_z: u32) -> ! {
+        unsafe {
+            asm! {
+                "OpEmitMeshTasksEXT {group_count_x} {group_count_y} {group_count_z}",
+                group_count_x = in(reg) group_count_x,
+                group_count_y = in(reg) group_count_y,
+                group_count_z = in(reg) group_count_z,
+                options(noreturn),
+            }
+        }
+    }
     """
 
     result = parse_and_generate(code)
 
     assert "void emit_vertex()" in result
     assert 'asm!("OpEmitVertex",);' in result
+    assert (
+        "void emit_mesh_tasks_ext("
+        "uint group_count_x, uint group_count_y, uint group_count_z)" in result
+    )
+    assert "! emit_mesh_tasks_ext" not in result
+    crosstl.translator.parse(result)
 
 
 def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
