@@ -11140,6 +11140,59 @@ def test_validate_project_report_rejects_non_ok_external_corpus_with_entries(
     )
 
 
+def test_validate_project_report_rejects_non_ok_external_corpus_accounting(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "non-ok-external-corpus-accounting-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "externalCorpusManifest": "corpus.json",
+                },
+                "artifacts": [],
+                "externalCorpus": {
+                    "schemaVersion": 1,
+                    "manifest": "corpus.json",
+                    "status": "missing",
+                    "entries": [],
+                    "summary": {
+                        "manifestEntryCount": 1,
+                        "validEntryCount": 0,
+                        "invalidEntryCount": 1,
+                        "entryCount": 0,
+                        "presentCount": 0,
+                        "missingCount": 0,
+                        "discoveredUnitCount": 0,
+                        "undiscoveredPresentCount": 0,
+                        "entriesBySourceBackend": {},
+                        "entriesByTarget": {},
+                        "artifactsByTarget": {},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "externalCorpus.summary must be empty when status is not ok" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_external_corpus_entry_count_mismatches(
     tmp_path,
 ):

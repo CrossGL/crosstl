@@ -10446,6 +10446,16 @@ def _external_corpus_contract_reasons(
             require_closed_fields=require_closed_fields,
         )
     )
+    summary = external_corpus.get("summary")
+    if (
+        status in {"missing", "invalid", "outside-project"}
+        and isinstance(summary, Mapping)
+        and any(
+            summary.get(field_name) != expected
+            for field_name, expected in _external_corpus_empty_summary().items()
+        )
+    ):
+        reasons.append("externalCorpus.summary must be empty when status is not ok")
     return reasons
 
 
