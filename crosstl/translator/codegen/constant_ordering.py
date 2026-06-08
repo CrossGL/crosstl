@@ -5,7 +5,6 @@ from ..ast import (
     FunctionType,
     GenericType,
     MatrixType,
-    NamedType,
     PointerType,
     ReferenceType,
     StructNode,
@@ -25,9 +24,7 @@ def partition_constants_by_struct_dependency(constants, structs):
     struct_dependent_constants = []
 
     for constant in constants or []:
-        const_type = getattr(
-            constant, "const_type", getattr(constant, "vtype", None)
-        )
+        const_type = getattr(constant, "const_type", getattr(constant, "vtype", None))
         if type_references_names(const_type, struct_names):
             struct_dependent_constants.append(constant)
         else:
