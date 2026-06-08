@@ -128,6 +128,7 @@ def _refresh_artifact_summary(payload):
     summary["artifactsByTarget"] = project_pipeline._artifact_counts_by_target(
         artifacts
     )
+    summary.update(project_pipeline._artifact_provenance_rollups(artifacts))
     summary.update(project_pipeline._source_map_rollups(artifacts))
 
 
@@ -5888,6 +5889,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["summary"]["artifactProvenanceIntermediateBySourceBackend"] == {
         "cgl": {"none": 1}
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {}
     assert payload["project"]["sourceRootCount"] == 1
     assert payload["project"]["includePatternCount"] == 0
     assert payload["project"]["excludePatternCount"] == len(
@@ -6026,6 +6028,7 @@ def test_translate_project_records_bridge_artifact_provenance_rollups(
     assert payload["summary"]["artifactProvenanceIntermediateBySourceBackend"] == {
         "rust": {"crossgl": 1}
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {}
 
 
 def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
@@ -6395,6 +6398,14 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         "debug": 1,
         "release": 1,
     }
+    assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {
+        "debug": {"none": 1},
+        "release": {"none": 1},
+    }
+    assert inspection["artifactProvenance"]["intermediateByVariant"] == {
+        "debug": {"none": 1},
+        "release": {"none": 1},
+    }
     assert inspection["sourceMaps"]["sourceMapsByVariant"] == {
         "debug": 1,
         "release": 1,
@@ -6428,6 +6439,10 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
     assert result.returncode == 0
     assert "Source maps by variant: debug=1, release=1" in result.stdout
     assert "Source remaps by variant: debug=1, release=1" in result.stdout
+    assert (
+        "Artifact provenance by variant and intermediate: "
+        "debug=(none=1), release=(none=1)"
+    ) in result.stdout
 
 
 def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path):
@@ -6479,11 +6494,17 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
     )
     assert payload["summary"]["sourceMapsByVariant"] == {"qa/profile": 1}
     assert payload["summary"]["sourceRemapsByVariant"] == {"qa/profile": 1}
+    assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {
+        "qa/profile": {"none": 1}
+    }
     assert validation["artifactStatusByVariant"] == {
         "qa/profile": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }
     assert inspection["sourceMaps"]["sourceMapsByVariant"] == {"qa/profile": 1}
     assert inspection["sourceMaps"]["sourceRemapsByVariant"] == {"qa/profile": 1}
+    assert inspection["artifactProvenance"]["intermediateByVariant"] == {
+        "qa/profile": {"none": 1}
+    }
     assert (repo / expected_artifact_path).exists()
     assert (repo / expected_remap_path).exists()
     assert not (repo / "out" / "cgl" / "qa" / "profile" / "simple.cgl").exists()
@@ -12215,6 +12236,30 @@ def test_validate_project_report_rejects_missing_artifact_provenance_source_back
     )
 
 
+def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    payload["summary"].pop("artifactProvenanceIntermediateByVariant")
+    report_path = repo / "out" / "missing-provenance-variant-rollup-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "summary.artifactProvenanceIntermediateByVariant must be an object"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_missing_source_map_variant_rollups(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -12376,6 +12421,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "artifactProvenanceIntermediateBySourceBackend": {
                         "cgl": {"crossgl": 1}
                     },
+                    "artifactProvenanceIntermediateByVariant": {
+                        "debug": {"crossgl": 1}
+                    },
                 },
                 "units": [
                     {
@@ -12462,6 +12510,10 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     )
     assert (
         "summary.artifactProvenanceIntermediateBySourceBackend must match "
+        "artifact provenance"
+    ) in diagnostic["message"]
+    assert (
+        "summary.artifactProvenanceIntermediateByVariant must match "
         "artifact provenance"
     ) in diagnostic["message"]
     assert "summary.sourceMapCount must match artifact source maps" in (
@@ -15362,6 +15414,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "byPipeline": {"single-file-translate": 1},
         "byIntermediate": {"none": 1},
         "intermediateBySourceBackend": {"cgl": {"none": 1}},
+        "intermediateByVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
         "artifacts": [
@@ -16049,6 +16102,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "byPipeline": {"single-file-translate": 1},
         "byIntermediate": {"none": 1},
         "intermediateBySourceBackend": {"cgl": {"none": 1}},
+        "intermediateByVariant": {},
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
         "artifacts": [
