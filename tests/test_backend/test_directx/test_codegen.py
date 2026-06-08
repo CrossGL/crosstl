@@ -800,6 +800,27 @@ def test_codegen_skips_struct_forward_declarations_from_dxc_tests():
     parse_crossgl(crossgl)
 
 
+def test_codegen_skips_struct_member_using_declarations_from_dxc_cpp_style():
+    crossgl = generate_crossgl("""
+        struct Base {
+            float value;
+        };
+
+        struct Derived : Base {
+            using Base::value;
+            float other;
+        };
+
+        float readDerived(Derived input) {
+            return input.other;
+        }
+    """)
+
+    assert "using Base::value" not in crossgl
+    assert "struct Derived {\n        float other;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_interpolation_modifiers_as_crossgl_metadata():
     crossgl = generate_crossgl("""
         struct PSInput {
@@ -1593,6 +1614,21 @@ def test_codegen_template_vector_constant_expression_dimensions_from_dxc():
     assert "return vec2(1, 2).xyxy;" in output
     assert "vector<float" not in output
 
+    parse_crossgl(output)
+
+
+def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc():
+    hlsl = textwrap.dedent("""
+        ByteAddressBuffer BAB : register(t0);
+
+        float4 main(uint offset : OFFSET) : SV_Target0 {
+            return BAB.Load<vector<float, 4>>(offset);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "return buffer_load(BAB, offset);" in output
     parse_crossgl(output)
 
 

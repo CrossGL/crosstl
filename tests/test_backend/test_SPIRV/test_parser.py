@@ -1465,6 +1465,18 @@ OpTypeForwardPointer %structptr UniformConstant
 %structptr = OpTypePointer UniformConstant %structt1
 """
 
+SPIRV_TOOLS_FORWARD_POINTER_TYPE_ONLY_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/OpTypeForwardPointer_mismatching_type_dst.spvasm.
+OpCapability Kernel
+OpCapability Addresses
+OpCapability Linkage
+OpMemoryModel Logical OpenCL
+OpName %Aptr "Aptr"
+OpTypeForwardPointer %Aptr UniformConstant
+%uint = OpTypeInt 32 0
+%Aptr = OpTypePointer UniformConstant %uint
+"""
+
 SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY = """
 ; Reduced from KhronosGroup/SPIRV-Tools@96545708d0fb060ec6d1e67e85de593bcf24dd21
 ; test/diff/diff_files/spec_constant_array_size_src.spvasm.
@@ -3073,6 +3085,21 @@ def test_spirv_assembly_type_only_module_is_rejected():
     tokens = tokenize_code(code)
     with pytest.raises(SyntaxError, match="only partially supported"):
         parse_code(tokens)
+
+
+def test_spirv_assembly_linkage_pointer_type_only_module_is_preserved():
+    tokens = tokenize_code(SPIRV_TOOLS_FORWARD_POINTER_TYPE_ONLY_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    assert not ast.functions
+    assert not ast.structs
+    assert not ast.global_variables
+    assert ast.spirv_types["%Aptr"] == {
+        "kind": "pointer",
+        "storage_class": "UniformConstant",
+        "type_id": "%uint",
+    }
+    assert ast.spirv_names["%Aptr"] == "Aptr"
 
 
 def test_mod_parsing():

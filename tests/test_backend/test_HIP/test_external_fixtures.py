@@ -394,6 +394,41 @@ extern "C" __global__ void saxpy_kernel()
     assert 'name: "saxpy_kernel.cu"' in crossgl
 
 
+def test_external_rocm_hiprtc_linker_commented_macro_call_codegen_reparse():
+    # Upstream shape: ROCm/rocm-examples, Programming-for-HIP-Runtime-Compiler
+    # linker API examples. The HIPRTC_CHECK invocation keeps line comments on
+    # split arguments, which must not truncate the preprocessed macro call.
+    source = r"""
+    #define CHECK_RET_CODE(call, ret_code)                                      \
+    {                                                                           \
+        if ((call) != ret_code)                                                 \
+        {                                                                       \
+            std::abort();                                                       \
+        }                                                                       \
+    }
+    #define HIPRTC_CHECK(call) CHECK_RET_CODE(call, HIPRTC_SUCCESS)
+
+    void linkWithComments(hiprtcJIT_option* options, void** option_vals) {
+        auto num_options = 0u;
+        auto rtc_link_state = hiprtcLinkState{};
+        HIPRTC_CHECK(hiprtcLinkCreate(num_options,        // number of options
+                                      options,            // options
+                                      option_vals,        // option values
+                                      &rtc_link_state));  // state output
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    link_function = ast.statements[0]
+    assert isinstance(link_function, FunctionNode)
+    assert len(link_function.body) == 3
+    assert (
+        "HIPRTC link create: options: num_options, option keys: options, "
+        "option values: option_vals, state output: rtc_link_state"
+    ) in crossgl
+
+
 def test_external_rocm_convolution_std_array_template_extent_codegen_reparse():
     source = """
     const constexpr std::array<float, 5 * 5> convolution_filter_5x5 = {

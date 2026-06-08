@@ -667,12 +667,22 @@ class SlangToCrossGLConverter:
     def format_function_generic_constraints(self, function):
         constraints = []
         for constraint in getattr(function, "generic_constraints", []) or []:
+            if self.is_erased_generic_constraint(constraint):
+                continue
             relation = getattr(constraint, "relation", ":")
             constraints.append(
                 f"function {function.name} where "
                 f"{constraint.parameter} {relation} {constraint.constraint_type}"
             )
         return constraints
+
+    def is_erased_generic_constraint(self, constraint):
+        relation = getattr(constraint, "relation", ":")
+        parameter = getattr(constraint, "parameter", "")
+        constraint_type = getattr(constraint, "constraint_type", "")
+        if relation == ":" and constraint_type.startswith("__Builtin"):
+            return True
+        return relation == "==" and parameter == f"{constraint_type}.Differential"
 
     def is_forward_struct_declaration(self, node):
         return isinstance(node, StructNode) and getattr(

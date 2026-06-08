@@ -1323,9 +1323,20 @@ class CudaParser:
             return self.parse_function_pointer_type_alias_declarator(alias_type)
 
         name = self.parse_name_component()
+        if self.current_token[0] == "LPAREN":
+            return self.parse_function_type_alias_declarator(alias_type, name)
+
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def parse_function_type_alias_declarator(self, return_type, name):
+        params = self.parse_parameters()
+        alias_type = f"{return_type} ()".strip()
+        alias = TypeAliasNode(alias_type, name)
+        alias.params = params
+        self.type_aliases.add(name)
+        return alias
 
     def parse_function_pointer_type_alias_declarator(self, return_type):
         self.eat("LPAREN")

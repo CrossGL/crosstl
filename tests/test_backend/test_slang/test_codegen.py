@@ -1329,6 +1329,36 @@ def test_reverse_codegen_rejects_interface_and_conformance_constructs():
     assert "extension MyType : IBar" in message
 
 
+def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matrix():
+    # Reduced from shader-slang/slang source/standard-modules/neural/WaveMatrix.slang
+    # at 5230a81f2fe68afe5cb8d04a1b09d56476f6b960.
+    code = """
+    struct WaveMatrix<T, int Rows>
+    {
+        T value;
+    };
+
+    void matMad<T, int R0>(
+        WaveMatrix<T, R0> a,
+        WaveMatrix<T, R0> b,
+        inout WaveMatrix<T, R0> c)
+        where T : __BuiltinFloatingPointType
+        where T.Differential == T
+    {
+        c = a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void matMad(" in generated_code
+    assert "where" not in generated_code
+    assert "__BuiltinFloatingPointType" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_reverse_codegen_rejects_generic_where_conformance_constraint():
     code = """
     int useFoo<T>(T value) where T : IFoo {

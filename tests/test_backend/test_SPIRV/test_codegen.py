@@ -7387,6 +7387,32 @@ def test_translate_api_rejects_unsupported_spirv_assembly_with_clear_error(tmp_p
         crosstl.translate(str(shader_path), backend="cgl", format_output=False)
 
 
+def test_translate_api_accepts_linkage_pointer_type_only_spirv_assembly(tmp_path):
+    import crosstl
+
+    shader_path = tmp_path / "linkage_type.spvasm"
+    shader_path.write_text(
+        """
+        ; Reduced from Khronos SPIRV-Tools test/diff/diff_files/OpTypeForwardPointer_mismatching_type_dst.spvasm.
+        OpCapability Kernel
+        OpCapability Addresses
+        OpCapability Linkage
+        OpMemoryModel Logical OpenCL
+        OpName %Aptr "Aptr"
+        OpTypeForwardPointer %Aptr UniformConstant
+        %uint = OpTypeInt 32 0
+        %Aptr = OpTypePointer UniformConstant %uint
+        """,
+        encoding="utf-8",
+    )
+
+    generated_code = crosstl.translate(
+        str(shader_path), backend="cgl", format_output=False
+    )
+
+    assert generated_code == "shader main {\n}\n"
+
+
 def test_vulkan_layout_blocks_emit_crossgl_resources():
     tokens = tokenize_code(LAYOUT_SHADER)
     ast = parse_code(tokens)

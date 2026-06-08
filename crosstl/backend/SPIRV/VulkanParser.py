@@ -1081,7 +1081,12 @@ class VulkanParser:
             constant_types,
             extended_instruction_imports,
         )
-        if not global_variables and not structs and not functions:
+        if (
+            not global_variables
+            and not structs
+            and not functions
+            and not self.spirv_assembly_has_metadata_only_surface(types)
+        ):
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
         return ShaderNode(
@@ -1100,6 +1105,23 @@ class VulkanParser:
             spirv_constant_types=constant_types,
             spirv_spec_constant_ids=spec_constant_ids,
             spirv_extended_instruction_imports=extended_instruction_imports,
+        )
+
+    def spirv_assembly_has_metadata_only_surface(self, types):
+        metadata_type_kinds = {
+            "acceleration_structure",
+            "array",
+            "cooperative_matrix",
+            "image",
+            "named_barrier",
+            "pointer",
+            "ray_query",
+            "runtime_array",
+            "sampled_image",
+            "sampler",
+        }
+        return any(
+            type_info.get("kind") in metadata_type_kinds for type_info in types.values()
         )
 
     def spirv_assembly_functions(

@@ -987,6 +987,27 @@ def test_parse_using_alias_declarations_from_hlsl_spec():
     assert [function.name for function in ast.functions] == ["main"]
 
 
+def test_parse_struct_member_using_declarations_from_dxc_cpp_style():
+    ast = parse_code("""
+    struct Base {
+        float value;
+    };
+
+    struct Derived : Base {
+        using Base::value;
+        float other;
+    };
+
+    float main(Derived input) : SV_Target0 {
+        return input.other;
+    }
+    """)
+
+    derived = next(struct for struct in ast.structs if struct.name == "Derived")
+    assert [member.name for member in derived.members] == ["other"]
+    assert ast.functions[0].params[0].vtype == "Derived"
+
+
 def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
     code = """
     ByteAddressBuffer BAB : register(t0);
@@ -1585,6 +1606,18 @@ def test_parse_struct_forward_declarations_from_dxc_incomplete_type_tests():
     assert ast.functions[0].name == "get"
     assert ast.functions[0].is_prototype is True
     assert ast.functions[0].params[0].vtype == "Wrapper<float>"
+
+
+def test_parse_nested_template_arguments_closed_by_shift_right_token_from_dxc():
+    ast = parse_code("""
+    template<typename T> struct Wrapper;
+
+    float main(Wrapper<vector<float, 4>> input) : SV_Target0 {
+        return 1.0;
+    }
+    """)
+
+    assert ast.functions[0].params[0].vtype == "Wrapper<vector<float, 4>>"
 
 
 def test_parse_struct_template_methods_from_dxc_spirv_resource_array():

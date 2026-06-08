@@ -1,6 +1,6 @@
 """Preprocessor support for HIP source imports."""
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor
 
@@ -36,3 +36,23 @@ class HipPreprocessor(HLSLPreprocessor):
         if include_target.startswith("<") and include_target.endswith(">"):
             return f"{PRESERVED_INCLUDE_SENTINEL}{include_target}"
         return None
+
+    def _join_multiline_function_macro_call(
+        self, lines: List[str], start: int
+    ) -> Tuple[str, int]:
+        if self._function_macro_call_balance(lines[start]) <= 0:
+            return super()._join_multiline_function_macro_call(lines, start)
+
+        line = self._strip_macro_comments(lines[start])
+        consumed = 1
+
+        while self._function_macro_call_balance(line) > 0 and start + consumed < len(
+            lines
+        ):
+            next_line = lines[start + consumed]
+            if next_line.lstrip().startswith("#"):
+                break
+            line += " " + self._strip_macro_comments(next_line.lstrip())
+            consumed += 1
+
+        return line, consumed

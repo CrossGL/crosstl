@@ -597,6 +597,11 @@ class HLSLParser:
                 if depth == 0:
                     self.eat("GREATER_THAN")
                     return
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    self.eat("SHIFT_RIGHT")
+                    return
             self.eat(token_type)
 
         raise SyntaxError("Unterminated template argument list")
@@ -948,6 +953,16 @@ class HLSLParser:
                     args.append(self.format_generic_argument_tokens(current))
                 self.eat("GREATER_THAN")
                 return args
+            if token_type == "SHIFT_RIGHT" and depth > 0:
+                current.append(("GREATER_THAN", ">"))
+                if depth == 1:
+                    args.append(self.format_generic_argument_tokens(current))
+                    self.eat("SHIFT_RIGHT")
+                    return args
+                current.append(("GREATER_THAN", ">"))
+                depth -= 2
+                self.eat("SHIFT_RIGHT")
+                continue
             if token_type == "COMMA" and depth == 0:
                 args.append(self.format_generic_argument_tokens(current))
                 current = []
@@ -1216,6 +1231,10 @@ class HLSLParser:
                 depth -= 1
                 if depth == 0:
                     return idx + 1
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    return idx + 1
             elif token_type == "EOF":
                 return None
             idx += 1
@@ -1256,6 +1275,9 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             qualifiers = self.parse_qualifiers()
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
             if self.is_constructor_or_destructor_member(name):
                 methods.append(
                     self.parse_constructor_or_destructor_member(
@@ -1357,6 +1379,9 @@ class HLSLParser:
             member_attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
             if self.is_constructor_or_destructor_member(nested_name):
                 nested_methods.append(
                     self.parse_constructor_or_destructor_member(
@@ -1564,6 +1589,9 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
             if self.is_constructor_or_destructor_member(explicit_name):
                 methods.append(
                     self.parse_constructor_or_destructor_member(
@@ -2493,6 +2521,11 @@ class HLSLParser:
                     if depth == 0:
                         idx += 1
                         break
+                elif self.tokens[idx][0] == "SHIFT_RIGHT" and depth > 1:
+                    depth -= 2
+                    if depth == 0:
+                        idx += 1
+                        break
                 idx += 1
             else:
                 return None
@@ -3136,6 +3169,15 @@ class HLSLParser:
                         else ("EOF", "")
                     )
                     return next_token[0] == "LPAREN"
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN"
             elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
                 return False
             elif token_type == "EOF":
@@ -3183,6 +3225,15 @@ class HLSLParser:
                 depth += 1
             elif token_type == "GREATER_THAN":
                 depth -= 1
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN"
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
                 if depth == 0:
                     next_token = (
                         self.tokens[idx + 1]

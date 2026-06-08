@@ -602,6 +602,43 @@ class TestCudaParser:
         ]
         assert [kernel.name for kernel in ast.kernels] == ["function_pointer_kernel"]
 
+    def test_public_cuda_samples_driver_function_type_typedef_parsing(self):
+        code = """
+        typedef int CUresult;
+        typedef CUresult tcuInit(unsigned int Flags);
+        typedef CUresult tcuMemcpyHtoD(
+            unsigned long long dstDevice,
+            const void *srcHost,
+            unsigned int ByteCount
+        );
+
+        extern tcuInit *cuInit;
+        extern tcuMemcpyHtoD *cuMemcpyHtoD;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        init_alias = ast.typedefs[1]
+        memcpy_alias = ast.typedefs[2]
+        assert init_alias.name == "tcuInit"
+        assert init_alias.alias_type == "CUresult ()"
+        assert [(param.vtype, param.name) for param in init_alias.params] == [
+            ("unsigned int", "Flags"),
+        ]
+        assert memcpy_alias.name == "tcuMemcpyHtoD"
+        assert memcpy_alias.alias_type == "CUresult ()"
+        assert [(param.vtype, param.name) for param in memcpy_alias.params] == [
+            ("unsigned long long", "dstDevice"),
+            ("const void *", "srcHost"),
+            ("unsigned int", "ByteCount"),
+        ]
+        assert [(var.vtype, var.name) for var in ast.global_variables] == [
+            ("tcuInit *", "cuInit"),
+            ("tcuMemcpyHtoD *", "cuMemcpyHtoD"),
+        ]
+
     def test_public_cuda_samples_elaborated_and_qualified_type_declarations(self):
         code = """
         void configure(int n) {
