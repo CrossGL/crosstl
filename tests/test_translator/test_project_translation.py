@@ -17112,6 +17112,7 @@ def test_project_cli_inspect_report_text_includes_source_override_rollups(tmp_pa
     report = translate_project(load_project_config(repo), output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
+    payload = inspect_project_report(report_path)
 
     result = subprocess.run(
         [
@@ -17130,6 +17131,14 @@ def test_project_cli_inspect_report_text_includes_source_override_rollups(tmp_pa
     )
 
     assert result.returncode == 1
+    assert payload["report"]["project"]["sourceOverrides"] == {
+        "gpu/kernel.shader": "cgl",
+        "gpu/unsupported.shader": "unknown-backend",
+    }
+    assert (
+        "Project source overrides: gpu/kernel.shader=cgl, "
+        "gpu/unsupported.shader=unknown-backend"
+    ) in result.stdout
     assert "Units by source override: cgl=1" in result.stdout
     assert "Skipped by source override: unknown-backend=1" in result.stdout
 

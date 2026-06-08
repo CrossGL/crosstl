@@ -236,7 +236,7 @@ validation diagnostic-code, missing-capability, artifact target,
 artifact source-backend, artifact variant, hash-status, source-map status,
 source-remap status, toolchain status, and toolchain-run target,
 source-backend, check-kind, tool, and variant rollups, report
-source-backend, file-extension, and artifact
+source-backend, source override mappings, file-extension, and artifact
 target rollups, source-map count, granularity, target, and source-backend
 rollups, source-remap granularity, target, and source-backend rollups,
 artifact matrix completion counts, target and variant completion rollups,

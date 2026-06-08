@@ -858,6 +858,24 @@ def _format_project_variant_names(project):
     return "Project variants: " + ", ".join(names)
 
 
+def _format_project_source_overrides(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    source_overrides = project.get("sourceOverrides")
+    if not isinstance(source_overrides, Mapping):
+        return None
+
+    entries = [
+        f"{path}={backend}"
+        for path, backend in sorted(source_overrides.items())
+        if isinstance(path, str) and path and isinstance(backend, str) and backend
+    ]
+    if not entries:
+        return None
+    return "Project source overrides: " + ", ".join(entries)
+
+
 def _format_project_selected_variants(project):
     if not isinstance(project, Mapping):
         return None
@@ -2139,6 +2157,10 @@ def _format_project_report_inspection(payload):
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(project_insert_index, project_config_counts)
+        project_insert_index += 1
+    project_source_overrides = _format_project_source_overrides(project)
+    if project_source_overrides:
+        lines.insert(project_insert_index, project_source_overrides)
         project_insert_index += 1
     project_variant_names = _format_project_variant_names(project)
     if project_variant_names:

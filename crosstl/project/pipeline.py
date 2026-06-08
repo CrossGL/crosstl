@@ -6107,6 +6107,13 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     ):
         if field_name in project:
             summary[field_name] = project[field_name]
+    source_overrides = project.get("sourceOverrides")
+    if isinstance(source_overrides, Mapping):
+        summary["sourceOverrides"] = {
+            path: backend
+            for path, backend in sorted(source_overrides.items())
+            if isinstance(path, str) and isinstance(backend, str)
+        }
     variants = project.get("variants")
     if isinstance(variants, Mapping):
         summary["variantNames"] = sorted(
