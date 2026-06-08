@@ -2011,10 +2011,10 @@ def _external_corpus_report(
         entry_targets = _manifest_entry_targets(raw_entry, targets)
         unit = units_by_path.get(path)
         manifest_source_backend = raw_entry.get("sourceBackend")
-        if _is_non_empty_string(manifest_source_backend):
-            source_backend = _external_corpus_source_backend(manifest_source_backend)
-        elif unit is not None:
+        if unit is not None:
             source_backend = unit.source_backend
+        elif _is_non_empty_string(manifest_source_backend):
+            source_backend = _external_corpus_source_backend(manifest_source_backend)
         else:
             source_backend = "unknown"
         entry_artifacts = [
@@ -3167,6 +3167,46 @@ def _external_corpus_entry_diagnostics(
     return diagnostics
 
 
+def _external_corpus_source_backend_mismatch_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    manifest_path = _external_corpus_manifest_path(config)
+    if manifest_path is None or not _is_relative_to(manifest_path, config.root):
+        return []
+
+    manifest, _status = _load_external_corpus_manifest(config)
+    if manifest is None:
+        return []
+
+    units_by_path = {unit.relative_path: unit for unit in units}
+    diagnostics: list[ProjectDiagnostic] = []
+    for index, entry in _valid_external_corpus_manifest_entries(manifest):
+        path = str(entry.get("path", "")).replace("\\", "/")
+        unit = units_by_path.get(path)
+        declared_source_backend = entry.get("sourceBackend")
+        if unit is None or not _is_non_empty_string(declared_source_backend):
+            continue
+        declared_backend = _external_corpus_source_backend(declared_source_backend)
+        if declared_backend == unit.source_backend:
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="warning",
+                code="project.config.external-corpus-source-backend-mismatch",
+                message=(
+                    f"External corpus manifest entry {index + 1} declares "
+                    f"sourceBackend {declared_backend} for {path}, but project "
+                    f"discovery resolved {unit.source_backend}; the report uses "
+                    "the discovered source backend."
+                ),
+                location=_config_location(config),
+                missing_capabilities=["external.corpus"],
+            )
+        )
+    return diagnostics
+
+
 def _source_root_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
@@ -3779,6 +3819,9 @@ def scan_project(
             )
         )
 
+    diagnostics.extend(
+        _external_corpus_source_backend_mismatch_diagnostics(config, units)
+    )
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
