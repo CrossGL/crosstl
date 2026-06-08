@@ -2304,6 +2304,11 @@ def _format_project_report_inspection(payload):
             include_zero=False,
         ),
         _format_count_rollup(
+            "Source remaps by granularity",
+            summary.get("sourceRemapsByGranularity"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
             "Source remaps by target",
             summary.get("sourceRemapsByTarget"),
             include_zero=False,

@@ -1170,9 +1170,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "source-map summary rollups including variant rollups" in (
             backend_support["notes"]
         )
-        assert "source-remap summary rollups including variant rollups" in (
-            backend_support["notes"]
-        )
+        assert (
+            "source-remap summary rollups by granularity and including variant "
+            "rollups"
+        ) in (backend_support["notes"])
         assert (
             "sanitized variant output segments in source-map and source-remap paths"
             in (backend_support["notes"])
@@ -1186,7 +1187,7 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "source-map, source-remap target, and source-remap sidecar hash" in (
             backend_support["notes"]
         )
-        assert "missing source-map and source-remap variant rollups" in (
+        assert "missing source-map and source-remap granularity or variant rollups" in (
             backend_support["notes"]
         )
         assert "current artifact-level source-map span coverage" in (

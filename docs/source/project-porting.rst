@@ -238,8 +238,9 @@ source-remap status, toolchain status, and toolchain-run target,
 source-backend, check-kind, tool, and variant rollups, report
 source-backend, file-extension, and artifact
 target rollups, source-map count, granularity, target, and source-backend
-rollups, artifact matrix completion counts, target and variant completion
-rollups, sampled missing and extra artifact identities,
+rollups, source-remap granularity, target, and source-backend rollups,
+artifact matrix completion counts, target and variant completion rollups,
+sampled missing and extra artifact identities,
 bounded validation artifact and validation toolchain-run samples with
 truncation counts, failed validation metadata on artifact provenance samples,
 include-directory status counts, inactive source-root and include-directory
@@ -457,8 +458,9 @@ Project reports are JSON documents with:
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
   backend, variant, target backend, source-map granularity, source-map target,
-  source-map source backend, source-map variant, source-remap target,
-  source-remap source backend, source-remap variant, include dependency kind,
+  source-map source backend, source-map variant, source-remap granularity,
+  source-remap target, source-remap source backend, source-remap variant,
+  include dependency kind,
   include dependency status, include dependency source backend, include
   dependency source-backend status, include dependency resolution source,
   include dependency variant, artifact provenance pipeline, intermediate,
@@ -599,7 +601,7 @@ Project reports are JSON documents with:
   target/variant rollup checks,
   full-report source-map granularity, target, source-backend, and variant
   rollup checks,
-  source-remap target, source-backend, and variant rollup checks,
+  source-remap granularity, target, source-backend, and variant rollup checks,
   source hash checks, failed artifact error metadata checks, translated artifact
   error metadata rejection, required artifact provenance and provenance value
   checks, artifact provenance source-backend and variant rollup checks, failed

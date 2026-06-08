@@ -148,6 +148,7 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "sourceMapsBySourceBackend",
         "sourceMapsByVariant",
         "sourceRemapCount",
+        "sourceRemapsByGranularity",
         "sourceRemapsByTarget",
         "sourceRemapsBySourceBackend",
         "sourceRemapsByVariant",
@@ -1211,6 +1212,20 @@ def _source_remap_count(artifacts: Sequence[Mapping[str, Any]]) -> int:
     return sum(1 for artifact in artifacts if artifact.get("sourceRemap"))
 
 
+def _source_remap_counts_by_granularity(
+    artifacts: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for artifact in artifacts:
+        source_remap = artifact.get("sourceRemap")
+        if not isinstance(source_remap, Mapping):
+            continue
+        granularity = source_remap.get("mappingGranularity")
+        key = granularity if _is_non_empty_string(granularity) else "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _source_map_counts_by_granularity(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -1623,6 +1638,7 @@ def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "sourceMapsBySourceBackend": _source_map_counts_by_source_backend(artifacts),
         "sourceMapsByVariant": _source_map_counts_by_variant(artifacts),
         "sourceRemapCount": _source_remap_count(artifacts),
+        "sourceRemapsByGranularity": _source_remap_counts_by_granularity(artifacts),
         "sourceRemapsByTarget": _source_remap_counts_by_target(artifacts),
         "sourceRemapsBySourceBackend": _source_remap_counts_by_source_backend(
             artifacts
@@ -6586,6 +6602,7 @@ def _inspection_source_map_summary(
         "sourceMapsByTarget",
         "sourceMapsBySourceBackend",
         "sourceMapsByVariant",
+        "sourceRemapsByGranularity",
         "sourceRemapsByTarget",
         "sourceRemapsBySourceBackend",
         "sourceRemapsByVariant",
@@ -10684,6 +10701,14 @@ def _summary_contract_reasons(
                 "summary.sourceRemapCount",
                 summary.get("sourceRemapCount"),
                 source_map_rollups["sourceRemapCount"],
+                "artifact source remaps",
+            )
+        )
+        reasons.extend(
+            _mapping_field_contract_reasons(
+                "summary.sourceRemapsByGranularity",
+                summary.get("sourceRemapsByGranularity"),
+                source_map_rollups["sourceRemapsByGranularity"],
                 "artifact source remaps",
             )
         )
