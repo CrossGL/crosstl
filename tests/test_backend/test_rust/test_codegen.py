@@ -6691,6 +6691,27 @@ def test_rust_cuda_tuple_return_match_codegen_reparse_from_atomic_ordering():
     crosstl.translator.parse(result)
 
 
+def test_rust_cuda_match_expression_return_arm_codegen_reparse():
+    # Reduced from Rust-CUDA error conversions that return early from a match arm.
+    code = """
+    fn to_result(status: Status) -> Result<(), Error> {
+        let err = match status {
+            Success => return Ok(()),
+            Other => Error::Other,
+        };
+        Err(err)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "case Success:" in result
+    assert "return Ok(());" in result
+    assert "err = ReturnNode" not in result
+    assert "args=['()']" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
     # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/warp.rs.
     code = """

@@ -3529,6 +3529,15 @@ class RustToCrossGLConverter:
     ):
         indent_str = "    " * indent
 
+        if isinstance(expression, ReturnNode):
+            if expression.value is None:
+                return f"{indent_str}return;\n"
+            return self.generate_expression_result(
+                expression.value,
+                indent,
+                self.return_result_target,
+                loop_contexts,
+            )
         if isinstance(expression, LoopNode):
             return self.generate_loop(
                 expression,

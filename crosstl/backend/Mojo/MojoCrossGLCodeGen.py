@@ -26,6 +26,13 @@ class MojoToCrossGLConverter:
     REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
     MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`([^`]+)`$")
     BACKTICK_IDENTIFIER_PATTERN = re.compile(r"^`([^`]+)`$")
+    INLINE_IF_TYPE_PATTERN = re.compile(
+        r"(?P<true>\([^,\[\]]+\)|[A-Za-z_][A-Za-z0-9_.]*|\d+(?:\.\d+)?)"
+        r"\s+if\s+"
+        r"(?P<condition>[^,\[\]]+?)"
+        r"\s+else\s+"
+        r"(?P<false>\([^,\[\]]+\)|[A-Za-z_][A-Za-z0-9_.]*|\d+(?:\.\d+)?)"
+    )
     STRING_LITERAL_PREFIXES = {
         "r",
         "R",
@@ -1332,7 +1339,21 @@ class MojoToCrossGLConverter:
             return mojo_type
         mojo_type = re.sub(r"(?<=[\[,])\s*\*(?=[A-Za-z_`])", "", mojo_type)
         mojo_type = re.sub(r"(?<=[\[,])\s*//\s*(?=,|\])", " /", mojo_type)
-        return re.sub(r"\s*//\s*", " / ", mojo_type)
+        mojo_type = re.sub(r"\s*//\s*", " / ", mojo_type)
+        return self.normalize_inline_if_type_expressions(mojo_type)
+
+    def normalize_inline_if_type_expressions(self, mojo_type):
+        def replace(match):
+            condition = match.group("condition").strip()
+            true_expr = match.group("true").strip()
+            false_expr = match.group("false").strip()
+            return f"({condition} ? {true_expr} : {false_expr})"
+
+        previous = None
+        while mojo_type != previous:
+            previous = mojo_type
+            mojo_type = self.INLINE_IF_TYPE_PATTERN.sub(replace, mojo_type)
+        return mojo_type
 
     def strip_reference_type(self, mojo_type):
         if not isinstance(mojo_type, str):
@@ -1431,14 +1452,51 @@ class MojoToCrossGLConverter:
         return self.generate_expression(arg)
 
     def normalize_string_literal(self, value):
+        literal_parts = self.split_string_literal(value)
+        if literal_parts is None:
+            return value
+
+        _, quote, body = literal_parts
+        if quote == '"':
+            return f'"{body}"'
+
+        return f'"{self.escape_double_quoted_string_body(body, quote)}"'
+
+    def split_string_literal(self, value):
+        if not isinstance(value, str):
+            return None
+
         for quote in ("'", '"'):
             quote_index = value.find(quote)
-            if quote_index <= 0:
+            if quote_index == -1:
                 continue
             prefix = value[:quote_index]
-            if prefix in self.STRING_LITERAL_PREFIXES and value.endswith(quote):
-                return value[quote_index:]
-        return value
+            if prefix and prefix not in self.STRING_LITERAL_PREFIXES:
+                continue
+            if value.endswith(quote):
+                return prefix, quote, value[quote_index + 1 : -1]
+        return None
+
+    def escape_double_quoted_string_body(self, body, source_quote):
+        escaped = []
+        index = 0
+        while index < len(body):
+            char = body[index]
+            if char == "\\" and index + 1 < len(body):
+                next_char = body[index + 1]
+                if source_quote == "'" and next_char == "'":
+                    escaped.append(next_char)
+                else:
+                    escaped.append("\\" + next_char)
+                index += 2
+                continue
+
+            if char == '"':
+                escaped.append('\\"')
+            else:
+                escaped.append(char)
+            index += 1
+        return "".join(escaped)
 
     def map_function_attributes(self, func):
         if not hasattr(func, "attributes") or not func.attributes:

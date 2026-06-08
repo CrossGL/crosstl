@@ -956,7 +956,9 @@ class VulkanParser:
             elif result_id and opcode in {"OpConstant", "OpSpecConstant"}:
                 if len(operands) >= 2:
                     constant_types[result_id] = operands[0]
-                    constants[result_id] = operands[1]
+                    constants[result_id] = self.spirv_constant_literal_expression(
+                        operands[0], operands[1], types
+                    )
                     if opcode == "OpSpecConstant":
                         spec_constant_ids.append(result_id)
             elif result_id and opcode == "OpString" and operands:
@@ -5766,6 +5768,24 @@ class VulkanParser:
         if isinstance(operand, str) and operand.startswith("%"):
             return operand.lstrip("%")
         return operand
+
+    def spirv_constant_literal_expression(self, type_id, literal, types):
+        type_info = types.get(type_id, {})
+        if type_info.get("name") not in {"half", "float", "double"}:
+            return literal
+
+        text = str(literal)
+        stripped = text.lstrip("+-")
+        if not stripped.lower().startswith("0x") or "p" not in stripped.lower():
+            return literal
+
+        try:
+            float.fromhex(text)
+        except OverflowError:
+            return "-1e+309" if text.startswith("-") else "1e+309"
+        except ValueError:
+            return literal
+        return literal
 
     def spirv_integer_constant_operand(self, operand, constants):
         value = constants.get(operand, operand)

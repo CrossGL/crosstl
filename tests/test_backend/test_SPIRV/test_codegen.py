@@ -5061,6 +5061,35 @@ def test_spirv_assembly_location_decorated_interfaces_codegen():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_assembly_overflowing_hex_float_constant_reparse():
+    assembly = """
+    ; Reduced from glslang Test/stringToDouble.vert 1e+309 constants.
+    OpCapability Shader
+    OpCapability Float64
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint Vertex %main "main"
+    OpName %main "main"
+    OpName %value "value"
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %double = OpTypeFloat 64
+    %ptr_function_double = OpTypePointer Function %double
+    %inf = OpConstant %double 0x1p+1024
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    %value = OpVariable %ptr_function_double Function
+    OpStore %value %inf
+    OpReturn
+    OpFunctionEnd
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(assembly)))
+
+    assert "0x1p+1024" not in generated_code
+    assert "value = 1e+309;" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
     tokens = tokenize_code(SPIRV_NON_MAIN_VERTEX_ENTRY_ASSEMBLY)
     ast = parse_code(tokens)

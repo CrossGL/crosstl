@@ -436,17 +436,22 @@ def test_comptime_expression_prefix_codegen_drops_mojo_marker():
     assert "tile_layout.size()" in generated_code
 
 
-def test_single_quoted_string_literal_codegen():
+def test_single_quoted_string_literal_codegen_reparses_crossgl():
     code = """
     fn message() -> String:
         let status: String = 'done'
+        print('Short-circuit "or" evaluation')
+        print('Name or \\'quit\\'')
         return status
     """
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "String status = 'done';" in generated_code
+    assert 'String status = "done";' in generated_code
+    assert 'print("Short-circuit \\"or\\" evaluation");' in generated_code
+    assert "print(\"Name or 'quit'\");" in generated_code
     assert "return status;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_triple_quoted_string_literal_codegen_from_mojo_reference():
@@ -3307,6 +3312,34 @@ def test_multiline_parenthesized_inline_if_codegen_from_mojo_gpu_puzzles():
         "shared_cache[(local_i + 3072)] : series_correction);"
     ) in generated_code
     assert "Unhandled expression" not in generated_code
+
+
+def test_inline_if_generic_type_argument_codegen_reparses_crossgl():
+    # Reduced from Modular max/kernels/src/comm/allreduce.mojo and
+    # max/kernels/src/comm/reducescatter.mojo parameter type arguments.
+    code = """
+    fn reduce[
+        dtype: DType,
+        in_layout: TensorLayout,
+        use_multimem: Bool = False,
+        ngpus: Int,
+    ](
+        src_tensors: InlineArray[
+            TileTensor[dtype, in_layout, ImmutAnyOrigin],
+            1 if use_multimem else ngpus,
+        ],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "InlineArray[TileTensor[dtype, in_layout, ImmutAnyOrigin], "
+        "(use_multimem ? 1 : ngpus)] src_tensors"
+    ) in generated_code
+    assert "ifuse_multimemelse" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_import_codegen():

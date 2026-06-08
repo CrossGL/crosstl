@@ -1817,6 +1817,32 @@ def test_nested_generic_type_annotation_parsing():
     assert function.body[0].vtype == "InlineArray[SIMD[DType.float32, 4], 2]"
 
 
+def test_inline_if_generic_type_argument_parse_from_modular_comm():
+    # Reduced from Modular max/kernels/src/comm/allreduce.mojo and
+    # max/kernels/src/comm/reducescatter.mojo parameter type arguments.
+    code = """
+    fn reduce[
+        dtype: DType,
+        in_layout: TensorLayout,
+        use_multimem: Bool = False,
+        ngpus: Int,
+    ](
+        src_tensors: InlineArray[
+            TileTensor[dtype, in_layout, ImmutAnyOrigin],
+            1 if use_multimem else ngpus,
+        ],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    param = find_function(ast, "reduce").params[0]
+
+    assert param.vtype == (
+        "InlineArray[TileTensor[dtype, in_layout, ImmutAnyOrigin], "
+        "1 if use_multimem else ngpus]"
+    )
+
+
 def test_ternary_operator_parsing():
     code = """
     fn main():

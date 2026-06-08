@@ -2845,6 +2845,9 @@ class MojoParser:
                 self.skip_layout_tokens()
                 if self.current_token[0] != "RBRACKET":
                     suffix += ", "
+            elif token_type in {"IF", "ELSE"}:
+                suffix = suffix.rstrip() + f" {token_value} "
+                self.eat(token_type)
             elif token_type in {"NEWLINE", "INDENT", "DEDENT"}:
                 self.eat(token_type)
             else:
