@@ -43,6 +43,35 @@ def _non_negative_int(value):
     return parsed
 
 
+def _project_define_arg(value):
+    name, separator, define_value = value.partition("=")
+    name = name.strip()
+    if not name:
+        raise argparse.ArgumentTypeError("--define entries must use NAME or NAME=VALUE")
+    return f"{name}={define_value.strip()}" if separator else name
+
+
+def _project_source_override_arg(value):
+    pattern, separator, backend = value.partition("=")
+    pattern = pattern.strip()
+    backend = backend.strip()
+    if not pattern or not separator or not backend:
+        raise argparse.ArgumentTypeError(
+            "--source-override entries must use PATTERN=BACKEND"
+        )
+    return f"{pattern}={backend}"
+
+
+def _non_empty_project_arg(option):
+    def parse(value):
+        parsed = value.strip()
+        if not parsed:
+            raise argparse.ArgumentTypeError(f"{option} entries must be non-empty")
+        return parsed
+
+    return parse
+
+
 def _read_shader_source(file_path: str, source_name: str) -> str:
     with open(file_path, "rb") as file:
         shader_bytes = file.read()
@@ -219,11 +248,13 @@ def _legacy_parser():
     parser.add_argument(
         "--include-dir",
         action="append",
+        type=_non_empty_project_arg("--include-dir"),
         help="Source parser include directory; repeatable",
     )
     parser.add_argument(
         "--define",
         action="append",
+        type=_project_define_arg,
         help="Source parser preprocessor define as NAME or NAME=VALUE; repeatable",
     )
     parser.set_defaults(func=_run_single_file)
@@ -334,6 +365,7 @@ def _add_project_override_args(parser):
     parser.add_argument(
         "--source-root",
         action="append",
+        type=_non_empty_project_arg("--source-root"),
         help=(
             "Project source root override; repeatable. Replaces configured "
             "source roots for this command."
@@ -342,16 +374,19 @@ def _add_project_override_args(parser):
     parser.add_argument(
         "--include-dir",
         action="append",
+        type=_non_empty_project_arg("--include-dir"),
         help="Project include directory override; repeatable",
     )
     parser.add_argument(
         "--define",
         action="append",
+        type=_project_define_arg,
         help="Project preprocessor define override as NAME or NAME=VALUE; repeatable",
     )
     parser.add_argument(
         "--source-override",
         action="append",
+        type=_project_source_override_arg,
         help="Project source backend override as PATTERN=BACKEND; repeatable",
     )
 
@@ -3056,11 +3091,13 @@ def _build_parser():
     translate_parser.add_argument(
         "--include-dir",
         action="append",
+        type=_non_empty_project_arg("--include-dir"),
         help="Source parser include directory; repeatable",
     )
     translate_parser.add_argument(
         "--define",
         action="append",
+        type=_project_define_arg,
         help="Source parser preprocessor define as NAME or NAME=VALUE; repeatable",
     )
     translate_parser.set_defaults(func=_run_single_file)
@@ -3073,6 +3110,7 @@ def _build_parser():
         "--target",
         "-b",
         action="append",
+        type=_non_empty_project_arg("--target"),
         help="Target backend to include in the scan report; repeatable",
     )
     _add_project_variant_args(scan_parser, action_label="scan")
@@ -3089,6 +3127,7 @@ def _build_parser():
         "--target",
         "-b",
         action="append",
+        type=_non_empty_project_arg("--target"),
         help="Target backend; repeatable. Defaults to config targets or cgl.",
     )
     translate_project_parser.add_argument(
@@ -3243,6 +3282,7 @@ def _build_parser():
         "--target",
         "-b",
         action="append",
+        type=_non_empty_project_arg("--target"),
         help="Target backend to include in the report; repeatable",
     )
     _add_project_variant_args(report_parser, action_label="report")

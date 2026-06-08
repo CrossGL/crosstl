@@ -15818,8 +15818,12 @@ def test_project_cli_scan_rejects_empty_define_override(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "Error: --define entries must use NAME or NAME=VALUE" in result.stdout
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        "argument --define: --define entries must use NAME or NAME=VALUE"
+        in result.stderr
+    )
 
 
 def test_project_cli_scan_rejects_empty_source_root_override(tmp_path):
@@ -15842,8 +15846,12 @@ def test_project_cli_scan_rejects_empty_source_root_override(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "Error: --source-root entries must be non-empty" in result.stdout
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        "argument --source-root: --source-root entries must be non-empty"
+        in result.stderr
+    )
 
 
 def test_project_cli_scan_rejects_empty_include_dir_override(tmp_path):
@@ -15866,8 +15874,12 @@ def test_project_cli_scan_rejects_empty_include_dir_override(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "Error: --include-dir entries must be non-empty" in result.stdout
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        "argument --include-dir: --include-dir entries must be non-empty"
+        in result.stderr
+    )
 
 
 def test_project_cli_scan_rejects_empty_target_override(tmp_path):
@@ -15890,8 +15902,9 @@ def test_project_cli_scan_rejects_empty_target_override(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "Error: --target entries must be non-empty" in result.stdout
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "argument --target/-b: --target entries must be non-empty" in result.stderr
 
 
 def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):
@@ -15914,8 +15927,12 @@ def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 1
-    assert "Error: --source-override entries must use PATTERN=BACKEND" in result.stdout
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        "argument --source-override: "
+        "--source-override entries must use PATTERN=BACKEND"
+    ) in result.stderr
 
 
 def test_project_cli_translate_project_fails_on_error_diagnostics(tmp_path):
