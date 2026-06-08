@@ -322,6 +322,7 @@ def test_project_report_inspection_documents_rollups():
     feature = features["project.report_inspection"]
 
     for backend_support in feature["support"].values():
+        assert "source report generation metadata" in backend_support["notes"]
         assert "variant-name summaries" in backend_support["notes"]
         assert "source-override mappings and rollups" in backend_support["notes"]
         assert "project root, output directory" in backend_support["notes"]

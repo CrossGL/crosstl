@@ -16601,6 +16601,12 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         f"Config file: {repo / 'crosstl.toml'} (hash={config_hash_preview})"
         in result.stdout
     )
+    generator = payload["report"]["generator"]
+    assert f"Report generated at: {payload['report']['generatedAt']}" in result.stdout
+    assert (
+        "Report generator: CrossTL "
+        f"(project-porting, packageVersion={generator['packageVersion']})"
+    ) in result.stdout
     assert payload["report"]["project"]["root"] == str(repo)
     assert payload["report"]["project"]["outputDir"] == str((repo / "out").resolve())
     assert f"Project root: {repo}" in result.stdout

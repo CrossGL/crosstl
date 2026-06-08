@@ -2102,6 +2102,43 @@ def _format_report_status(report, validation_diagnostic_codes):
     return None
 
 
+def _format_report_generated_at(report):
+    if not isinstance(report, Mapping):
+        return None
+
+    generated_at = report.get("generatedAt")
+    if (
+        not isinstance(generated_at, int)
+        or isinstance(generated_at, bool)
+        or generated_at < 0
+    ):
+        return None
+    return f"Report generated at: {generated_at}"
+
+
+def _format_report_generator(report):
+    if not isinstance(report, Mapping):
+        return None
+
+    generator = report.get("generator")
+    if not isinstance(generator, Mapping):
+        return None
+
+    name = generator.get("name")
+    pipeline = generator.get("pipeline")
+    package_version = generator.get("packageVersion")
+    if not isinstance(name, str) or not name:
+        return None
+
+    details = []
+    if isinstance(pipeline, str) and pipeline:
+        details.append(pipeline)
+    if isinstance(package_version, str) and package_version:
+        details.append(f"packageVersion={package_version}")
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"Report generator: {name}{suffix}"
+
+
 def _format_project_report_inspection(payload):
     report = payload.get("report", {})
     summary = report.get("summary", {}) if isinstance(report, Mapping) else {}
@@ -2173,7 +2210,17 @@ def _format_project_report_inspection(payload):
     report_status = _format_report_status(report, validation_diagnostic_codes)
     if report_status:
         lines.insert(2, report_status)
-    project_insert_index = 3
+    report_metadata_insert_index = 1
+    report_metadata_count = 0
+    for report_metadata_line in (
+        _format_report_generated_at(report),
+        _format_report_generator(report),
+    ):
+        if report_metadata_line:
+            lines.insert(report_metadata_insert_index, report_metadata_line)
+            report_metadata_insert_index += 1
+            report_metadata_count += 1
+    project_insert_index = 3 + report_metadata_count
     project_config_counts = _format_project_config_counts(project)
     if project_config_counts:
         lines.insert(project_insert_index, project_config_counts)
@@ -2220,8 +2267,9 @@ def _format_project_report_inspection(payload):
     )
     if include_dir_issues:
         project_status_lines.append(include_dir_issues)
+    project_status_insert_index = 4 + report_metadata_count
     for offset, line in enumerate(project_status_lines):
-        lines.insert(4 + offset, line)
+        lines.insert(project_status_insert_index + offset, line)
     project_path_insert_index = 1
     for project_path_line in (
         _format_project_config_path(project),
