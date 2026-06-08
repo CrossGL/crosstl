@@ -227,6 +227,51 @@ def test_thin_function_type_parameter_codegen_from_official_parameter_docs():
     assert "Unhandled expression" not in generated_code
 
 
+def test_post_generic_member_type_parameter_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/src/nn/attention/gpu/nvidia/sm100/attention_utils.mojo
+    # STMatrixTMEM.store_async.
+    code = """
+    def store_async[
+        *, num_threads: Int
+    ](
+        src: STMatrixLayout[
+            Self.BM,
+            Self.BN,
+            num_threads=num_threads,
+            accum_dtype_size=Self.dtype_size,
+        ].TensorType[Self.dtype],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "STMatrixLayout_TensorType[" in generated_code
+    assert "].TensorType" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_post_generic_mlir_type_parameter_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # mojo/stdlib/std/builtin/variadics.mojo VariadicList.__init__.
+    code = """
+    def init(
+        value: Pointer[
+            _MLIR.POPArrayType[size, Self._EltPointerType._mlir_type],
+            container_origin,
+        ]._mlir_type,
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Pointer__mlir_type[" in generated_code
+    assert "]._mlir_type" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_variadic_and_reference_parameter_codegen_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:

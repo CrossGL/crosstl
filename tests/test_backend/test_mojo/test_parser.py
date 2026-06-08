@@ -212,6 +212,36 @@ def test_thin_function_type_parameter_parsing_from_official_parameter_docs():
     assert function.return_type == "Int"
 
 
+def test_comptime_function_type_value_with_terminal_raises_parse():
+    code = """
+    struct _Test:
+        comptime fn_type = def() thin raises
+        var test_fn: Self.fn_type
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "_Test")
+    fn_type = struct_node.members[0]
+
+    assert isinstance(fn_type, VariableDeclarationNode)
+    assert fn_type.initial_value == "def() thin raises"
+    assert struct_node.members[1].name == "test_fn"
+
+
+def test_mlir_region_statement_parse_from_coroutine_stdlib():
+    code = """
+    def _suspend_async[body: def(AnyCoroutine) capturing -> None]():
+        __mlir_region await_body(hdl: __mlir_type.`!co.routine`):
+            body(hdl)
+            __mlir_op.`co.suspend.end`()
+        __mlir_op.`co.suspend`[_region="await_body".value]()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "_suspend_async")
+
+    assert isinstance(function.body[0], PassNode)
+    assert isinstance(function.body[1], CallNode)
+
+
 def test_variadic_and_deinit_parameters_parse_from_current_docs():
     code = """
     struct GenericArray[ElementType: Copyable & ImplicitlyDestructible]:
@@ -611,6 +641,60 @@ def test_struct_generic_parameter_list_parsing_from_modular_corpus():
     ]
 
 
+def test_struct_standalone_string_metadata_and_ellipsis_members_parse():
+    code = """
+    struct cudnnMultiHeadAttnWeightKind_t(TrivialRegisterPassable):
+        var _value: Int32
+        comptime ATTN_Q_WEIGHTS = Self(0)
+        "Input projection weights for 'queries'."
+
+    struct IOSpec[mut: Bool, input: IO](TrivialRegisterPassable):
+        ...
+        comptime Input = IOSpec[false, IO.Input]()
+    """
+    ast = parse_code(tokenize_code(code))
+    weight_kind = find_struct(ast, "cudnnMultiHeadAttnWeightKind_t")
+    io_spec = find_struct(ast, "IOSpec")
+
+    assert isinstance(weight_kind.members[2], PassNode)
+    assert isinstance(io_spec.members[0], PassNode)
+    assert io_spec.members[1].name == "Input"
+
+
+def test_attributed_nested_type_declarations_parse_in_type_bodies():
+    code = """
+    struct Outer:
+        @fieldwise_init
+        struct Inner:
+            var value: Int
+
+        trait Capability:
+            ...
+    """
+    ast = parse_code(tokenize_code(code))
+    outer = find_struct(ast, "Outer")
+
+    assert isinstance(outer.members[0], StructNode)
+    assert outer.members[0].name == "Inner"
+    assert isinstance(outer.members[1], TraitNode)
+
+
+def test_builtin_type_keyword_struct_names_parse():
+    code = """
+    struct Bool(Boolable):
+        var value: Int1
+
+    struct Int(Intable):
+        var value: Int64
+
+    struct String(Writable):
+        var value: UnsafePointer[UInt8]
+    """
+    ast = parse_code(tokenize_code(code))
+
+    assert [node.name for node in ast.structs] == ["Bool", "Int", "String"]
+
+
 def test_parenthesized_import_items_and_floor_divide_parsing():
     code = """
     from std.gpu import (
@@ -857,6 +941,28 @@ def test_for_in_iterable_parsing_preserves_loop_iterable():
     assert loop.iterable.name == "values"
 
 
+def test_for_in_nested_tuple_target_parse_from_kv_cache_utils():
+    code = """
+    fn main(prompt_lens: List[Int], cache_lens: List[Int]):
+        for batch, (prompt_len, cache_len) in enumerate(zip(prompt_lens, cache_lens)):
+            sink(batch, prompt_len, cache_len)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, RangeForNode)
+    assert isinstance(loop.name, TupleNode)
+    batch, lengths = loop.name.elements
+    assert batch.name == "batch"
+    assert isinstance(lengths, TupleNode)
+    assert [element.name for element in lengths.elements] == [
+        "prompt_len",
+        "cache_len",
+    ]
+    assert isinstance(loop.iterable, FunctionCallNode)
+
+
 def test_for_in_target_conventions_parse_from_modular_control_flow_docs():
     # Reduced from https://github.com/modular/modular.git commit
     # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
@@ -974,6 +1080,53 @@ def test_comptime_for_parsing_preserves_loop_shape():
     assert c_style_loop.init.name == "i"
     assert c_style_loop.condition.op == "<"
     assert isinstance(c_style_loop.update, AssignmentNode)
+
+
+def test_comptime_if_elif_survives_multiline_generic_return_parse():
+    code = """
+    def load[width: Int]():
+        comptime if width == 1:
+            return call_ld_intrinsic[S]()
+        elif width == 2:
+            return call_ld_intrinsic[
+                _RegisterPackType[S, S]
+            ]()
+        elif width == 4:
+            return call_ld_intrinsic[
+                _RegisterPackType[S, S, S, S]
+            ]()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "load")
+    branch = function.body[0]
+
+    assert isinstance(branch, IfNode)
+    assert getattr(branch, "is_comptime", False)
+    assert isinstance(branch.else_body[0], IfNode)
+    assert isinstance(branch.else_body[0].else_body[0], IfNode)
+
+
+def test_comptime_if_elif_survives_multiline_call_statement_parse():
+    code = """
+    def store[width: Int](data: InlineArray[Scalar[dtype], width], tmem_addr: UInt32):
+        comptime if width == 1:
+            inlined_assembly[asm_str, NoneType, has_side_effect=true](
+                data[0],
+                tmem_addr,
+            )
+        elif width == 2:
+            inlined_assembly[asm_str, NoneType, has_side_effect=true](
+                data[0], data[1],
+                tmem_addr,
+            )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "store")
+    branch = function.body[0]
+
+    assert isinstance(branch, IfNode)
+    assert getattr(branch, "is_comptime", False)
+    assert isinstance(branch.else_body[0], IfNode)
 
 
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_parsing():
@@ -1367,6 +1520,23 @@ def test_parenthesized_where_clause_with_and_constraints_parsing():
     assert function.where_clause is not None
     assert "&&" in function.where_clause
     assert "type_of" in function.where_clause
+    assert function.body
+
+
+def test_where_clause_with_sibling_parenthesized_constraints_parse():
+    code = """
+    def move_from(
+        self: UnsafePointer[T, _],
+        src: UnsafePointer[T, _],
+    ) where (type_of(self).mut) && (type_of(src).mut):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "move_from")
+
+    assert function.where_clause is not None
+    assert "&&" in function.where_clause
+    assert function.where_clause.count("type_of") == 2
     assert function.body
 
 
@@ -2672,6 +2842,46 @@ def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_do
     assert assignment.right.elements == ["0", "0"]
 
 
+def test_bool_literal_tokens_can_be_local_binding_names_parse():
+    code = """
+    def main():
+        var false = false
+        var true, flag = true, false
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    false_decl = function.body[0]
+    tuple_decl = function.body[1]
+
+    assert false_decl.name == "false"
+    assert false_decl.initial_value == "false"
+    assert isinstance(tuple_decl.name, TupleNode)
+    assert [element.name for element in tuple_decl.name.elements] == ["true", "flag"]
+    assert isinstance(tuple_decl.initial_value, TupleNode)
+    assert tuple_decl.initial_value.elements == ["true", "false"]
+
+
+def test_list_literal_elements_continue_binary_expression_across_newline_parse():
+    code = """
+    def main():
+        var values = [
+            "Warmup Total: "
+            + String(count),
+            List("123456789012345".as_bytes())
+            + [0xED],
+        ]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    values = function.body[0].initial_value
+
+    assert isinstance(values, ListLiteralNode)
+    assert len(values.elements) == 2
+    assert all(isinstance(element, BinaryOpNode) for element in values.elements)
+    assert values.elements[0].op == "+"
+    assert values.elements[1].op == "+"
+
+
 def test_tuple_assignment_with_mixed_targets_and_ref_binding_parse():
     code = """
     def main():
@@ -2934,6 +3144,26 @@ def test_try_except_parse_from_layout_tensor_gpu_docs():
     assert isinstance(statement.except_body[0], FunctionCallNode)
 
 
+def test_try_except_name_after_multiline_specialized_call_parse():
+    code = """
+    def main():
+        try:
+            bench_bf16[
+                num_heads=32,
+                head_dim=256,
+            ](m, ctx)
+        except e:
+            print("bench failed:", e)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    statement = function.body[0]
+
+    assert isinstance(statement, TryExceptNode)
+    assert statement.exception_name == "e"
+    assert isinstance(statement.try_body[0], VectorConstructorNode)
+
+
 def test_try_except_else_finally_parse_from_official_error_docs():
     # Reduced from the full try syntax documented at:
     # https://docs.modular.com/mojo/manual/errors/
@@ -3194,6 +3424,43 @@ def test_type_member_expression_parse_from_modular_testing_examples():
     assert call_arg.member == "MAX"
 
 
+def test_double_bracket_specialized_call_parse_from_vendor_blas_tests():
+    code = """
+    def main() raises:
+        if has_amd_gpu_accelerator():
+            test_matmul[[DType.float8_e4m3fnuz, DType.bfloat16]]()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0].if_body[0]
+
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, ArrayAccessNode)
+    assert call.callee.array.name == "test_matmul"
+    assert isinstance(call.callee.index, TupleNode)
+    assert [element.member for element in call.callee.index.elements] == [
+        "float8_e4m3fnuz",
+        "bfloat16",
+    ]
+
+
+def test_switch_keyword_can_be_value_name_parse_from_tile_tests():
+    code = """
+    def main():
+        def print_wrapper[tile_size: Int, switch: Bool](offset: Int):
+            print(offset, tile_size, switch)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    nested = function.body[0]
+    call = nested.body[0]
+
+    assert isinstance(nested, FunctionNode)
+    assert nested.name == "print_wrapper"
+    assert isinstance(call, FunctionCallNode)
+    assert call.args[2].name == "switch"
+
+
 def test_alias_declarations_parse_as_comptime_aliases():
     code = """
     alias THREADS_PER_BLOCK = 256
@@ -3243,6 +3510,24 @@ def test_struct_comptime_member_from_modular_custom_ops_parse():
     assert isinstance(size_member.initial_value, FunctionCallNode)
     assert size_member.initial_value.name == "product"
     assert struct_node.members[1].vtype == "DeviceBuffer[Self.dtype]"
+
+
+def test_trait_comptime_associated_type_intersection_parse():
+    code = """
+    trait Boxable:
+        comptime Associated: Writable & Copyable & ImplicitlyDestructible
+
+        def unbox(self) -> Self.Associated:
+            ...
+    """
+    ast = parse_code(tokenize_code(code))
+    trait = ast.traits[0]
+    associated = trait.members[0]
+
+    assert isinstance(associated, VariableDeclarationNode)
+    assert associated.name == "Associated"
+    assert associated.vtype == "Writable&Copyable&ImplicitlyDestructible"
+    assert getattr(associated, "is_comptime", False)
 
 
 def test_bare_annotated_assignment_with_initializer_parsing():
@@ -3879,6 +4164,42 @@ string"""
     assert isinstance(declaration, VariableDeclarationNode)
     assert declaration.name == "message"
     assert declaration.initial_value == '"Multi-line\\nstring"'
+
+
+def test_triple_quoted_call_argument_parse_from_modular_fast_div():
+    code = '''
+    fn main():
+        assert_equal(
+            """div: 33
+mprime: 4034666248
+""",
+            String(value),
+        )
+    '''
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.args[0] == '"div: 33\\nmprime: 4034666248\\n"'
+    assert isinstance(call.args[1], VectorConstructorNode)
+    assert call.args[1].type_name == "String"
+
+
+def test_nested_prefixed_tstring_parse_from_modular_format_tests():
+    code = r"""
+    fn main():
+        var tstring = t"hello \t{x}, {rt"world \t{x}"}"
+        var greeting = String(t"Hello, {t"dear {name}"}!")
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    tstring = function.body[0]
+    greeting = function.body[1]
+
+    assert isinstance(tstring, VariableDeclarationNode)
+    assert tstring.initial_value == r't"hello \\t{x}, {rt\"world \\t{x}\"}"'
+    assert isinstance(greeting.initial_value, VectorConstructorNode)
 
 
 def test_numeric_literals_parsing():

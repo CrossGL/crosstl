@@ -9215,6 +9215,49 @@ def test_glsl_ray_query_trace_ray_inline_raydesc_lowers_to_initialize_fields():
     assert ".TraceRayInline(" not in generated_code
 
 
+def test_glsl_ray_query_lowercase_importer_type_lowers_to_ext_functions():
+    # Reduced from FidelityFX SDK raytracing_common.hlsl after HLSL import.
+    shader = """
+    shader LowercaseRayQueryImporterType {
+        struct RayDesc {
+            vec3 Origin;
+            float TMin;
+            vec3 Direction;
+            float TMax;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayDesc ray = RayDesc(
+                    vec3(0.0),
+                    0.01,
+                    vec3(0.0, 0.0, 1.0),
+                    1024.0
+                );
+                rayQuery rayQuery;
+                rayQuery.TraceRayInline(topLevelAS, 0, 255, ray);
+                bool active = rayQuery.Proceed();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "rayQueryEXT rayQuery;" in generated_code
+    assert (
+        "rayQueryInitializeEXT(rayQuery, topLevelAS, 0, 255, "
+        "ray.Origin, ray.TMin, ray.Direction, ray.TMax);" in generated_code
+    )
+    assert "bool active_ = rayQueryProceedEXT(rayQuery);" in generated_code
+    assert ".TraceRayInline(" not in generated_code
+
+
 def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
     shader = """
     shader ScopedRayQueryExtensions {

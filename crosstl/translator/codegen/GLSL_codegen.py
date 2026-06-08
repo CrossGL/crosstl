@@ -14917,6 +14917,7 @@ class GLSLCodeGen:
         type_name = str(type_name)
         return (
             type_name == "rayQueryEXT"
+            or type_name == "rayQuery"
             or type_name == "RayQuery"
             or type_name.startswith("RayQuery<")
         )

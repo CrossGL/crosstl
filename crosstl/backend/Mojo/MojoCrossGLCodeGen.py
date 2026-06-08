@@ -1386,7 +1386,109 @@ class MojoToCrossGLConverter:
         mojo_type = re.sub(r"\s*//\s*", " / ", mojo_type)
         mojo_type = self.normalize_mlir_type_expressions(mojo_type)
         mojo_type = self.normalize_mlir_attr_type_expressions(mojo_type)
+        mojo_type = self.normalize_post_generic_type_member_access(mojo_type)
         return self.normalize_inline_if_type_expressions(mojo_type)
+
+    def normalize_post_generic_type_member_access(self, mojo_type):
+        """Flatten Mojo type members after generic suffixes into CrossGL names."""
+        previous = None
+        while mojo_type != previous:
+            previous = mojo_type
+            mojo_type = self.flatten_one_post_generic_type_member_access(mojo_type)
+        return mojo_type
+
+    def flatten_one_post_generic_type_member_access(self, mojo_type):
+        dot_index = self.find_post_generic_member_dot(mojo_type)
+        if dot_index is None:
+            return mojo_type
+
+        close_index = dot_index - 1
+        while close_index >= 0 and mojo_type[close_index].isspace():
+            close_index -= 1
+        open_index = self.find_matching_type_bracket_start(mojo_type, close_index)
+        if open_index is None:
+            return mojo_type
+
+        base_start = open_index - 1
+        while base_start >= 0 and re.match(r"[A-Za-z0-9_.]", mojo_type[base_start]):
+            base_start -= 1
+        base_start += 1
+        if base_start == open_index:
+            return mojo_type
+
+        member_start = dot_index + 1
+        member_end = member_start
+        while member_end < len(mojo_type) and re.match(
+            r"[A-Za-z0-9_]", mojo_type[member_end]
+        ):
+            member_end += 1
+        if member_start == member_end:
+            return mojo_type
+
+        suffix_end = member_end
+        member_args = ""
+        next_index = member_end
+        while next_index < len(mojo_type) and mojo_type[next_index].isspace():
+            next_index += 1
+        if next_index < len(mojo_type) and mojo_type[next_index] == "[":
+            member_close = self.find_matching_type_bracket(mojo_type, next_index + 1)
+            if member_close is not None:
+                member_args = mojo_type[next_index + 1 : member_close].strip()
+                suffix_end = member_close + 1
+
+        base = mojo_type[base_start:open_index].strip()
+        base_args = mojo_type[open_index + 1 : close_index].strip()
+        member = mojo_type[member_start:member_end].strip()
+        flattened_name = self.sanitize_identifier(f"{base}_{member}")
+
+        combined_args = ", ".join(arg for arg in (base_args, member_args) if arg)
+        replacement = (
+            f"{flattened_name}[{combined_args}]" if combined_args else flattened_name
+        )
+        return mojo_type[:base_start] + replacement + mojo_type[suffix_end:]
+
+    def find_post_generic_member_dot(self, mojo_type):
+        index = 0
+        while True:
+            dot_index = mojo_type.find(".", index)
+            if dot_index == -1:
+                return None
+
+            previous_index = dot_index - 1
+            while previous_index >= 0 and mojo_type[previous_index].isspace():
+                previous_index -= 1
+            if previous_index >= 0 and mojo_type[previous_index] == "]":
+                next_index = dot_index + 1
+                if next_index < len(mojo_type) and re.match(
+                    r"[A-Za-z_]", mojo_type[next_index]
+                ):
+                    return dot_index
+
+            index = dot_index + 1
+
+    def find_matching_type_bracket_start(self, text, close):
+        if close < 0 or close >= len(text) or text[close] != "]":
+            return None
+
+        depth = 1
+        quote = None
+        index = close - 1
+        while index >= 0:
+            char = text[index]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char == "]":
+                depth += 1
+            elif char == "[":
+                depth -= 1
+                if depth == 0:
+                    return index
+            index -= 1
+
+        return None
 
     def normalize_mlir_type_expressions(self, mojo_type):
         def replace(match):

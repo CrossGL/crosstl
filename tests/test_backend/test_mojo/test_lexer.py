@@ -438,6 +438,35 @@ string"""
     assert ("STRING_LITERAL", '"Multi-line\\nstring"') in tokens
 
 
+def test_triple_quoted_call_argument_tokenization_from_modular_fast_div():
+    code = '''
+    fn main():
+        assert_equal(
+            """div: 33
+mprime: 4034666248
+""",
+            String(value),
+        )
+    '''
+    tokens = tokenize_code(code)
+
+    assert ("STRING_LITERAL", '"div: 33\\nmprime: 4034666248\\n"') in tokens
+
+
+def test_nested_prefixed_tstring_tokenization_from_modular_format_tests():
+    code = r"""
+    fn main():
+        var tstring = t"hello \t{x}, {rt"world \t{x}"}"
+    """
+    tokens = tokenize_code(code)
+
+    assert ("IDENTIFIER", "t") in tokens
+    assert (
+        "STRING_LITERAL",
+        r'"hello \\t{x}, {rt\"world \\t{x}\"}"',
+    ) in tokens
+
+
 def test_backtick_metadata_identifiers_tokenization_from_modular_kernels():
     code = """
     @__llvm_metadata(`nvvm.cluster_dim`=cluster_shape)

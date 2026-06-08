@@ -2864,8 +2864,8 @@ class RustToCrossGLConverter:
         if not isinstance(stmt.value, TupleNode):
             if stmt.value is None:
                 return ""
-            return self.generate_discarded_expression(
-                stmt.value,
+            return self.generate_tuple_pattern_expression_let(
+                stmt,
                 indent,
                 loop_contexts,
             )
@@ -2881,6 +2881,33 @@ class RustToCrossGLConverter:
             loop_contexts,
             type_elements,
         )
+
+    def generate_tuple_pattern_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        subject_name = self.next_match_tuple_name()
+        code = f"{indent_str}auto {subject_name};\n"
+        code += self.generate_expression_result(
+            stmt.value,
+            indent,
+            subject_name,
+            loop_contexts,
+        )
+
+        type_elements = self.get_tuple_pattern_type_elements(
+            stmt.vtype,
+            len(stmt.name.elements),
+        )
+
+        for index, pattern_element in enumerate(stmt.name.elements):
+            type_element = type_elements[index] if type_elements is not None else None
+            code += self.generate_pattern_binding(
+                pattern_element,
+                self.generate_tuple_element_accessor(subject_name, index),
+                indent,
+                loop_contexts,
+                type_element,
+            )
+        return code
 
     def generate_tuple_pattern_bindings(
         self, pattern, value, indent, loop_contexts=None, type_elements=None

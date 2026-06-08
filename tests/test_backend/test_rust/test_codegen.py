@@ -4624,6 +4624,35 @@ def test_tuple_pattern_result_expression_elements_conversion():
         pytest.fail(f"Tuple pattern result expression conversion failed: {e}")
 
 
+def test_tuple_pattern_if_let_expression_initializer_conversion():
+    code = """
+    fn stub(def_location: Option<Location>, cx: Cx) {
+        let (file_metadata, line_number) = if let Some(def_location) = def_location {
+            (def_location.0, def_location.1)
+        } else {
+            (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER)
+        };
+        use_location(file_metadata, line_number);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "LetPatternConditionNode" not in result
+        assert "auto _rust_match_tuple_0;" in result
+        assert "if (is_Some(def_location))" in result
+        assert "_rust_match_tuple_0 = (def_location.0, def_location.1);" in result
+        assert (
+            "_rust_match_tuple_0 = (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER);"
+            in result
+        )
+        assert "file_metadata = _rust_tuple_0(_rust_match_tuple_0);" in result
+        assert "line_number = _rust_tuple_1(_rust_match_tuple_0);" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Tuple pattern if-let initializer conversion failed: {e}")
+
+
 def test_match_to_switch_conversion():
     code = """
     fn test_match() {

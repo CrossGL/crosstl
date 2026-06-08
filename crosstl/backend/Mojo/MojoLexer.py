@@ -179,7 +179,9 @@ class MojoLexer:
     def token_generator(self) -> Iterator[Tuple[str, str]]:
         indent_stack = [0]
         layout_code = self._join_line_continuations(
-            self._normalize_triple_string_literals(self.code)
+            self._normalize_prefixed_string_literals(
+                self._normalize_triple_string_literals(self.code)
+            )
         )
 
         for line in layout_code.splitlines():
@@ -288,8 +290,19 @@ class MojoLexer:
         """Detect unprefixed doc/comment-style triple-quoted blocks."""
         if prefix:
             return False
+        previous = self._previous_significant_char(code, pos)
+        if previous in {"(", "[", "{", ",", "=", ":"}:
+            return False
         line_start = code.rfind("\n", 0, pos) + 1
         return not code[line_start:pos].strip()
+
+    def _previous_significant_char(self, code: str, pos: int) -> Optional[str]:
+        index = pos - 1
+        while index >= 0 and code[index].isspace():
+            index -= 1
+        if index < 0:
+            return None
+        return code[index]
 
     def _preserve_layout(self, text: str) -> str:
         return "".join("\n" if char == "\n" else " " for char in text)
@@ -303,6 +316,140 @@ class MojoLexer:
             .replace("\r", "\n")
             .replace("\n", "\\n")
         )
+
+    def _normalize_prefixed_string_literals(self, code: str) -> str:
+        """Collapse Mojo-prefixed string literals for line-oriented lexing."""
+        pieces = []
+        pos = 0
+
+        while pos < len(code):
+            if code[pos] == "#":
+                line_end = code.find("\n", pos)
+                if line_end == -1:
+                    pieces.append(code[pos:])
+                    break
+                pieces.append(code[pos : line_end + 1])
+                pos = line_end + 1
+                continue
+
+            if code[pos : pos + 1] in {'"', "'"}:
+                body_end = self._find_simple_string_end(code, pos + 1, code[pos])
+                if body_end is None:
+                    raise SyntaxError("Unterminated Mojo string literal")
+                pieces.append(code[pos : body_end + 1])
+                pos = body_end + 1
+                continue
+
+            prefix, quote = self._match_prefixed_string_start(code, pos)
+            if quote is None:
+                pieces.append(code[pos])
+                pos += 1
+                continue
+
+            body_start = pos + len(prefix) + 1
+            body_end = self._find_prefixed_string_end(
+                code,
+                body_start,
+                quote,
+                interpolation="t" in prefix.lower(),
+            )
+            if body_end is None:
+                raise SyntaxError("Unterminated Mojo prefixed string literal")
+
+            body = code[body_start:body_end]
+            pieces.append(f'{prefix}"{self._escape_simple_string_body(body)}"')
+            pos = body_end + 1
+
+        return "".join(pieces)
+
+    def _match_prefixed_string_start(
+        self, code: str, pos: int
+    ) -> Tuple[str, Optional[str]]:
+        for prefix_len in (2, 1):
+            prefix = code[pos : pos + prefix_len]
+            if prefix not in TRIPLE_STRING_PREFIXES:
+                continue
+            if pos > 0 and re.match(r"[A-Za-z0-9_]", code[pos - 1]):
+                continue
+
+            quote_pos = pos + prefix_len
+            quote = code[quote_pos : quote_pos + 1]
+            if quote not in {'"', "'"}:
+                continue
+            if code[quote_pos : quote_pos + 3] in {'"""', "'''"}:
+                continue
+            return prefix, quote
+
+        return "", None
+
+    def _find_prefixed_string_end(
+        self, code: str, pos: int, quote: str, interpolation: bool
+    ) -> Optional[int]:
+        escaped = False
+        brace_depth = 0
+
+        while pos < len(code):
+            char = code[pos]
+            if escaped:
+                escaped = False
+                pos += 1
+                continue
+            if char == "\\":
+                escaped = True
+                pos += 1
+                continue
+
+            if interpolation:
+                if char == "{" and code[pos : pos + 2] != "{{":
+                    brace_depth += 1
+                    pos += 1
+                    continue
+                if char == "}" and code[pos : pos + 2] != "}}":
+                    if brace_depth:
+                        brace_depth -= 1
+                    pos += 1
+                    continue
+                if brace_depth and self._match_nested_string_start(code, pos):
+                    pos = self._skip_nested_string_literal(code, pos)
+                    continue
+
+            if char == quote and brace_depth == 0:
+                return pos
+            pos += 1
+
+        return None
+
+    def _match_nested_string_start(self, code: str, pos: int) -> bool:
+        if code[pos : pos + 1] in {'"', "'"}:
+            return True
+        return self._match_prefixed_string_start(code, pos)[1] is not None
+
+    def _skip_nested_string_literal(self, code: str, pos: int) -> int:
+        prefix, quote = self._match_prefixed_string_start(code, pos)
+        if quote is None:
+            prefix = ""
+            quote = code[pos]
+        body_start = pos + len(prefix) + 1
+        body_end = self._find_simple_string_end(code, body_start, quote)
+        if body_end is None:
+            raise SyntaxError("Unterminated Mojo nested string literal")
+        return body_end + 1
+
+    def _find_simple_string_end(self, code: str, pos: int, quote: str) -> Optional[int]:
+        escaped = False
+        while pos < len(code):
+            char = code[pos]
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                return pos
+            pos += 1
+        return None
+
+    def _escape_simple_string_body(self, body: str) -> str:
+        return body.replace("\\", "\\\\").replace('"', '\\"')
 
     def _join_line_continuations(self, code: str) -> str:
         """Join explicit Mojo line continuations before indentation analysis."""
