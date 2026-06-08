@@ -24,10 +24,12 @@ class MojoToCrossGLConverter:
     }
     MATRIX_TYPE_PATTERN = re.compile(r"^Matrix\[(DType\.\w+),\s*(\d+),\s*(\d+)\]$")
     REFERENCE_TYPE_PATTERN = re.compile(r"^ref\[[^\]]*\]\s+(.+)$")
-    MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`([^`]+)`$")
-    MLIR_DOT_TYPE_EXPRESSION_PATTERN = re.compile(r"__mlir_type\.`([^`]+)`")
-    MLIR_BRACKET_TYPE_EXPRESSION_PATTERN = re.compile(r"__mlir_type\[`([^`]+)`\]")
-    BACKTICK_IDENTIFIER_PATTERN = re.compile(r"^`([^`]+)`$")
+    MLIR_BACKTICK_TYPE_PATTERN = re.compile(r"^__mlir_type\.`((?:[^`\\]|\\.)*)`$")
+    MLIR_DOT_TYPE_EXPRESSION_PATTERN = re.compile(r"__mlir_type\.`((?:[^`\\]|\\.)*)`")
+    MLIR_BRACKET_TYPE_EXPRESSION_PATTERN = re.compile(
+        r"__mlir_type\[`((?:[^`\\]|\\.)*)`\]"
+    )
+    BACKTICK_IDENTIFIER_PATTERN = re.compile(r"^`((?:[^`\\]|\\.)*)`$")
     INLINE_IF_TYPE_PATTERN = re.compile(
         r"(?P<true>\([^,\[\]]+\)|[A-Za-z_][A-Za-z0-9_.]*|\d+(?:\.\d+)?)"
         r"\s+if\s+"
@@ -1156,7 +1158,12 @@ class MojoToCrossGLConverter:
         elif isinstance(expr, str):
             if self.is_numeric_literal(expr):
                 return self.normalize_numeric_literal(expr)
-            return self.normalize_string_literal(expr)
+            if self.is_mojo_function_type_text(expr):
+                return self.normalize_type_expression_operators(expr)
+            literal = self.normalize_string_literal(expr)
+            if literal != expr or self.split_string_literal(expr) is not None:
+                return literal
+            return self.normalize_type_expression_operators(expr)
         elif isinstance(expr, (int, float, bool)):
             return str(expr)
         elif isinstance(expr, VariableNode):
@@ -1261,6 +1268,8 @@ class MojoToCrossGLConverter:
             type_name = self.map_type(expr.type_name)
             return f"{type_name}({args_str})"
         elif isinstance(expr, ArrayAccessNode):
+            if self.is_mlir_type_literal_access(expr):
+                return self.generate_mlir_type_literal_expression(expr)
             array = self.generate_expression(expr.array)
             index = self.generate_array_index(expr.index)
             return f"{array}[{index}]"
@@ -1278,6 +1287,39 @@ class MojoToCrossGLConverter:
                 self.generate_expression(element) for element in index.elements
             )
         return self.generate_expression(index)
+
+    def is_mlir_type_literal_access(self, expr):
+        return isinstance(expr.array, VariableNode) and expr.array.name in {
+            "__mlir_type",
+            "__mlir_attr",
+        }
+
+    def generate_mlir_type_literal_expression(self, expr):
+        payload = self.render_mlir_literal_payload(expr.index)
+        if expr.array.name == "__mlir_attr":
+            return f"MLIRAttr_{self.sanitize_identifier(payload)}"
+        return self.map_mlir_type_payload(payload)
+
+    def render_mlir_literal_payload(self, node):
+        if isinstance(node, TupleNode):
+            return "_".join(
+                part
+                for part in (self.render_mlir_literal_payload(e) for e in node.elements)
+                if part
+            )
+        if isinstance(node, UnaryOpNode) and node.op == "+":
+            return self.render_mlir_literal_payload(node.operand)
+        if isinstance(node, VariableNode):
+            payload = self.unquote_backtick_identifier(node.name)
+            if payload is not None:
+                return payload
+            return self.map_identifier_name(node.name)
+        if isinstance(node, str):
+            literal_parts = self.split_string_literal(node)
+            if literal_parts is not None:
+                return literal_parts[2]
+            return node
+        return self.generate_expression(node)
 
     def generate_member_receiver_expression(self, expr):
         if self.is_empty_array_access(expr):
@@ -1372,6 +1414,7 @@ class MojoToCrossGLConverter:
         if isinstance(mojo_type, str) and mojo_type.startswith("*"):
             mojo_type = mojo_type[1:].lstrip()
         mojo_type = self.strip_reference_type(mojo_type)
+        mojo_type = self.normalize_mojo_function_type_text(mojo_type)
         mapped_type = self.type_map.get(mojo_type)
         if mapped_type:
             return mapped_type
@@ -1387,7 +1430,9 @@ class MojoToCrossGLConverter:
         """Normalize Mojo-only operators embedded in source-like type strings."""
         if not isinstance(mojo_type, str):
             return mojo_type
+        mojo_type = self.normalize_mojo_function_type_text(mojo_type)
         mojo_type = re.sub(r"(?<=[\[,])\s*\*(?=[A-Za-z_`])", "", mojo_type)
+        mojo_type = self.normalize_specialization_binding_arrows(mojo_type)
         mojo_type = re.sub(
             r"(?<=[A-Za-z0-9_\]])\[\](?=(?:\.|\)|,|\]|\s|$))",
             "",
@@ -1399,6 +1444,46 @@ class MojoToCrossGLConverter:
         mojo_type = self.normalize_mlir_attr_type_expressions(mojo_type)
         mojo_type = self.normalize_post_generic_type_member_access(mojo_type)
         return self.normalize_inline_if_type_expressions(mojo_type)
+
+    def normalize_specialization_binding_arrows(self, mojo_type):
+        pattern = re.compile(
+            r"(?P<value>(?:\d+(?:\.\d+)?|[A-Za-z_][A-Za-z0-9_.]*))"
+            r"\s*->\s*"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+        )
+
+        def replace(match):
+            previous = self.previous_nonspace_char(mojo_type, match.start())
+            if previous not in {"[", ","}:
+                return match.group(0)
+            return f"{match.group('name')} = {match.group('value')}"
+
+        return pattern.sub(replace, mojo_type)
+
+    def previous_nonspace_char(self, text, end):
+        index = end - 1
+        while index >= 0:
+            if not text[index].isspace():
+                return text[index]
+            index -= 1
+        return None
+
+    def normalize_mojo_function_type_text(self, mojo_type):
+        if not isinstance(mojo_type, str):
+            return mojo_type
+
+        mojo_type = re.sub(r"\bfn(?=\s*(?:\[|\())", "def", mojo_type)
+        mojo_type = re.sub(r"\s+abi\s*\([^)]*\)", "", mojo_type)
+        return re.sub(
+            r"\braises\s+[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]]*\])?\s*(?=->)",
+            "raises ",
+            mojo_type,
+        )
+
+    def is_mojo_function_type_text(self, value):
+        if not isinstance(value, str):
+            return False
+        return re.match(r"^\s*(?:fn|def)\s*(?:\[|\()", value) is not None
 
     def normalize_post_generic_type_member_access(self, mojo_type):
         """Flatten Mojo type members after generic suffixes into CrossGL names."""
@@ -1503,7 +1588,9 @@ class MojoToCrossGLConverter:
 
     def normalize_mlir_type_expressions(self, mojo_type):
         def replace(match):
-            return self.map_mlir_type_payload(match.group(1))
+            return self.map_mlir_type_payload(
+                self.decode_escaped_literal_payload(match.group(1))
+            )
 
         mojo_type = self.MLIR_DOT_TYPE_EXPRESSION_PATTERN.sub(replace, mojo_type)
         return self.MLIR_BRACKET_TYPE_EXPRESSION_PATTERN.sub(replace, mojo_type)
@@ -1556,17 +1643,113 @@ class MojoToCrossGLConverter:
         return None
 
     def normalize_inline_if_type_expressions(self, mojo_type):
-        def replace(match):
-            condition = match.group("condition").strip()
-            true_expr = match.group("true").strip()
-            false_expr = match.group("false").strip()
-            return f"({condition} ? {true_expr} : {false_expr})"
-
         previous = None
         while mojo_type != previous:
             previous = mojo_type
-            mojo_type = self.INLINE_IF_TYPE_PATTERN.sub(replace, mojo_type)
+            mojo_type = self.rewrite_first_inline_if_type_expression(mojo_type)
         return mojo_type
+
+    def rewrite_first_inline_if_type_expression(self, text):
+        if not isinstance(text, str):
+            return text
+
+        index = 0
+        while True:
+            if_index = text.find(" if ", index)
+            if if_index == -1:
+                return text
+
+            else_index = self.find_inline_if_else(text, if_index + 4)
+            if else_index == -1:
+                index = if_index + 4
+                continue
+
+            true_start = self.find_inline_if_true_start(text, if_index)
+            false_end = self.find_inline_if_false_end(text, else_index + 6)
+            true_expr = text[true_start:if_index].strip()
+            condition = text[if_index + 4 : else_index].strip()
+            false_expr = text[else_index + 6 : false_end].strip()
+            if not true_expr or not condition or not false_expr:
+                index = if_index + 4
+                continue
+
+            replacement = f"({condition} ? {true_expr} : {false_expr})"
+            if true_start > 0 and text[true_start - 1] == ",":
+                replacement = f" {replacement}"
+            return text[:true_start] + replacement + text[false_end:]
+
+    def find_inline_if_else(self, text, start):
+        depth = 0
+        quote = None
+        index = start
+        while index < len(text):
+            char = text[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char in "[({":
+                depth += 1
+            elif char in "])}":
+                if depth:
+                    depth -= 1
+            elif depth == 0 and text.startswith(" else ", index):
+                return index
+            index += 1
+        return -1
+
+    def find_inline_if_true_start(self, text, if_index):
+        depth = 0
+        quote = None
+        index = if_index - 1
+        while index >= 0:
+            char = text[index]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char in "])}":
+                depth += 1
+            elif char in "[({":
+                if depth:
+                    depth -= 1
+                else:
+                    return index + 1
+            elif char == "," and depth == 0:
+                return index + 1
+            index -= 1
+        return 0
+
+    def find_inline_if_false_end(self, text, start):
+        depth = 0
+        quote = None
+        index = start
+        while index < len(text):
+            char = text[index]
+            if quote:
+                if char == "\\":
+                    index += 2
+                    continue
+                if char == quote:
+                    quote = None
+            elif char in {"'", '"', "`"}:
+                quote = char
+            elif char in "[({":
+                depth += 1
+            elif char in "])}":
+                if depth:
+                    depth -= 1
+                else:
+                    return index
+            elif char == "," and depth == 0:
+                return index
+            index += 1
+        return len(text)
 
     def strip_reference_type(self, mojo_type):
         if not isinstance(mojo_type, str):
@@ -1601,7 +1784,7 @@ class MojoToCrossGLConverter:
         if not match:
             return None
 
-        payload = match.group(1)
+        payload = self.decode_escaped_literal_payload(match.group(1))
         return self.map_mlir_type_payload(payload)
 
     def map_mlir_type_payload(self, payload):
@@ -1616,13 +1799,22 @@ class MojoToCrossGLConverter:
         if not isinstance(member, str):
             return member
 
-        match = self.BACKTICK_IDENTIFIER_PATTERN.match(member)
-        if not match:
+        payload = self.unquote_backtick_identifier(member)
+        if payload is None:
             if member in self.CROSSGL_RESERVED_IDENTIFIERS:
                 return f"{member}_"
             return member
 
-        return self.sanitize_identifier(match.group(1))
+        return self.sanitize_identifier(payload)
+
+    def unquote_backtick_identifier(self, member):
+        match = self.BACKTICK_IDENTIFIER_PATTERN.match(member)
+        if not match:
+            return None
+        return self.decode_escaped_literal_payload(match.group(1))
+
+    def decode_escaped_literal_payload(self, payload):
+        return re.sub(r"\\(.)", r"\1", payload)
 
     def sanitize_identifier(self, name):
         sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", name).strip("_")

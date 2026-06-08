@@ -2216,6 +2216,21 @@ def test_reference_array_type_parsing():
         pytest.fail(f"Reference array type parsing failed: {e}")
 
 
+def test_nested_array_generic_reference_type_parsing_from_naga_criterion():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # benches/criterion.rs parse_glsl inputs parameter.
+    code = """
+    fn parse_glsl(inputs: &[Box<[u8]>]) {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].vtype == "&Box<[u8]>[]"
+
+
 def test_lifetime_reference_type_parsing():
     code = """
     fn borrow<'a>(value: &'a Vec3<f32>) -> &'a Vec3<f32> {

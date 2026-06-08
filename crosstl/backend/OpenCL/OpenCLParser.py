@@ -244,6 +244,55 @@ class OpenCLParser(HipParser):
             index = self.skip_newlines_at_pos(index)
         return index
 
+    def consume_function_name(self):
+        name = super().consume_function_name()
+        self.skip_newlines()
+        return name
+
+    def skip_function_name_at(self, index):
+        if index >= len(self.tokens) or not self.is_function_name_token(
+            self.tokens[index]
+        ):
+            return None
+
+        name = self.tokens[index].value
+        index += 1
+        index = self.skip_operator_function_suffix_at(index, name)
+        if index < len(self.tokens) and self.tokens[index].type == "LT":
+            index = self.skip_template_at_pos(index)
+            if index is None:
+                return None
+
+        while index < len(self.tokens) and self.tokens[index].type == "SCOPE":
+            index += 1
+            if index < len(self.tokens) and self.tokens[index].type == "TILDE":
+                index += 1
+            if index >= len(self.tokens) or not self.is_function_name_token(
+                self.tokens[index]
+            ):
+                return None
+            name = self.tokens[index].value
+            index += 1
+            index = self.skip_operator_function_suffix_at(index, name)
+            if index < len(self.tokens) and self.tokens[index].type == "LT":
+                index = self.skip_template_at_pos(index)
+                if index is None:
+                    return None
+
+        index = self.skip_newlines_at_pos(index)
+        if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
+            return index
+        return None
+
+    def parse_variable_declarator(self, base_type, qualifiers, allow_prefix):
+        if allow_prefix:
+            base_type = self.parse_declarator_prefix(base_type)
+        self.skip_newlines()
+        self.parse_type_attribute_prefixes()
+        return super().parse_variable_declarator(
+            base_type, qualifiers, allow_prefix=False
+        )
+
     def parse_simple_function(self):
         qualifiers = []
         attributes = []

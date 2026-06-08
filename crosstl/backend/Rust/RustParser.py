@@ -1667,11 +1667,24 @@ class RustParser:
 
     def format_array_type(self, element_type, size):
         suffix = f"[{size}]" if size is not None else "[]"
-        if "[" not in element_type:
+        array_index = self.find_top_level_array_suffix(element_type)
+        if array_index is None:
             return f"{element_type}{suffix}"
 
-        base_type, existing_suffix = element_type.split("[", 1)
+        base_type = element_type[:array_index]
+        existing_suffix = element_type[array_index + 1 :]
         return f"{base_type}{suffix}[{existing_suffix}"
+
+    def find_top_level_array_suffix(self, type_name):
+        depth = 0
+        for index, char in enumerate(type_name):
+            if char == "[" and depth == 0:
+                return index
+            if char in "<([":
+                depth += 1
+            elif char in ">)]":
+                depth = max(0, depth - 1)
+        return None
 
     def parse_where_clause(self, terminators=None):
         terminators = set(terminators or {"LBRACE"})

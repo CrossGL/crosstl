@@ -227,6 +227,58 @@ def test_thin_function_type_parameter_codegen_from_official_parameter_docs():
     assert "Unhandled expression" not in generated_code
 
 
+def test_fn_function_type_alias_codegen_reparses_from_ksandvik_memset():
+    # Reduced from ksandvik/mojo-examples examples/memset.mojo.
+    code = """
+    alias memset_fn_type = fn (BufferPtrType, ValueType, Int) -> None
+
+    fn measure_time(func: memset_fn_type) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let memset_fn_type = def(BufferPtrType, ValueType, Int) -> None;" in (
+        generated_code
+    )
+    assert "let memset_fn_type = fn(" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_autotune_binding_arrow_codegen_reparses_from_ksandvik_memset():
+    # Reduced from ksandvik/mojo-examples examples/memset.mojo
+    # autotune_fork choice binding.
+    code = """
+    fn main():
+        autotune_fork[Int, 0, 4, 8, 16, 32 -> cur]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "autotune_fork[Int, 0, 4, 8, 16, cur = 32]();" in generated_code
+    assert "32->cur" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_function_type_with_raises_error_codegen_reparses_from_modular_cublaslt():
+    # Reduced from Modular max/kernels/src/_cublas/cublaslt.mojo.
+    code = """
+    fn register_callback(
+        callback: def(Result) thin raises Error -> UnsafePointer[Int8, ImmutAnyOrigin]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "def(Result) thin raises -> UnsafePointer[Int8, ImmutAnyOrigin] callback"
+        in generated_code
+    )
+    assert "raises Error" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_post_generic_member_type_parameter_codegen_reparses_crossgl():
     # Reduced from /tmp/crossgl-modular-mojo-probe
     # max/kernels/src/nn/attention/gpu/nvidia/sm100/attention_utils.mojo
@@ -269,6 +321,61 @@ def test_post_generic_mlir_type_parameter_codegen_reparses_crossgl():
 
     assert "Pointer__mlir_type[" in generated_code
     assert "]._mlir_type" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_inline_if_indexed_generic_type_argument_codegen_reparses_crossgl():
+    # Reduced from Modular max/kernels/src/layout/tile_layout.mojo
+    # _UnwrapSingleTuple.
+    code = """
+    alias _UnwrapSingleTuple[*element_types: CoordLike] = TypeList[
+        element_types[0]._ParamListType if element_types.size == 1
+        and element_types[0].is_tuple else element_types.values
+    ]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "TypeList[(element_types.size==1&&element_types_is_tuple[0] ? "
+        "element_types__ParamListType[0] : element_types.values)]()"
+    ) in generated_code
+    assert " if " not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mlir_bracket_literal_expression_codegen_reparses_crossgl():
+    # Reduced from Modular max/kernels/src/layout/tile_layout.mojo
+    # _TwoCoordLikePredicate.
+    code = """
+    comptime _TwoCoordLikePredicate = __mlir_type[
+        `!lit.generator<<"LHS": `,
+        +CoordLike,
+        `, "RHS": `,
+        +CoordLike,
+        `> `,
+        +Bool,
+        `>`,
+    ]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let _TwoCoordLikePredicate = MLIR_" in generated_code
+    assert "__mlir_type[" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_escaped_mlir_type_info_literal_codegen_reparses_crossgl():
+    code = """
+    struct Holder:
+        var value: __mlir_type.`!lit.type[\\`info]`
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "MLIR_lit_type_info value;" in generated_code
+    assert "`" not in generated_code
     parse_crossgl(generated_code)
 
 

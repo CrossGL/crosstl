@@ -258,6 +258,48 @@ EXTERNAL_FIXTURES = [
     {
         # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/bugs/c-style-cast-overload.slang
+        "id": "slang_c_style_cast_overload_unnamed_parameters",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/bugs/c-style-cast-overload.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            struct S {};
+
+            int f(S)
+            {
+                return 1;
+            }
+
+            int f(float)
+            {
+                return 2;
+            }
+
+            [shader("compute")]
+            [numthreads(1,1,1)]
+            void computeMain()
+            {
+                outputBuffer[0] = f(float(0));
+                outputBuffer[1] = f((float)1);
+                outputBuffer[2] = f((float)0);
+                outputBuffer[3] = f((S)0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "int f(S _param0)",
+            "int f(float _param0)",
+            "outputBuffer[3] = f(S(0));",
+        ],
+        "not_contains": ["int f(S )", "int f(float )"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: tests/language-feature/multi-level-break.slang
         "id": "slang_labeled_break_from_multi_level_break_sample",
         "repo": "shader-slang/slang-current-2026-06-07",

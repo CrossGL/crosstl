@@ -926,9 +926,13 @@ class SlangToCrossGLConverter:
             self.register_identifier_declaration(param)
         function_qualifier = self.effective_function_qualifier(func)
         preserve_parameter_qualifiers = self.is_entry_like_function(func)
+        unnamed_parameter_names = self.collect_unnamed_parameter_names(func.params)
         params = ", ".join(
             self.generate_parameter(
-                p, preserve_parameter_qualifiers, function_qualifier
+                p,
+                preserve_parameter_qualifiers,
+                function_qualifier,
+                unnamed_parameter_names.get(id(p)),
             )
             for p in func.params
         )
@@ -946,15 +950,31 @@ class SlangToCrossGLConverter:
         self.pop_identifier_scope()
         return code
 
+    def collect_unnamed_parameter_names(self, params):
+        names = {}
+        used_names = self.identifier_used_name_scopes[-1]
+        for index, param in enumerate(params or []):
+            if getattr(param, "name", None):
+                continue
+            safe_name = self.sanitize_crossgl_identifier(f"_param{index}", used_names)
+            used_names.add(safe_name)
+            names[id(param)] = safe_name
+        return names
+
     def generate_parameter(
-        self, param, preserve_qualifiers=False, function_qualifier=None
+        self,
+        param,
+        preserve_qualifiers=False,
+        function_qualifier=None,
+        fallback_name=None,
     ):
         qualifier_prefix = self.format_parameter_qualifier_prefix(
             param, preserve_qualifiers
         )
+        parameter_name = param.name or fallback_name or "_param"
         parameter = (
             f"{qualifier_prefix}{self.map_parameter_type(param.vtype)} "
-            f"{self.format_identifier(param.name)}"
+            f"{self.format_identifier(parameter_name)}"
             f"{self.format_array_suffixes(param)}"
         )
         semantic = self.map_semantic(

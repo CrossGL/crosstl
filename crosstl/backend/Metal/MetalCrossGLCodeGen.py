@@ -1574,7 +1574,8 @@ class MetalToCrossGLConverter:
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
             function_name = self.sanitize_identifier(self.function_output_name(func))
-            code += f"{self.map_type(func.return_type)} {function_name}({params}){suffix} {{\n"
+            return_type = self.map_function_return_type(func.return_type)
+            code += f"{return_type} {function_name}({params}){suffix} {{\n"
             code += self.generate_function_body(func.body, indent=indent + 1)
             code += "    }\n\n"
         finally:
@@ -1583,6 +1584,12 @@ class MetalToCrossGLConverter:
             self.current_storage_texture_names = previous_storage_texture_names
             self.current_structured_buffer_names = previous_structured_buffer_names
         return code
+
+    def map_function_return_type(self, return_type):
+        mapped_type = self.map_type(return_type)
+        if str(mapped_type).rstrip().endswith("&"):
+            return str(mapped_type).rstrip()[:-1].rstrip()
+        return mapped_type
 
     def function_output_name(self, func):
         host_name = self.function_host_name(func)

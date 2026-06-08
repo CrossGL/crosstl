@@ -3578,6 +3578,31 @@ def test_codegen_preserves_native_address_space_qualifiers():
     assert "unsupported Metal address-space call" not in metal
 
 
+def test_codegen_reference_return_helper_reparses_from_pytorch_linalg():
+    # Reduced from pytorch/pytorch aten/src/ATen/native/mps/kernels/LinearAlgebra.metal.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template<bool upper>
+    float& get_ref(device float* A, uint row, uint col, uint N) {
+        return A[row * N + col];
+    }
+
+    kernel void factorDiagonalBlock(device float* A [[buffer(0)]],
+                                    constant uint& N [[buffer(1)]]) {
+        uint row = 0;
+        uint col = 0;
+        get_ref<true>(A, row, col, N) = 1.0f;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "float get_ref(device float* A" in crossgl
+    assert "float& get_ref" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
     code = """
     #include <metal_stdlib>

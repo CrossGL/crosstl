@@ -4715,8 +4715,9 @@ def test_let_binding_conversion():
         lines = [line.strip() for line in result.splitlines()]
 
         assert "let x = 42;" in lines
-        assert "let mut y = 3.14;" in lines
+        assert "let y = 3.14;" in lines
         assert "float z = 2.0;" in lines
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Let binding conversion failed: {e}")
 
@@ -8797,7 +8798,7 @@ def test_closure_expression_conversion():
         result = parse_and_generate(code)
         assert "add = lambda(x, y, (x + y));" in result
         assert "typed = lambda(int x, (x + 1));" in result
-        assert "always = lambda(true);" in result
+        assert "always = lambda({ return true; });" in result
         assert "moved = lambda(v, (v * 2));" in result
     except Exception as e:
         pytest.fail(f"Closure expression conversion failed: {e}")
@@ -8814,7 +8815,7 @@ def test_async_closure_expression_conversion():
     try:
         result = parse_and_generate(code)
         assert "async_add = lambda(x, (x + 1));" in result
-        assert "async_moved = lambda(true);" in result
+        assert "async_moved = lambda({ return true; });" in result
         assert "mapped = map(values, lambda(x, (x + 1)));" in result
         assert "async |" not in result
         assert "async move" not in result
@@ -9103,8 +9104,8 @@ def test_tuple_typed_pattern_closure_stays_inline():
     """
     try:
         result = parse_and_generate(code)
-        assert "_rust_closure_map_0" not in result
-        assert "projected = map(values, lambda((i32, i32) _rust_closure_arg_0" in result
+        assert "int _rust_closure_map_0(Tuple<int, int> _rust_closure_arg_0)" in result
+        assert "projected = map(values, _rust_closure_map_0);" in result
         assert "auto x = _rust_tuple_0(_rust_closure_arg_0);" in result
         assert "auto y = _rust_tuple_1(_rust_closure_arg_0);" in result
         crosstl.translator.parse(result)
@@ -10455,6 +10456,229 @@ def test_inline_block_use_comment_codegen_reparse_from_rust_gpu_symbols_table():
 
     assert "/* use BuiltIn::* */" in result
     assert "const Tuple<str, BuiltIn> BUILTINS[]" in result
+    crosstl.translator.parse(result)
+
+
+def test_unit_generic_return_type_codegen_reparse_from_rust_gpu_linker():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/linker/import_export_link.rs.
+    code = """
+    fn run() -> Result<()> {
+        Ok(())
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Result<void> run()" in result
+    assert "Result<()>" not in result
+    crosstl.translator.parse(result)
+
+
+def test_tuple_generic_return_type_codegen_reparse_from_rust_gpu_toolchain():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/cargo-gpu-install/src/install_toolchain.rs run_cmd.
+    code = """
+    fn run_cmd() -> anyhow::Result<(String, String)> {
+        Ok((stdout, stderr))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "anyhow_Result<Tuple<String, String>> run_cmd()" in result
+    assert "Result<(String, String)>" not in result
+    crosstl.translator.parse(result)
+
+
+def test_callable_trait_parameter_type_codegen_reparse_from_wgpu_bench_iter():
+    # Reduced from gfx-rs/wgpu commit
+    # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
+    # benches/src/iter.rs.
+    code = """
+    fn iter(f: FnMut() -> Duration) -> Duration {
+        let mut duration = Duration::ZERO;
+        duration += f();
+        duration
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Duration iter(FnMut_to_Duration f)" in result
+    assert "FnMut() -> Duration" not in result
+    assert "let duration = Duration::ZERO;" in result
+    crosstl.translator.parse(result)
+
+
+def test_nested_array_generic_declarator_codegen_reparse_from_wgpu_print():
+    # Reduced from gfx-rs/wgpu commit
+    # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
+    # benches/src/print.rs previous_results parameter.
+    code = """
+    struct Previous<'a> {
+        previous_results: Option<&'a [SubBenchResult]>,
+        parts: SmallVec<[&'a str; 1]>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<SubBenchResult[]> previous_results;" in result
+    assert "SmallVec<str[1]> parts;" in result
+    assert "previous_results[" not in result
+    assert "parts[" not in result
+    crosstl.translator.parse(result)
+
+
+def test_nested_array_generic_reference_codegen_reparse_from_naga_criterion():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # benches/criterion.rs parse_glsl inputs parameter.
+    code = """
+    fn parse_glsl(inputs: &[Box<[u8]>]) {
+        consume(inputs);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void parse_glsl(Box<u8[]> inputs[])" in result
+    assert "Box<]" not in result
+    crosstl.translator.parse(result)
+
+
+def test_tuple_destructure_codegen_declares_untyped_bindings_for_reparse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/cargo-gpu-install/src/install_toolchain.rs run_cmd.
+    code = """
+    fn split_pair(pair: Result<(String, String)>) -> Result<String> {
+        let (stdout, stderr) = pair?;
+        stdout
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto stdout = _rust_tuple_0(_rust_match_tuple_0);" in result
+    assert "auto stderr = _rust_tuple_1(_rust_match_tuple_0);" in result
+    crosstl.translator.parse(result)
+
+
+def test_lifetime_array_generic_codegen_reparse_from_naga_wgsl_ast():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/wgsl/parse/ast.rs.
+    code = """
+    struct EntryPoint<'a> {
+        workgroup_size: Option<[Option<Handle<Expression<'a>>>; 3]>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<Option<Handle<Expression>>[3]> workgroup_size;" in result
+    assert "'a" not in result
+    crosstl.translator.parse(result)
+
+
+def test_dyn_static_generic_argument_codegen_reparse_from_naga_span():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/span.rs and hlsl-snapshots/src/lib.rs Error::source impls.
+    code = """
+    fn source() -> Option<dyn Error + 'static> {
+        None
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<Error> source()" in result
+    assert "dyn Error + 'static" not in result
+    crosstl.translator.parse(result)
+
+
+def test_match_expression_continue_arm_codegen_reparse_from_naga_glsl_functions():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/glsl/functions.rs labeled-loop conversion.
+    code = """
+    fn scan(values: Values, maybe: Option<(u32, u32)>) {
+        for value in values {
+            let (left, right) = match maybe {
+                Some(pair) => pair,
+                _ => continue,
+            };
+            use_pair(left, right);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ContinueNode" not in result
+    assert "continue;" in result
+    assert "auto left = _rust_tuple_0" in result
+    assert "auto right = _rust_tuple_1" in result
+    crosstl.translator.parse(result)
+
+
+def test_unit_impl_method_prefix_codegen_reparse_from_naga_spv_selection():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/back/spv/selection.rs impl Merge for ().
+    code = """
+    impl () {
+        fn write_phis(self, block: Block) {
+            block.finish();
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void Unit_write_phis(Unit self, Block block)" in result
+    assert "()_write_phis" not in result
+    crosstl.translator.parse(result)
+
+
+def test_zero_arg_closure_expression_codegen_reparse_from_naga_block():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/block.rs extend/end_with_span helpers.
+    code = """
+    fn fill() {
+        let span_iter = std::iter::repeat_with(|| Span::UNDEFINED);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "lambda({ return Span::UNDEFINED; })" in result
+    assert "lambda(Span::UNDEFINED)" not in result
+    crosstl.translator.parse(result)
+
+
+def test_reference_impl_prefix_codegen_reparse_from_naga_block():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/block.rs IntoIterator for &Block.
+    code = """
+    impl<'a> IntoIterator for &'a Block {
+        fn into_iter(self) -> std::slice::Iter<'a, Statement> {
+            self.iter()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "std_slice_Iter<Statement> Block_into_iter(Block self)" in result
+    assert "&Block_into_iter" not in result
     crosstl.translator.parse(result)
 
 

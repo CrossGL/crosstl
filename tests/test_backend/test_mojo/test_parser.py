@@ -259,6 +259,41 @@ def test_comptime_function_type_value_with_terminal_raises_parse():
     assert struct_node.members[1].name == "test_fn"
 
 
+def test_fn_function_type_alias_parse_from_ksandvik_memset():
+    # Reduced from ksandvik/mojo-examples examples/memset.mojo.
+    code = """
+    alias memset_fn_type = fn (BufferPtrType, ValueType, Int) -> None
+
+    fn measure_time(func: memset_fn_type) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    alias = ast.global_variables[0]
+    function = find_function(ast, "measure_time")
+
+    assert alias.name == "memset_fn_type"
+    assert alias.initial_value == "fn(BufferPtrType, ValueType, Int) -> None"
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("func", "memset_fn_type")
+    ]
+
+
+def test_function_type_with_raises_error_type_parse_from_modular_cublaslt():
+    # Reduced from Modular max/kernels/src/_cublas/cublaslt.mojo.
+    code = """
+    fn register_callback(
+        callback: def(Result) thin raises Error -> UnsafePointer[Int8, ImmutAnyOrigin]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "register_callback")
+
+    assert function.params[0].vtype == (
+        "def(Result) thin raises Error -> UnsafePointer[Int8, ImmutAnyOrigin]"
+    )
+
+
 def test_mlir_region_statement_parse_from_coroutine_stdlib():
     code = """
     def _suspend_async[body: def(AnyCoroutine) capturing -> None]():
