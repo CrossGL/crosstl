@@ -50,7 +50,10 @@ PROJECT_IMPLEMENTATION_PATHS = (
 )
 PROJECT_TEST_PATHS = ("tests/test_translator/test_project_translation.py",)
 
-BACKLOG_STATUSES = {
+# Support-signal extraction treats every reviewed non-success catalog row as
+# already accounted for. Issue sync keeps the narrower actionable backlog
+# policy in sync_support_issues.py.
+CATALOG_NON_SUCCESS_STATUSES = {
     "partial",
     "diagnostic",
     "validated_rejection",
@@ -1217,7 +1220,7 @@ def infer_state(
         return "unsupported_signal"
     if implementation_hits:
         return "implementation_only"
-    if support.get("status") in BACKLOG_STATUSES:
+    if support.get("status") in CATALOG_NON_SUCCESS_STATUSES:
         return "catalog_backlog"
     return "not_detected"
 
@@ -1231,7 +1234,7 @@ def extraction_issue(
     unsupported_hits: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     status = support.get("status")
-    if status in BACKLOG_STATUSES:
+    if status in CATALOG_NON_SUCCESS_STATUSES:
         return None
     if status != "supported":
         return None
