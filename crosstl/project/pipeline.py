@@ -1895,6 +1895,19 @@ def _manifest_entry_targets(
     return list(fallback_targets)
 
 
+def _resolve_external_corpus_source_backend(value: str) -> str | None:
+    register_default_sources()
+    discover_backend_plugins()
+    return SOURCE_REGISTRY.resolve_name(value)
+
+
+def _external_corpus_source_backend(value: Any) -> str:
+    if not _is_non_empty_string(value):
+        return "unknown"
+    canonical_name = _resolve_external_corpus_source_backend(value)
+    return canonical_name or value.strip()
+
+
 def _external_corpus_entries_by_source_backend(
     entries: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -1990,7 +2003,7 @@ def _external_corpus_report(
     for index, raw_entry in valid_manifest_entries:
         path = str(raw_entry.get("path", "")).replace("\\", "/")
         entry_targets = _manifest_entry_targets(raw_entry, targets)
-        source_backend = str(raw_entry.get("sourceBackend", "unknown"))
+        source_backend = _external_corpus_source_backend(raw_entry.get("sourceBackend"))
         entry_artifacts = [
             artifact
             for artifact in artifacts_by_source.get(path, [])
@@ -10138,6 +10151,19 @@ def _external_corpus_entry_contract_reasons(
     for field_name in ("id", "path", "sourceBackend"):
         if not _is_non_empty_string(entry.get(field_name)):
             reasons.append(f"{prefix}.{field_name} must be a string")
+    source_backend = entry.get("sourceBackend")
+    if require_closed_fields and _is_non_empty_string(source_backend):
+        canonical_source_backend = _resolve_external_corpus_source_backend(
+            source_backend
+        )
+        if (
+            canonical_source_backend is not None
+            and canonical_source_backend != source_backend
+        ):
+            reasons.append(
+                f"{prefix}.sourceBackend must use canonical source backend name "
+                f"{canonical_source_backend}"
+            )
     path = entry.get("path")
     path_is_valid = False
     if _is_non_empty_string(path):
@@ -10177,7 +10203,6 @@ def _external_corpus_entry_contract_reasons(
             reasons.append(f"{prefix}.discovered must match units")
     if declared_units_by_path is not None and path_is_valid:
         declared_unit = declared_units_by_path.get(path)
-        source_backend = entry.get("sourceBackend")
         if declared_unit is not None and _is_non_empty_string(source_backend):
             unit_index, unit = declared_unit
             if source_backend != unit.get("sourceBackend"):

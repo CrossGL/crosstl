@@ -3465,6 +3465,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_external_corpus_accounting",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_provenance",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_applies_external_corpus_sample_limit"
@@ -3485,6 +3486,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_external_corpus_accounting",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_provenance",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_applies_external_corpus_sample_limit"
@@ -3505,6 +3507,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_external_corpus_accounting",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_source_backend",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_provenance",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_external_corpus_manifest",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_applies_external_corpus_sample_limit"

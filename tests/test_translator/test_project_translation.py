@@ -6664,7 +6664,7 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
                     {
                         "id": "repo/missing-hlsl",
                         "path": "missing.hlsl",
-                        "sourceBackend": "directx",
+                        "sourceBackend": "HLSL",
                         "targets": ["cgl", "opengl"],
                     },
                 ],
@@ -10520,6 +10520,53 @@ def test_validate_project_report_rejects_noncanonical_external_corpus_targets(
     assert (
         "externalCorpus.entries[0].targets must use normalized backend names "
         "without duplicates"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_noncanonical_external_corpus_source_backend(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/missing-glsl",
+                        "path": "missing.glsl",
+                        "sourceBackend": "opengl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(load_project_config(repo)).to_json()
+    payload["externalCorpus"]["entries"][0]["sourceBackend"] = "GLSL"
+    payload["externalCorpus"]["summary"]["entriesBySourceBackend"] = {"GLSL": 1}
+    report_path = repo / "noncanonical-external-corpus-source-backend.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "externalCorpus.entries[0].sourceBackend must use canonical source "
+        "backend name opengl"
     ) in diagnostic["message"]
 
 
