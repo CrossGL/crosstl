@@ -22,4 +22,3 @@ def test_opencl_access_qualifier_tokens():
 
     assert ("READ_ONLY", "read_only") in tokens
     assert ("WRITE_ONLY", "write_only") in tokens
-

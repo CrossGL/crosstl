@@ -6,7 +6,7 @@ from crosstl.backend.HIP.HipAst import FunctionCallNode, FunctionNode, KernelNod
 from crosstl.backend.HIP.HipParser import HipParser
 
 from .OpenCLAst import OpenCLProgramNode
-from .OpenCLLexer import OpenCLLexer, Token
+from .OpenCLLexer import OpenCLLexer
 
 
 class OpenCLParser(HipParser):
@@ -301,9 +301,7 @@ class OpenCLParser(HipParser):
         if super().is_cast_type_sequence(start, end):
             return True
 
-        tokens = [
-            token for token in self.tokens[start:end] if token.type != "NEWLINE"
-        ]
+        tokens = [token for token in self.tokens[start:end] if token.type != "NEWLINE"]
         index = 0
         saw_integral_sign = False
         while index < len(tokens) and tokens[index].type in self.TYPE_QUALIFIER_TOKENS:

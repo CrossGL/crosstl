@@ -3,10 +3,11 @@
 import re
 from typing import Dict, List, Optional
 
-from crosstl.backend.HIP.HipLexer import SKIP_TOKENS, TOKENS as HIP_TOKENS, Token
+from crosstl.backend.HIP.HipLexer import SKIP_TOKENS
+from crosstl.backend.HIP.HipLexer import TOKENS as HIP_TOKENS
+from crosstl.backend.HIP.HipLexer import Token
 
 from .preprocessor import OpenCLPreprocessor
-
 
 OPENCL_TOKENS = (
     ("__GLOBAL__", r"\b(?:__kernel|kernel)\b"),
@@ -20,7 +21,10 @@ OPENCL_TOKENS = (
     ("WRITE_ONLY", r"\b(?:__write_only|write_only)\b"),
     ("SYNCTHREADS", r"\bbarrier\b"),
     ("SYNCWARP", r"\bmem_fence\b"),
-    ("ATOMICCAS", r"\batomic_(?:cmpxchg|compare_exchange(?:_strong|_weak)?(?:_explicit)?)\b"),
+    (
+        "ATOMICCAS",
+        r"\batomic_(?:cmpxchg|compare_exchange(?:_strong|_weak)?(?:_explicit)?)\b",
+    ),
     ("ATOMICADD", r"\batomic_(?:add|fetch_add(?:_explicit)?)\b"),
     ("ATOMICSUB", r"\batomic_(?:sub|fetch_sub(?:_explicit)?)\b"),
     ("ATOMICMAX", r"\batomic_(?:max|fetch_max(?:_explicit)?)\b"),
@@ -130,7 +134,9 @@ class OpenCLLexer:
         if not re.search(r"\b(__kernel|kernel)\b", content):
             return code
 
-        return code[: match.start()] + "\n" + content + code[content_end + len(closing) :]
+        return (
+            code[: match.start()] + "\n" + content + code[content_end + len(closing) :]
+        )
 
     def tokenize(self) -> List[Token]:
         """Return the full OpenCL token stream with source locations."""

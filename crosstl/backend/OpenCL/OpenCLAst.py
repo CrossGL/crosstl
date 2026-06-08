@@ -12,4 +12,3 @@ class OpenCLProgramNode(ASTNode):
 
     def __repr__(self):
         return f"OpenCLProgramNode(statements={self.statements})"
-

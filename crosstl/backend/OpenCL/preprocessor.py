@@ -97,4 +97,3 @@ class OpenCLPreprocessor(HLSLPreprocessor):
             consumed += 1
 
         return line, consumed
-

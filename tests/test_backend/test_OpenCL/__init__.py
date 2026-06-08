@@ -1,2 +1,1 @@
 """OpenCL backend tests."""
-

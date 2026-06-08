@@ -3,12 +3,9 @@
 import re
 
 from crosstl.backend.HIP.HipAst import (
-    AtomicOperationNode,
     FunctionNode,
     KernelNode,
-    PreprocessorNode,
     StructNode,
-    SyncNode,
     TypeAliasNode,
     VariableNode,
 )
@@ -76,9 +73,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "half": "f16",
     }.items():
         for _width in (2, 3, 4):
-            OPENCL_VECTOR_TYPE_MAPPING[f"{_scalar}{_width}"] = (
-                f"vec{_width}<{_mapped}>"
-            )
+            OPENCL_VECTOR_TYPE_MAPPING[f"{_scalar}{_width}"] = f"vec{_width}<{_mapped}>"
         for _width in (8, 16):
             OPENCL_VECTOR_TYPE_MAPPING[f"{_scalar}{_width}"] = (
                 f"array<{_mapped}, {_width}>"
