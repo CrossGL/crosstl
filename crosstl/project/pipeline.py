@@ -9754,6 +9754,20 @@ def _validation_artifact_contract_reasons(
             f"{', '.join(sorted(SOURCE_REMAP_VALIDATION_STATUSES))}"
         )
     if (
+        referenced_artifact is not None
+        and referenced_artifact[1].get("status") == "failed"
+    ):
+        for field_name, value in (
+            ("generatedHashStatus", generated_hash_status),
+            ("sourceMapStatus", source_map_status),
+            ("sourceRemapStatus", source_remap_status),
+        ):
+            if field_name in artifact and value != "not-applicable":
+                reasons.append(
+                    f"{prefix}.{field_name} must be not-applicable when "
+                    f"report.artifacts[{referenced_artifact[0]}].status is failed"
+                )
+    if (
         status_is_valid
         and isinstance(artifact.get("exists"), bool)
         and (
