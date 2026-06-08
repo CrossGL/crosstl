@@ -14434,6 +14434,38 @@ def test_project_cli_scan_applies_source_backend_overrides(tmp_path):
     assert payload["units"][0]["sourceOverride"] == "cgl"
 
 
+def test_project_cli_scan_writes_json_to_stdout_for_dash_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "scan",
+            str(repo),
+            "--target",
+            "cgl",
+            "--output",
+            "-",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert "Wrote" not in result.stdout
+    assert payload["kind"] == project_pipeline.REPORT_KIND
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
+
+
 def test_project_cli_report_records_include_dir_and_define_overrides(tmp_path):
     repo = tmp_path / "repo"
     output = tmp_path / "portability-report.json"
@@ -16568,6 +16600,39 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
     assert payload["artifactMatrix"]["complete"] is True
+
+
+def test_project_cli_inspect_report_text_writes_stdout_for_dash_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+            "--output",
+            "-",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Wrote" not in result.stdout
+    assert f"Project report: {report_path}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Targets: cgl" in result.stdout
+    assert "Report generator: CrossTL" in result.stdout
 
 
 @pytest.mark.parametrize(
