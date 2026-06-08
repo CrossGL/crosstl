@@ -16601,6 +16601,10 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         f"Config file: {repo / 'crosstl.toml'} (hash={config_hash_preview})"
         in result.stdout
     )
+    assert payload["report"]["project"]["root"] == str(repo)
+    assert payload["report"]["project"]["outputDir"] == str((repo / "out").resolve())
+    assert f"Project root: {repo}" in result.stdout
+    assert f"Output directory: {(repo / 'out').resolve()}" in result.stdout
     assert (
         "Project config: sourceRoots=1, includePatterns=0, excludePatterns="
         f"{len(project_pipeline.DEFAULT_EXCLUDE_PATTERNS)}, sourceOverrides=1, "

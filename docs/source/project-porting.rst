@@ -230,7 +230,8 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --max-external-corpus-entries 20
 
 Report inspection includes validation status, invalid/unavailable report status,
-project counts, project configuration path and counts, failed artifacts with
+project counts, project configuration path, project root, output directory, and
+configuration counts, failed artifacts with
 variant labels when present, diagnostic code and missing-capability rollups,
 validation diagnostic-code, missing-capability, artifact target,
 artifact source-backend, artifact variant, hash-status, source-map status,

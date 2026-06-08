@@ -324,6 +324,7 @@ def test_project_report_inspection_documents_rollups():
     for backend_support in feature["support"].values():
         assert "variant-name summaries" in backend_support["notes"]
         assert "source-override mappings and rollups" in backend_support["notes"]
+        assert "project root, output directory" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_source_map_counts"

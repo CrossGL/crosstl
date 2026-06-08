@@ -919,6 +919,26 @@ def _format_project_config_path(project):
     return None
 
 
+def _format_project_root_path(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    root_path = project.get("root")
+    if not isinstance(root_path, str) or not root_path:
+        return None
+    return f"Project root: {root_path}"
+
+
+def _format_project_output_dir(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    output_dir = project.get("outputDir")
+    if not isinstance(output_dir, str) or not output_dir:
+        return None
+    return f"Output directory: {output_dir}"
+
+
 def _format_inactive_status_records(label, records):
     if not isinstance(records, list):
         return None
@@ -2202,9 +2222,15 @@ def _format_project_report_inspection(payload):
         project_status_lines.append(include_dir_issues)
     for offset, line in enumerate(project_status_lines):
         lines.insert(4 + offset, line)
-    project_config_path = _format_project_config_path(project)
-    if project_config_path:
-        lines.insert(1, project_config_path)
+    project_path_insert_index = 1
+    for project_path_line in (
+        _format_project_config_path(project),
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+    ):
+        if project_path_line:
+            lines.insert(project_path_insert_index, project_path_line)
+            project_path_insert_index += 1
     source_maps = _format_source_map_counts(summary)
     if source_maps:
         lines.append(source_maps)
