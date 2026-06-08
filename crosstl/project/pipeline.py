@@ -120,6 +120,9 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "failedCount",
         "diagnosticCounts",
         "diagnosticsByCode",
+        "diagnosticsByTarget",
+        "diagnosticsBySourceBackend",
+        "diagnosticsByVariant",
         "missingCapabilityCounts",
         "unitsBySourceBackend",
         "unitsByExtension",
@@ -327,6 +330,9 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "success",
         "diagnosticCounts",
         "diagnosticsByCode",
+        "diagnosticsByTarget",
+        "diagnosticsBySourceBackend",
+        "diagnosticsByVariant",
         "missingCapabilityCounts",
         "artifactStatusByTarget",
         "artifactStatusBySourceBackend",
@@ -936,6 +942,36 @@ def _diagnostic_counts_by_code(
     for diagnostic in diagnostics:
         counts[diagnostic.code] = counts.get(diagnostic.code, 0) + 1
     return dict(sorted(counts.items()))
+
+
+def _diagnostic_counts_by_optional_value(
+    diagnostics: Sequence[ProjectDiagnostic],
+    field_name: str,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        value = getattr(diagnostic, field_name)
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _diagnostic_counts_by_target(
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, int]:
+    return _diagnostic_counts_by_optional_value(diagnostics, "target")
+
+
+def _diagnostic_counts_by_source_backend(
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, int]:
+    return _diagnostic_counts_by_optional_value(diagnostics, "source_backend")
+
+
+def _diagnostic_counts_by_variant(
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, int]:
+    return _diagnostic_counts_by_optional_value(diagnostics, "variant")
 
 
 def _missing_capability_counts(
@@ -3586,6 +3622,11 @@ class ProjectPortabilityReport:
                 "failedCount": failed_count,
                 "diagnosticCounts": _diagnostic_counts(self.diagnostics),
                 "diagnosticsByCode": _diagnostic_counts_by_code(self.diagnostics),
+                "diagnosticsByTarget": _diagnostic_counts_by_target(self.diagnostics),
+                "diagnosticsBySourceBackend": _diagnostic_counts_by_source_backend(
+                    self.diagnostics
+                ),
+                "diagnosticsByVariant": _diagnostic_counts_by_variant(self.diagnostics),
                 "missingCapabilityCounts": _missing_capability_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
                 "unitsByExtension": _unit_counts_by_extension(self.units),
@@ -4435,6 +4476,9 @@ def translate_project(
         else load_project_config(config_or_root)
     )
     if output_dir is not None:
+        output_dir = str(output_dir)
+        if not output_dir.strip():
+            raise ValueError("output_dir must be a non-empty string")
         config = ProjectConfig(
             root=config.root,
             config_path=config.config_path,
@@ -4442,7 +4486,7 @@ def translate_project(
             include_patterns=config.include_patterns,
             exclude_patterns=config.exclude_patterns,
             targets=config.targets,
-            output_dir=str(output_dir),
+            output_dir=output_dir,
             source_overrides=config.source_overrides,
             include_dirs=config.include_dirs,
             defines=config.defines,
@@ -5687,6 +5731,15 @@ def inspect_project_report(
             "success": bool(validation_report.get("success")),
             "diagnosticCounts": dict(validation_report.get("diagnosticCounts", {})),
             "diagnosticsByCode": dict(validation_report.get("diagnosticsByCode", {})),
+            "diagnosticsByTarget": dict(
+                validation_report.get("diagnosticsByTarget", {})
+            ),
+            "diagnosticsBySourceBackend": dict(
+                validation_report.get("diagnosticsBySourceBackend", {})
+            ),
+            "diagnosticsByVariant": dict(
+                validation_report.get("diagnosticsByVariant", {})
+            ),
             "missingCapabilityCounts": dict(
                 validation_report.get("missingCapabilityCounts", {})
             ),
@@ -7192,6 +7245,15 @@ def _validation_report_payload(
         ),
         "diagnosticCounts": _diagnostic_payload_counts(diagnostics),
         "diagnosticsByCode": _payload_diagnostic_counts_by_code(diagnostics) or {},
+        "diagnosticsByTarget": (
+            _payload_diagnostic_counts_by_field(diagnostics, "target") or {}
+        ),
+        "diagnosticsBySourceBackend": (
+            _payload_diagnostic_counts_by_field(diagnostics, "sourceBackend") or {}
+        ),
+        "diagnosticsByVariant": (
+            _payload_diagnostic_counts_by_field(diagnostics, "variant") or {}
+        ),
         "missingCapabilityCounts": (
             _payload_missing_capability_counts(diagnostics) or {}
         ),
@@ -7479,6 +7541,20 @@ def _payload_diagnostic_counts_by_code(
         code = diagnostic.get("code")
         if _is_non_empty_string(code):
             counts[code] = counts.get(code, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _payload_diagnostic_counts_by_field(
+    diagnostics: Sequence[Any], field_name: str
+) -> dict[str, int] | None:
+    if not all(isinstance(diagnostic, Mapping) for diagnostic in diagnostics):
+        return None
+
+    counts: dict[str, int] = {}
+    for diagnostic in diagnostics:
+        value = diagnostic.get(field_name)
+        if _is_non_empty_string(value):
+            counts[value] = counts.get(value, 0) + 1
     return dict(sorted(counts.items()))
 
 
@@ -8098,6 +8174,15 @@ def _diagnostic_code_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
     expected = _payload_diagnostic_counts_by_code(diagnostics)
+    if expected is None:
+        return []
+    return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
+
+
+def _diagnostic_field_counts_contract_reasons(
+    prefix: str, value: Any, diagnostics: Sequence[Any], field_name: str
+) -> list[str]:
+    expected = _payload_diagnostic_counts_by_field(diagnostics, field_name)
     if expected is None:
         return []
     return _mapping_field_contract_reasons(prefix, value, expected, "diagnostics")
@@ -11134,6 +11219,30 @@ def _summary_contract_reasons(
                 "summary.diagnosticsByCode",
                 summary.get("diagnosticsByCode"),
                 diagnostics,
+            )
+        )
+        reasons.extend(
+            _diagnostic_field_counts_contract_reasons(
+                "summary.diagnosticsByTarget",
+                summary.get("diagnosticsByTarget"),
+                diagnostics,
+                "target",
+            )
+        )
+        reasons.extend(
+            _diagnostic_field_counts_contract_reasons(
+                "summary.diagnosticsBySourceBackend",
+                summary.get("diagnosticsBySourceBackend"),
+                diagnostics,
+                "sourceBackend",
+            )
+        )
+        reasons.extend(
+            _diagnostic_field_counts_contract_reasons(
+                "summary.diagnosticsByVariant",
+                summary.get("diagnosticsByVariant"),
+                diagnostics,
+                "variant",
             )
         )
         reasons.extend(

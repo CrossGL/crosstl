@@ -7814,6 +7814,17 @@ def test_scan_project_reports_output_dir_outside_project(tmp_path):
     assert "../outside" in diagnostic["message"]
 
 
+def test_translate_project_rejects_empty_output_dir_override(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="output_dir must be a non-empty string"):
+        translate_project(repo, targets=["cgl"], output_dir=" ")
+
+    assert not (repo / "cgl").exists()
+
+
 def test_translate_project_rejects_output_dir_outside_project_without_writing(
     tmp_path,
 ):
@@ -10600,6 +10611,9 @@ def test_validate_project_report_rejects_missing_diagnostic_summary_rollups(tmp_
 
     payload = translate_project(repo, targets=["opengl"], output_dir="out").to_json()
     payload["summary"].pop("diagnosticsByCode")
+    payload["summary"].pop("diagnosticsByTarget")
+    payload["summary"].pop("diagnosticsBySourceBackend")
+    payload["summary"].pop("diagnosticsByVariant")
     payload["summary"].pop("missingCapabilityCounts")
     report_path = repo / "report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -10611,6 +10625,11 @@ def test_validate_project_report_rejects_missing_diagnostic_summary_rollups(tmp_
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "summary.diagnosticsByCode must be an object" in diagnostic["message"]
+    assert "summary.diagnosticsByTarget must be an object" in diagnostic["message"]
+    assert "summary.diagnosticsBySourceBackend must be an object" in (
+        diagnostic["message"]
+    )
+    assert "summary.diagnosticsByVariant must be an object" in diagnostic["message"]
     assert "summary.missingCapabilityCounts must be an object" in (
         diagnostic["message"]
     )
@@ -13270,6 +13289,9 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "failedCount": 1,
                     "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
                     "diagnosticsByCode": {},
+                    "diagnosticsByTarget": {"metal": 1},
+                    "diagnosticsBySourceBackend": {"cgl": 1},
+                    "diagnosticsByVariant": {"debug": 1},
                     "missingCapabilityCounts": {},
                     "unitsBySourceBackend": {"metal": 1},
                     "unitsByExtension": {".metal": 1},
@@ -13385,6 +13407,13 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     )
     assert "summary.diagnosticCounts must match diagnostics" in diagnostic["message"]
     assert "summary.diagnosticsByCode must match diagnostics" in diagnostic["message"]
+    assert "summary.diagnosticsByTarget must match diagnostics" in diagnostic["message"]
+    assert "summary.diagnosticsBySourceBackend must match diagnostics" in (
+        diagnostic["message"]
+    )
+    assert "summary.diagnosticsByVariant must match diagnostics" in (
+        diagnostic["message"]
+    )
     assert "summary.missingCapabilityCounts must match diagnostics" in (
         diagnostic["message"]
     )
@@ -14123,6 +14152,9 @@ def test_validate_project_report_records_toolchain_failures(
 
     assert payload["success"] is False
     assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnosticsByTarget"] == {"opengl": 1}
+    assert payload["diagnosticsBySourceBackend"] == {"cgl": 1}
+    assert payload["diagnosticsByVariant"] == {}
     assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
     assert payload["diagnostics"][0]["target"] == "opengl"
     assert payload["diagnostics"][0]["sourceBackend"] == "cgl"
@@ -14842,11 +14874,19 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project.variants.debug]
+            MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
 
     report = translate_project(
         repo,
         targets=["opengl", "not-a-backend"],
         output_dir="out",
+        variants=["debug"],
     )
     payload = report.to_json()
 
@@ -14866,6 +14906,9 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
         },
     }
     assert payload["diagnosticCounts"]["error"] == 2
+    assert payload["summary"]["diagnosticsByTarget"] == {"not-a-backend": 2}
+    assert payload["summary"]["diagnosticsBySourceBackend"] == {"cgl": 1}
+    assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
     target_diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -14881,6 +14924,8 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     )
     assert translate_diagnostic["severity"] == "error"
     assert translate_diagnostic["target"] == "not-a-backend"
+    assert translate_diagnostic["sourceBackend"] == "cgl"
+    assert translate_diagnostic["variant"] == "debug"
     assert translate_diagnostic["location"]["file"] == "simple.cgl"
     failed_artifact = next(
         artifact for artifact in payload["artifacts"] if artifact["status"] == "failed"
@@ -15913,6 +15958,33 @@ def test_project_cli_scan_rejects_empty_target_override(tmp_path):
     assert "argument --target/-b: --target entries must be non-empty" in result.stderr
 
 
+def test_project_cli_translate_project_rejects_empty_output_dir_override(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(repo),
+            "--output-dir",
+            " ",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        "argument --output-dir: --output-dir entries must be non-empty" in result.stderr
+    )
+
+
 def test_project_cli_scan_rejects_malformed_source_backend_override(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -16173,6 +16245,9 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert result.returncode == 1
     assert payload["success"] is False
     assert payload["diagnosticsByCode"] == {"project.validate.failed-artifact": 1}
+    assert payload["diagnosticsByTarget"] == {"not-a-backend": 1}
+    assert payload["diagnosticsBySourceBackend"] == {}
+    assert payload["diagnosticsByVariant"] == {}
     assert payload["missingCapabilityCounts"] == {"batch.translation": 1}
     assert payload["artifactStatusByTarget"] == {
         "not-a-backend": {"artifactCount": 1, "okCount": 0, "failedCount": 1}
@@ -16219,6 +16294,7 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert "Diagnostic codes: project.validate.failed-artifact=1" in (
         text_result.stdout
     )
+    assert "Diagnostics by target: not-a-backend=1" in text_result.stdout
     assert "Missing capabilities: batch.translation=1" in text_result.stdout
     expected_artifact_rollup = (
         "Validation artifacts by target: not-a-backend=1 artifact " "(0 ok, 1 failed)"
@@ -18908,6 +18984,9 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
     assert payload["validation"]["diagnosticsByCode"] == {
         "project.validate.generated-hash-mismatch": 1
     }
+    assert payload["validation"]["diagnosticsByTarget"] == {"cgl": 1}
+    assert payload["validation"]["diagnosticsBySourceBackend"] == {"cgl": 1}
+    assert payload["validation"]["diagnosticsByVariant"] == {}
     assert payload["validation"]["missingCapabilityCounts"] == {"artifact.manifest": 1}
     assert result.returncode == 1
     assert "Validation toolchains: not-configured=1" in result.stdout
@@ -18924,6 +19003,8 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
         "Validation diagnostic codes: project.validate.generated-hash-mismatch=1"
         in result.stdout
     )
+    assert "Validation diagnostics by target: cgl=1" in result.stdout
+    assert "Validation diagnostics by source backend: cgl=1" in result.stdout
     assert "Validation missing capabilities: artifact.manifest=1" in result.stdout
     assert "Validation source hashes: ok=1" in result.stdout
     assert "Validation generated hashes: mismatch=1" in result.stdout
@@ -18964,12 +19045,14 @@ def test_project_cli_inspect_report_text_fails_on_error_diagnostics(tmp_path):
     assert "Status: failed" in result.stdout
     assert "Targets: not-a-backend" in result.stdout
     assert "Diagnostic codes: project.config.unsupported-target=1" in result.stdout
+    assert "Diagnostics by target: not-a-backend=1" in result.stdout
     assert "Missing capabilities: target.backend=1" in result.stdout
     assert "Validation diagnostics: 1 errors" in result.stdout
     assert (
         "Validation diagnostic codes: project.config.unsupported-target=1"
         in result.stdout
     )
+    assert "Validation diagnostics by target: not-a-backend=1" in result.stdout
     assert "Validation missing capabilities: target.backend=1" in result.stdout
     assert "Validation artifacts: 0 ok, 0 failed" in result.stdout
     assert "project.config.unsupported-target" in result.stdout

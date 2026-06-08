@@ -71,9 +71,12 @@ Use these report fields to decide the next action:
 
    * - Report field
      - Triage use
-   * - ``diagnosticCounts`` and ``diagnosticsByCode``
-     - Separate configuration errors from source/backend translation failures
-       before reviewing artifacts.
+   * - ``diagnosticCounts``, ``diagnosticsByCode``,
+       ``diagnosticsByTarget``, ``diagnosticsBySourceBackend``, and
+       ``diagnosticsByVariant``
+     - Separate configuration errors from source/backend translation failures,
+       then group actionable diagnostics by target backend, source backend, and
+       named variant before reviewing artifacts.
    * - ``missingCapabilityCounts``
      - Group unsupported source features, include resolution gaps, define
        forwarding gaps, artifact manifest issues, provenance issues, and
@@ -482,7 +485,10 @@ Project reports are JSON documents with:
   include dependency variant, artifact provenance pipeline, intermediate,
   source backend plus intermediate, target plus intermediate, variant plus
   intermediate, diagnostic severity (``diagnosticCounts``), diagnostic code
-  (``diagnosticsByCode``), and missing capability
+  (``diagnosticsByCode``), diagnostic target backend
+  (``diagnosticsByTarget``), diagnostic source backend
+  (``diagnosticsBySourceBackend``), diagnostic variant
+  (``diagnosticsByVariant``), and missing capability
   (``missingCapabilityCounts``).
 - ``units``: discovered translation units with stable repository-relative POSIX
   paths,

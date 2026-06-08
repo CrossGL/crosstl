@@ -676,6 +676,21 @@ def _format_project_validation_report(payload):
             "Diagnostic codes", payload.get("diagnosticsByCode"), include_zero=False
         ),
         _format_count_rollup(
+            "Diagnostics by target",
+            payload.get("diagnosticsByTarget"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Diagnostics by source backend",
+            payload.get("diagnosticsBySourceBackend"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Diagnostics by variant",
+            payload.get("diagnosticsByVariant"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
             "Missing capabilities",
             payload.get("missingCapabilityCounts"),
             include_zero=False,
@@ -2725,6 +2740,27 @@ def _format_project_report_inspection(payload):
     )
     if diagnostic_codes:
         lines.append(diagnostic_codes)
+    diagnostics_by_target = _format_count_rollup(
+        "Diagnostics by target",
+        summary.get("diagnosticsByTarget"),
+        include_zero=False,
+    )
+    if diagnostics_by_target:
+        lines.append(diagnostics_by_target)
+    diagnostics_by_source_backend = _format_count_rollup(
+        "Diagnostics by source backend",
+        summary.get("diagnosticsBySourceBackend"),
+        include_zero=False,
+    )
+    if diagnostics_by_source_backend:
+        lines.append(diagnostics_by_source_backend)
+    diagnostics_by_variant = _format_count_rollup(
+        "Diagnostics by variant",
+        summary.get("diagnosticsByVariant"),
+        include_zero=False,
+    )
+    if diagnostics_by_variant:
+        lines.append(diagnostics_by_variant)
     missing_capabilities = _format_count_rollup(
         "Missing capabilities", summary.get("missingCapabilityCounts")
     )
@@ -2743,6 +2779,27 @@ def _format_project_report_inspection(payload):
     )
     if validation_codes:
         lines.append(validation_codes)
+    validation_diagnostics_by_target = _format_count_rollup(
+        "Validation diagnostics by target",
+        payload.get("validation", {}).get("diagnosticsByTarget"),
+        include_zero=False,
+    )
+    if validation_diagnostics_by_target:
+        lines.append(validation_diagnostics_by_target)
+    validation_diagnostics_by_source_backend = _format_count_rollup(
+        "Validation diagnostics by source backend",
+        payload.get("validation", {}).get("diagnosticsBySourceBackend"),
+        include_zero=False,
+    )
+    if validation_diagnostics_by_source_backend:
+        lines.append(validation_diagnostics_by_source_backend)
+    validation_diagnostics_by_variant = _format_count_rollup(
+        "Validation diagnostics by variant",
+        payload.get("validation", {}).get("diagnosticsByVariant"),
+        include_zero=False,
+    )
+    if validation_diagnostics_by_variant:
+        lines.append(validation_diagnostics_by_variant)
     validation_missing = _format_count_rollup(
         "Validation missing capabilities",
         validation_missing_capabilities,
@@ -3146,6 +3203,7 @@ def _build_parser():
     translate_project_parser.add_argument(
         "--output-dir",
         default=None,
+        type=_non_empty_project_arg("--output-dir"),
         help="Directory for translated artifacts",
     )
     translate_project_parser.add_argument(
