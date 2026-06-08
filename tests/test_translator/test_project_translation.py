@@ -18443,6 +18443,7 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
         json.dumps(
             {
                 "schemaVersion": 1,
+                "name": "Reduced inspection corpus",
                 "entries": [
                     {
                         "id": "repo/simple",
@@ -18519,6 +18520,8 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
     payload = inspect_project_report(report_path)
 
     assert payload["externalCorpus"]["available"] is True
+    assert payload["externalCorpus"]["manifest"] == "corpus.json"
+    assert payload["externalCorpus"]["name"] == "Reduced inspection corpus"
     assert payload["externalCorpus"]["missingEntries"] == [
         {
             "id": "repo/missing",
@@ -18555,6 +18558,8 @@ def test_project_cli_inspect_report_text_includes_external_corpus_rollups(tmp_pa
         "External corpus: ok; 3 entries, 2 present, 1 missing, 1 invalid"
         in result.stdout
     )
+    assert "External corpus manifest: corpus.json" in result.stdout
+    assert "External corpus name: Reduced inspection corpus" in result.stdout
     assert (
         "External corpus coverage: 1 discovered, 1 present but undiscovered; "
         "4 manifest entries, 3 valid"
@@ -18625,6 +18630,7 @@ def test_project_cli_inspect_report_text_includes_invalid_external_corpus_state(
 
     assert payload["externalCorpus"]["available"] is True
     assert payload["externalCorpus"]["status"] == "invalid"
+    assert payload["externalCorpus"]["manifest"] == "corpus.json"
     assert payload["externalCorpus"]["summary"] == (
         project_pipeline._external_corpus_empty_summary()
     )
@@ -18634,6 +18640,7 @@ def test_project_cli_inspect_report_text_includes_invalid_external_corpus_state(
     assert "External corpus: invalid; 0 entries, 0 present, 0 missing" in (
         result.stdout
     )
+    assert "External corpus manifest: corpus.json" in result.stdout
     assert (
         "External corpus coverage: 0 discovered, 0 present but undiscovered; "
         "0 manifest entries, 0 valid"

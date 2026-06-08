@@ -2816,6 +2816,12 @@ def _format_project_report_inspection(payload):
                 f"{external_summary.get('missingCount', 0)} missing"
                 f"{invalid_entries}"
             )
+            manifest = external_corpus.get("manifest")
+            if isinstance(manifest, str) and manifest:
+                lines.append(f"External corpus manifest: {manifest}")
+            corpus_name = external_corpus.get("name")
+            if isinstance(corpus_name, str) and corpus_name:
+                lines.append(f"External corpus name: {corpus_name}")
             corpus_accounting = _format_external_corpus_accounting(external_summary)
             if corpus_accounting:
                 lines.append(corpus_accounting)

@@ -5904,7 +5904,7 @@ def inspect_project_report(
                 limit=external_corpus_entry_limit,
             )
         )
-        payload["externalCorpus"] = {
+        external_corpus_payload = {
             "available": True,
             "status": external_corpus.get("status"),
             "summary": (
@@ -5917,6 +5917,11 @@ def inspect_project_report(
             "truncatedUndiscoveredPresentEntryCount": truncated_undiscovered_count,
             "undiscoveredPresentEntries": undiscovered_entries,
         }
+        for field_name in ("manifest", "name"):
+            value = external_corpus.get(field_name)
+            if isinstance(value, str):
+                external_corpus_payload[field_name] = value
+        payload["externalCorpus"] = external_corpus_payload
     return payload
 
 
