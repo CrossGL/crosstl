@@ -201,9 +201,10 @@ source files with recorded hashes are missing or changed, or opt-in toolchain
 smoke checks fail.
 Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository. Each smoke check is bounded by a short subprocess timeout, and
-timeouts are reported as failed toolchain runs. DirectX and Metal hooks currently
-record target tool availability because full compiler invocation needs backend-
-specific entry point and profile selection. Validation reports include
+timeouts are reported as failed toolchain runs. Targets that need backend-
+specific entry points, profiles, package metadata, or SDK context record bounded
+tool availability runs instead of claiming artifact compilation. Validation
+reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, artifact source-backend,
 artifact variant, hash-status, source-map status, source-remap status,

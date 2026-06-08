@@ -460,6 +460,15 @@ TOOLCHAIN_BY_BACKEND = {
     "slang": ("slangc",),
     "vulkan": ("spirv-val", "spirv-as"),
 }
+TOOLCHAIN_AVAILABILITY_COMMANDS = {
+    "cuda": ("nvcc", "--version"),
+    "directx": ("dxc", "-help"),
+    "hip": ("hipcc", "--version"),
+    "metal": ("xcrun", "metal", "-v"),
+    "mojo": ("mojo", "--version"),
+    "rust": ("rustc", "--version"),
+    "slang": ("slangc", "--version"),
+}
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 
@@ -11728,20 +11737,10 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        if target == "opengl":
-            command = [tools[0], "--stdin"]
-            check_kind = "artifact"
-        elif target == "vulkan":
-            command = [tools[0], str(artifact_path)]
-            check_kind = "artifact"
-        elif target == "directx":
-            command = [tools[0], "-help"]
-            check_kind = "tool-availability"
-        elif target == "metal":
-            command = [tools[0], "metal", "-v"]
-            check_kind = "tool-availability"
-        else:
+        smoke_command = _toolchain_smoke_command(target, tools, artifact_path)
+        if smoke_command is None:
             continue
+        command, check_kind = smoke_command
         try:
             completed = subprocess.run(
                 command,
@@ -11785,3 +11784,16 @@ def _run_toolchain_smoke(
             run["variant"] = artifact["variant"]
         runs.append(run)
     return runs
+
+
+def _toolchain_smoke_command(
+    target: str, tools: Sequence[str], artifact_path: Path
+) -> tuple[list[str], str] | None:
+    if target == "opengl":
+        return [tools[0], "--stdin"], "artifact"
+    if target == "vulkan":
+        return [tools[0], str(artifact_path)], "artifact"
+    availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(target)
+    if availability_command is None:
+        return None
+    return list(availability_command), "tool-availability"

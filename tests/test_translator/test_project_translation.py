@@ -13580,8 +13580,13 @@ def test_inspect_project_report_omits_invalid_toolchain_run_commands(
 @pytest.mark.parametrize(
     ("target", "extension", "tool", "command"),
     (
+        ("cuda", "cu", "nvcc", ["nvcc", "--version"]),
         ("directx", "hlsl", "dxc", ["dxc", "-help"]),
+        ("hip", "hip", "hipcc", ["hipcc", "--version"]),
         ("metal", "metal", "xcrun", ["xcrun", "metal", "-v"]),
+        ("mojo", "mojo", "mojo", ["mojo", "--version"]),
+        ("rust", "rs", "rustc", ["rustc", "--version"]),
+        ("slang", "slang", "slangc", ["slangc", "--version"]),
     ),
 )
 def test_validate_project_report_marks_availability_only_toolchain_runs(
