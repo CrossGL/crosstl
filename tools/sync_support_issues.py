@@ -2899,6 +2899,10 @@ def sync_issues(
             )
             time.sleep(throttle_seconds)
         else:
+            if not issue_requires_update(issue, target):
+                summary["unchanged"] += 1
+                materialized[key] = issue
+                continue
             update_reasons = issue_update_reasons(issue, target)
             before = (
                 issue.get("title"),

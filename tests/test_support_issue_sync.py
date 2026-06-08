@@ -2300,8 +2300,40 @@ def test_sync_issues_prefers_open_duplicate_marker_over_closed_issue():
     assert summary["updated"] == 0
     assert summary["closed"] == 0
     assert summary["unchanged"] == 2
-    assert client.updated[0]["number"] == open_parent["number"]
+    assert client.updated == []
     assert client.closed == []
+
+
+def test_sync_issues_skips_update_for_unchanged_existing_issues():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing = []
+    for number, (key, target) in enumerate(desired.items(), start=1):
+        existing.append(
+            {
+                "id": 1000 + number,
+                "number": number,
+                "title": target.title,
+                "body": target.body,
+                "state": "open",
+                "labels": [{"name": label} for label in target.labels],
+            }
+        )
+    client = FakeClient(existing=existing)
+
+    summary = module.sync_issues(
+        client,
+        desired,
+        dry_run=False,
+        manage_sub_issues=False,
+        throttle_seconds=0,
+    )
+
+    assert summary["created"] == 0
+    assert summary["updated"] == 0
+    assert summary["unchanged"] == len(desired)
+    assert client.created == []
+    assert client.updated == []
 
 
 def test_sync_issues_preserves_stale_extracted_issues_when_signals_are_not_clean():
