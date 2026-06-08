@@ -416,11 +416,6 @@ class CudaParser:
             index += 1
 
         index = self.skip_cpp_attribute_specifiers_at_index(index)
-        while (
-            index < len(self.tokens)
-            and self.tokens[index][0] in self.TYPE_QUALIFIER_TOKENS
-        ):
-            index += 1
 
         index = self.skip_type_at_index(index, allow_unknown_identifier_declarator=True)
         if index is None:
@@ -564,11 +559,6 @@ class CudaParser:
             saved_index += 1
 
         saved_index = self.skip_cpp_attribute_specifiers_at_index(saved_index)
-        while (
-            saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
-        ):
-            saved_index += 1
 
         saved_index = self.skip_type_at_index(
             saved_index, allow_unknown_identifier_declarator=True
@@ -620,12 +610,6 @@ class CudaParser:
             if self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
                 saved_index = self.skip_function_attribute_at_index(saved_index)
                 continue
-            saved_index += 1
-
-        while (
-            saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
-        ):
             saved_index += 1
 
         saved_index = self.skip_type_at_index(
@@ -1770,26 +1754,7 @@ class CudaParser:
 
     def is_shared_aggregate_declaration_start(self):
         index = self.current_index
-        qualifiers = []
-
-        while index < len(self.tokens):
-            token_type, token_value = self.tokens[index]
-            if token_type in self.DECLARATION_PREFIX_TOKENS:
-                qualifiers.append(token_value)
-                index += 1
-                continue
-            if (
-                token_type == "VOLATILE"
-                and index + 1 < len(self.tokens)
-                and self.tokens[index + 1][0] in self.CUDA_STORAGE_QUALIFIER_TOKENS
-            ):
-                qualifiers.append(token_value)
-                index += 1
-                continue
-            break
-
-        if "__shared__" not in qualifiers:
-            return False
+        index, _ = self.skip_aggregate_declaration_prefixes_at_index(index)
 
         index = self.skip_alignment_attributes_at_index(index)
         index = self.skip_gnu_attributes_at_index(index)
@@ -1812,8 +1777,36 @@ class CudaParser:
 
         return index < len(self.tokens) and self.tokens[index][0] == "LBRACE"
 
+    def skip_aggregate_declaration_prefixes_at_index(self, index):
+        qualifiers = []
+        while index < len(self.tokens):
+            token_type, token_value = self.tokens[index]
+            if token_type in self.DECLARATION_PREFIX_TOKENS or token_type in {
+                "CONST",
+                "VOLATILE",
+            }:
+                qualifiers.append(token_value)
+                index += 1
+                continue
+            break
+        return index, qualifiers
+
+    def parse_aggregate_declaration_prefixes(self):
+        qualifiers = []
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type in self.DECLARATION_PREFIX_TOKENS or token_type in {
+                "CONST",
+                "VOLATILE",
+            }:
+                qualifiers.append(token_value)
+                self.eat(token_type)
+                continue
+            break
+        return qualifiers
+
     def parse_shared_aggregate_declaration(self):
-        qualifiers = self.parse_declaration_prefixes()
+        qualifiers = self.parse_aggregate_declaration_prefixes()
         self.parse_alignment_attributes()
         self.skip_gnu_attributes()
 
@@ -1850,16 +1843,23 @@ class CudaParser:
 
         if not tag_name:
             first_name = declarators[0][0] if declarators else "union"
-            tag_name = f"__anonymous_shared_{first_name}_layout"
+            prefix = "__anonymous_shared" if "__shared__" in qualifiers else "anonymous"
+            tag_name = f"{prefix}_{first_name}_layout"
 
         self.struct_names.add(tag_name)
         nodes = [StructNode(tag_name, members, attributes=attributes)]
-        nodes.extend(
-            self.create_shared_memory_node(
-                f"{tag_name}{array_suffix}", name, qualifiers
-            )
-            for name, array_suffix in declarators
-        )
+        for name, array_suffix in declarators:
+            vtype = f"{tag_name}{array_suffix}"
+            if "__shared__" in qualifiers:
+                nodes.append(self.create_shared_memory_node(vtype, name, qualifiers))
+            else:
+                nodes.append(
+                    VariableNode(
+                        vtype,
+                        name,
+                        qualifiers=qualifiers,
+                    )
+                )
         return nodes if len(nodes) > 1 else nodes[0]
 
     def skip_until_semicolon(self):
@@ -3848,8 +3848,18 @@ class CudaParser:
 
         return clobbers
 
-    def parse_expression(self):
-        return self.parse_assignment_expression()
+    def parse_expression(self, allow_comma=False):
+        expr = self.parse_assignment_expression()
+        if allow_comma and self.current_token[0] == "COMMA":
+            return self.parse_comma_expression(expr)
+        return expr
+
+    def parse_comma_expression(self, first_expr):
+        expressions = [first_expr]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_assignment_expression())
+        return FunctionCallNode("cuda_comma_expression", expressions)
 
     def parse_ternary_expression(self):
         expr = self.parse_logical_or_expression()
@@ -4436,7 +4446,7 @@ class CudaParser:
                 return CastNode(target_type, expr)
 
             self.eat("LPAREN")
-            expr = self.parse_expression()
+            expr = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             return expr
         elif self.current_token[0] == "LBRACE":

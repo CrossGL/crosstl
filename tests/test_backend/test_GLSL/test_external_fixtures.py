@@ -20,6 +20,7 @@ from crosstl.backend.GLSL.OpenglAst import (
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -1157,6 +1158,22 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: godotengine/godot
+    # Commit: a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # Path: servers/rendering/renderer_rd/shaders/samplers_inc.glsl
+    # Reduced from engine-configured sampler binding expressions where the base
+    # define is supplied outside the include file.
+    ExternalFixture(
+        name="godot-rd-samplers-symbolic-binding-base",
+        repo="https://github.com/godotengine/godot",
+        commit="a4f5e8cddf68487bdc358bc2ccf745d98363139b",
+        path="servers/rendering/renderer_rd/shaders/samplers_inc.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            layout(set = 0, binding = SAMPLERS_BINDING_FIRST_INDEX + 0) uniform sampler SAMPLER_NEAREST_CLAMP;
+            layout(set = 0, binding = SAMPLERS_BINDING_FIRST_INDEX + 1) uniform sampler SAMPLER_LINEAR_CLAMP;
+        """).strip(),
+    ),
     ExternalFixture(
         name="filament-surface-instancing-highp-object-uniforms",
         repo="https://github.com/google/filament",
@@ -2027,6 +2044,31 @@ def test_codegen_godot_duplicate_cbuffer_padding_members_fixture():
     assert "uint local = (base_index + State_pad0);" in crossgl
     assert "base_index + pad0" not in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_godot_symbolic_sampler_binding_fixture_regenerates():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-rd-samplers-symbolic-binding-base"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    sampler = next(var for var in ast.uniforms if var.name == "SAMPLER_NEAREST_CLAMP")
+
+    assert sampler.layout["set"] == "0"
+    assert isinstance(sampler.layout["binding"], BinaryOpNode)
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "sampler SAMPLER_NEAREST_CLAMP @set(0);" in crossgl
+    assert "@binding((SAMPLERS_BINDING_FIRST_INDEX + 0))" not in crossgl
+    assert "@binding((SAMPLERS_BINDING_FIRST_INDEX + 1))" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    regenerated = GLSLCodeGen().generate(shader_ast)
+
+    assert GLSLParser(GLSLLexer(regenerated).tokenize(), "auto").parse() is not None
 
 
 def test_parse_godot_canvas_occlusion_filters_inactive_stage_sections():

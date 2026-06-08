@@ -1002,11 +1002,9 @@ class GLSLToCrossGLConverter:
         layout = getattr(var, "layout", None) or {}
         attributes = []
         descriptor_set = layout.get("set")
-        if descriptor_set is not None:
-            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
+        self.append_concrete_descriptor_attribute(attributes, "set", descriptor_set)
         binding = layout.get("binding")
-        if binding is not None:
-            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        self.append_concrete_descriptor_attribute(attributes, "binding", binding)
         return f" {' '.join(attributes)}" if attributes else ""
 
     def ssbo_block_attribute_suffix(self, var):
@@ -1017,12 +1015,10 @@ class GLSLToCrossGLConverter:
             self.validate_shader_record_layout(var)
 
         descriptor_set = layout.get("set")
-        if descriptor_set is not None:
-            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
+        self.append_concrete_descriptor_attribute(attributes, "set", descriptor_set)
 
         binding = self.ssbo_binding(var)
-        if binding is not None:
-            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        self.append_concrete_descriptor_attribute(attributes, "binding", binding)
 
         qualifiers = self._qualifier_set(var)
         for qualifier in ("coherent", "volatile", "restrict", "readonly", "writeonly"):
@@ -1195,11 +1191,9 @@ class GLSLToCrossGLConverter:
         attributes = []
         layout = getattr(var, "layout", None) or {}
         descriptor_set = layout.get("set")
-        if descriptor_set is not None:
-            attributes.append(f"@set({self.layout_value_to_string(descriptor_set)})")
+        self.append_concrete_descriptor_attribute(attributes, "set", descriptor_set)
         binding = layout.get("binding")
-        if binding is not None:
-            attributes.append(f"@binding({self.layout_value_to_string(binding)})")
+        self.append_concrete_descriptor_attribute(attributes, "binding", binding)
         input_attachment_index = layout.get("input_attachment_index")
         if input_attachment_index is not None and "uniform" in self._qualifier_set(var):
             attributes.append(
@@ -1512,6 +1506,23 @@ class GLSLToCrossGLConverter:
             return value
         return self.generate_expression(value)
 
+    def concrete_integer_layout_value_to_string(self, value):
+        folded = self.evaluate_integer_layout_constant(value)
+        if folded is not None:
+            return str(folded)
+        if isinstance(value, str):
+            folded = self.integer_number_literal_value(value)
+            if folded is not None:
+                return str(folded)
+        return None
+
+    def append_concrete_descriptor_attribute(self, attributes, name, value):
+        if value is None:
+            return
+        value_text = self.concrete_integer_layout_value_to_string(value)
+        if value_text is not None:
+            attributes.append(f"@{name}({value_text})")
+
     def evaluate_integer_layout_constant(self, value):
         if isinstance(value, bool):
             return None
@@ -1809,8 +1820,7 @@ class GLSLToCrossGLConverter:
         attributes = []
         for name in ("set", "binding"):
             value = self.layout_value(layout, name)
-            if value is not None:
-                attributes.append(f"@{name}({self.layout_value_to_string(value)})")
+            self.append_concrete_descriptor_attribute(attributes, name, value)
         return f" {' '.join(attributes)}" if attributes else ""
 
     def descriptor_set_uniform_block_output_name(self, block_name, uniforms):

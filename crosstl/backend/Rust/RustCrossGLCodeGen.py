@@ -746,6 +746,8 @@ class RustToCrossGLConverter:
         self.function_return_types = {}
         self.function_type_signatures = {}
         self.impl_method_signatures = {}
+        self.impl_receiver_method_names = set()
+        self.impl_associated_function_names = set()
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
@@ -817,6 +819,10 @@ class RustToCrossGLConverter:
         self.function_return_types = self.collect_function_return_types(ast)
         self.function_type_signatures = self.collect_function_type_signatures(ast)
         self.impl_method_signatures = self.collect_impl_method_signatures(ast)
+        (
+            self.impl_receiver_method_names,
+            self.impl_associated_function_names,
+        ) = self.collect_impl_method_name_sets()
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
@@ -1199,6 +1205,19 @@ class RustToCrossGLConverter:
                         ],
                     }
         return signatures_by_type
+
+    def collect_impl_method_name_sets(self):
+        receiver_methods = set()
+        associated_functions = set()
+
+        for signature in self.impl_method_signatures.values():
+            for method_name, method in signature["methods"].items():
+                if self.method_has_self_parameter(method):
+                    receiver_methods.add(method_name)
+                else:
+                    associated_functions.add(method_name)
+
+        return receiver_methods, associated_functions
 
     def collect_struct_member_types(self, ast):
         member_types = {}
@@ -4351,6 +4370,62 @@ class RustToCrossGLConverter:
 
         return None
 
+    def method_call_may_need_special_format(self, method_name, arg_nodes):
+        if not isinstance(method_name, str):
+            return False
+
+        base_method_name, _ = self.split_function_type_arguments(method_name)
+        arg_count = len(arg_nodes)
+
+        if base_method_name in self.impl_receiver_method_names:
+            return True
+        if self.is_resource_method_name(base_method_name):
+            return True
+        if base_method_name in {
+            "load",
+            "load_unchecked",
+            "store",
+            "store_unchecked",
+            "to_bits",
+            "len",
+            "recip",
+            "is_multiple_of",
+            "extend",
+            "truncate",
+            "length",
+            "length_recip",
+            "length_squared",
+            "normalize",
+            "normalize_or_zero",
+            "dot",
+            "cross",
+            "dot_into_vec",
+            "distance",
+            "distance_squared",
+            "reflect",
+            "refract",
+            "perp_dot",
+        }:
+            return True
+        if base_method_name in self.RUST_GPU_DERIVATIVE_METHOD_MAP:
+            return True
+        if base_method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
+            return True
+        if base_method_name in self.SCALAR_ONE_ARG_METHOD_MAP:
+            return True
+        if base_method_name in self.SCALAR_TWO_ARG_METHOD_MAP:
+            return True
+        if base_method_name in {"max_element", "min_element"}:
+            return True
+        if base_method_name in {"map", "filter", "for_each", "any", "all"}:
+            return arg_count == 1 and isinstance(arg_nodes[0], ClosureNode)
+        if base_method_name == "fold":
+            return arg_count == 2 and isinstance(arg_nodes[1], ClosureNode)
+        if arg_count == 0 and self.is_swizzle_member(base_method_name):
+            return True
+
+        return False
+
     def format_rust_gpu_byte_addressable_buffer_call(
         self,
         method_name,
@@ -4833,6 +4908,10 @@ class RustToCrossGLConverter:
         return None
 
     def lookup_impl_method_receiver_match(self, obj, method_name):
+        base_method_name, _ = self.split_function_type_arguments(method_name)
+        if base_method_name not in self.impl_receiver_method_names:
+            return None
+
         receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
             return None
@@ -4868,6 +4947,9 @@ class RustToCrossGLConverter:
             return None
 
         type_name, method_name, method_type_args = parsed
+        if method_name not in self.impl_associated_function_names:
+            return None
+
         for signature in self.impl_method_signatures.values():
             method = signature["methods"].get(method_name)
             if method is None:
@@ -9850,6 +9932,9 @@ class RustToCrossGLConverter:
             return None
 
         method_name = expr.name.member
+        if not self.method_call_may_need_special_format(method_name, expr.args):
+            return None
+
         obj = self.generate_expression(expr.name.object)
         receiver_type = self.infer_value_type(expr.name.object)
 

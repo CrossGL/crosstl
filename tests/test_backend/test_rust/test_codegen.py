@@ -358,6 +358,98 @@ def test_rust_gpu_compute_shader_method_turbofish_codegen():
     assert "collect<Vec<_>>();" in result
 
 
+def test_rust_gpu_ash_builder_chain_codegen_reparse_without_timeout():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # a27c0363d391a54de1feb9ee6864ad9dff72d243,
+    # examples/runners/ash/src/graphics.rs.
+    code = r"""
+    struct Manager {
+        device: Device,
+        color_out_format: Format,
+        factor: u32,
+    }
+
+    impl Manager {
+        fn rebuild_pipeline(&mut self) -> anyhow::Result<()> {
+            unsafe {
+                let mut pipelines = self.device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[vk::GraphicsPipelineCreateInfo::default()
+                        .stages(&[
+                            vk::PipelineShaderStageCreateInfo {
+                                p_name: c"main_vs".as_ptr(),
+                                stage: vk::ShaderStageFlags::VERTEX,
+                                ..Default::default()
+                            },
+                            vk::PipelineShaderStageCreateInfo {
+                                p_name: c"main_fs".as_ptr(),
+                                stage: vk::ShaderStageFlags::FRAGMENT,
+                                p_specialization_info: &vk::SpecializationInfo::default()
+                                    .map_entries(&[vk::SpecializationMapEntry::default()
+                                        .constant_id(0x5007)
+                                        .offset(0)
+                                        .size(4)])
+                                    .data(&u32::to_le_bytes(self.factor)),
+                                ..Default::default()
+                            },
+                        ])
+                        .vertex_input_state(&vk::PipelineVertexInputStateCreateInfo::default())
+                        .input_assembly_state(&vk::PipelineInputAssemblyStateCreateInfo {
+                            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                            ..Default::default()
+                        })
+                        .rasterization_state(&vk::PipelineRasterizationStateCreateInfo {
+                            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                            line_width: 1.0,
+                            ..Default::default()
+                        })
+                        .multisample_state(&vk::PipelineMultisampleStateCreateInfo {
+                            rasterization_samples: vk::SampleCountFlags::TYPE_1,
+                            ..Default::default()
+                        })
+                        .color_blend_state(
+                            &vk::PipelineColorBlendStateCreateInfo::default()
+                                .attachments(&[
+                                    vk::PipelineColorBlendAttachmentState {
+                                        blend_enable: 0,
+                                        color_write_mask: vk::ColorComponentFlags::RGBA,
+                                        ..Default::default()
+                                    },
+                                ]),
+                        )
+                        .dynamic_state(
+                            &vk::PipelineDynamicStateCreateInfo::default()
+                                .dynamic_states(&[
+                                    vk::DynamicState::VIEWPORT,
+                                    vk::DynamicState::SCISSOR,
+                                ]),
+                        )
+                        .viewport_state(
+                            &vk::PipelineViewportStateCreateInfo::default()
+                                .scissor_count(1)
+                                .viewport_count(1),
+                        )
+                        .layout(pipeline_layout)
+                        .push_next(
+                            &mut vk::PipelineRenderingCreateInfo::default()
+                                .color_attachment_formats(&[self.color_out_format]),
+                        )],
+                    None,
+                )
+                .map_err(|(_, e)| e)
+                .context("Unable to create graphics pipeline")?;
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "create_graphics_pipelines" in result
+    assert "map_err(lambda" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_compute_shader_is_multiple_of_method_codegen():
     code = """
     pub fn collatz(mut n: u32) -> Option<u32> {

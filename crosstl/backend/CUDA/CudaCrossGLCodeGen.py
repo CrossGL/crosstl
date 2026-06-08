@@ -4571,6 +4571,8 @@ class CudaToCrossGLConverter:
             return self.format_lambda_call(node.args)
         if raw_name == "cuda_fold_expression":
             return self.format_cuda_fold_expression(node.args)
+        if raw_name == "cuda_comma_expression":
+            return self.format_cuda_comma_expression(node.args)
 
         args = [self.visit(arg) for arg in node.args]
         args_str = ", ".join(args)
@@ -4656,6 +4658,13 @@ class CudaToCrossGLConverter:
         args_text = ", ".join(args)
         return (
             f"(/* cuda time function {function_name}({args_text}) "
+            "not directly supported in CrossGL */ 0)"
+        )
+
+    def format_cuda_comma_expression(self, args):
+        args_text = ", ".join(self.visit(arg) for arg in args)
+        return (
+            f"(/* CUDA comma expression {args_text} "
             "not directly supported in CrossGL */ 0)"
         )
 

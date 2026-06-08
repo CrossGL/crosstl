@@ -31,6 +31,8 @@ BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shader
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
 WGPU_REPO = "https://github.com/gfx-rs/wgpu"
 WGPU_COMMIT = "26e2525f8dea477ef356b80efb6eb1bc1dec120d"
+DAWN_REPO = "https://github.com/google/dawn"
+DAWN_COMMIT = "78a171ad2ed7f7265cfc3dd52e4e7a637a099df0"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 MLX_CURRENT_COMMIT = "b155224b9963cd9476363b464a559232a0868000"
@@ -725,6 +727,32 @@ EXTERNAL_FIXTURES = [
             long helper() {
                 long val = 20L;
                 return val + 5L;
+            }
+            """
+        ),
+    },
+    {
+        "name": "dawn_tint_subgroup_matrix_trailing_const_opaque_type",
+        "repo_url": DAWN_REPO,
+        "commit": DAWN_COMMIT,
+        "source_path": (
+            "test/tint/builtins/gen/var/subgroupMatrixStore/" "17ec3e.wgsl.expected.msl"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "simdgroup_half8x8 arg_2 = "
+            "make_filled_simdgroup_matrix_u3chalf_u2c8_u2c8_u3e(0.0);",
+            "const simdgroup_half8x8 v_1 = arg_2;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void subgroupMatrixStore_17ec3e() {
+                simdgroup_half8x8 arg_2 =
+                    make_filled_simdgroup_matrix<half, 8, 8>(0.0h);
+                simdgroup_half8x8 const v_1 = arg_2;
             }
         """
         ),

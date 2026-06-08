@@ -1,6 +1,7 @@
 """Parser for Vulkan SPIR-V source AST construction."""
 
 import re
+import shlex
 
 from ..common_ast import InitializerListNode
 from .VulkanAst import *
@@ -307,6 +308,55 @@ class VulkanParser:
         "InclusiveScan": "subgroupInclusive",
         "ExclusiveScan": "subgroupExclusive",
         "ClusteredReduce": "subgroupClustered",
+    }
+    LEGACY_GLSLANG_SPIRV_ID_OPERANDS = {
+        "AccessChain": "all",
+        "CompositeConstruct": "all",
+        "CompositeExtract": {0, 1},
+        "Constant": {0},
+        "ConstantComposite": "all",
+        "ConvertSToF": {0, 1},
+        "ConvertUToF": {0, 1},
+        "Decorate": {0},
+        "EntryPoint": "entry_point",
+        "ExecutionMode": {0},
+        "ExecutionModeId": "execution_mode_id",
+        "ExtInstImport": set(),
+        "FAdd": {0, 1, 2},
+        "FMul": {0, 1, 2},
+        "Function": {0, 2},
+        "FunctionCall": "all",
+        "FunctionEnd": set(),
+        "FunctionParameter": {0},
+        "Label": set(),
+        "Load": {0, 1},
+        "MemberDecorate": {0},
+        "MemberName": {0},
+        "Name": {0},
+        "Return": set(),
+        "ReturnValue": {0},
+        "Store": {0, 1},
+        "TypeArray": {0, 1},
+        "TypeBool": set(),
+        "TypeFloat": set(),
+        "TypeFunction": "all",
+        "TypeInt": set(),
+        "TypeMatrix": {0},
+        "TypePointer": {1},
+        "TypeRuntimeArray": {0},
+        "TypeStruct": "all",
+        "TypeVector": {0},
+        "TypeVoid": set(),
+        "Variable": {0, 2},
+        "VectorTimesScalar": {0, 1, 2},
+    }
+    LEGACY_GLSLANG_SPIRV_GLOBAL_OPCODES = {
+        "Capability",
+        "Extension",
+        "ExtInstImport",
+        "MemoryModel",
+        "Source",
+        "SourceExtension",
     }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
@@ -5400,6 +5450,9 @@ class VulkanParser:
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []
+        if self.looks_like_legacy_glslang_spirv_disassembly(code):
+            code = self.normalize_legacy_glslang_spirv_disassembly(code)
+
         tokens = self.spirv_assembly_tokens(code)
         index = 0
 
@@ -5437,6 +5490,137 @@ class VulkanParser:
             index = next_index
 
         return instructions
+
+    def looks_like_legacy_glslang_spirv_disassembly(self, code):
+        return bool(
+            re.search(
+                r"(?m)^\s*(?:"
+                r"Capability\s+\w+\b"
+                r"|MemoryModel\s+\w+\s+\w+\b"
+                r"|EntryPoint\s+\w+\s+\d+\b"
+                r"|\d+(?:\([^)]*\))?:\s+(?:Type[A-Za-z0-9_]+|Function|Label|Variable)\b"
+                r")",
+                code,
+            )
+        )
+
+    def normalize_legacy_glslang_spirv_disassembly(self, code):
+        normalized_lines = []
+        for raw_line in code.splitlines():
+            line = raw_line.split("//", 1)[0].strip()
+            if not line:
+                continue
+            try:
+                parts = shlex.split(line, comments=False, posix=True)
+            except ValueError as error:
+                if self.can_skip_unparseable_legacy_glslang_spirv_line(line):
+                    continue
+                if self.legacy_glslang_spirv_line_has_instruction_shape(line):
+                    raise SyntaxError(
+                        f"Invalid glslang SPIR-V disassembly syntax: {error}"
+                    ) from error
+                continue
+
+            instruction = self.normalize_legacy_glslang_spirv_instruction(parts)
+            if instruction is not None:
+                normalized_lines.append(instruction)
+
+        return "\n".join(normalized_lines)
+
+    def legacy_glslang_spirv_line_has_instruction_shape(self, line):
+        opcode_pattern = "|".join(
+            sorted(
+                set(self.LEGACY_GLSLANG_SPIRV_ID_OPERANDS)
+                | self.LEGACY_GLSLANG_SPIRV_GLOBAL_OPCODES
+            )
+        )
+        return bool(
+            re.match(r"\d+(?:\([^)]*\))?:\s+", line)
+            or re.match(rf"(?:{opcode_pattern})\b", line)
+        )
+
+    def can_skip_unparseable_legacy_glslang_spirv_line(self, line):
+        return bool(
+            re.match(
+                r"(?:\d+(?:\([^)]*\))?:\s+)?(?:Source|SourceContinued|String)\b",
+                line,
+            )
+        )
+
+    def normalize_legacy_glslang_spirv_instruction(self, parts):
+        if not parts:
+            return None
+
+        result_id = None
+        if self.is_legacy_glslang_spirv_result_token(parts[0]):
+            result_id = self.legacy_glslang_spirv_id(parts.pop(0))
+        if not parts:
+            return None
+
+        known_opcodes = (
+            set(self.LEGACY_GLSLANG_SPIRV_ID_OPERANDS)
+            | self.LEGACY_GLSLANG_SPIRV_GLOBAL_OPCODES
+        )
+        if result_id is None and parts[0] not in known_opcodes:
+            return None
+
+        if result_id is not None and parts[0] in known_opcodes:
+            opcode = parts.pop(0)
+            operands = [
+                self.normalize_legacy_glslang_spirv_operand(opcode, index, operand)
+                for index, operand in enumerate(parts)
+            ]
+        elif result_id is not None and len(parts) >= 2 and parts[1] in known_opcodes:
+            result_type = self.legacy_glslang_spirv_id(parts.pop(0))
+            opcode = parts.pop(0)
+            operands = [
+                result_type,
+                *[
+                    self.normalize_legacy_glslang_spirv_operand(
+                        opcode, index + 1, operand
+                    )
+                    for index, operand in enumerate(parts)
+                ],
+            ]
+        else:
+            opcode = parts.pop(0)
+            operands = [
+                self.normalize_legacy_glslang_spirv_operand(opcode, index, operand)
+                for index, operand in enumerate(parts)
+            ]
+
+        if not opcode.startswith("Op"):
+            opcode = f"Op{opcode}"
+        instruction = f"{result_id} = {opcode}" if result_id is not None else opcode
+        if operands:
+            instruction = f"{instruction} {' '.join(operands)}"
+        return instruction
+
+    def is_legacy_glslang_spirv_result_token(self, token):
+        return bool(re.match(r"\d+(?:\([^)]*\))?:$", str(token)))
+
+    def legacy_glslang_spirv_id(self, token):
+        match = re.match(r"(\d+)(?:\([^)]*\))?:?$", str(token))
+        if match:
+            return f"%{match.group(1)}"
+        if re.match(r"\d+$", str(token)):
+            return f"%{token}"
+        return token
+
+    def normalize_legacy_glslang_spirv_operand(self, opcode, operand_index, operand):
+        if self.is_legacy_glslang_spirv_id_operand(opcode, operand_index):
+            return self.legacy_glslang_spirv_id(operand)
+        return operand
+
+    def is_legacy_glslang_spirv_id_operand(self, opcode, operand_index):
+        id_operands = self.LEGACY_GLSLANG_SPIRV_ID_OPERANDS.get(opcode)
+        if id_operands == "all":
+            return True
+        if id_operands == "entry_point":
+            return operand_index == 1 or operand_index >= 3
+        if id_operands == "execution_mode_id":
+            return operand_index == 0 or operand_index >= 2
+        return operand_index in (id_operands or set())
 
     def spirv_assembly_tokens(self, code):
         tokens = []

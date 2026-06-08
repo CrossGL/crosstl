@@ -2460,8 +2460,9 @@ class MetalParser:
                     in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
                 ):
                     return True
+                next_idx = idx + 1
                 next_tok = (
-                    self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
+                    self.tokens[next_idx][0] if next_idx < len(self.tokens) else "EOF"
                 )
                 if next_tok in [
                     "IDENTIFIER",
@@ -2471,6 +2472,22 @@ class MetalParser:
                     "BITWISE_AND",
                 ]:
                     return True
+                while next_idx < len(self.tokens) and self.is_qualifier_token_at(
+                    next_idx
+                ):
+                    next_idx += 1
+                if next_idx != idx + 1:
+                    next_tok = (
+                        self.tokens[next_idx][0]
+                        if next_idx < len(self.tokens)
+                        else "EOF"
+                    )
+                    return next_tok in {
+                        "IDENTIFIER",
+                        "MULTIPLY",
+                        "BITWISE_AND",
+                        "LBRACKET",
+                    }
                 return token_value in self.known_types
             return True
         return False

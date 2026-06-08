@@ -440,6 +440,95 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_LEGACY_NUMERIC_ID_DISASSEMBLY_ASSEMBLY = """
+spv.1.4.OpEntryPoint.frag
+// Source repo: https://github.com/KhronosGroup/glslang
+// Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+// Source path: Test/baseResults/spv.1.4.OpEntryPoint.frag.out
+// Reduced from glslang's numeric-id disassembly syntax.
+                              Capability Shader
+               1:             ExtInstImport  "GLSL.std.450"
+                              MemoryModel Logical GLSL450
+                              EntryPoint Fragment 4  "main" 11 14 17 25 33 41
+                              ExecutionMode 4 OriginUpperLeft
+                              Name 4  "main"
+                              Name 9  "functionv"
+                              Name 11  "inv"
+                              Name 14  "globalv"
+                              Name 17  "outv"
+                              Name 23  "ubt"
+                              MemberName 23(ubt) 0  "v"
+                              Name 25  "uniformv"
+                              Name 31  "pushB"
+                              MemberName 31(pushB) 0  "a"
+                              Name 33  "pushv"
+                              Name 39  "bbt"
+                              MemberName 39(bbt) 0  "f"
+                              Name 41  "bufferv"
+                              Decorate 11(inv) Location 0
+                              Decorate 17(outv) Location 0
+                              Decorate 23(ubt) Block
+                              MemberDecorate 23(ubt) 0 Offset 0
+                              Decorate 25(uniformv) Binding 0
+                              Decorate 25(uniformv) DescriptorSet 0
+                              Decorate 31(pushB) Block
+                              MemberDecorate 31(pushB) 0 Offset 0
+                              Decorate 39(bbt) Block
+                              MemberDecorate 39(bbt) 0 Offset 0
+                              Decorate 41(bufferv) Binding 1
+                              Decorate 41(bufferv) DescriptorSet 0
+               2:             TypeVoid
+               3:             TypeFunction 2
+               6:             TypeFloat 32
+               7:             TypeVector 6(float) 4
+               8:             TypePointer Function 7(fvec4)
+              10:             TypePointer Input 7(fvec4)
+         11(inv):     10(ptr) Variable Input
+              13:             TypePointer Private 7(fvec4)
+     14(globalv):     13(ptr) Variable Private
+              16:             TypePointer Output 7(fvec4)
+        17(outv):     16(ptr) Variable Output
+         23(ubt):             TypeStruct 7(fvec4)
+              24:             TypePointer Uniform 23(ubt)
+    25(uniformv):     24(ptr) Variable Uniform
+              26:             TypeInt 32 1
+              27:     26(int) Constant 0
+              28:             TypePointer Uniform 7(fvec4)
+       31(pushB):             TypeStruct 26(int)
+              32:             TypePointer PushConstant 31(pushB)
+       33(pushv):     32(ptr) Variable PushConstant
+              34:             TypePointer PushConstant 26(int)
+         39(bbt):             TypeStruct 6(float)
+              40:             TypePointer StorageBuffer 39(bbt)
+     41(bufferv):     40(ptr) Variable StorageBuffer
+              42:             TypePointer StorageBuffer 6(float)
+         4(main):           2 Function None 3
+               5:             Label
+    9(functionv):      8(ptr) Variable Function
+              12:    7(fvec4) Load 11(inv)
+                              Store 9(functionv) 12
+              15:    7(fvec4) Load 11(inv)
+                              Store 14(globalv) 15
+              18:    7(fvec4) Load 9(functionv)
+              19:    7(fvec4) Load 11(inv)
+              20:    7(fvec4) FAdd 18 19
+              21:    7(fvec4) Load 14(globalv)
+              22:    7(fvec4) FAdd 20 21
+              29:     28(ptr) AccessChain 25(uniformv) 27
+              30:    7(fvec4) Load 29
+              35:     34(ptr) AccessChain 33(pushv) 27
+              36:     26(int) Load 35
+              37:    6(float) ConvertSToF 36
+              38:    7(fvec4) VectorTimesScalar 30 37
+              43:     42(ptr) AccessChain 41(bufferv) 27
+              44:    6(float) Load 43
+              45:    7(fvec4) VectorTimesScalar 38 44
+              46:    7(fvec4) FAdd 22 45
+                              Store 17(outv) 46
+                              Return
+                              FunctionEnd
+"""
+
 SPIRV_GLSLANG_SIMPLE_MAT_MATRIX_TIMES_VECTOR_ASSEMBLY = """
 ; Source repo: https://github.com/KhronosGroup/glslang
 ; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -5614,6 +5703,26 @@ def test_glslang_private_global_variables_codegen_reparse():
     assert "privateColor = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
     assert "outColor = privateColor;" in generated_code
     assert "outColor = loaded;" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_legacy_numeric_id_disassembly_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_LEGACY_NUMERIC_ID_DISASSEMBLY_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer ubt @set(0) @binding(0)" in generated_code
+    assert "cbuffer pushB @push_constant" in generated_code
+    assert "RWStructuredBuffer<bbt> bufferv @set(0) @binding(1);" in generated_code
+    assert "float4 inv @input @location(0);" in generated_code
+    assert "float4 outv @output @location(0);" in generated_code
+    assert "globalv = inv;" in generated_code
+    assert (
+        "outv = (((functionv + inv) + globalv) + ((v * float(a)) * bufferv[0].f));"
+        in generated_code
+    )
+    assert "value_" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

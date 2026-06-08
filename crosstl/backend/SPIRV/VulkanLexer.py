@@ -20,6 +20,15 @@ SPIRV_ASSEMBLY_PATTERN = re.compile(
     r")"
 )
 
+SPIRV_LEGACY_GLSLANG_ASSEMBLY_PATTERN = re.compile(
+    r"(?m)^\s*(?:"
+    r"Capability\s+\w+\b"
+    r"|MemoryModel\s+\w+\s+\w+\b"
+    r"|EntryPoint\s+\w+\s+\d+\b"
+    r"|\d+(?:\([^)]*\))?:\s+(?:Type[A-Za-z0-9_]+|Function|Label|Variable)\b"
+    r")"
+)
+
 SPIRV_ASSEMBLY_ERROR = (
     "SPIR-V assembly input is only partially supported by the Vulkan backend "
     "parser; supported assembly must expose location-decorated Input/Output "
@@ -351,7 +360,10 @@ class VulkanLexer:
 
     def _looks_like_spirv_assembly(self, code: str) -> bool:
         """Return whether ``code`` starts using SPIR-V assembly instructions."""
-        return bool(SPIRV_ASSEMBLY_PATTERN.search(code))
+        return bool(
+            SPIRV_ASSEMBLY_PATTERN.search(code)
+            or SPIRV_LEGACY_GLSLANG_ASSEMBLY_PATTERN.search(code)
+        )
 
     def tokenize(self) -> List[Tuple[str, str]]:
         """Return the full token stream as ``(token_type, text)`` tuples."""

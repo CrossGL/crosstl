@@ -44,6 +44,7 @@ EXTERNAL_SAMPLES = [
             "cpp/3_CUDA_Features/cdpQuadtree/cdpQuadtree.cu",
             "cpp/3_CUDA_Features/simpleCudaGraphs/simpleCudaGraphs.cu",
             "cpp/3_CUDA_Features/cudaTensorCoreGemm/cudaTensorCoreGemm.cu",
+            "cpp/4_CUDA_Libraries/batchCUBLAS/batchCUBLAS.h",
             "cpp/5_Domain_Specific/BlackScholes/BlackScholes_kernel.cuh",
             "cpp/5_Domain_Specific/dxtc/dxtc.cu",
             "cpp/5_Domain_Specific/stereoDisparity/stereoDisparity_kernel.cuh",
@@ -396,6 +397,46 @@ def test_cuda_samples_nvrtc_char_escape_literals_codegen_reparse():
     assert "memBlock[inputSize] = 0;" in crossgl
     assert "memBlock[0] = 65;" in crossgl
     assert "'\\x0'" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_batch_cublas_unsigned_inline_union_and_comma_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/4_CUDA_Libraries/batchCUBLAS/batchCUBLAS.h
+    source = """
+    static __inline__ unsigned floatAsUInt(float x) {
+        volatile union {
+            float f;
+            unsigned i;
+        } xx;
+        xx.f = x;
+        return xx.i;
+    }
+
+    static __inline__ unsigned cuRand(void) {
+        static unsigned int cuda_jsr = 123456789;
+        return (cuda_jsr = cuda_jsr ^ (cuda_jsr << 17),
+                cuda_jsr = cuda_jsr ^ (cuda_jsr >> 13),
+                cuda_jsr = cuda_jsr ^ (cuda_jsr << 5));
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].return_type == "unsigned int"
+    assert ast.functions[0].name == "floatAsUInt"
+    assert isinstance(ast.functions[0].body[0], StructNode)
+    assert ast.functions[0].body[0].name == "anonymous_xx_layout"
+    assert isinstance(ast.functions[0].body[1], VariableNode)
+    assert ast.functions[0].body[1].vtype == "anonymous_xx_layout"
+
+    assert "u32 floatAsUInt(f32 x)" in crossgl
+    assert "struct anonymous_xx_layout" in crossgl
+    assert "var xx: anonymous_xx_layout;" in crossgl
+    assert "CUDA comma expression" in crossgl
     assert_crossgl_reparse(crossgl)
 
 
