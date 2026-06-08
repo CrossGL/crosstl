@@ -1322,7 +1322,13 @@ class MojoToCrossGLConverter:
         matrix_type = self.map_matrix_type(mojo_type)
         if matrix_type:
             return matrix_type
-        return mojo_type
+        return self.normalize_type_expression_operators(mojo_type)
+
+    def normalize_type_expression_operators(self, mojo_type):
+        """Normalize Mojo-only operators embedded in source-like type strings."""
+        if not isinstance(mojo_type, str):
+            return mojo_type
+        return re.sub(r"\s*//\s*", " / ", mojo_type)
 
     def strip_reference_type(self, mojo_type):
         if not isinstance(mojo_type, str):

@@ -1549,6 +1549,8 @@ class MojoParser:
             return node
         if self.current_token[0] == "IDENTIFIER" and self.current_token[1] == "assert":
             return self.parse_assert_statement(is_comptime=True)
+        if self.is_comptime_tuple_declaration_start():
+            return self.parse_comptime_tuple_declaration(after_keyword=True)
         if self.is_comptime_declaration_start():
             return self.parse_comptime_declaration(after_keyword=True)
         if self.is_comptime_expression_statement():
@@ -1583,6 +1585,23 @@ class MojoParser:
                     return next_after_suffix[0] in {"COLON", "EQUALS"}
             index += 1
         return False
+
+    def is_comptime_tuple_declaration_start(self):
+        return self.is_identifier_name_token() and self.peek_token()[0] == "COMMA"
+
+    def parse_comptime_tuple_declaration(self, after_keyword=False):
+        if not after_keyword:
+            self.eat("COMPTIME")
+
+        name = self.parse_identifier_tuple()
+        if self.current_token[0] != "EQUALS":
+            raise SyntaxError("Expected assignment after comptime identifier tuple")
+        self.eat("EQUALS")
+        initial_value = self.parse_expression_list_value()
+        self.consume_statement_terminator()
+        node = VariableDeclarationNode(None, name, initial_value, is_var=False)
+        node.is_comptime = True
+        return node
 
     def parse_assert_statement(self, is_comptime=False):
         self.eat("IDENTIFIER")
@@ -1899,7 +1918,7 @@ class MojoParser:
         ]:
             value = None
         else:
-            value = self.parse_expression()
+            value = self.parse_expression_list_value()
 
         self.consume_statement_terminator()
 

@@ -2525,6 +2525,9 @@ class Parser:
         }:
             return self.parse_expression()
 
+        if self.square_generic_argument_forms_expression():
+            return self.parse_expression()
+
         if self.current_token_starts_type():
             return self.parse_type()
 
@@ -2541,6 +2544,54 @@ class Parser:
             return self.parse_literal()
 
         return self.parse_expression()
+
+    def square_generic_argument_forms_expression(self):
+        """Return whether one square generic arg contains expression operators."""
+        expression_operators = {
+            "PLUS",
+            "MINUS",
+            "MULTIPLY",
+            "DIVIDE",
+            "MOD",
+            "LOGICAL_AND",
+            "LOGICAL_OR",
+            "BITWISE_AND",
+            "BITWISE_OR",
+            "BITWISE_XOR",
+            "SHIFT_LEFT",
+            "SHIFT_RIGHT",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "EQUAL",
+            "NOT_EQUAL",
+        }
+        opener_to_closer = {
+            "LPAREN": "RPAREN",
+            "LBRACKET": "RBRACKET",
+            "LBRACE": "RBRACE",
+        }
+        closers = set(opener_to_closer.values())
+        stack = []
+        index = self.pos
+
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if not stack and token_type in {"COMMA", "RBRACKET"}:
+                return False
+            if token_type in opener_to_closer:
+                stack.append(opener_to_closer[token_type])
+            elif token_type in closers:
+                if stack and token_type == stack[-1]:
+                    stack.pop()
+                elif not stack:
+                    return False
+            elif not stack and token_type in expression_operators:
+                return True
+            index += 1
+
+        return False
 
     def skip_balanced_brackets(self):
         """Consume a square-bracket payload used by type effects."""

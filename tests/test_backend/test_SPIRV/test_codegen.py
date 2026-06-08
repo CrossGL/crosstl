@@ -2154,6 +2154,27 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_STORAGE_IMAGE_BUFFER_FORMAT_ASSEMBLY = """
+; Reduced from glslang-generated formatted storage texel buffers.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpName %storage_buffer "storageBuffer"
+OpDecorate %storage_buffer DescriptorSet 0
+OpDecorate %storage_buffer Binding 2
+OpDecorate %storage_buffer NonWritable
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%image = OpTypeImage %uint Buffer 0 0 0 2 R32ui
+%ptr_storage_buffer = OpTypePointer UniformConstant %image
+%storage_buffer = OpVariable %ptr_storage_buffer UniformConstant
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_NON_32BIT_INTEGER_IMAGE_FAMILY_ASSEMBLY = """
 ; Reduced from SPIR-V explicit integer-width image declarations.
 ; Preserved i16/u16 sampled types should still select signed integer resources.
@@ -5661,6 +5682,7 @@ def test_spirv_assembly_specialization_constant_composite_and_op_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    parse_crossgl(generated_code)
     assert "struct SizedBlock" in generated_code
     assert "uint values[(WORKGROUP_WIDTH + WORKGROUP_HEIGHT)];" in generated_code
     assert "const uint WORKGROUP_WIDTH @constant_id(0) = 8;" in generated_code
@@ -5881,6 +5903,7 @@ def test_spirv_assembly_storage_image_format_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    parse_crossgl(generated_code)
     assert (
         "RWTexture2D<uint> storageImage @set(0) @binding(0) @r32ui @readonly;"
         in generated_code
@@ -5894,12 +5917,27 @@ def test_spirv_assembly_storage_image_array_format_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
+    parse_crossgl(generated_code)
     assert (
         "RWTexture2D<uint> storageImages[4] @set(0) @binding(0) @r32ui @readonly;"
         in generated_code
     )
     assert "storageImages[4] @set(0) @binding(0) @readonly;" not in generated_code
     assert "%storage_images" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_assembly_storage_image_buffer_format_codegen_reparse():
+    tokens = tokenize_code(SPIRV_STORAGE_IMAGE_BUFFER_FORMAT_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert (
+        "RWBuffer<uint> storageBuffer @set(0) @binding(2) @readonly;" in generated_code
+    )
+    assert "@r32ui" not in generated_code
+    assert "%storage_buffer" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

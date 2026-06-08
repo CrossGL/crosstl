@@ -662,6 +662,29 @@ def test_mlir_backtick_type_codegen_from_modular_gpu_globals_reparses_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_floor_divide_in_parameterized_type_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo max/kernels/src/linalg/matmul/cpu/default.mojo.
+    # Mojo floor division in a parameterized type must not emit CrossGL comments.
+    code = """
+    def _accumulate[
+        simd_size: Int, kernel_rows: Int, kernel_cols: Int
+    ](
+        c_local: _Accumulator[
+            _, kernel_rows, kernel_cols // simd_size, simd_size
+        ]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "_Accumulator[_, kernel_rows, kernel_cols / simd_size, simd_size]" in (
+        generated_code
+    )
+    assert "kernel_cols//simd_size" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_example():
     code = """
     def main():

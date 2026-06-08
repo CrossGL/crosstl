@@ -6627,6 +6627,66 @@ def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
         pytest.fail(f"Escaped newline string literal conversion failed: {e}")
 
 
+def test_rust_cuda_tuple_return_match_codegen_reparse_from_atomic_ordering():
+    # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/atomic.rs.
+    code = """
+    use core::sync::atomic::Ordering;
+
+    fn double_ordering_from_one(ordering: Ordering) -> (Ordering, Ordering) {
+        match ordering {
+            Ordering::Relaxed => (Ordering::Relaxed, Ordering::Relaxed),
+            Ordering::Acquire => (Ordering::Acquire, Ordering::Acquire),
+            Ordering::Release => (Ordering::Release, Ordering::Relaxed),
+            Ordering::AcqRel => (Ordering::AcqRel, Ordering::Acquire),
+            Ordering::SeqCst => (Ordering::SeqCst, Ordering::SeqCst),
+            _ => unreachable!(),
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "Tuple<Ordering, Ordering> double_ordering_from_one(Ordering ordering)"
+        in result
+    )
+    assert "(Ordering, Ordering) double_ordering_from_one" not in result
+    assert "switch (ordering)" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
+    # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/warp.rs.
+    code = """
+    unsafe fn match_all_32(mask: u32, value: u32, predicate: bool) -> (u32, bool) {
+        let out: u32;
+        unsafe {
+            asm!(
+                "{",
+                ".reg .pred %p1;",
+                "setp.eq.u32 %p1, {}, 1;",
+                "vote.sync.ballot.b32 {}, %p1, {};",
+                "}",
+                in(reg32) predicate as u32,
+                out(reg32) out,
+                in(reg32) mask,
+            );
+        }
+        (value, predicate)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "Tuple<uint, bool> match_all_32(uint mask, uint value, bool predicate)"
+        in result
+    )
+    assert "(uint, bool) match_all_32" not in result
+    assert "asm!(" in result
+    crosstl.translator.parse(result)
+
+
 def test_byte_literal_conversion():
     code = r"""
     fn test_byte_literals(c: u8) -> String {

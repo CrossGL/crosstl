@@ -2211,7 +2211,7 @@ class RustToCrossGLConverter:
         display_return_type = self.normalize_receiver_type(
             func.return_type, struct_name
         )
-        return_type = self.map_type(display_return_type)
+        return_type = self.map_function_return_type(display_return_type)
 
         if struct_name:
             func_name = f"{self.impl_function_prefix(struct_name)}_{func.name}"
@@ -2259,7 +2259,7 @@ class RustToCrossGLConverter:
             func.params,
             extra_forbidden=local_binding_names,
         )
-        return_type = self.map_type(func.return_type)
+        return_type = self.map_function_return_type(func.return_type)
         entry_point_name = self.get_entry_point_name_from_attributes(func.attributes)
         stage_name = self.crossgl_identifier(entry_point_name or func.name)
         numthreads = self.get_numthreads_from_attributes(func.attributes)
@@ -9717,6 +9717,15 @@ class RustToCrossGLConverter:
             return crossgl_type
 
         return rust_type
+
+    def map_function_return_type(self, rust_type):
+        tuple_elements = self.split_tuple_type(rust_type)
+        if tuple_elements is not None:
+            if not tuple_elements:
+                return "void"
+            mapped_elements = [self.map_type(element) for element in tuple_elements]
+            return f"Tuple<{', '.join(mapped_elements)}>"
+        return self.map_type(rust_type)
 
     def format_unmapped_crossgl_type(self, rust_type):
         if not isinstance(rust_type, str) or "::" not in rust_type:

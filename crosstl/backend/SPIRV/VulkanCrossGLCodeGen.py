@@ -659,7 +659,8 @@ class VulkanToCrossGLConverter:
         return ""
 
     def storage_image_layout_attribute_suffix(self, node):
-        if not self.is_storage_image_type(getattr(node, "data_type", None)):
+        data_type = getattr(node, "data_type", None)
+        if not self.is_storage_image_type(data_type):
             return ""
 
         attributes = []
@@ -672,7 +673,10 @@ class VulkanToCrossGLConverter:
                 descriptor_set = value
             elif qualifier_name == "binding" and value is not None:
                 binding = value
-            elif qualifier_name in self.supported_image_formats():
+            elif (
+                qualifier_name in self.supported_image_formats()
+                and not self.is_storage_image_buffer_type(data_type)
+            ):
                 image_format = qualifier_name
 
         declaration_attributes = []
@@ -738,6 +742,9 @@ class VulkanToCrossGLConverter:
         return isinstance(type_name, str) and type_name.startswith(
             ("image", "iimage", "uimage")
         )
+
+    def is_storage_image_buffer_type(self, type_name):
+        return isinstance(type_name, str) and type_name.endswith("imageBuffer")
 
     def supported_image_formats(self):
         return {

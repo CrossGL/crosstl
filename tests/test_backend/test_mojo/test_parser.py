@@ -2827,6 +2827,55 @@ def test_postfix_transfer_marker_before_member_call_parse_from_modular_primitive
     assert xor_value.body[0].value.op == "^"
 
 
+def test_return_tuple_parse_from_modular_comma_bucket():
+    # Reduced from Modular max/kernels examples that previously left the comma
+    # for statement termination after parsing only the first return expression.
+    code = """
+    def map_fn() -> Tuple[IndexList[stencil_rank], IndexList[stencil_rank]]:
+        return lower_bound, upper_bound
+
+    def take_results(deinit self) -> Tuple[Int, InlineArray[Int, Self.num_allocs]]:
+        return self.pool_size, self.offsets
+    """
+    ast = parse_code(tokenize_code(code))
+    map_fn = find_function(ast, "map_fn")
+    take_results = find_function(ast, "take_results")
+
+    map_return = map_fn.body[0].value
+    assert isinstance(map_return, TupleNode)
+    assert [element.name for element in map_return.elements] == [
+        "lower_bound",
+        "upper_bound",
+    ]
+
+    results_return = take_results.body[0].value
+    assert isinstance(results_return, TupleNode)
+    assert [element.member for element in results_return.elements] == [
+        "pool_size",
+        "offsets",
+    ]
+
+
+def test_comptime_tuple_declaration_parse_from_modular_grouped_matmul():
+    # Reduced from Modular max/kernels/src/linalg/grouped_matmul.mojo.
+    code = """
+    def writeback():
+        comptime dst_m_offset, dst_n_offset = divmod(dst_idx, N)
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "writeback").body[0]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert getattr(declaration, "is_comptime", False)
+    assert isinstance(declaration.name, TupleNode)
+    assert [target.name for target in declaration.name.elements] == [
+        "dst_m_offset",
+        "dst_n_offset",
+    ]
+    assert isinstance(declaration.initial_value, FunctionCallNode)
+    assert declaration.initial_value.name == "divmod"
+
+
 def test_type_member_expression_parse_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:

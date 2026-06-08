@@ -8,6 +8,7 @@ from crosstl.translator.ast import (
     ArrayLiteralNode,
     ArrayType,
     AssignmentNode,
+    BinaryOpNode,
     ConstructorNode,
     ConstructorPatternNode,
     DoWhileNode,
@@ -179,6 +180,25 @@ def test_square_bracket_generic_type_arguments_accept_expression_values():
     assert isinstance(tensor_type.generic_args[1], FunctionCallNode)
     assert isinstance(statements[0].expression, FunctionCallNode)
     assert isinstance(statements[1].expression, FunctionCallNode)
+
+
+def test_square_bracket_generic_type_arguments_accept_binary_expression_values():
+    code = """
+    shader BinaryExpressionSquareGenericShader {
+        void accumulate(
+            _Accumulator[_, kernel_rows, kernel_cols / simd_size, simd_size] local
+        ) {
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    accumulator_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(accumulator_type, NamedType)
+    assert accumulator_type.name == "_Accumulator"
+    assert isinstance(accumulator_type.generic_args[2], BinaryOpNode)
+    assert accumulator_type.generic_args[2].operator == "/"
 
 
 def test_square_bracket_expression_specializations_accept_colon_parameters():
