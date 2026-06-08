@@ -7012,6 +7012,7 @@ def test_validate_project_report_emits_closed_validation_report_schema(tmp_path)
     assert payload["toolchainRunStatusCounts"] == {"failed": 0, "ok": 0}
     assert payload["toolchainRunStatusByTarget"] == {}
     assert payload["toolchainRunStatusBySourceBackend"] == {}
+    assert payload["toolchainRunStatusByCheckKind"] == {}
     assert payload["toolchainRunStatusByVariant"] == {}
 
 
@@ -13284,6 +13285,9 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["toolchainRunStatusBySourceBackend"] == {
         "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
     assert payload["toolchainRunStatusByVariant"] == {}
     inspection = inspect_project_report(report_path, run_toolchains=True)
     assert inspection["validation"]["artifactCount"] == 1
@@ -13303,6 +13307,9 @@ def test_validate_project_report_records_toolchain_failures(
     ]
     assert inspection["validation"]["toolchainRunCount"] == 1
     assert inspection["validation"]["truncatedToolchainRunCount"] == 0
+    assert inspection["validation"]["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
     assert inspection["validation"]["toolchainRuns"] == [
         {
             "source": "simple.cgl",
@@ -13338,6 +13345,10 @@ def test_validate_project_report_records_toolchain_failures(
         "Validation toolchain runs by source backend: cgl=1 run (0 ok, 1 failed)"
         in stdout
     )
+    assert (
+        "Validation toolchain runs by check kind: artifact=1 run (0 ok, 1 failed)"
+        in stdout
+    )
     exit_code = crosstl_cli.main(
         [
             "inspect-report",
@@ -13357,6 +13368,10 @@ def test_validate_project_report_records_toolchain_failures(
         "sourceRemap=not-recorded)"
     ) in stdout
     assert "Validation toolchain run samples:" in stdout
+    assert (
+        "Validation toolchain runs by check kind: artifact=1 run (0 ok, 1 failed)"
+        in stdout
+    )
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
         "(sourceBackend=cgl, status=failed, checkKind=artifact, returncode=2, "
@@ -13448,11 +13463,17 @@ def test_validate_project_report_marks_availability_only_toolchain_runs(
     assert payload["toolchainRunStatusByTarget"] == {
         target: {"runCount": 1, "okCount": 1, "failedCount": 0}
     }
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "tool-availability": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
 
     inspection = inspect_project_report(report_path, run_toolchains=True)
     assert inspection["validation"]["toolchainRuns"][0]["checkKind"] == (
         "tool-availability"
     )
+    assert inspection["validation"]["toolchainRunStatusByCheckKind"] == {
+        "tool-availability": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
 
 
 def test_validate_project_report_records_toolchain_run_variant_rollups(
@@ -13488,6 +13509,9 @@ def test_validate_project_report_records_toolchain_run_variant_rollups(
     }
     assert payload["toolchainRunStatusBySourceBackend"] == {
         "cgl": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 1, "okCount": 1, "failedCount": 0}
     }
     assert payload["toolchainRunStatusByVariant"] == {
         "debug": {"runCount": 1, "okCount": 1, "failedCount": 0}
@@ -13539,6 +13563,9 @@ def test_validate_project_report_records_toolchain_timeouts(tmp_path, monkeypatc
     assert payload["toolchainRunStatusBySourceBackend"] == {
         "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
     assert payload["toolchainRunStatusByVariant"] == {}
 
 
@@ -13575,6 +13602,9 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
     assert inspection["validation"]["toolchainRunStatusBySourceBackend"] == {
         "cgl": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
+    assert inspection["validation"]["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
     assert inspection["validation"]["toolchainRunStatusByVariant"] == {}
 
     exit_code = crosstl_cli.main(
@@ -13594,6 +13624,10 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
     )
     assert (
         "Validation toolchain runs by source backend: cgl=1 run (0 ok, 1 failed)"
+        in stdout
+    )
+    assert (
+        "Validation toolchain runs by check kind: artifact=1 run (0 ok, 1 failed)"
         in stdout
     )
 
@@ -15614,6 +15648,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     }
     assert payload["validation"]["toolchainRunStatusByTarget"] == {}
     assert payload["validation"]["toolchainRunStatusBySourceBackend"] == {}
+    assert payload["validation"]["toolchainRunStatusByCheckKind"] == {}
     assert payload["validation"]["toolchainRunStatusByVariant"] == {}
     assert payload["validation"][
         "sourceHashStatusCounts"

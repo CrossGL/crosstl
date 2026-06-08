@@ -1514,6 +1514,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "toolchain run status" in backend_support["notes"]
         assert "toolchain run target" in backend_support["notes"]
         assert "toolchain run source backend" in backend_support["notes"]
+        assert "toolchain run check-kind" in backend_support["notes"]
         assert "toolchain run variant" in backend_support["notes"]
         assert "translate-project can embed artifact validation" in (
             backend_support["notes"]

@@ -322,6 +322,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "toolchainRunStatusCounts",
         "toolchainRunStatusByTarget",
         "toolchainRunStatusBySourceBackend",
+        "toolchainRunStatusByCheckKind",
         "toolchainRunStatusByVariant",
         "sourceHashStatusCounts",
         "generatedHashStatusCounts",
@@ -4513,6 +4514,12 @@ def _validation_toolchain_run_status_by_source_backend(
     return _validation_run_status_rollup(runs, "sourceBackend")
 
 
+def _validation_toolchain_run_status_by_check_kind(
+    runs: Sequence[Any],
+) -> dict[str, dict[str, int]]:
+    return _validation_run_status_rollup(runs, "checkKind")
+
+
 def _validation_toolchain_run_status_by_variant(
     runs: Sequence[Any],
 ) -> dict[str, dict[str, int]]:
@@ -5350,6 +5357,9 @@ def inspect_project_report(
     toolchain_run_status_by_source_backend = validation_report.get(
         "toolchainRunStatusBySourceBackend"
     )
+    toolchain_run_status_by_check_kind = validation_report.get(
+        "toolchainRunStatusByCheckKind"
+    )
     toolchain_run_status_by_variant = validation_report.get(
         "toolchainRunStatusByVariant"
     )
@@ -5449,6 +5459,13 @@ def inspect_project_report(
                 dict(toolchain_run_status_by_source_backend)
                 if isinstance(toolchain_run_status_by_source_backend, Mapping)
                 else _validation_toolchain_run_status_by_source_backend(
+                    _record_sequence(validation_toolchain_runs)
+                )
+            ),
+            "toolchainRunStatusByCheckKind": (
+                dict(toolchain_run_status_by_check_kind)
+                if isinstance(toolchain_run_status_by_check_kind, Mapping)
+                else _validation_toolchain_run_status_by_check_kind(
                     _record_sequence(validation_toolchain_runs)
                 )
             ),
@@ -6852,6 +6869,9 @@ def _validation_report_payload(
             _validation_toolchain_run_status_by_source_backend(
                 validation_toolchain_runs
             )
+        ),
+        "toolchainRunStatusByCheckKind": _validation_toolchain_run_status_by_check_kind(
+            validation_toolchain_runs
         ),
         "toolchainRunStatusByVariant": _validation_toolchain_run_status_by_variant(
             validation_toolchain_runs
