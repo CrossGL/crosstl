@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import crosstl._crosstl as crosstl_cli
+import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
     inspect_project_report,
@@ -40,6 +41,23 @@ SIMPLE_CROSSL = textwrap.dedent("""
         }
     }
     """).strip()
+
+
+def test_project_package_exposes_public_api_surface():
+    assert set(project_api.__all__) == {
+        "ProjectConfig",
+        "ProjectDiagnostic",
+        "ProjectPortabilityReport",
+        "ProjectScan",
+        "ProjectTranslationUnit",
+        "inspect_project_report",
+        "load_project_config",
+        "scan_project",
+        "translate_project",
+        "validate_project_report",
+    }
+    for name in project_api.__all__:
+        assert hasattr(project_api, name)
 
 
 def _source_hash_status_counts(**overrides):

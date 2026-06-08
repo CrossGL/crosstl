@@ -1,4 +1,4 @@
-"""Repo-scale CrossTL project porting APIs."""
+"""Project scanning, translation, validation, and reporting APIs."""
 
 from .pipeline import (
     ProjectConfig,
