@@ -15360,7 +15360,13 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert sarif_payload["version"] == "2.1.0"
     run = sarif_payload["runs"][0]
     assert run["invocations"][0]["executionSuccessful"] is False
-    assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
+    invocation_properties = run["invocations"][0]["properties"]
+    assert invocation_properties["sourceReport"] == str(report_path)
+    assert (
+        invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    )
+    assert invocation_properties["kind"] == project_pipeline.VALIDATION_REPORT_KIND
+    assert isinstance(invocation_properties["generatedAt"], int)
     assert run["tool"]["driver"]["name"] == "CrossTL project validation"
     assert run["tool"]["driver"]["rules"] == [
         {
@@ -15462,7 +15468,13 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     run = payload["runs"][0]
     assert run["tool"]["driver"]["name"] == "CrossTL project validation"
     assert run["invocations"][0]["executionSuccessful"] is False
-    assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
+    invocation_properties = run["invocations"][0]["properties"]
+    assert invocation_properties["sourceReport"] == str(report_path)
+    assert (
+        invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    )
+    assert invocation_properties["kind"] == project_pipeline.VALIDATION_REPORT_KIND
+    assert isinstance(invocation_properties["generatedAt"], int)
     rules_by_id = {rule["id"]: rule for rule in run["tool"]["driver"]["rules"]}
     assert rules_by_id["project.validate.generated-hash-mismatch"] == {
         "id": "project.validate.generated-hash-mismatch",
@@ -17965,7 +17977,19 @@ def test_project_cli_inspect_report_sarif_reports_diagnostics(tmp_path):
     run = payload["runs"][0]
     assert run["tool"]["driver"]["name"] == "CrossTL project report inspection"
     assert run["invocations"][0]["executionSuccessful"] is False
-    assert run["invocations"][0]["properties"]["sourceReport"] == str(report_path)
+    invocation_properties = run["invocations"][0]["properties"]
+    assert invocation_properties["sourceReport"] == str(report_path)
+    assert (
+        invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    )
+    assert invocation_properties["kind"] == project_pipeline.REPORT_INSPECTION_KIND
+    assert isinstance(invocation_properties["generatedAt"], int)
+    assert (
+        invocation_properties["sourceReportSchemaVersion"]
+        == project_pipeline.REPORT_SCHEMA_VERSION
+    )
+    assert invocation_properties["sourceReportKind"] == project_pipeline.REPORT_KIND
+    assert isinstance(invocation_properties["sourceReportGeneratedAt"], int)
     assert run["tool"]["driver"]["rules"] == [
         {
             "id": "project.config.unsupported-target",

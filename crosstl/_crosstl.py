@@ -757,6 +757,46 @@ def _sarif_location(diagnostic):
     return {"physicalLocation": physical_location}
 
 
+def _sarif_non_negative_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _sarif_invocation_properties(payload):
+    properties = {}
+
+    source_report = payload.get("sourceReport")
+    if isinstance(source_report, str) and source_report:
+        properties["sourceReport"] = source_report
+
+    schema_version = payload.get("schemaVersion")
+    if _sarif_non_negative_int(schema_version):
+        properties["schemaVersion"] = schema_version
+
+    kind = payload.get("kind")
+    if isinstance(kind, str) and kind:
+        properties["kind"] = kind
+
+    generated_at = payload.get("generatedAt")
+    if _sarif_non_negative_int(generated_at):
+        properties["generatedAt"] = generated_at
+
+    report = payload.get("report")
+    if isinstance(report, Mapping):
+        source_schema_version = report.get("schemaVersion")
+        if _sarif_non_negative_int(source_schema_version):
+            properties["sourceReportSchemaVersion"] = source_schema_version
+
+        source_kind = report.get("kind")
+        if isinstance(source_kind, str) and source_kind:
+            properties["sourceReportKind"] = source_kind
+
+        source_generated_at = report.get("generatedAt")
+        if _sarif_non_negative_int(source_generated_at):
+            properties["sourceReportGeneratedAt"] = source_generated_at
+
+    return properties
+
+
 def _format_project_diagnostics_sarif(
     payload, *, tool_name="CrossTL project validation"
 ):
@@ -811,9 +851,7 @@ def _format_project_diagnostics_sarif(
                 "invocations": [
                     {
                         "executionSuccessful": bool(payload.get("success")),
-                        "properties": {
-                            "sourceReport": payload.get("sourceReport"),
-                        },
+                        "properties": _sarif_invocation_properties(payload),
                     }
                 ],
                 "results": results,

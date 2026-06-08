@@ -229,8 +229,9 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --max-migration-actions 20 \
      --max-external-corpus-entries 20
 
-Report inspection includes inspection identity and source report schema/kind
-metadata, source report generation metadata, validation status,
+Report inspection includes inspection identity, SARIF invocation metadata, and
+source report schema/kind metadata, source report generation metadata,
+validation status,
 invalid/unavailable report status, project counts, project configuration path,
 project root, output directory, and configuration counts, failed artifacts with
 variant labels when present, diagnostic code and missing-capability rollups,
