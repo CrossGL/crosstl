@@ -174,6 +174,25 @@ def test_raw_borrow_and_nested_reference_closure_patterns_parse():
     assert isinstance(closure.params[0].pattern, ReferenceNode)
 
 
+def test_reference_named_raw_cast_parses_from_rust_cuda_surface():
+    # Reduced from Rust-GPU/Rust-CUDA crates/cust/src/surface.rs.
+    code = """
+    fn surface(raw: CUDA_RESOURCE_DESC) {
+        cuSurfObjectCreate(uninit.as_mut_ptr(), &raw as *const _).to_result()?;
+    }
+    """
+
+    ast = parse_code(code)
+    call = ast.functions[0].body[0].expression.name.object
+    cast = call.args[1]
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "*const _"
+    assert isinstance(cast.expression, ReferenceNode)
+    assert cast.expression.expression == "raw"
+
+
 def test_for_loop_accepts_destructuring_path_patterns():
     code = """
     fn validate(cases: &[crate::SwitchCase]) {

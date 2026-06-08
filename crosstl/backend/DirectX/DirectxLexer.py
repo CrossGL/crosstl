@@ -649,8 +649,13 @@ class HLSLLexer:
                 cursor += match.end()
 
         if not found_program_block:
+            if self._looks_like_shaderlab_source(code):
+                return ""
             return code
         return "\n".join(extracted_lines)
+
+    def _looks_like_shaderlab_source(self, code: str) -> bool:
+        return re.search(r'(?m)^\s*Shader\s+"[^"]+"', code) is not None
 
     def _find_shaderlab_program_marker(self, text: str, markers):
         for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):

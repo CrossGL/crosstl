@@ -3656,6 +3656,8 @@ class HipParser:
                 self.advance()
             if token_type == "LONG" and self.match("LONG"):
                 self.advance()
+            if token_type == "LONG" and self.match("INT"):
+                self.advance()
 
             while self.match("ASTERISK", "STAR"):
                 self.advance()

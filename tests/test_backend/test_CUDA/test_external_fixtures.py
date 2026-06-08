@@ -2722,3 +2722,23 @@ def test_cuda_samples_tile_spmv_trailing_unsigned_parameter_codegen_reparse():
     assert "u32 seed" in crossgl
     assert "unsigned seed _unused_param" not in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_vector_of_const_char_pointer_type_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # paths:
+    # - cpp/5_Domain_Specific/vulkanImageCUDA/vulkanImageCUDA.cu
+    # - cpp/6_Performance/cudaGraphsPerfScaling/cudaGraphPerfScaling.cu
+    source = """
+    const std::vector<const char *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
+    std::vector<const char *> metricName;
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "var validationLayers: std_vector_ptr_i8" in crossgl
+    assert "var metricName: std_vector_ptr_i8;" in crossgl
+    assert "ptr<std::vector<const char>>" not in crossgl
+    assert_crossgl_reparse(crossgl)

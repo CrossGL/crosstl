@@ -1779,6 +1779,30 @@ def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
     ]
 
 
+def test_parse_unity_shaderlab_without_hlsl_program_blocks_skips_non_hlsl_content():
+    # Reduced from Unity-Built-in-Shaders:
+    # DefaultResourcesExtra/Mobile/Mobile-Particle-Add.shader
+    ast = parse_code("""
+    Shader "Mobile/Particles/Additive" {
+        Properties {
+            _MainTex ("Particle Texture", 2D) = "white" {}
+        }
+
+        SubShader {
+            Pass {
+                SetTexture [_MainTex] {
+                    combine texture * primary
+                }
+            }
+        }
+    }
+    """)
+
+    assert ast.structs == []
+    assert ast.functions == []
+    assert ast.global_variables == []
+
+
 def test_parse_unity_unexpanded_struct_member_macros_from_builtin_shaders():
     ast = parse_code("""
     struct SpeedTreeVB {

@@ -12,3 +12,13 @@ class OpenCLProgramNode(ASTNode):
 
     def __repr__(self):
         return f"OpenCLProgramNode(statements={self.statements})"
+
+
+class OpenCLStatementExpressionNode(ASTNode):
+    """GNU statement-expression block used by some OpenCL C corpora."""
+
+    def __init__(self, statements=None):
+        self.statements = statements or []
+
+    def __repr__(self):
+        return f"OpenCLStatementExpressionNode(statements={self.statements})"

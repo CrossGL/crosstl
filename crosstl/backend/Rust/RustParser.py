@@ -3064,12 +3064,13 @@ class RustParser:
                 if (
                     self.current_token[0] == "IDENTIFIER"
                     and self.current_token[1] == "raw"
+                    and self.peek_token_type() in {"MUT", "CONST"}
                 ):
                     self.eat("IDENTIFIER")
                     is_mutable = False
-                    if self.current_token[0] in {"MUT", "CONST"}:
-                        is_mutable = self.current_token[0] == "MUT"
-                        self.eat(self.current_token[0])
+                    if self.current_token[0] == "MUT":
+                        is_mutable = True
+                    self.eat(self.current_token[0])
                     expr = self.parse_unary_expression()
                     return ReferenceNode(expr, is_mutable)
 

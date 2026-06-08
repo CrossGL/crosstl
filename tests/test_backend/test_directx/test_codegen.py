@@ -594,6 +594,31 @@ def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     assert "_MainTex.Sample(_MainTexSampler, i.uv)" in hlsl
 
 
+def test_codegen_shaderlab_without_hlsl_program_blocks_reparse_empty_shader():
+    # Reduced from Unity-Built-in-Shaders:
+    # DefaultResourcesExtra/Mobile/Mobile-Particle-Add.shader
+    shaderlab = textwrap.dedent("""
+        Shader "Mobile/Particles/Additive" {
+            Properties {
+                _MainTex ("Particle Texture", 2D) = "white" {}
+            }
+
+            SubShader {
+                Pass {
+                    SetTexture [_MainTex] {
+                        combine texture * primary
+                    }
+                }
+            }
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(shaderlab)
+
+    assert crossgl == "shader main {\n}\n"
+    parse_crossgl(crossgl)
+
+
 def test_codegen_skips_unexpanded_struct_member_macros_from_unity_builtins():
     hlsl = textwrap.dedent("""
         struct SpeedTreeVB {

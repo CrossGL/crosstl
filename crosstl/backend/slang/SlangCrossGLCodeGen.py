@@ -38,7 +38,9 @@ class SlangToCrossGLConverter:
         r"^(?P<body>(?:\d+\.\d*|\.\d+|\d+)"
         r"(?:[eE][+-]?\d+)?)(?P<suffix>[fFhHuUlL]*)$"
     )
-    HEX_NUMERIC_LITERAL = re.compile(r"^0[xX][0-9a-fA-F]+[uUlL]*$")
+    HEX_NUMERIC_LITERAL = re.compile(
+        r"^(?P<body>0[xX][0-9a-fA-F]+)(?P<suffix>[uUlL]*)$"
+    )
     RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
     ASSOCIATED_DIFFERENTIAL_TYPE = re.compile(
         r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*(?:[234](?:x[234])?)?)\.Differential$"
@@ -1665,8 +1667,11 @@ class SlangToCrossGLConverter:
     def normalize_numeric_literal(self, value):
         if not isinstance(value, str):
             return value
-        if self.HEX_NUMERIC_LITERAL.match(value):
-            return value
+        hex_match = self.HEX_NUMERIC_LITERAL.match(value)
+        if hex_match:
+            return self.normalize_integer_suffix(
+                hex_match.group("body"), hex_match.group("suffix")
+            )
 
         match = self.DECIMAL_NUMERIC_LITERAL.match(value)
         if not match:
@@ -1677,6 +1682,8 @@ class SlangToCrossGLConverter:
         float_suffix = any(char in "fFhH" for char in suffix)
         integer_suffix = "".join(char for char in suffix if char not in "fFhH")
         float_like = "." in body or "e" in body.lower() or float_suffix
+        if not float_like and integer_suffix:
+            return self.normalize_integer_suffix(body, integer_suffix)
         if not float_like or integer_suffix:
             return value
 
@@ -1688,6 +1695,11 @@ class SlangToCrossGLConverter:
         if "." not in normalized:
             normalized = f"{normalized}.0"
         return normalized
+
+    def normalize_integer_suffix(self, body, suffix):
+        if not suffix:
+            return body
+        return f"{body}u" if "u" in suffix.lower() else body
 
     def map_type(self, slang_type):
         """Map a Slang type name to the closest CrossGL type name."""

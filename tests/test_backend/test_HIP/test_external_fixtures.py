@@ -1790,6 +1790,30 @@ def test_external_rocm_hip_tests_popc_intrinsics_codegen_reparse():
     assert "__popcll" not in crossgl
 
 
+def test_external_hip_tests_unsigned_long_long_sizeof_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/math/integer_intrinsics.cc and catch/unit/deviceLib/popc.cc.
+    source = """
+    void allocate_popc_inputs() {
+        unsigned long long int* hostD;
+        hostD = (unsigned long long int*)malloc(
+            NUM * sizeof(unsigned long long int));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    assignment = ast.statements[0].body[1]
+    malloc_call = assignment.right.expression
+    sizeof_call = malloc_call.args[0].right
+
+    assert assignment.right.target_type == "unsigned long long *"
+    assert malloc_call.name == "malloc"
+    assert sizeof_call.name == "sizeof"
+    assert sizeof_call.args == ["unsigned long long"]
+    assert "var hostD: ptr<u64>;" in crossgl
+    assert "sizeof(unsigned long long)" in crossgl
+
+
 def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():
     # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
     # catch/unit/math/integer_intrinsics.cc.

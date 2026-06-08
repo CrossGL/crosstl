@@ -156,6 +156,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         node.__class__ = OpenCLProgramNode
         return self.visit_OpenCLProgramNode(node)
 
+    def visit_OpenCLStatementExpressionNode(self, node):
+        for stmt in getattr(node, "statements", []) or []:
+            self.emit_statement(stmt)
+
     def visit_kernel_as_compute_shader(self, kernel):
         workgroup_size = self.opencl_workgroup_size(kernel)
         self.emit("@compute")

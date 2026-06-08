@@ -32,6 +32,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
     },
+    "shader-slang/slang-gh-4104-2026-06-08": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
     "shader-slang/slang-property-2026-06-04": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
@@ -1662,6 +1666,34 @@ EXTERNAL_FIXTURES = [
             "void computeMain()",
         ],
         "not_contains": ["namespace foo", "foo::bar"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: tests/bugs/gh-4104-div.slang
+        "id": "slang_hex_ull_literal_suffix_codegen_reparse",
+        "repo": "shader-slang/slang-gh-4104-2026-06-08",
+        "path": "tests/bugs/gh-4104-div.slang",
+        "source": (
+            """
+            RWStructuredBuffer<uint64_t> outputBuffer;
+
+            static const uint64_t u64Const = 0xffffffffffffffffULL;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                outputBuffer[0] = u64Const;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "static const uint64_t u64Const = 0xffffffffffffffffu;",
+            "outputBuffer[0] = u64Const;",
+        ],
+        "not_contains": ["ULL", "LL"],
     },
     {
         # Source: https://github.com/shader-slang/slang

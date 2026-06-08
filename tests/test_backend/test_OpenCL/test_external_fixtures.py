@@ -31,6 +31,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "f2565512667db3d4a7142ba3d3248a02f7be917d",
         "path": "data/kernels/blendop.cl",
     },
+    "darktable_channelmixer_statement_expression_switch": {
+        "url": "https://github.com/darktable-org/darktable",
+        "commit": "f2565512667db3d4a7142ba3d3248a02f7be917d",
+        "path": "data/kernels/channelmixer.cl",
+    },
 }
 
 
@@ -166,3 +171,38 @@ def test_external_darktable_comma_assignment_statement_codegen_reparse():
     assert "scaled[0] = (pixel.x / 100.0f);" in crossgl
     assert "scaled[1] = (pixel.y / 256.0f);" in crossgl
     assert "scaled[0] = pixel.x / 100.0f, scaled[1]" not in crossgl
+
+
+def test_external_darktable_channelmixer_statement_expression_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "darktable_channelmixer_statement_expression_switch"
+    ]
+    assert source_info["commit"] == "f2565512667db3d4a7142ba3d3248a02f7be917d"
+    assert source_info["path"] == "data/kernels/channelmixer.cl"
+
+    source = """
+    #define unswitch_channelmixer(kind) \\
+      ({ switch(kind) \\
+        { \\
+          case 0: \\
+          { \\
+            out[0] = 1.0f; \\
+            break; \\
+          } \\
+          default: \\
+          { \\
+            out[0] = 0.0f; \\
+            break; \\
+          } \\
+        }})
+
+    kernel void channelmixer_probe(global float *out, const int kind) {
+        unswitch_channelmixer(kind);
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "switch (kind)" in crossgl
+    assert "case 0:" in crossgl
+    assert "out[0] = 1.0f;" in crossgl

@@ -6415,12 +6415,6 @@ class CudaToCrossGLConverter:
         if wmma_type is not None:
             return wmma_type
 
-        if self.has_array_suffix(cuda_type):
-            return self.convert_cuda_array_type(cuda_type, type_mapping)
-
-        if "*" in cuda_type:
-            return self.convert_cuda_pointer_type(cuda_type)
-
         if self.is_decltype_type_name(cuda_type):
             return "auto"
 
@@ -6429,6 +6423,12 @@ class CudaToCrossGLConverter:
         )
         if expression_template_type is not None:
             return expression_template_type
+
+        if self.has_array_suffix(cuda_type):
+            return self.convert_cuda_array_type(cuda_type, type_mapping)
+
+        if "*" in cuda_type:
+            return self.convert_cuda_pointer_type(cuda_type)
 
         template_type = None
         if cuda_type in self.cuda_record_names:
@@ -6684,7 +6684,7 @@ class CudaToCrossGLConverter:
         mapped_type = self.convert_cuda_type_to_crossgl(base_type)
 
         for _ in range(pointer_depth):
-            mapped_type = f"ptr<{mapped_type}>"
+            mapped_type = self.wrap_crossgl_pointer_type(mapped_type)
 
         return mapped_type
 
@@ -6694,9 +6694,13 @@ class CudaToCrossGLConverter:
         mapped_type = self.convert_cuda_type_to_crossgl(base_type)
 
         for _ in range(max(0, pointer_depth - 1)):
-            mapped_type = f"ptr<{mapped_type}>"
+            mapped_type = self.wrap_crossgl_pointer_type(mapped_type)
 
         return mapped_type
+
+    def wrap_crossgl_pointer_type(self, mapped_type):
+        element_type = self.crossgl_safe_generic_type_argument(mapped_type)
+        return f"ptr<{element_type}>"
 
     def strip_type_qualifiers(self, type_name):
         qualifiers = {

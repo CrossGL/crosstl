@@ -1,4 +1,10 @@
-from crosstl.backend.OpenCL.OpenCLAst import FunctionCallNode, KernelNode, SyncNode
+from crosstl.backend.OpenCL.OpenCLAst import (
+    FunctionCallNode,
+    KernelNode,
+    OpenCLStatementExpressionNode,
+    SwitchNode,
+    SyncNode,
+)
 from crosstl.backend.OpenCL.OpenCLLexer import OpenCLLexer
 from crosstl.backend.OpenCL.OpenCLParser import OpenCLParser, OpenCLProgramNode
 
@@ -159,3 +165,30 @@ def test_darktable_pointer_to_array_const_declarator_parses():
     assert helper.name == "FCxtrans"
     assert helper.params[2]["name"] == "xtrans"
     assert helper.params[2]["type"] == "__global__ const unsigned char (*)[6]"
+
+
+def test_darktable_gnu_statement_expression_switch_macro_parses():
+    ast = parse_code("""
+        #define unswitch_channelmixer(kind) \\
+          ({ switch(kind) \\
+            { \\
+              case 0: \\
+              { \\
+                out[0] = 1.0f; \\
+                break; \\
+              } \\
+              default: \\
+              { \\
+                out[0] = 0.0f; \\
+                break; \\
+              } \\
+            }})
+
+        kernel void channelmixer_probe(global float *out, const int kind) {
+            unswitch_channelmixer(kind);
+        }
+        """)
+
+    statement_expr = ast.statements[0].body[0]
+    assert isinstance(statement_expr, OpenCLStatementExpressionNode)
+    assert isinstance(statement_expr.statements[0], SwitchNode)

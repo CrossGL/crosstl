@@ -5,7 +5,7 @@ import re
 from crosstl.backend.HIP.HipAst import FunctionCallNode, FunctionNode, KernelNode
 from crosstl.backend.HIP.HipParser import HipParser
 
-from .OpenCLAst import OpenCLProgramNode
+from .OpenCLAst import OpenCLProgramNode, OpenCLStatementExpressionNode
 from .OpenCLLexer import OpenCLLexer
 
 
@@ -407,9 +407,28 @@ class OpenCLParser(HipParser):
         return FunctionNode(return_type, name, params, body, qualifiers, attributes)
 
     def parse_primary_expression(self):
+        if self.is_opencl_statement_expression_start():
+            return self.parse_opencl_statement_expression()
         if self.is_opencl_vector_constructor_cast():
             return self.parse_opencl_vector_constructor_cast()
         return super().parse_primary_expression()
+
+    def is_opencl_statement_expression_start(self):
+        if not self.match("LPAREN"):
+            return False
+
+        block_start = self.skip_newlines_at_pos(self.pos + 1)
+        return (
+            block_start < len(self.tokens) and self.tokens[block_start].type == "LBRACE"
+        )
+
+    def parse_opencl_statement_expression(self):
+        self.consume("LPAREN")
+        self.skip_newlines()
+        statements = self.parse_block()
+        self.skip_newlines()
+        self.consume("RPAREN")
+        return OpenCLStatementExpressionNode(statements)
 
     def parse_unary_expression(self):
         self.skip_newlines()
