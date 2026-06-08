@@ -569,19 +569,66 @@ def _format_validation_run_rollup(label, counts):
     )
 
 
+def _format_payload_schema_version(payload, label):
+    if not isinstance(payload, Mapping):
+        return None
+
+    schema_version = payload.get("schemaVersion")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 0
+    ):
+        return None
+    return f"{label}: {schema_version}"
+
+
+def _format_payload_kind(payload, label):
+    if not isinstance(payload, Mapping):
+        return None
+
+    kind = payload.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return None
+    return f"{label}: {kind}"
+
+
+def _format_payload_generated_at(payload, label):
+    if not isinstance(payload, Mapping):
+        return None
+
+    generated_at = payload.get("generatedAt")
+    if (
+        not isinstance(generated_at, int)
+        or isinstance(generated_at, bool)
+        or generated_at < 0
+    ):
+        return None
+    return f"{label}: {generated_at}"
+
+
 def _format_project_validation_report(payload):
     counts = payload.get("diagnosticCounts", {})
     counts = counts if isinstance(counts, Mapping) else {}
-    lines = [
-        f"Project validation report: {payload.get('sourceReport')}",
-        f"Status: {'ok' if payload.get('success') else 'failed'}",
-        (
-            "Diagnostics: "
-            f"{counts.get('error', 0)} errors, "
-            f"{counts.get('warning', 0)} warnings, "
-            f"{counts.get('note', 0)} notes"
-        ),
-    ]
+    lines = [f"Project validation report: {payload.get('sourceReport')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Validation schema version"),
+        _format_payload_kind(payload, "Validation kind"),
+        _format_payload_generated_at(payload, "Validation generated at"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.extend(
+        [
+            f"Status: {'ok' if payload.get('success') else 'failed'}",
+            (
+                "Diagnostics: "
+                f"{counts.get('error', 0)} errors, "
+                f"{counts.get('warning', 0)} warnings, "
+                f"{counts.get('note', 0)} notes"
+            ),
+        ]
+    )
 
     for line in (
         _format_count_rollup(

@@ -15323,6 +15323,17 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
 
     assert text_result.returncode == 1
     assert f"Project validation report: {report_path}" in text_result.stdout
+    assert (
+        f"Validation schema version: {payload['schemaVersion']}" in text_result.stdout
+    )
+    assert f"Validation kind: {payload['kind']}" in text_result.stdout
+    validation_generated_lines = [
+        line
+        for line in text_result.stdout.splitlines()
+        if line.startswith("Validation generated at: ")
+    ]
+    assert len(validation_generated_lines) == 1
+    assert int(validation_generated_lines[0].split(": ", 1)[1]) >= 0
     assert "Status: failed" in text_result.stdout
     assert "Diagnostics: 1 errors, 0 warnings, 0 notes" in text_result.stdout
     assert "Diagnostic codes: project.validate.failed-artifact=1" in (

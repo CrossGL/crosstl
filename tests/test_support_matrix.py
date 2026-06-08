@@ -1531,6 +1531,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "validate-project JSON, text, and SARIF summaries"
             in backend_support["notes"]
         )
+        assert "validation report schema/kind/generated-at metadata" in (
+            backend_support["notes"]
+        )
         assert "direct validation report artifact target" in backend_support["notes"]
         assert "artifact source backend" in backend_support["notes"]
         assert "toolchain run status" in backend_support["notes"]

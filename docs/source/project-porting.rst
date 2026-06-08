@@ -207,8 +207,9 @@ toolchain-run variant rollups for validation results.
 The JSON validation report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift.
 The default output is JSON; ``--format text``
-prints a concise validation summary with the same rollups, and ``--format
-sarif`` emits validation diagnostics as SARIF.
+prints a concise validation summary with validation report identity metadata
+and the same rollups, and ``--format sarif`` emits validation diagnostics as
+SARIF.
 
 Inspect an existing report as a concise JSON, text, or SARIF summary:
 
