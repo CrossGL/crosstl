@@ -21335,8 +21335,9 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     generated_span_preview = crosstl_cli._format_source_map_span_preview(generated_span)
     assert (
         "- simple.cgl -> out/cgl/simple.cgl "
-        f"(sourceBackend=cgl, target=cgl, granularity=line, "
-        f"mappings={line_mapping_count}, sourceSpan={source_span_preview}, "
+        f"(sourceBackend=cgl, target=cgl, sourceMapTarget=cgl, "
+        f"granularity=line, mappings={line_mapping_count}, "
+        f"sourceSpan={source_span_preview}, "
         f"generatedSpan={generated_span_preview}, "
         f"sourceHash={source_hash_preview}, sourceSize={source_size} bytes, "
         f"generatedHash={generated_hash_preview}, "
@@ -21354,8 +21355,9 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     )
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
-        f"(sourceBackend=cgl, target=cgl, granularity=line, "
-        f"mappings={line_mapping_count}, sourceHash={source_hash_preview}, "
+        f"(sourceBackend=cgl, target=cgl, sourceRemapTarget=cgl, "
+        f"granularity=line, mappings={line_mapping_count}, "
+        f"sourceHash={source_hash_preview}, "
         f"sourceSize={source_size} bytes, "
         f"generatedHash={generated_hash_preview}, "
         f"generatedSize={generated_size} bytes, hash={source_remap_hash_preview}, "

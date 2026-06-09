@@ -609,8 +609,8 @@ Project reports are JSON documents with:
   The report records the sidecar path, per-artifact mapping count, aggregate
   source-remap mapping count, hash, generated-file identity, summary rollups by
   target and source backend, and bounded inspection
-  samples for source-map and source-remap artifacts with source and generated
-  hash and byte-size metadata. Validation checks that
+  samples for source-map and source-remap artifacts with declared target,
+  source and generated hash, and byte-size metadata. Validation checks that
   artifact-level source-map spans still cover the current source and generated
   files, recomputes line-preserving mappings, requires source-remap metadata
   mapping counts to match source-map mappings, and checks that compiler
