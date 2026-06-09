@@ -3461,7 +3461,7 @@ class HLSLParser:
                 expr = MemberAccessNode(expr, member)
             elif self.current_token_is_double_colon():
                 expr = self.parse_scoped_name(expr)
-            elif self.looks_like_template_call_arguments() and isinstance(expr, str):
+            elif self.looks_like_template_id_arguments() and isinstance(expr, str):
                 expr = self.format_templated_name(expr, self.parse_generic_arguments())
             elif self.current_token[0] == "LPAREN":
                 args = self.parse_call_arguments()
@@ -3515,6 +3515,52 @@ class HLSLParser:
                         else ("EOF", "")
                     )
                     return next_token[0] == "LPAREN"
+            elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
+                return False
+            elif token_type == "EOF":
+                return False
+            idx += 1
+        return False
+
+    def looks_like_template_id_arguments(self):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        depth = 0
+        idx = self.current_index
+        saw_top_level_comma = False
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN" or (
+                        saw_top_level_comma
+                        and next_token[0]
+                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    )
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN" or (
+                        saw_top_level_comma
+                        and next_token[0]
+                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    )
+            elif depth == 1 and token_type == "COMMA":
+                saw_top_level_comma = True
             elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
                 return False
             elif token_type == "EOF":

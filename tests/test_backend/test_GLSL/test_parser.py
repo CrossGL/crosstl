@@ -225,6 +225,36 @@ def test_parse_function_parameters_without_names():
     ]
 
 
+def test_parse_variadic_function_parameter_from_glslang_variadic_compute():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/variadic.comp.
+    code = textwrap.dedent("""
+        #version 450
+
+        void foo(int n, ...)
+        {
+        }
+
+        void main()
+        {
+            foo(7);
+            foo(8, 43);
+            foo(9, 42.0, 21.05);
+        }
+        """)
+
+    ast = parse_ok(code, "compute")
+    foo = next(function for function in ast.functions if function.name == "foo")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert [(param.vtype, param.name) for param in foo.params] == [
+        ("int", "n"),
+        ("...", "..."),
+    ]
+    assert foo.params[1].is_variadic is True
+    assert len(main.body) == 3
+
+
 def test_parse_struct_with_brace_on_next_line():
     code = textwrap.dedent("""
         #version 450

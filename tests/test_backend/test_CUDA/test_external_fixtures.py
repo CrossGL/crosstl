@@ -4,6 +4,7 @@ import subprocess
 
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
+    CastNode,
     ForNode,
     FunctionCallNode,
     IfNode,
@@ -406,6 +407,32 @@ def test_cuda_samples_eglstream_elaborated_struct_types_codegen_reparse():
     assert "f64 getMicrosecond(timespec t)" in crossgl
     assert "void getTime(ptr<timespec> t)" in crossgl
     assert "struct timespec" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_samples_helper_multiprocess_elaborated_struct_cast_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: Common/helper_multiprocess.cpp
+    source = """
+    void host(int server_fd, sockaddr_un servaddr) {
+        if (bind(server_fd, (struct sockaddr *)&servaddr, SUN_LEN(&servaddr)) < 0) {
+            return;
+        }
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    bind_call = ast.functions[0].body[0].condition.left
+    sockaddr_arg = bind_call.args[1]
+
+    assert isinstance(bind_call, FunctionCallNode)
+    assert isinstance(sockaddr_arg, CastNode)
+    assert sockaddr_arg.target_type == "struct sockaddr *"
+    assert "ptr<sockaddr>((&servaddr))" in crossgl
+    assert "struct sockaddr" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

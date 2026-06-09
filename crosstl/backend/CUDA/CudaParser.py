@@ -4903,27 +4903,30 @@ class CudaParser:
             while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
                 self.eat(self.current_token[0])
 
-            if self.current_token[0] not in self.TYPE_TOKENS or (
-                self.current_token[0] == "IDENTIFIER"
-                and not self.is_identifier_type_name(self.current_token[1])
-                and not self.is_identifier_cast_target_at_current_index()
-                and not self.is_qualified_identifier_cast_target_at_current_index()
-            ):
-                return False
+            if self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
+                self.parse_elaborated_type_name()
+            else:
+                if self.current_token[0] not in self.TYPE_TOKENS or (
+                    self.current_token[0] == "IDENTIFIER"
+                    and not self.is_identifier_type_name(self.current_token[1])
+                    and not self.is_identifier_cast_target_at_current_index()
+                    and not self.is_qualified_identifier_cast_target_at_current_index()
+                ):
+                    return False
 
-            token_type = self.current_token[0]
-            self.eat(token_type)
-            self.consume_composite_scalar_type_suffix(token_type)
+                token_type = self.current_token[0]
+                self.eat(token_type)
+                self.consume_composite_scalar_type_suffix(token_type)
 
-            while True:
-                if self.current_token[0] == "LESS_THAN":
-                    self.parse_template_suffix()
-                    continue
-                if self.current_token[0] == "SCOPE":
-                    self.eat("SCOPE")
-                    self.parse_name_component()
-                    continue
-                break
+                while True:
+                    if self.current_token[0] == "LESS_THAN":
+                        self.parse_template_suffix()
+                        continue
+                    if self.current_token[0] == "SCOPE":
+                        self.eat("SCOPE")
+                        self.parse_name_component()
+                        continue
+                    break
 
             while self.current_token[0] in {
                 "MULTIPLY",

@@ -1774,6 +1774,29 @@ def test_parse_dependent_typename_scoped_template_return_from_dxc_sfinae():
     assert wrapper.members[-1].name == "val"
 
 
+def test_parse_variable_template_id_expressions_from_dxc_var_template():
+    # Source: microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/CodeGenSPIRV/var.template.hlsl
+    ast = parse_code("""
+    template <class, class>
+    static const bool is_same_v = false;
+
+    template <class T>
+    static const bool is_same_v<T, T> = true;
+
+    RWStructuredBuffer<bool> outs;
+
+    void main() {
+      outs[0] = is_same_v<int, bool>;
+      outs[1] = is_same_v<int, int>;
+    }
+    """)
+
+    assert ast.global_variables[-1].name == "outs"
+    assert ast.functions[0].body[0].right == "is_same_v<int, bool>"
+    assert ast.functions[0].body[1].right == "is_same_v<int, int>"
+
+
 def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
     ast = parse_code("""
     Shader "Custom/ExtractedProgram"

@@ -25,6 +25,13 @@ class OpenCLPreprocessor(HLSLPreprocessor):
         )
         for name in ("VECTOR_SIZE_I", "VECTOR_SIZE_J", "VECTOR_SIZE_K"):
             self.macros.setdefault(name, Macro(name=name, replacement="1"))
+        for name in (
+            "DECLARE_INPUT_MAT_N",
+            "DECLARE_OUTPUT_MAT_N",
+            "DECLARE_INDEX_N",
+            "PROCESS_ELEM_N",
+        ):
+            self.macros.setdefault(name, Macro(name=name, replacement=""))
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         code = self._mask_comments(code)

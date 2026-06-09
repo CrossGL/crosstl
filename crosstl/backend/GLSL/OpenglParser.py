@@ -1737,6 +1737,14 @@ class GLSLParser:
         if self.current_token[0] != "RPAREN":
             while True:
                 self.skip_newlines()
+                if self.current_token[0] == "ELLIPSIS":
+                    self.eat("ELLIPSIS")
+                    params.append(VariableNode("...", "...", is_variadic=True))
+                    self.skip_newlines()
+                    if self.current_token[0] != "RPAREN":
+                        raise SyntaxError("GLSL variadic parameter must be last")
+                    break
+
                 qualifiers = self.parse_qualifiers()
                 param_type = self.parse_type()
                 type_array_sizes = []

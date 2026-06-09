@@ -7266,6 +7266,8 @@ class VulkanParser:
 
         while self.current_token[0] != "RBRACE":
             self.skip_hlsl_attributes()
+            while self.current_token[0] in self.PRECISION_QUALIFIER_TOKENS:
+                self.eat(self.current_token[0])
             if self.current_token[0] in [
                 "VEC2",
                 "VEC3",

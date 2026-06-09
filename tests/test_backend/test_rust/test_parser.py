@@ -2145,6 +2145,19 @@ def test_named_function_pointer_type_alias_parsing_from_rust_gpu():
     )
 
 
+def test_nested_qualified_associated_type_generic_from_rust_gpu():
+    # Reduced from Rust-GPU/rust-gpu crates/rustc_codegen_spirv/src/lib.rs.
+    code = """
+    pub type BackendModule = ModuleCodegen<<Self as WriteBackendMethods>::Module>;
+    """
+
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == (
+        "ModuleCodegen<<Self as WriteBackendMethods>::Module>"
+    )
+
+
 def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handler():
     # Reduced from https://github.com/bevyengine/bevy commit
     # 67f441da62424f83a1bb6e3f5145034e0583d495,

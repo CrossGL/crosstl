@@ -166,6 +166,28 @@ def test_parse_struct_instance_declarator_from_vulkan_compute_samples():
     assert ast.structs[0].members[0].name == "avg[9]"
 
 
+def test_parse_precision_qualified_struct_members_from_glslang_spv_430():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/glslang
+    # Path: Test/spv.430.vert
+    code = """
+    struct S {
+        mediump float a;
+        highp uvec2 b;
+        highp vec3 c;
+    };
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.structs[0].name == "S"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("float", "a"),
+        ("uvec2", "b"),
+        ("vec3", "c"),
+    ]
+
+
 def test_parse_hlsl_attribute_and_semantic_declarations_from_vulkan_samples():
     code = """
     struct VSOutput

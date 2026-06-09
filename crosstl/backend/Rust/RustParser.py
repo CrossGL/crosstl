@@ -1457,7 +1457,7 @@ class RustParser:
                 self.eat(self.current_token[0])
             elif self.current_token[0] == "EXCLAMATION":
                 type_parts.append(self.parse_type_macro_suffix())
-            elif self.current_token[0] == "LESS_THAN":
+            elif self.current_token[0] in {"LESS_THAN", "SHIFT_LEFT"}:
                 type_parts.append(self.parse_generic_argument_suffix())
             elif self.current_token[0] == "LPAREN" and self.is_callable_trait_type(
                 type_parts
@@ -1588,10 +1588,17 @@ class RustParser:
         return f"({', '.join(elements)})"
 
     def parse_generic_argument_suffix(self):
+        if self.current_token[0] == "SHIFT_LEFT":
+            self.split_shift_left_token()
         self.eat("LESS_THAN")
         arguments = self.collect_token_text_until({"GREATER_THAN"})
         self.eat("GREATER_THAN")
         return f"<{arguments}>"
+
+    def split_shift_left_token(self):
+        self.tokens[self.current_index] = ("LESS_THAN", "<")
+        self.tokens.insert(self.current_index + 1, ("LESS_THAN", "<"))
+        self.current_token = self.tokens[self.current_index]
 
     def parse_qualified_path_type(self):
         self.eat("LESS_THAN")
