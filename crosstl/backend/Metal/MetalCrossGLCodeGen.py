@@ -2353,6 +2353,10 @@ class MetalToCrossGLConverter:
         while base.endswith("*") or base.endswith("&"):
             suffix = base[-1] + suffix
             base = base[:-1].strip()
+        for tag_prefix in ("struct ", "enum "):
+            if base.startswith(tag_prefix):
+                base = base[len(tag_prefix) :].strip()
+                break
 
         atomic_alias = self.atomic_type_alias(base)
         if atomic_alias:

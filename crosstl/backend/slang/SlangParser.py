@@ -148,6 +148,7 @@ class SlangParser:
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"GENERIC", "VOID"}
     )
     EXPRESSION_PACK_MARKER_IDENTIFIERS = {"expand", "each"}
+    CONTEXTUAL_IDENTIFIER_TOKENS = {"IDENTIFIER", "MODULE"}
 
     def __init__(self, tokens):
         self.tokens = tokens
@@ -169,6 +170,13 @@ class SlangParser:
             self.skip_comments()
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+
+    def parse_contextual_identifier(self):
+        if self.current_token[0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS:
+            raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+        value = self.current_token[1]
+        self.eat(self.current_token[0])
+        return value
 
     def parse(self):
         shader = self.parse_shader()
@@ -2830,21 +2838,26 @@ class SlangParser:
             self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS | {"IDENTIFIER"}
         ):
             return False
-        if token_type == "IDENTIFIER" and self.tokens[current_pos + 1][0] not in {
-            "IDENTIFIER",
-            "LBRACKET",
-            "LESS_THAN",
-            "MULTIPLY",
-            "DOT",
-            "COLON",
-        }:
+        if token_type == "IDENTIFIER" and self.tokens[current_pos + 1][0] not in (
+            self.CONTEXTUAL_IDENTIFIER_TOKENS
+            | {
+                "LBRACKET",
+                "LESS_THAN",
+                "MULTIPLY",
+                "DOT",
+                "COLON",
+            }
+        ):
             return False
 
         next_pos = self.skip_generic_type_suffix_tokens(current_pos + 1)
         next_pos = self.skip_qualified_type_suffix_tokens(next_pos)
         next_pos = self.skip_type_array_suffix_tokens(next_pos)
         next_pos = self.skip_pointer_declarator_tokens(next_pos)
-        return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "IDENTIFIER"
+        return (
+            next_pos < len(self.tokens)
+            and self.tokens[next_pos][0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+        )
 
     def is_anonymous_struct_variable_declaration_start(self):
         return (
@@ -2869,8 +2882,7 @@ class SlangParser:
 
         declarations = []
         while True:
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_contextual_identifier()
             variable = VariableNode(
                 struct_name,
                 name,
@@ -2910,8 +2922,7 @@ class SlangParser:
         declarations = []
 
         while True:
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_contextual_identifier()
             array_sizes = self.parse_array_suffixes()
             variable = VariableNode(
                 var_type,
@@ -3436,8 +3447,8 @@ class SlangParser:
 
     def parse_primary(self):
         if (
-            self.current_token[0]
-            in {"IDENTIFIER"} | self.EXPRESSION_TYPE_OPERAND_TOKENS
+            self.current_token[0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+            or self.current_token[0] in self.EXPRESSION_TYPE_OPERAND_TOKENS
         ):
             if self.current_token[0] in self.EXPRESSION_TYPE_OPERAND_TOKENS:
                 type_name = self.current_token[1]
@@ -3680,8 +3691,7 @@ class SlangParser:
         return text.strip()
 
     def parse_function_call_or_identifier(self):
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_contextual_identifier()
         while True:
             if (
                 self.current_token[0] == "LESS_THAN"

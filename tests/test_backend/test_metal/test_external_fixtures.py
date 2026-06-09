@@ -55,6 +55,7 @@ CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
 LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
+LLAMA_CPP_METAL_DEVICE_COMMIT = "f0152efe401acd5b329b5f62d87dc070a6d069f0"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
@@ -1542,6 +1543,58 @@ EXTERNAL_FIXTURES = [
                     uint tpig[[thread_position_in_grid]]) {
                 dst[tpig] = args.val;
             }
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_ggml_metal_keyword_member_name",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_METAL_DEVICE_COMMIT,
+        "source_path": "ggml/src/ggml-metal/ggml-metal-device.h",
+        "roundtrip": True,
+        "contains": [
+            "struct ggml_metal_buffer_id",
+            "void* metal;",
+            "uint64 offs;",
+            "struct ggml_metal_pipeline_with_params",
+            "int nsg;",
+            "ggml_metal_device_id device_id;",
+        ],
+        "not_contains": ["enum ggml_metal_device_id device_id;"],
+        "source": (
+            """
+            // Reduced from the ggml Metal device header. The host-side C API
+            // uses `metal` as a struct member name for an id<MTLBuffer> handle
+            // and declares prototypes with `struct tag` return types and
+            // `enum tag` parameters.
+            enum ggml_metal_device_id {
+                GGML_METAL_DEVICE_ID_ANY = -1
+            };
+
+            struct ggml_metal_buffer_id {
+                void * metal;
+                size_t offs;
+            };
+
+            struct ggml_metal_device_props {
+                enum ggml_metal_device_id device_id;
+            };
+
+            typedef struct ggml_metal_library * ggml_metal_library_t;
+
+            struct ggml_metal_pipeline_with_params {
+                int nsg;
+            };
+
+            struct ggml_metal_pipeline_with_params
+            ggml_metal_library_get_pipeline(
+                ggml_metal_library_t lib,
+                const char * name);
+
+            struct ggml_metal_pipeline_with_params
+            ggml_metal_library_get_pipeline_base(
+                ggml_metal_library_t lib,
+                enum ggml_op op);
         """
         ),
     },

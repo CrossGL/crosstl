@@ -2409,7 +2409,7 @@ class RustParser:
                 paren_depth == 0
                 and bracket_depth == 0
                 and brace_depth == 0
-                and token_type == "LBRACE"
+                and token_type in {"FAT_ARROW", "LBRACE"}
             ):
                 return False
 
@@ -2512,7 +2512,7 @@ class RustParser:
             guard = None
             if self.current_token[0] == "IF":
                 self.eat("IF")
-                guard = self.parse_expression()
+                guard = self.parse_if_condition()
 
             self.eat("FAT_ARROW")
 
@@ -3347,7 +3347,7 @@ class RustParser:
         guard = None
         if self.current_token[0] == "IF":
             self.eat("IF")
-            guard = self.parse_expression()
+            guard = self.parse_if_condition()
 
         if self.current_token[0] == "COMMA":
             self.eat("COMMA")

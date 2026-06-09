@@ -5,6 +5,7 @@ import subprocess
 from crosstl.backend.CUDA.CudaAst import (
     AtomicOperationNode,
     CastNode,
+    EnumNode,
     ForNode,
     FunctionCallNode,
     IfNode,
@@ -62,6 +63,7 @@ EXTERNAL_SAMPLES = [
             "cub/cub/device/dispatch/kernels/kernel_transform.cuh",
             "libcudacxx/include/cuda/__bit/bit_reverse.h",
             "libcudacxx/include/cuda/std/__concepts/equality_comparable.h",
+            "libcudacxx/include/cuda/std/__fwd/fp.h",
             "libcudacxx/include/cuda/std/__variant/comparison.h",
             "thrust/examples/cuda/async_reduce.cu",
         ],
@@ -211,6 +213,43 @@ def test_cccl_libcudacxx_concept_emulation_declaration_is_skipped():
     assert "i32 keep_after_concept(i32 value)" in crossgl
     assert "_CCCL_CONCEPT" not in crossgl
     assert "_CCCL_REQUIRES_EXPR" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_libcudacxx_forward_scoped_enum_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5a9ea633bfe63f113f4e99ecd505985ec2c38206
+    # path: libcudacxx/include/cuda/std/__fwd/fp.h
+    source = """
+    _CCCL_BEGIN_NAMESPACE_CUDA_STD
+
+    enum class __fp_format;
+
+    template <__fp_format _Fmt>
+    class __cccl_fp;
+
+    __device__ int keep_after_forward_decl(int value) {
+        return value;
+    }
+
+    _CCCL_END_NAMESPACE_CUDA_STD
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert isinstance(ast.structs[0], EnumNode)
+    assert ast.structs[0].name == "__fp_format"
+    assert ast.structs[0].members == []
+    assert ast.structs[0].is_scoped is True
+    assert isinstance(ast.structs[1], StructNode)
+    assert ast.structs[1].name == "__cccl_fp"
+    assert ast.structs[1].members == []
+    assert [function.name for function in ast.functions] == ["keep_after_forward_decl"]
+    assert "enum __fp_format" in crossgl
+    assert "struct cccl_fp" in crossgl
+    assert "i32 keep_after_forward_decl(i32 value)" in crossgl
     assert_crossgl_reparse(crossgl)
 
 

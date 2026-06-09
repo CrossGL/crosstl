@@ -130,7 +130,7 @@ RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
-KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER"}
+KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
 OPERATOR_OVERLOAD_TOKENS = {
@@ -394,9 +394,14 @@ class MetalParser:
                 elif isinstance(declaration, StructNode):
                     structs.append(declaration)
             elif self.current_token[0] == "STRUCT":
-                struct = self.parse_struct()
-                if struct is not None:
-                    structs.append(struct)
+                if self.is_function_definition():
+                    function = self.parse_function()
+                    if function is not None:
+                        functions.append(function)
+                else:
+                    struct = self.parse_struct()
+                    if struct is not None:
+                        structs.append(struct)
             elif self.current_token[0] == "CLASS":
                 class_node = self.parse_class()
                 if class_node is not None:
@@ -904,6 +909,13 @@ class MetalParser:
         if tok_type == "IDENTIFIER" and self.tokens[idx][1] in SIGNED_TYPE_PREFIXES:
             idx = self.skip_signed_type_prefix_at(idx)
             type_name = "int"
+        elif (
+            tok_type in {"STRUCT", "ENUM"}
+            and idx + 1 < len(self.tokens)
+            and self.tokens[idx + 1][0] == "IDENTIFIER"
+        ):
+            type_name = f"{self.tokens[idx][1]} {self.tokens[idx + 1][1]}"
+            idx += 2
         elif tok_type not in TYPE_TOKENS:
             return False
         else:
@@ -1509,9 +1521,13 @@ class MetalParser:
             if attributes is not None:
                 attributes.extend(parsed_attributes)
 
-        if self.current_token[0] == "STRUCT" and self.peek(1)[0] == "IDENTIFIER":
-            self.eat("STRUCT")
-            base_type = self.current_token[1]
+        if (
+            self.current_token[0] in {"STRUCT", "ENUM"}
+            and self.peek(1)[0] == "IDENTIFIER"
+        ):
+            tag_kind = self.current_token[1]
+            self.eat(self.current_token[0])
+            base_type = f"{tag_kind} {self.current_token[1]}"
             self.eat("IDENTIFIER")
         elif (
             self.current_token[0] == "IDENTIFIER"

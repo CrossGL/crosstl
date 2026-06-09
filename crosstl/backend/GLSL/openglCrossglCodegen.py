@@ -291,7 +291,7 @@ class GLSLToCrossGLConverter:
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     DEFAULT_SHADER_TYPE = "vertex"
 
-    def __init__(self, shader_type="vertex"):
+    def __init__(self, shader_type=None):
         self.shader_type = shader_type
         self.indent_level = 0
         self.indent_str = "    "

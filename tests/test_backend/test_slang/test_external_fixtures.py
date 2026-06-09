@@ -1822,6 +1822,41 @@ EXTERNAL_FIXTURES = [
     },
     {
         # Source: https://github.com/shader-slang/slang
+        # Commit: 6b9f98ff90facc35306a0ba643dfecb59a870156
+        # Path: tests/autodiff/callable-constraint-witness-rollback.slang
+        "id": "slang_contextual_module_identifier_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": "tests/autodiff/callable-constraint-witness-rollback.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            struct InferenceModule
+            {
+                float forward(float input)
+                {
+                    return input;
+                }
+            };
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                InferenceModule module;
+                outputBuffer[dispatchThreadID.x] = module.forward(1.0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "InferenceModule module_;",
+            "outputBuffer[dispatchThreadID.x] = module_.forward(1.0);",
+        ],
+        "not_contains": ["Expected SEMICOLON, got MODULE", " module;"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: docs/generated/tests/design/ast-reference/statements/
         # targetswitch-static-dispatch.slang

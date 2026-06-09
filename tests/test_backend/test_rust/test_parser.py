@@ -473,6 +473,43 @@ def test_block_local_module_item_is_skipped_from_rust_gpu_type_constraints():
     assert function.body == ["op"]
 
 
+def test_match_guard_let_chain_parses_from_rust_gpu_format_args_decompiler():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Commit: a27c0363d391a54de1feb9ee6864ad9dff72d243
+    # Path: crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
+    code = """
+    fn decode(args: &[Value]) -> Option<(Word, Word)> {
+        let split = match *args {
+            [template, rt_args_or_tagged_len, ref trailing @ ..]
+                if trailing.len() <= 3
+                    && matches!(lookup(template.ty), Type::Pointer { .. })
+                    && let (Some(template_id), Some(rt_args_or_tagged_len_id)) =
+                        (value_id(template), value_id(rt_args_or_tagged_len))
+                    && const_str(&[template_id, rt_args_or_tagged_len_id]).is_none() =>
+            {
+                Some((template_id, rt_args_or_tagged_len_id))
+            }
+            _ => None,
+        };
+
+        split
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    split = function.body[0]
+
+    assert isinstance(split, LetNode)
+    assert isinstance(split.value, MatchNode)
+
+    guard = split.value.arms[0].guard
+    assert isinstance(guard, ConditionChainNode)
+    assert len(guard.operands) == 4
+    assert isinstance(guard.operands[2], LetPatternConditionNode)
+
+
 def test_top_level_macro_invocations_are_skipped_from_rust_gpu_spirv_std():
     code = r"""
     bitflags::bitflags! {

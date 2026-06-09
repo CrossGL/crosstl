@@ -2012,6 +2012,13 @@ class CudaParser:
             self.eat("COLON")
             underlying_type = self.parse_type()
 
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            enum_node = EnumNode(name, [])
+            enum_node.underlying_type = underlying_type
+            enum_node.is_scoped = is_scoped
+            return enum_node
+
         self.eat("LBRACE")
         members = self.parse_enum_members()
         self.eat("RBRACE")

@@ -101,6 +101,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/imgproc/src/opencl/filter2DSmall.cl",
     },
+    "opencv_cascadedetect_aligned_typedef_struct": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/objdetect/src/opencl/cascadedetect.cl",
+    },
 }
 
 
@@ -611,3 +616,31 @@ def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
     assert "int y = startY + py" in macro_stmt.args[1]
     assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
     assert "out[0] = 2.0f;" in crossgl
+
+
+def test_external_opencv_cascadedetect_aligned_typedef_struct_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "opencv_cascadedetect_aligned_typedef_struct"
+    ]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/objdetect/src/opencl/cascadedetect.cl"
+
+    source = """
+    typedef struct __attribute__((aligned(4))) Stump
+    {
+        float4 st __attribute__((aligned (4)));
+    }
+    Stump;
+
+    kernel void cascadedetect_probe(global Stump *stumps, global float *out) {
+        out[0] = stumps[0].st.x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    struct_node = ast.statements[0]
+
+    assert struct_node.name == "Stump"
+    assert struct_node.members[0].name == "st"
+    assert "struct Stump" in crossgl
+    assert "__attribute__" not in crossgl

@@ -1219,12 +1219,19 @@ class HipParser:
 
     def parse_typedef_struct_alias(self):
         self.consume("STRUCT")
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
+        self.skip_newlines()
 
         tag_name = None
         if self.match("IDENTIFIER"):
             tag_name = self.current_token.value
             self.advance()
 
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
         self.skip_newlines()
         if not self.match("LBRACE"):
             alias = self.parse_type_alias_declarator(

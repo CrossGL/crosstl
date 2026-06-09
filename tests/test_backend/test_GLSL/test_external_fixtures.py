@@ -100,6 +100,38 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/Vulkan-Samples
+    # Path: shaders/dynamic_line_rasterization/glsl/grid.frag.
+    # Covers default GLSL reverse-codegen preserving fragment stage context for
+    # derivative operations such as fwidth().
+    ExternalFixture(
+        name="vulkan-samples-dynamic-line-grid-fragment-stage-roundtrip",
+        repo=VULKAN_SAMPLES_REPO,
+        commit=VULKAN_SAMPLES_COMMIT,
+        path="shaders/dynamic_line_rasterization/glsl/grid.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 450
+
+            layout(location = 0) in vec3 nearPoint;
+            layout(location = 1) in vec3 farPoint;
+            layout(location = 0) out vec4 outColor;
+
+            vec4 grid(vec3 pos) {
+                vec2 coord = pos.xz;
+                vec2 derivative = fwidth(coord);
+                vec2 gridLine = abs(fract(coord - 0.5) - 0.5) / derivative;
+                float line = min(gridLine.x, gridLine.y);
+                return vec4(0.5, 0.5, 0.5, 1.0 - min(line, 1.0));
+            }
+
+            void main() {
+                float t = -nearPoint.y / (farPoint.y - nearPoint.y);
+                vec3 pos = nearPoint + t * (farPoint - nearPoint);
+                outColor = grid(pos);
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.buffer.autoassign.frag.
     # Covers HLSL-style cbuffers/register annotations accepted by glslang.
     ExternalFixture(
@@ -1491,6 +1523,24 @@ def test_parse_glslang_layout_only_builtin_spec_constant_fixture():
 
     assert builtin.vtype == ""
     assert builtin.layout == {"constant_id": "24"}
+
+
+def test_codegen_vulkan_samples_fragment_stage_preserved_by_default_converter():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "vulkan-samples-dynamic-line-grid-fragment-stage-roundtrip"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = GLSLToCrossGLConverter().generate(ast)
+
+    assert "fragment {" in crossgl
+    assert "vertex {" not in crossgl
+    assert "fwidth(coord)" in crossgl
+
+    regenerated_glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "fwidth(coord)" in regenerated_glsl
 
 
 def test_parse_glslang_perprimitive_nv_interface_block_fixture():
