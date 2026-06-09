@@ -209,10 +209,13 @@ embedded toolchain runs reference failed report artifacts,
 validation records contain duplicate identities or inconsistent status fields,
 summarized embedded validation omits declared artifacts, external corpus entry
 presence, discovery, or source-backend fields do not match the project root and
-declared units, translated outputs are missing, artifact paths resolve outside
-the repository, generated artifact hashes no longer match the files on disk,
-source files with recorded hashes are missing or changed, or opt-in toolchain
-smoke checks fail.
+declared units, full reports omit units or skipped files that the current
+project scan discovers, translated outputs are missing, artifact paths resolve
+outside the repository, generated artifact hashes no longer match the files on
+disk, source files with recorded hashes are missing or changed, or opt-in
+toolchain smoke checks fail. The report file being validated is ignored during
+that freshness scan, and files under the configured output directory remain
+excluded from discovery.
 Toolchain smoke checks only run for translated artifacts that still exist inside
 the repository. Each smoke check is bounded by a short subprocess timeout, and
 timeouts are reported as failed toolchain runs. Targets that need backend-
@@ -679,6 +682,7 @@ Project reports are JSON documents with:
   include provenance checks, resolved and unresolved include inspection samples,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
+  current project scan coverage for omitted unit and skipped-source records,
   translated artifact existence checks, escaped output directory and
   artifact-path checks, source artifact existence and hash mismatch checks,
   generated artifact hash mismatch checks, optional external toolchain
