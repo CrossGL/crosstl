@@ -12998,6 +12998,7 @@ def test_validate_project_report_rejects_missing_diagnostic_summary_rollups(tmp_
     payload["summary"].pop("diagnosticsByTarget")
     payload["summary"].pop("diagnosticsBySourceBackend")
     payload["summary"].pop("diagnosticsByVariant")
+    payload["summary"].pop("diagnosticsByCheckKind")
     payload["summary"].pop("missingCapabilityCounts")
     report_path = repo / "report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -13014,6 +13015,7 @@ def test_validate_project_report_rejects_missing_diagnostic_summary_rollups(tmp_
         diagnostic["message"]
     )
     assert "summary.diagnosticsByVariant must be an object" in diagnostic["message"]
+    assert "summary.diagnosticsByCheckKind must be an object" in (diagnostic["message"])
     assert "summary.missingCapabilityCounts must be an object" in (
         diagnostic["message"]
     )
