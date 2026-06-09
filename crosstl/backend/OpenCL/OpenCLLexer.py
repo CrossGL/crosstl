@@ -116,6 +116,7 @@ KEYWORDS = {
     "barrier": "SYNCTHREADS",
     "work_group_barrier": "SYNCTHREADS",
     "mem_fence": "SYNCWARP",
+    "__asm": "ASM",
 }
 
 

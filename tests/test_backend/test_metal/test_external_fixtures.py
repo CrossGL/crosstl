@@ -840,6 +840,41 @@ EXTERNAL_FIXTURES = [
         "source": _dawn_deep_tint_array_initializer_source(),
     },
     {
+        "name": "dawn_tint_warning_prologue_before_generated_msl",
+        "repo_url": DAWN_REPO,
+        "commit": DAWN_COMMIT,
+        "source_path": "test/tint/bug/tint/2201.wgsl.expected.msl",
+        "roundtrip": False,
+        "source": (
+            """
+            <dawn>/test/tint/bug/tint/2201.wgsl:9:9 warning: code is unreachable
+                    let _e16_ = vec2(false, false);
+                    ^^^^^^^^^
+
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[max_total_threads_per_threadgroup(1)]]
+            kernel void v() {
+              {
+                uint2 tint_loop_idx = uint2(4294967295u);
+                while(true) {
+                  if (all((tint_loop_idx == uint2(0u)))) {
+                    break;
+                  }
+                  if (true) {
+                    break;
+                  } else {
+                    break;
+                  }
+                  /* unreachable */
+                }
+              }
+            }
+        """
+        ),
+    },
+    {
         "name": "mlx_axpby_template_static_cast_buffer_store",
         "repo_url": MLX_REPO,
         "commit": MLX_COMMIT,

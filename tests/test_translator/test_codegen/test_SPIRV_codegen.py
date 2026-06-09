@@ -23312,6 +23312,38 @@ class TestVulkanSPIRVCodeGen:
         assert val_id
         assert "WARNING" not in spv_code
 
+    def test_array_access_warning_formats_expression_paths(self):
+        source_code = """
+        shader ArrayAccessDiagnostic {
+            const uint COLS = 3;
+            struct Particle {
+                float weights[COLS];
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer Particle* particles;
+
+                void main() {
+                    float first = particles[0].weights[1];
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: Could not determine array element type for "
+            "particles[0].weights"
+        ) in spv_code
+        assert "IdentifierNode(" not in spv_code
+        assert "ArrayAccessNode(" not in spv_code
+        assert "MemberAccessNode(" not in spv_code
+
     def test_struct_declaration_and_member_access(self):
         source_code = """
         shader StructTest {

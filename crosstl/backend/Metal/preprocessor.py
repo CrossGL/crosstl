@@ -15,6 +15,18 @@ CLANG_FEATURE_TEST_MACROS = {
     "__has_include",
     "__has_include_next",
 }
+COMPILER_DIAGNOSTIC_START_RE = re.compile(
+    r'^\s*(?:<[^>\n]+>[^:\n]*|"[^"\n]+"|[^:\n]+):\d+:\d+:?\s+' r"(?:warning|note):"
+)
+MSL_SOURCE_START_RE = re.compile(
+    r"^\s*(?:"
+    r"#include\b|#pragma\b|using\b|namespace\b|template\b|"
+    r"struct\b|class\b|enum\b|typedef\b|constant\b|"
+    r"\[\[|kernel\b|vertex\b|fragment\b|"
+    r"(?:inline|static|constexpr|const|device|thread|threadgroup|void|"
+    r"float|half|double|int|uint|long|ulong|short|ushort|char|uchar|bool)\b"
+    r")"
+)
 
 
 class MetalPreprocessor(HLSLPreprocessor):
@@ -41,8 +53,33 @@ class MetalPreprocessor(HLSLPreprocessor):
             self.macros.setdefault(name, Macro(name=name, replacement="0"))
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
+        code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
+
+    def _strip_leading_compiler_diagnostics(self, code: str) -> str:
+        lines = code.splitlines(keepends=True)
+        saw_diagnostic = False
+
+        for index, line in enumerate(lines):
+            if MSL_SOURCE_START_RE.match(line):
+                if saw_diagnostic:
+                    return "".join(lines[index:])
+                return code
+
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if COMPILER_DIAGNOSTIC_START_RE.match(line):
+                saw_diagnostic = True
+                continue
+            if saw_diagnostic and (
+                line.startswith((" ", "\t")) or stripped.startswith("^")
+            ):
+                continue
+            return code
+
+        return code
 
     def _expand_macros(
         self,

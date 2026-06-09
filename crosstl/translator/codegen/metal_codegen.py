@@ -633,6 +633,7 @@ class MetalCodeGen:
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
         self.metal_resource_binding_indices_by_id = {}
+        self.metal_source_binding_stage_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.cbuffer_variables = []
@@ -1388,11 +1389,17 @@ class MetalCodeGen:
                 self.generic_enum_struct_definitions
             ),
         }
+        stage_local_resource_variables = collect_stage_local_variables(
+            ast, target_stage, self.is_stage_local_resource_variable
+        )
+        self.metal_source_binding_stage_by_id = (
+            self.collect_stage_local_resource_stage_scopes(
+                ast, target_stage, stage_local_resource_variables
+            )
+        )
         global_vars = deduplicate_named_declarations(
             list(getattr(ast, "global_variables", []) or [])
-            + collect_stage_local_variables(
-                ast, target_stage, self.is_stage_local_resource_variable
-            ),
+            + stage_local_resource_variables,
             "Metal resource",
         )
         self.glsl_buffer_block_struct_names = (
@@ -3796,7 +3803,10 @@ class MetalCodeGen:
 
         if shader_type == "vertex":
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
+                params_str,
+                self.current_function_name,
+                func,
+                filter_writable_textures=True,
             )
             function_name = entry_name or f"vertex_{func.name}"
             return_wrapper = self.function_return_semantic_wrapper(
@@ -3809,7 +3819,7 @@ class MetalCodeGen:
             code += f"vertex {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "fragment":
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name
+                params_str, self.current_function_name, func
             )
             function_name = entry_name or f"fragment_{func.name}"
             return_wrapper = self.function_return_semantic_wrapper(
@@ -3822,7 +3832,7 @@ class MetalCodeGen:
             code += f"fragment {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "geometry":
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name
+                params_str, self.current_function_name, func
             )
             function_name = entry_name or f"geometry_{func.name}"
             self.validate_metal_geometry_stage(func, param_list)
@@ -3833,7 +3843,7 @@ class MetalCodeGen:
             code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name
+                params_str, self.current_function_name, func
             )
             function_name = entry_name or self.stage_entry_base_name(shader_type, func)
             self.validate_metal_tessellation_stage(func, param_list, shader_type)
@@ -3845,7 +3855,7 @@ class MetalCodeGen:
             code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
             params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name
+                params_str, self.current_function_name, func
             )
             function_name = entry_name or f"kernel_{func.name}"
             self.validate_metal_kernel_return_type(func, shader_type, raw_return_type)
@@ -4604,18 +4614,27 @@ class MetalCodeGen:
             return mapped_semantic[2:-2]
         return mapped_semantic
 
-    def append_global_resource_parameters(self, params_str, func_name=None, func=None):
+    def append_global_resource_parameters(
+        self, params_str, func_name=None, func=None, filter_writable_textures=False
+    ):
         resource_params = []
         dependencies = None
-        vertex_texture_dependencies = (
+        entry_point_dependencies = (
             self.entry_point_global_resource_dependencies(func)
             if func is not None
             else None
         )
+        texture_dependencies = (
+            entry_point_dependencies if filter_writable_textures else None
+        )
         sampler_dependencies = (
-            self.function_global_resource_dependencies.get(func_name, set())
-            if func_name
-            else None
+            entry_point_dependencies
+            if func is not None
+            else (
+                self.function_global_resource_dependencies.get(func_name, set())
+                if func_name
+                else None
+            )
         )
         cbuffer_dependencies = None
         if self.cbuffer_variables:
@@ -4658,8 +4677,8 @@ class MetalCodeGen:
             ) in self.texture_variables:
                 texture_name = getattr(texture_variable, "name", None)
                 if (
-                    vertex_texture_dependencies is not None
-                    and texture_name not in vertex_texture_dependencies
+                    texture_dependencies is not None
+                    and texture_name not in texture_dependencies
                     and self.metal_texture_parameter_type_is_writable(texture_type)
                 ):
                     continue
@@ -17306,6 +17325,26 @@ class MetalCodeGen:
                 return binding_index
             binding_index = conflict_end + 1
 
+    def collect_stage_local_resource_stage_scopes(
+        self, ast, target_stage, stage_local_resource_variables
+    ):
+        stage_scopes = {}
+        stage_local_ids = {id(node) for node in stage_local_resource_variables}
+        if not stage_local_ids:
+            return stage_scopes
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            for variable in getattr(stage, "local_variables", []) or []:
+                if id(variable) in stage_local_ids:
+                    stage_scopes[id(variable)] = stage_name
+        return stage_scopes
+
+    def metal_source_binding_stage_scope(self, node):
+        return self.metal_source_binding_stage_by_id.get(id(node))
+
     def pre_reserve_cbuffer_bindings(self, used_bindings, source_bindings):
         for cbuffer in self.cbuffer_variables:
             if self.explicit_resource_set_index(cbuffer) is not None:
@@ -17368,6 +17407,7 @@ class MetalCodeGen:
                 binding,
                 1,
                 name,
+                stage_scope=self.metal_source_binding_stage_scope(node),
             )
             target_binding = self.next_available_resource_binding(
                 used_bindings,
@@ -17438,6 +17478,7 @@ class MetalCodeGen:
                     requested_binding,
                     1,
                     name,
+                    stage_scope=self.metal_source_binding_stage_scope(node),
                 )
             target_cursor = 0 if descriptor_set != 0 else binding
             target_binding = self.next_available_resource_binding(
@@ -17461,11 +17502,18 @@ class MetalCodeGen:
         return target_binding
 
     def reserve_source_resource_binding_range(
-        self, source_bindings, namespace, descriptor_set, start, count, name
+        self,
+        source_bindings,
+        namespace,
+        descriptor_set,
+        start,
+        count,
+        name,
+        stage_scope=None,
     ):
         count = max(count or 1, 1)
         end = start + count - 1
-        key = (namespace, descriptor_set)
+        key = (namespace, descriptor_set, stage_scope)
         ranges = source_bindings.setdefault(key, [])
         for used_start, used_end, used_name in ranges:
             if start <= used_end and used_start <= end:
@@ -17473,18 +17521,19 @@ class MetalCodeGen:
                     return
                 raise ValueError(
                     f"Conflicting Metal source resource binding for '{name}': "
-                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, start, end)} "
+                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, start, end, stage_scope)} "
                     f"overlaps '{used_name}' "
-                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, used_start, used_end)}"
+                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, used_start, used_end, stage_scope)}"
                 )
         ranges.append((start, end, name))
 
     def source_resource_binding_range_label(
-        self, namespace, descriptor_set, start, end
+        self, namespace, descriptor_set, start, end, stage_scope=None
     ):
+        stage_label = f" {stage_scope}" if stage_scope else ""
         if start == end:
-            return f"set {descriptor_set} {namespace}({start})"
-        return f"set {descriptor_set} {namespace}({start}-{end})"
+            return f"set {descriptor_set}{stage_label} {namespace}({start})"
+        return f"set {descriptor_set}{stage_label} {namespace}({start}-{end})"
 
     def reserve_resource_binding_range(
         self, used_bindings, target, namespace, start, count, name

@@ -344,6 +344,20 @@ class OpenCLParser(HipParser):
         self.skip_newlines()
         return name
 
+    def skip_post_function_qualifiers(self, attributes=None):
+        while True:
+            previous_pos = self.pos
+            super().skip_post_function_qualifiers(attributes)
+            self.skip_newlines()
+            if self.match("ASM"):
+                self.advance()
+                self.skip_newlines()
+                if self.match("LPAREN"):
+                    self.skip_balanced_parentheses()
+                continue
+            if self.pos == previous_pos:
+                return
+
     def parse_type(self):
         self.parse_type_attribute_prefixes()
         type_name = super().parse_type()

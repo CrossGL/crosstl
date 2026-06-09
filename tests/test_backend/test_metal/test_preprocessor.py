@@ -85,6 +85,41 @@ def test_unresolved_system_include_is_preserved():
     assert "using" in values
 
 
+def test_dawn_tint_warning_prologue_is_stripped_before_msl():
+    # Reduced from:
+    # Repo: https://dawn.googlesource.com/dawn
+    # Commit: 78a171ad2ed7f7265cfc3dd52e4e7a637a099df0
+    # Path: test/tint/bug/tint/2201.wgsl.expected.msl
+    code = """
+    <dawn>/test/tint/bug/tint/2201.wgsl:9:9 warning: code is unreachable
+            let _e16_ = vec2(false, false);
+            ^^^^^^^^^
+
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void v() {}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output.lstrip().startswith("#include <metal_stdlib>")
+    assert "warning: code is unreachable" not in output
+
+
+def test_diagnostic_error_prologue_is_preserved():
+    code = """
+    <dawn>/test/tint/broken.wgsl:1:1 error: invalid shader
+
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void v() {}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "error: invalid shader" in output
+
+
 def test_target_conditionals_simulator_macro_defaults_to_device_import():
     code = """
     #include <TargetConditionals.h>

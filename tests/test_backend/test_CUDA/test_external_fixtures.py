@@ -313,6 +313,51 @@ def test_current_cccl_three_way_operator_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_current_cccl_exec_check_macro_prefixed_template_constructor_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2,
+              bool = __must_synthesize_assignment_v<_T1>
+                     || __must_synthesize_assignment_v<_T2>>
+    struct __pair_base
+    {
+      _T1 first;
+      _T2 second;
+
+      _CCCL_EXEC_CHECK_DISABLE
+      template <class _Constraints = __pair_constraints<_T1, _T2>,
+                enable_if_t<_Constraints::__explicit_default_constructible, int> = 0>
+      _CCCL_API explicit constexpr __pair_base() noexcept(
+        is_nothrow_default_constructible_v<_T1>
+        && is_nothrow_default_constructible_v<_T2>)
+          : first()
+          , second()
+      {}
+
+      _CCCL_EXEC_CHECK_DISABLE
+      _CCCL_HIDE_FROM_ABI constexpr __pair_base(const __pair_base&) = default;
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    pair_base = ast.structs[0]
+    assert pair_base.name == "__pair_base"
+    assert [(member.vtype, member.name) for member in pair_base.members] == [
+        ("_T1", "first"),
+        ("_T2", "second"),
+    ]
+    assert "struct pair_base" in crossgl
+    assert "_CCCL_EXEC_CHECK_DISABLE" not in crossgl
+    assert "_CCCL_HIDE_FROM_ABI" not in crossgl
+    assert "__pair_base()" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_current_cccl_requires_requires_struct_specialization_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cccl

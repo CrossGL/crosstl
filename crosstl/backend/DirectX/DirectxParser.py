@@ -2188,6 +2188,11 @@ class HLSLParser:
     def parse_parameters(self):
         self.eat("LPAREN")
         params = []
+        if self.current_token[0] == "VOID" and self.peek()[0] == "RPAREN":
+            self.eat("VOID")
+            self.eat("RPAREN")
+            return params
+
         primitive_qualifiers = {
             "point",
             "line",

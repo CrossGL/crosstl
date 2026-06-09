@@ -15043,6 +15043,48 @@ class VulkanSPIRVCodeGen:
             return self.expression_name(array_expr)
         return None
 
+    def diagnostic_expression(self, expr) -> str:
+        """Render expression nodes for SPIR-V warnings without leaking reprs."""
+        if expr is None:
+            return "<unknown>"
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, LiteralNode):
+            return str(expr.value)
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+            index_expr = getattr(expr, "index", getattr(expr, "index_expr", None))
+            return (
+                f"{self.diagnostic_expression(array_expr)}"
+                f"[{self.diagnostic_expression(index_expr)}]"
+            )
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+            return f"{self.diagnostic_expression(object_expr)}.{expr.member}"
+        if isinstance(expr, FunctionCallNode):
+            callee = getattr(expr, "function", getattr(expr, "name", None))
+            args = ", ".join(
+                self.diagnostic_expression(arg)
+                for arg in getattr(expr, "args", getattr(expr, "arguments", []))
+            )
+            return f"{self.diagnostic_expression(callee)}({args})"
+        if isinstance(expr, UnaryOpNode):
+            operand = self.diagnostic_expression(expr.operand)
+            return f"{operand}{expr.op}" if expr.is_postfix else f"{expr.op}{operand}"
+        if isinstance(expr, BinaryOpNode):
+            return (
+                f"{self.diagnostic_expression(expr.left)} {expr.op} "
+                f"{self.diagnostic_expression(expr.right)}"
+            )
+        name = self.expression_name(expr)
+        if name is not None:
+            return name
+        return type(expr).__name__
+
     def direct_expression_name(self, expr):
         if isinstance(expr, str):
             return expr
@@ -18210,7 +18252,8 @@ class VulkanSPIRVCodeGen:
 
             if access is None or element_type is None:
                 self.emit(
-                    f"; WARNING: Could not determine array element type for {target.array}"
+                    "; WARNING: Could not determine array element type for "
+                    f"{self.diagnostic_expression(target.array)}"
                 )
                 return
 
@@ -19578,7 +19621,8 @@ class VulkanSPIRVCodeGen:
 
             if access is None or element_type is None:
                 self.emit(
-                    f"; WARNING: Could not determine array element type for {expr.array}"
+                    "; WARNING: Could not determine array element type for "
+                    f"{self.diagnostic_expression(expr.array)}"
                 )
                 element_type = self.primitive_types["float"]
                 return self.register_constant(0.0, element_type)

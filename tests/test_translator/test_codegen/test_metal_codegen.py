@@ -123,6 +123,71 @@ def test_metal_resource_array_size_expression_function_calls_do_not_leak_ast_nod
     assert "IdentifierNode(" not in generated_code
 
 
+def test_metal_stage_local_descriptor_arrays_can_reuse_source_bindings():
+    # Reduced from CrossGL-Compiler
+    # tests/metal/fixtures/MetalGraphicsDescriptorArrayShader.cgl.
+    shader = """
+    shader MetalGraphicsDescriptorArrayShader {
+        const int RESOURCE_COUNT = 2;
+
+        struct MeshVertex {
+            vec3 position;
+            vec2 texCoord;
+        }
+
+        struct RasterPayload {
+            vec4 clipPosition;
+            vec2 uv;
+        }
+
+        struct ColorTarget {
+            vec4 color;
+        }
+
+        vertex {
+            layout(set = 0, binding = 1) uniform sampler2D heightMaps[RESOURCE_COUNT];
+            layout(set = 0, binding = 3) sampler heightSamplers[RESOURCE_COUNT];
+
+            RasterPayload main(MeshVertex input) {
+                RasterPayload output;
+                vec4 height = textureLod(heightMaps[1], heightSamplers[0], input.texCoord, 0.0);
+                output.clipPosition = vec4(input.position, 1.0);
+                output.uv = input.texCoord + height.xy;
+                return output;
+            }
+        }
+
+        fragment {
+            layout(set = 0, binding = 1) uniform sampler2D colorMaps[RESOURCE_COUNT];
+            layout(set = 0, binding = 3) sampler linearSamplers[RESOURCE_COUNT];
+
+            ColorTarget main(RasterPayload input) {
+                ColorTarget output;
+                output.color = texture(colorMaps[0], linearSamplers[1], input.uv);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "array<texture2d<float>, RESOURCE_COUNT> heightMaps [[texture(1)]]"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float>, RESOURCE_COUNT> colorMaps [[texture(3)]]"
+        in generated_code
+    )
+    assert (
+        "array<sampler, RESOURCE_COUNT> heightSamplers [[sampler(3)]]" in generated_code
+    )
+    assert (
+        "array<sampler, RESOURCE_COUNT> linearSamplers [[sampler(5)]]" in generated_code
+    )
+
+
 def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
     # Apple MSL exposes fmod(), not GLSL/CrossGL mod(); real tiled shaders with
     # negative coordinates need floor-based mod semantics instead of fmod().

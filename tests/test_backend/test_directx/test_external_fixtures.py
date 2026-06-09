@@ -56,6 +56,7 @@ DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
 DIRECTX_SHADER_COMPILER_MATRIX_COMMA_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+DIRECTX_SHADER_COMPILER_VOID_PARAM_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SDK_SAMPLES_REWORKED_REPO = (
     "https://github.com/walbourn/directx-sdk-samples-reworked"
 )
@@ -586,6 +587,28 @@ EXTERNAL_FIXTURES = [
         contains=(
             "return vec4(MulBy2(0.25), 1, 0, 1);",
             "float MulBy2(float f)",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_void_parameter_list",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_VOID_PARAM_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/functions/arguments/void-param.hlsl",
+        code=textwrap.dedent("""
+            void helper(void)
+            {
+            }
+
+            float4 main() : SV_Target
+            {
+                helper();
+                return 0;
+            }
+        """).strip(),
+        contains=(
+            "void helper()",
+            "helper();",
+            "return 0;",
         ),
     ),
     ExternalFixture(

@@ -102,6 +102,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/test_as_type.cl",
     },
+    "pocl_ocml_irif_asm_label": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/ocml/inc/irif.h",
+    },
     "pocl_common_sizeof_constant_array": {
         "url": "https://github.com/pocl/pocl",
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
@@ -707,6 +712,30 @@ def test_external_pocl_noinline_function_specifier_codegen_reparse():
     assert helper.name == "clear_bytes"
     assert helper.qualifiers == ["_CL_NOINLINE"]
     assert "void clear_bytes(ptr<u8> p, u8 c, u32 n)" in crossgl
+
+
+def test_external_pocl_ocml_asm_label_declaration_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_ocml_irif_asm_label"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/ocml/inc/irif.h"
+
+    source = """
+    extern __attribute__((const)) half __llvm_floor_f16(half)
+        __asm("llvm.floor.f16");
+
+    kernel void ocml_asm_probe(global half *out, half x) {
+        out[0] = __llvm_floor_f16(x);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.name for stmt in ast.statements] == [
+        "__llvm_floor_f16",
+        "ocml_asm_probe",
+    ]
+    assert "f16 __llvm_floor_f16(f16 _param0)" in crossgl
+    assert "__asm" not in crossgl
 
 
 def test_external_pocl_sizeof_constant_array_codegen_reparse():

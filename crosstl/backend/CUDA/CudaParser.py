@@ -194,7 +194,9 @@ class CudaParser:
         "_CCCL_API",
         "_CCCL_DEVICE",
         "_CCCL_DEVICE_API",
+        "_CCCL_EXEC_CHECK_DISABLE",
         "_CCCL_FORCEINLINE",
+        "_CCCL_HIDE_FROM_ABI",
         "_CCCL_HOST_API",
         "_CCCL_HOST_DEVICE",
         "_CCCL_HOST_DEVICE_API",
@@ -2152,10 +2154,14 @@ class CudaParser:
 
     def is_struct_method_start(self):
         index = self.current_index
-        index = self.skip_optional_template_declaration_at_index(index)
-        index = self.skip_cpp_attribute_specifiers_at_index(index)
-        index = self.skip_struct_method_specifiers_at_index(index)
-        index = self.skip_cpp_attribute_specifiers_at_index(index)
+        while True:
+            next_index = self.skip_optional_template_declaration_at_index(index)
+            next_index = self.skip_cpp_attribute_specifiers_at_index(next_index)
+            next_index = self.skip_struct_method_specifiers_at_index(next_index)
+            next_index = self.skip_cpp_attribute_specifiers_at_index(next_index)
+            if next_index == index:
+                break
+            index = next_index
 
         if index >= len(self.tokens):
             return False
