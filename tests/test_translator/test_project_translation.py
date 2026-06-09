@@ -6190,7 +6190,10 @@ def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches(tmp_p
         "artifactMatrix.emittedArtifactCount must match artifact matrix artifacts"
         in diagnostic["message"]
     )
-    assert "artifactMatrix.complete must match artifact matrix" in diagnostic["message"]
+    assert (
+        "artifactMatrix.complete must match artifact matrix "
+        "(expected True, actual False)"
+    ) in diagnostic["message"]
     assert (
         "artifactMatrix.statusByTarget must match artifact matrix artifacts"
         in diagnostic["message"]

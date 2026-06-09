@@ -8883,7 +8883,8 @@ def _artifact_matrix_metadata_contract_reasons(
                     reasons.append(f"artifactMatrix.{field_name} must be a boolean")
                 elif value != actual[field_name]:
                     reasons.append(
-                        f"artifactMatrix.{field_name} must match artifact matrix"
+                        f"artifactMatrix.{field_name} must match artifact matrix "
+                        f"({_value_mismatch_context(actual[field_name], value)})"
                     )
             for field_name in mapping_rollup_fields:
                 reasons.extend(

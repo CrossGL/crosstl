@@ -1277,6 +1277,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "unit-target-variant artifact matrix entries" in (
             backend_support["notes"]
         )
+        assert (
+            "expected/actual boolean rollup mismatch context"
+            in backend_support["notes"]
+        )
         assert "applied define map" in backend_support["notes"]
         assert "missing or mismatched artifact define maps" in (
             backend_support["notes"]
