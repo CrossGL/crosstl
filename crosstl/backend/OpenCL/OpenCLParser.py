@@ -659,6 +659,7 @@ class OpenCLParser(HipParser):
             type_name in {"T", "U"}
             or type_name.endswith("Type")
             or type_name.startswith(("real", "Real"))
+            or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*T\d*", type_name)
             or type_name in {"Ti", "To", "Tk", "Tv", "accType"}
         )
 

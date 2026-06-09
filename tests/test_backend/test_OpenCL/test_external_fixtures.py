@@ -76,6 +76,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/video/src/opencl/optical_flow_farneback.cl",
     },
+    "opencv_filter_sep_col_macro_type_cast": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/imgproc/src/opencl/filterSepCol.cl",
+    },
 }
 
 
@@ -468,3 +473,22 @@ def test_external_opencv_opencl_const_parameter_codegen_reparse():
     }
     assert "var<storage, read_write> src: array<f32>" in crossgl
     assert "__const" not in crossgl
+
+
+def test_external_opencv_filter_sep_col_macro_type_cast_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["opencv_filter_sep_col_macro_type_cast"]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/imgproc/src/opencl/filterSepCol.cl"
+
+    source = """
+    kernel void opencv_filter_probe(global float *dst, float delta) {
+        srcT sum = (srcT)delta;
+        dst[0] = sum;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    cast = ast.statements[0].body[0].value
+    assert cast.target_type == "srcT"
+    assert "var sum: srcT = srcT(delta);" in crossgl

@@ -517,6 +517,32 @@ def test_codegen_storage_texture_alias_uses_image_read_write():
     parse_crossgl(crossgl)
 
 
+def test_codegen_scoped_access_mode_expression_from_blender_shader():
+    # Reduced from:
+    # Repo: https://github.com/blender/blender
+    # Commit: 5711482b0608efd82006c6d9e230cf0b3e657cc1
+    # Path: source/blender/draw/engines/eevee/shaders/eevee_depth_of_field_resolve.bsl.hh
+    code = """
+    kernel void copy_read(texture2d<float, access::read> src [[texture(0)]],
+                          texture2d<float, access::write> dst [[texture(1)]],
+                          uint2 tid [[thread_position_in_grid]]) {
+        auto readMode = access::read;
+        auto readWriteMode = metal::access::read_write;
+        float4 value = src.read(tid);
+        dst.write(value, tid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "auto readMode = access_u3a_u3aread;" in crossgl
+    assert "auto readWriteMode = metal_u3a_u3aaccess_u3a_u3aread_write;" in crossgl
+    assert "image2D src @texture(0) @readonly" in crossgl
+    assert "image2D dst @texture(1) @writeonly" in crossgl
+    assert "imageLoad(src, tid)" in crossgl
+    assert "imageStore(dst, tid, value);" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_access_qualified_texture_buffer_uses_image_buffer():
     code = """
     typedef texture_buffer<uint, access::read_write> RWCounterBuffer;

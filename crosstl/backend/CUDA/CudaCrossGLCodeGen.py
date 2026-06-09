@@ -6690,6 +6690,7 @@ class CudaToCrossGLConverter:
     def convert_cuda_pointer_type(self, cuda_type):
         pointer_depth = cuda_type.count("*")
         base_type = cuda_type.replace("*", "").strip()
+        base_type = self.strip_function_pointer_parameter_list(base_type)
         mapped_type = self.convert_cuda_type_to_crossgl(base_type)
 
         for _ in range(pointer_depth):
@@ -6700,12 +6701,17 @@ class CudaToCrossGLConverter:
     def convert_cuda_pointer_element_type(self, cuda_type):
         pointer_depth = cuda_type.count("*")
         base_type = cuda_type.replace("*", "").strip()
+        base_type = self.strip_function_pointer_parameter_list(base_type)
         mapped_type = self.convert_cuda_type_to_crossgl(base_type)
 
         for _ in range(max(0, pointer_depth - 1)):
             mapped_type = self.wrap_crossgl_pointer_type(mapped_type)
 
         return mapped_type
+
+    def strip_function_pointer_parameter_list(self, type_name):
+        """Keep imported C++ function-pointer types reparsable in CrossGL."""
+        return re.sub(r"\s*\(\s*\)\s*$", "", str(type_name)).strip()
 
     def wrap_crossgl_pointer_type(self, mapped_type):
         element_type = self.crossgl_safe_generic_type_argument(mapped_type)

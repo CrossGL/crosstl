@@ -1161,6 +1161,43 @@ def test_interface_struct_and_extension_conformance_metadata_parsing():
     assert not extension.methods[0].is_declaration
 
 
+def test_dunder_extension_multi_interface_conformance_parse():
+    # Reduced from shader-slang/slang tests/compute/extension-multi-interface.slang.
+    code = """
+    interface ISub {
+        float subf(float u, float v);
+    }
+
+    interface IAddAndSub {
+        float addf(float u, float v);
+        float subf(float u, float v);
+    }
+
+    struct Simple {
+        float base;
+    };
+
+    __extension Simple : ISub, IAddAndSub
+    {
+        float subf(float u, float v)
+        {
+            return base + u - v;
+        }
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    extension = ast.extensions[0]
+    assert isinstance(extension, ExtensionNode)
+    assert extension.extended_type == "Simple"
+    assert extension.conformances == ["ISub", "IAddAndSub"]
+    assert len(extension.methods) == 1
+    assert extension.methods[0].name == "subf"
+    assert isinstance(extension.methods[0].body[0], ReturnNode)
+
+
 def test_interface_associated_type_requirement_from_model_viewer_sample():
     code = """
     interface IMaterial

@@ -192,6 +192,14 @@ def test_interface_extension_and_where_tokenization():
     assert ("WHERE", "where") in tokens
 
 
+def test_dunder_extension_tokenization_from_compute_fixture():
+    # Reduced from shader-slang/slang tests/compute/extension-multi-interface.slang.
+    tokens = tokenize_code("__extension Simple : ISub { int subf(); };")
+
+    assert ("EXTENSION", "__extension") in tokens
+    assert ("IDENTIFIER", "__extension") not in tokens
+
+
 def test_typealias_and_associatedtype_tokenization():
     tokens = tokenize_code(
         "typealias Color = float4; "

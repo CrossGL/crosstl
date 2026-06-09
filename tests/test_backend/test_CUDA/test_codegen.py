@@ -7987,6 +7987,30 @@ class TestCudaCodeGen:
         assert "var q: ptr<auto> = data;" in result
         assert "var r: ptr<auto> = data;" in result
 
+    def test_public_cuda_function_pointer_local_initializer_codegen_reparse(self):
+        # Reduced from CUDA callback-table patterns used by public sample headers.
+        code = """
+        __device__ float add(float x) {
+            return x;
+        }
+
+        __global__ void use_function_pointer(float* out) {
+            float (*fn)(float) = add;
+            out[0] = fn(1.0f);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var fn: ptr<f32> = add;" in result
+        assert "ptr<float ()>" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_device_lambda_expression_conversion(self):
         code = """
         void host() {

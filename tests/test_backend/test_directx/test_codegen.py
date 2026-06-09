@@ -1801,6 +1801,34 @@ def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_pre_2018_fixed_width_typedef_names_from_dxc_reparse():
+    # Source: microsoft/DirectXShaderCompiler
+    # tools/clang/test/HLSLFileCheck/hlsl/types/typedef/typedef_fixed_width_types_pre_2018.hlsl
+    hlsl = textwrap.dedent("""
+        typedef uint uint16_t;
+        typedef int int16_t;
+        typedef float float64_t;
+
+        uint16_t unsignedValue;
+        int16_t signedValue;
+        float64_t floatValue;
+
+        float4 main() : SV_Target {
+            return float4(unsignedValue, signedValue, floatValue, 1.0);
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "type uint16_t = uint;" in output
+    assert "type int16_t = int;" in output
+    assert "type float64_t = float;" in output
+    assert "uint16 unsignedValue;" in output
+    assert "int16 signedValue;" in output
+    assert "double floatValue;" in output
+    parse_crossgl(output)
+
+
 def test_codegen_signedness_prefixed_int1_aliases_from_microsoft_docs_reparse():
     # Sources: Microsoft Learn HLSL vector and scalar type docs.
     # URLs:

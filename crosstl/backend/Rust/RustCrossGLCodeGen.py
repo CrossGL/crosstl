@@ -10815,10 +10815,22 @@ class RustToCrossGLConverter:
         if not generics or len(generics) != len(args):
             return None
 
+        if self.alias_target_base_matches(alias, base_name):
+            return None
+
         substituted = self.substitute_type_parameters(alias.alias_type, generics, args)
         if substituted == rust_type:
             return None
         return self.map_type(substituted)
+
+    def alias_target_base_matches(self, alias, base_name):
+        target = getattr(alias, "alias_type", None)
+        target_generic = self.parse_generic_type(target)
+        if target_generic is None:
+            return target == base_name
+
+        target_base, _ = target_generic
+        return target_base == base_name
 
     def type_lookup_names(self, type_name):
         names = [type_name]

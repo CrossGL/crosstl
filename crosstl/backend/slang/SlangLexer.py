@@ -151,6 +151,7 @@ KEYWORDS = {
     "__include": "INCLUDE",
     "__generic": "GENERIC",
     "extension": "EXTENSION",
+    "__extension": "EXTENSION",
     "typedef": "TYPEDEF",
     "typealias": "TYPEALIAS",
     "associatedtype": "ASSOCIATEDTYPE",

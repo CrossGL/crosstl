@@ -317,6 +317,18 @@ COMPOSITE_DECLARATOR_IDENTIFIER_TOKENS = {
     "MATRIX",
 }
 
+FIXED_WIDTH_TYPEDEF_NAME_TOKENS = {
+    "FLOAT16_T",
+    "FLOAT32_T",
+    "FLOAT64_T",
+    "INT16_T",
+    "INT32_T",
+    "INT64_T",
+    "UINT16_T",
+    "UINT32_T",
+    "UINT64_T",
+}
+
 
 class HLSLParser:
     """Parse HLSL tokens into the DirectX backend shader AST."""
@@ -576,13 +588,11 @@ class HLSLParser:
         )
 
     def parse_typedef_name(self):
-        if self.is_identifier_token(self.current_token[0]) or self.current_token[0] in {
-            "FVECTOR",
-            "IVECTOR",
-            "UVECTOR",
-            "BVECTOR",
-            "MATRIX",
-        }:
+        if (
+            self.is_identifier_token(self.current_token[0])
+            or self.current_token[0] in COMPOSITE_DECLARATOR_IDENTIFIER_TOKENS
+            or self.current_token[0] in FIXED_WIDTH_TYPEDEF_NAME_TOKENS
+        ):
             token = self.current_token
             self.eat(token[0])
             return token[1]

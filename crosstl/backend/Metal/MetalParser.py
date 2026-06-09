@@ -104,6 +104,16 @@ STAGE_TOKENS = {
     "OBJECT",
     "AMPLIFICATION",
 }
+SCOPED_IDENTIFIER_PART_TOKENS = (
+    TYPE_TOKENS
+    | STAGE_TOKENS
+    | {
+        "METAL",
+        "READ",
+        "WRITE",
+        "READ_WRITE",
+    }
+)
 
 UNARY_KEYWORDS = {"SIZEOF", "ALIGNOF"}
 MACRO_QUALIFIERS = {"METAL_FUNC", "STEEL_CONST", "C10_METAL_CONSTEXPR"}
@@ -972,11 +982,7 @@ class MetalParser:
             idx += 1
             if idx >= len(self.tokens):
                 return idx
-            if (
-                self.tokens[idx][0] not in TYPE_TOKENS
-                and self.tokens[idx][0] not in STAGE_TOKENS
-                and self.tokens[idx][0] != "METAL"
-            ):
+            if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                 return idx
             idx += 1
         return idx
@@ -1510,10 +1516,7 @@ class MetalParser:
 
         while self.current_token[0] == "SCOPE":
             self.eat("SCOPE")
-            if (
-                self.current_token[0] not in TYPE_TOKENS
-                and not self.is_current_name_token()
-            ):
+            if self.current_token[0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                 raise SyntaxError(
                     f"Expected identifier after '::', got {self.current_token[0]}"
                 )
@@ -1683,7 +1686,7 @@ class MetalParser:
                 name += f"<{self.format_generic_type_tokens(template_args)}>"
             while self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                if self.current_token[0] not in TYPE_TOKENS:
+                if self.current_token[0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                     raise SyntaxError(
                         f"Expected identifier after '::', got {self.current_token[0]}"
                     )
@@ -2544,22 +2547,14 @@ class MetalParser:
             idx += 1
         if idx >= len(self.tokens):
             return idx
-        if (
-            self.tokens[idx][0] not in TYPE_TOKENS
-            and self.tokens[idx][0] not in STAGE_TOKENS
-            and self.tokens[idx][0] != "METAL"
-        ):
+        if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
             return idx
         idx += 1
         while idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
             idx += 1
             if idx >= len(self.tokens):
                 return idx
-            if (
-                self.tokens[idx][0] not in TYPE_TOKENS
-                and self.tokens[idx][0] not in STAGE_TOKENS
-                and self.tokens[idx][0] != "METAL"
-            ):
+            if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                 return idx
             idx += 1
         return idx
@@ -2581,11 +2576,7 @@ class MetalParser:
 
         idx += 2
         while idx < len(self.tokens):
-            if (
-                self.tokens[idx][0] not in TYPE_TOKENS
-                and self.tokens[idx][0] not in STAGE_TOKENS
-                and self.tokens[idx][0] != "METAL"
-            ):
+            if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                 return False
             idx += 1
             if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
@@ -3280,7 +3271,12 @@ class MetalParser:
                 continue
             if self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                if self.current_token[0] not in ["IDENTIFIER", "READ", "WRITE"]:
+                if self.current_token[0] not in [
+                    "IDENTIFIER",
+                    "READ",
+                    "WRITE",
+                    "READ_WRITE",
+                ]:
                     raise SyntaxError(
                         f"Expected identifier after scope, got {self.current_token[0]}"
                     )
@@ -3681,11 +3677,7 @@ class MetalParser:
                 and self.peek(1)[0] in TYPE_TOKENS
             ):
                 self.eat("IDENTIFIER")
-            if (
-                self.current_token[0] not in TYPE_TOKENS
-                and self.current_token[0] not in STAGE_TOKENS
-                and self.current_token[0] != "METAL"
-            ):
+            if self.current_token[0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                 raise SyntaxError(
                     f"Expected identifier after '::', got {self.current_token[0]}"
                 )
