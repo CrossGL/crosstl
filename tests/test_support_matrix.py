@@ -1276,12 +1276,14 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "canonical source-map and source-remap target metadata" in (
             backend_support["notes"]
         )
-        assert "source-map, source-remap target, and source-remap sidecar hash" in (
-            backend_support["notes"]
-        )
+        assert (
+            "source-map, source-remap target, source-remap mapping-count, "
+            "and source-remap sidecar hash"
+        ) in backend_support["notes"]
         assert "missing source-map and source-remap granularity or variant rollups" in (
             backend_support["notes"]
         )
+        assert "source-remap mapping-count mismatches" in backend_support["notes"]
         assert "current artifact-level source-map span coverage" in (
             backend_support["notes"]
         )
@@ -1290,8 +1292,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert (
             "bounded source-map and source-remap artifact inspection samples "
-            "with source/generated span, source hash, and sidecar hash metadata "
-            "and custom limits"
+            "with source/generated span, mapping-count, source hash, and sidecar "
+            "hash metadata and custom limits"
         ) in backend_support["notes"]
         assert (
             "text inspection derives file-level source-map counts from total "
@@ -1379,6 +1381,11 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_sanitizes_variant_source_map_and_remap_paths"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_source_remap_mapping_count_"
+            "mismatches"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
