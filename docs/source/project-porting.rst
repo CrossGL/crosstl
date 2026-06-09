@@ -725,4 +725,7 @@ Project reports are JSON documents with:
   include supported requested targets when translation units are present.
   Translation reports scope ``manual-runtime-integration`` to targets that
   produced translated artifacts, covering host runtime API, resource binding,
-  build script, and backend integration review.
+  build script, and backend integration review. Reports with unresolved system
+  include dependencies also emit ``manual-include-resolution`` actions so target
+  SDK or toolchain header assumptions remain visible without claiming automatic
+  header rewriting.

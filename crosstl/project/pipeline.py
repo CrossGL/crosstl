@@ -458,7 +458,10 @@ REPORT_MIGRATION_NON_GOALS = (
     "application build-system rewrites",
     "backend framework integration",
 )
-REPORT_MIGRATION_ACTION_KINDS = ("manual-runtime-integration",)
+REPORT_MIGRATION_ACTION_KINDS = (
+    "manual-runtime-integration",
+    "manual-include-resolution",
+)
 REPORT_PACKAGE_NAME = "crosstl"
 UNKNOWN_PACKAGE_VERSION = "unknown"
 EXTERNAL_CORPUS_SCHEMA_VERSION = 1
@@ -3764,7 +3767,7 @@ class ProjectScan:
             artifacts=[],
             diagnostics=diagnostics,
             validation={"toolchains": [], "artifacts": []},
-            migration_actions=_runtime_migration_actions(self.units, report_targets),
+            migration_actions=_project_migration_actions(self.units, report_targets),
             artifact_matrix=_artifact_matrix_report(
                 self.config, self.units, report_targets, self.config.variants, []
             ),
@@ -4695,6 +4698,55 @@ def _runtime_migration_actions(
     ]
 
 
+def _has_system_include_dependencies(units: Sequence[ProjectTranslationUnit]) -> bool:
+    for unit in units:
+        for dependency in unit.include_dependencies:
+            if (
+                isinstance(dependency, Mapping)
+                and dependency.get("status") == "system"
+                and dependency.get("kind") == "system"
+            ):
+                return True
+    return False
+
+
+def _include_migration_actions(
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    artifacts: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if not _has_system_include_dependencies(units):
+        return []
+
+    action_targets = _runtime_migration_targets(units, targets, artifacts)
+    if not action_targets:
+        return []
+
+    return [
+        {
+            "kind": "manual-include-resolution",
+            "severity": "note",
+            "message": (
+                "Review unresolved system include dependencies against target "
+                "SDK or toolchain headers; CrossTL records them for portability "
+                "but does not rewrite SDK or framework headers automatically."
+            ),
+            "targets": action_targets,
+        }
+    ]
+
+
+def _project_migration_actions(
+    units: Sequence[ProjectTranslationUnit],
+    targets: Sequence[str],
+    artifacts: Sequence[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        *_runtime_migration_actions(units, targets, artifacts),
+        *_include_migration_actions(units, targets, artifacts),
+    ]
+
+
 def _has_error_diagnostic(diagnostics: Sequence[ProjectDiagnostic], code: str) -> bool:
     return any(
         diagnostic.severity == "error" and diagnostic.code == code
@@ -4900,7 +4952,7 @@ def translate_project(
         artifacts=artifacts,
         diagnostics=diagnostics,
         validation=validation,
-        migration_actions=_runtime_migration_actions(
+        migration_actions=_project_migration_actions(
             scan.units, selected_targets, artifacts
         ),
         artifact_matrix=_artifact_matrix_report(

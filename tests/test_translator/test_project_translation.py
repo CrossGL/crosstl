@@ -808,6 +808,41 @@ def test_scan_report_records_documented_migration_actions(tmp_path):
     ]
 
 
+def test_scan_report_records_system_include_migration_actions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #include <cuda_runtime.h>
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["summary"]["includeDependenciesByStatus"] == {"system": 1}
+    assert payload["summary"]["includeDependenciesByKind"] == {"system": 1}
+    assert payload["migration"]["actionCount"] == 2
+    assert payload["migration"]["actionsByKind"] == {
+        "manual-include-resolution": 1,
+        "manual-runtime-integration": 1,
+    }
+    assert payload["migration"]["actionsBySeverity"] == {"note": 2}
+    assert payload["migration"]["actionsByTarget"] == {"opengl": 2}
+    assert payload["migration"]["actions"][1] == {
+        "kind": "manual-include-resolution",
+        "severity": "note",
+        "message": (
+            "Review unresolved system include dependencies against target "
+            "SDK or toolchain headers; CrossTL records them for portability "
+            "but does not rewrite SDK or framework headers automatically."
+        ),
+        "targets": ["opengl"],
+    }
+
+
 def test_validate_project_report_rejects_missing_migration_rollups(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -15838,9 +15873,10 @@ def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
     assert "migration.actions[0].targets must be a list of strings" in (
         diagnostic["message"]
     )
-    assert "migration.actions[1].kind must be one of manual-runtime-integration" in (
-        diagnostic["message"]
-    )
+    assert (
+        "migration.actions[1].kind must be one of "
+        "manual-runtime-integration, manual-include-resolution"
+    ) in diagnostic["message"]
     assert "migration.actions[2] must be an object" in diagnostic["message"]
 
 
