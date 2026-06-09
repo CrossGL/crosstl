@@ -11047,6 +11047,10 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert "validation.artifacts[0].status must be ok or failed" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].status must be ok or failed "
+        "(expected one of failed, ok, actual missing)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[0].variant must be a string" in (diagnostic["message"])
     assert "validation.artifacts[0].sourceBackend must be a string" in (
         diagnostic["message"]
@@ -11054,21 +11058,54 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert "validation.artifacts[0].sourceHashStatus must be one of" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].sourceHashStatus must be one of mismatch, "
+        "missing, not-recorded, ok, outside-project (expected one of mismatch, "
+        "missing, not-recorded, ok, outside-project, actual ready)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[0].sourceSizeStatus must be one of" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].sourceSizeStatus must be one of mismatch, "
+        "missing, not-recorded, ok, outside-project (expected one of mismatch, "
+        "missing, not-recorded, ok, outside-project, actual ready)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[0].generatedHashStatus must be one of" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].generatedHashStatus must be one of mismatch, "
+        "missing, not-applicable, not-recorded, ok, outside-project (expected one "
+        "of mismatch, missing, not-applicable, not-recorded, ok, outside-project, "
+        "actual ready)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[0].generatedSizeStatus must be one of" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].generatedSizeStatus must be one of mismatch, "
+        "missing, not-applicable, not-recorded, ok, outside-project (expected one "
+        "of mismatch, missing, not-applicable, not-recorded, ok, outside-project, "
+        "actual ready)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[0].sourceMapStatus must be one of" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].sourceMapStatus must be one of mismatch, "
+        "not-applicable, not-checked, not-recorded, ok (expected one of "
+        "mismatch, not-applicable, not-checked, not-recorded, ok, actual ready)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[0].sourceRemapStatus must be one of" in (
         diagnostic["message"]
     )
+    assert (
+        "validation.artifacts[0].sourceRemapStatus must be one of hash-mismatch, "
+        "invalid, mismatch, missing, not-applicable, not-recorded, ok, "
+        "outside-project (expected one of hash-mismatch, invalid, mismatch, "
+        "missing, not-applicable, not-recorded, ok, outside-project, actual ready)"
+    ) in diagnostic["message"]
     assert "validation.artifacts[1] must be an object" in diagnostic["message"]
     assert "validation.summary.artifactCount must be a non-negative integer" in (
         diagnostic["message"]
@@ -11735,11 +11772,11 @@ def test_validate_project_report_rejects_inconsistent_validation_artifact_status
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "validation.artifacts[0].status must match exists, hash, size, "
-        "and provenance statuses" in diagnostic["message"]
+        "and provenance statuses (expected failed, actual ok)" in diagnostic["message"]
     )
     assert (
         "validation.artifacts[1].status must match exists, hash, size, "
-        "and provenance statuses" in diagnostic["message"]
+        "and provenance statuses (expected ok, actual failed)" in diagnostic["message"]
     )
 
 
@@ -11863,8 +11900,8 @@ def test_validate_project_report_rejects_validation_ok_for_failed_report_artifac
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.artifacts[0].status must match report.artifacts[0].status"
-        in diagnostic["message"]
+        "validation.artifacts[0].status must match report.artifacts[0].status "
+        "(expected failed, actual ok)" in diagnostic["message"]
     )
 
 
@@ -11924,19 +11961,20 @@ def test_validate_project_report_rejects_validation_status_metadata_for_failed_r
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "validation.artifacts[0].generatedHashStatus must be not-applicable "
-        "when report.artifacts[0].status is failed"
+        "when report.artifacts[0].status is failed (expected not-applicable, actual ok)"
     ) in diagnostic["message"]
     assert (
         "validation.artifacts[0].generatedSizeStatus must be not-applicable "
-        "when report.artifacts[0].status is failed"
+        "when report.artifacts[0].status is failed (expected not-applicable, actual ok)"
     ) in diagnostic["message"]
     assert (
         "validation.artifacts[0].sourceMapStatus must be not-applicable "
-        "when report.artifacts[0].status is failed"
+        "when report.artifacts[0].status is failed (expected not-applicable, actual ok)"
     ) in diagnostic["message"]
     assert (
         "validation.artifacts[0].sourceRemapStatus must be not-applicable "
-        "when report.artifacts[0].status is failed"
+        "when report.artifacts[0].status is failed "
+        "(expected not-applicable, actual not-recorded)"
     ) in diagnostic["message"]
 
 

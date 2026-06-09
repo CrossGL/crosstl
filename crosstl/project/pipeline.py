@@ -14,7 +14,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from importlib import metadata as importlib_metadata
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Iterable, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
 from crosstl.translator.codegen import (
@@ -832,6 +832,22 @@ def _size_mismatch_context(expected: int, actual: int) -> str:
 
 def _value_mismatch_context(expected: Any, actual: Any) -> str:
     return f"expected {expected}, actual {actual}"
+
+
+def _allowed_value_context(allowed: Iterable[str]) -> str:
+    return f"one of {', '.join(sorted(allowed))}"
+
+
+def _allowed_value_mismatch_context(allowed: Iterable[str], actual: Any) -> str:
+    return _value_mismatch_context(_allowed_value_context(allowed), actual)
+
+
+def _allowed_value_reason(prefix: str, allowed: Iterable[str], actual: Any) -> str:
+    allowed_values = ", ".join(sorted(allowed))
+    return (
+        f"{prefix} must be one of {allowed_values} "
+        f"({_value_mismatch_context(f'one of {allowed_values}', actual)})"
+    )
 
 
 def _source_frontend_supports_lexer_keyword(source_backend: str, keyword: str) -> bool:
@@ -10878,17 +10894,16 @@ def _tool_status_contract_reasons(
     return reasons
 
 
-def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> bool:
-    status = artifact.get("status")
+def _expected_validation_artifact_status(artifact: Mapping[str, Any]) -> str:
     if artifact.get("exists") is not True:
-        return status == "failed"
+        return "failed"
     source_hash_status = artifact.get("sourceHashStatus", "not-recorded")
     source_size_status = artifact.get("sourceSizeStatus", "not-recorded")
     generated_hash_status = artifact.get("generatedHashStatus", "not-recorded")
     generated_size_status = artifact.get("generatedSizeStatus", "not-recorded")
     source_map_status = artifact.get("sourceMapStatus", "ok")
     source_remap_status = artifact.get("sourceRemapStatus", "ok")
-    expected_status = (
+    return (
         "ok"
         if source_hash_status in {"ok", "not-recorded"}
         and source_size_status in {"ok", "not-recorded"}
@@ -10898,7 +10913,10 @@ def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> b
         and source_remap_status in {"ok", "not-applicable", "not-recorded"}
         else "failed"
     )
-    return status == expected_status
+
+
+def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> bool:
+    return artifact.get("status") == _expected_validation_artifact_status(artifact)
 
 
 def _validation_artifact_contract_reasons(
@@ -10945,7 +10963,10 @@ def _validation_artifact_contract_reasons(
     status = artifact.get("status")
     status_is_valid = status in {"ok", "failed"}
     if not status_is_valid:
-        reasons.append(f"{prefix}.status must be ok or failed")
+        reasons.append(
+            f"{prefix}.status must be ok or failed "
+            f"({_allowed_value_mismatch_context(['failed', 'ok'], status)})"
+        )
     variant = artifact.get("variant")
     if "variant" in artifact:
         if not _is_non_empty_string(variant):
@@ -11001,8 +11022,11 @@ def _validation_artifact_contract_reasons(
         and source_hash_status not in SOURCE_HASH_VALIDATION_STATUSES
     ):
         reasons.append(
-            f"{prefix}.sourceHashStatus must be one of "
-            f"{', '.join(sorted(SOURCE_HASH_VALIDATION_STATUSES))}"
+            _allowed_value_reason(
+                f"{prefix}.sourceHashStatus",
+                SOURCE_HASH_VALIDATION_STATUSES,
+                source_hash_status,
+            )
         )
     source_size_status = artifact.get("sourceSizeStatus")
     if require_status_fields and "sourceSizeStatus" not in artifact:
@@ -11015,8 +11039,11 @@ def _validation_artifact_contract_reasons(
         and source_size_status not in SOURCE_SIZE_VALIDATION_STATUSES
     ):
         reasons.append(
-            f"{prefix}.sourceSizeStatus must be one of "
-            f"{', '.join(sorted(SOURCE_SIZE_VALIDATION_STATUSES))}"
+            _allowed_value_reason(
+                f"{prefix}.sourceSizeStatus",
+                SOURCE_SIZE_VALIDATION_STATUSES,
+                source_size_status,
+            )
         )
     generated_hash_status = artifact.get("generatedHashStatus")
     if require_status_fields and "generatedHashStatus" not in artifact:
@@ -11029,8 +11056,11 @@ def _validation_artifact_contract_reasons(
         and generated_hash_status not in GENERATED_HASH_VALIDATION_STATUSES
     ):
         reasons.append(
-            f"{prefix}.generatedHashStatus must be one of "
-            f"{', '.join(sorted(GENERATED_HASH_VALIDATION_STATUSES))}"
+            _allowed_value_reason(
+                f"{prefix}.generatedHashStatus",
+                GENERATED_HASH_VALIDATION_STATUSES,
+                generated_hash_status,
+            )
         )
     generated_size_status = artifact.get("generatedSizeStatus")
     if require_status_fields and "generatedSizeStatus" not in artifact:
@@ -11043,8 +11073,11 @@ def _validation_artifact_contract_reasons(
         and generated_size_status not in GENERATED_SIZE_VALIDATION_STATUSES
     ):
         reasons.append(
-            f"{prefix}.generatedSizeStatus must be one of "
-            f"{', '.join(sorted(GENERATED_SIZE_VALIDATION_STATUSES))}"
+            _allowed_value_reason(
+                f"{prefix}.generatedSizeStatus",
+                GENERATED_SIZE_VALIDATION_STATUSES,
+                generated_size_status,
+            )
         )
     source_map_status = artifact.get("sourceMapStatus")
     if require_status_fields and "sourceMapStatus" not in artifact:
@@ -11057,8 +11090,11 @@ def _validation_artifact_contract_reasons(
         and source_map_status not in SOURCE_MAP_VALIDATION_STATUSES
     ):
         reasons.append(
-            f"{prefix}.sourceMapStatus must be one of "
-            f"{', '.join(sorted(SOURCE_MAP_VALIDATION_STATUSES))}"
+            _allowed_value_reason(
+                f"{prefix}.sourceMapStatus",
+                SOURCE_MAP_VALIDATION_STATUSES,
+                source_map_status,
+            )
         )
     source_remap_status = artifact.get("sourceRemapStatus")
     if require_status_fields and "sourceRemapStatus" not in artifact:
@@ -11071,8 +11107,11 @@ def _validation_artifact_contract_reasons(
         and source_remap_status not in SOURCE_REMAP_VALIDATION_STATUSES
     ):
         reasons.append(
-            f"{prefix}.sourceRemapStatus must be one of "
-            f"{', '.join(sorted(SOURCE_REMAP_VALIDATION_STATUSES))}"
+            _allowed_value_reason(
+                f"{prefix}.sourceRemapStatus",
+                SOURCE_REMAP_VALIDATION_STATUSES,
+                source_remap_status,
+            )
         )
     if (
         referenced_artifact is not None
@@ -11087,7 +11126,8 @@ def _validation_artifact_contract_reasons(
             if field_name in artifact and value != "not-applicable":
                 reasons.append(
                     f"{prefix}.{field_name} must be not-applicable when "
-                    f"report.artifacts[{referenced_artifact[0]}].status is failed"
+                    f"report.artifacts[{referenced_artifact[0]}].status is failed "
+                    f"({_value_mismatch_context('not-applicable', value)})"
                 )
     if (
         status_is_valid
@@ -11118,8 +11158,10 @@ def _validation_artifact_contract_reasons(
         )
         and not _validation_artifact_status_matches_record(artifact)
     ):
+        expected_status = _expected_validation_artifact_status(artifact)
         reasons.append(
-            f"{prefix}.status must match exists, hash, size, and provenance statuses"
+            f"{prefix}.status must match exists, hash, size, and provenance statuses "
+            f"({_value_mismatch_context(expected_status, status)})"
         )
     if (
         status == "ok"
@@ -11127,7 +11169,9 @@ def _validation_artifact_contract_reasons(
         and referenced_artifact[1].get("status") == "failed"
     ):
         reasons.append(
-            f"{prefix}.status must match report.artifacts[{referenced_artifact[0]}].status"
+            f"{prefix}.status must match "
+            f"report.artifacts[{referenced_artifact[0]}].status "
+            f"({_value_mismatch_context('failed', status)})"
         )
     return reasons
 

@@ -1711,6 +1711,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "expected/actual hash and byte-size mismatch context"
             in backend_support["notes"]
         )
+        assert (
+            "expected/actual validation status mismatch context"
+            in backend_support["notes"]
+        )
         assert "failed artifact error metadata" in backend_support["notes"]
         assert "translated artifact error metadata rejection" in (
             backend_support["notes"]
