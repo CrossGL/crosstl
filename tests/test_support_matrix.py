@@ -1404,6 +1404,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "artifact source hashes that do not match declared" in (
             backend_support["notes"]
         )
+        assert (
+            "expected/actual artifact source hash and byte-size mismatch context"
+            in (backend_support["notes"])
+        )
         assert "line-preserving source-map mappings" in (backend_support["notes"])
         assert "line-preserving source-map validation" in backend_support["notes"]
         assert "non-empty source-map mappings" in backend_support["notes"]

@@ -10481,6 +10481,8 @@ def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_so
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
     payload["units"][0]["sourceHash"]["value"] = "0" * 64
+    expected_hash = payload["units"][0]["sourceHash"]
+    actual_hash = payload["artifacts"][0]["sourceHash"]
     report_path = repo / "out" / "artifact-unit-source-hash-mismatch-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -10491,6 +10493,11 @@ def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_so
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "artifacts[0].sourceHash must match units[0].sourceHash"
+        in diagnostic["message"]
+    )
+    assert (
+        f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
         in diagnostic["message"]
     )
 
@@ -10522,6 +10529,8 @@ def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_so
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
     payload["artifacts"][0]["sourceSizeBytes"] += 1
+    expected_size = payload["units"][0]["sourceSizeBytes"]
+    actual_size = payload["artifacts"][0]["sourceSizeBytes"]
     report_path = repo / "out" / "artifact-unit-source-size-mismatch-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -10532,6 +10541,10 @@ def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_so
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "artifacts[0].sourceSizeBytes must match units[0].sourceSizeBytes"
+        in diagnostic["message"]
+    )
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
         in diagnostic["message"]
     )
 

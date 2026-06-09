@@ -7936,7 +7936,8 @@ def _artifact_unit_source_hash_contract_reasons(
     if dict(artifact_hash) != dict(unit_hash):
         return [
             f"artifacts[{index}].sourceHash must match "
-            f"units[{unit_index}].sourceHash"
+            f"units[{unit_index}].sourceHash "
+            f"({_hash_mismatch_context(artifact_hash, unit_hash)})"
         ]
     return []
 
@@ -7981,7 +7982,8 @@ def _artifact_unit_source_size_contract_reasons(
     if artifact_size != unit_size:
         return [
             f"artifacts[{index}].sourceSizeBytes must match "
-            f"units[{unit_index}].sourceSizeBytes"
+            f"units[{unit_index}].sourceSizeBytes "
+            f"({_size_mismatch_context(unit_size, artifact_size)})"
         ]
     return []
 
