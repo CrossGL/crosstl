@@ -25,6 +25,7 @@ from .OpenCLLexer import OpenCLLexer
 class OpenCLParser(HipParser):
     """Parse OpenCL C tokens into the OpenCL backend AST."""
 
+    MEMBER_NAME_TOKENS = {*HipParser.MEMBER_NAME_TOKENS, "TYPENAME"}
     DECLARATOR_NAME_TOKENS = {
         *HipParser.DECLARATOR_NAME_TOKENS,
         *HipParser.ATOMIC_FUNCTION_TOKENS,
@@ -32,11 +33,17 @@ class OpenCLParser(HipParser):
         "SIZE_T",
         "SYNCTHREADS",
         "SYNCWARP",
+        "TYPENAME",
     }
     FUNCTION_NAME_TOKENS = {
         *HipParser.FUNCTION_NAME_TOKENS,
         "SYNCTHREADS",
         "SYNCWARP",
+        "TYPENAME",
+    }
+    CONTEXTUAL_IDENTIFIER_TOKENS = {
+        *HipParser.CONTEXTUAL_IDENTIFIER_TOKENS,
+        "TYPENAME",
     }
     FUNCTION_DECLARATION_SPECIFIER_TOKENS = {
         *HipParser.FUNCTION_DECLARATION_SPECIFIER_TOKENS,

@@ -916,6 +916,8 @@ class VulkanParser:
         variables = []
         entry_points = []
         execution_modes = {}
+        group_decorates = []
+        group_member_decorates = []
 
         for result_id, opcode, operands, _line_number in instructions:
             if opcode == "OpCapability" and operands:
@@ -942,6 +944,10 @@ class VulkanParser:
                 member_decorations.setdefault(target, []).append(
                     (member, decoration, operands[3:])
                 )
+            elif opcode == "OpGroupDecorate" and len(operands) >= 2:
+                group_decorates.append((operands[0], operands[1:]))
+            elif opcode == "OpGroupMemberDecorate" and len(operands) >= 3:
+                group_member_decorates.append((operands[0], operands[1:]))
             elif opcode == "OpEntryPoint" and len(operands) >= 3:
                 entry_points.append(
                     {
@@ -1157,6 +1163,9 @@ class VulkanParser:
                     }
                 )
 
+        self.spirv_apply_decoration_groups(
+            decorations, member_decorations, group_decorates, group_member_decorates
+        )
         self.spirv_register_struct_type_names(types, names)
         self.spirv_assign_flattened_resource_block_member_aliases(
             variables,
@@ -1251,6 +1260,31 @@ class VulkanParser:
             spirv_spec_constant_ids=spec_constant_ids,
             spirv_extended_instruction_imports=extended_instruction_imports,
         )
+
+    def spirv_apply_decoration_groups(
+        self, decorations, member_decorations, group_decorates, group_member_decorates
+    ):
+        for group_id, targets in group_decorates:
+            group_decorations = decorations.get(group_id, [])
+            if not group_decorations:
+                continue
+            for target in targets:
+                decorations.setdefault(target, []).extend(
+                    (decoration, list(operands))
+                    for decoration, operands in group_decorations
+                )
+
+        for group_id, target_members in group_member_decorates:
+            group_decorations = decorations.get(group_id, [])
+            if not group_decorations:
+                continue
+            for index in range(0, len(target_members) - 1, 2):
+                target = target_members[index]
+                member = target_members[index + 1]
+                member_decorations.setdefault(target, []).extend(
+                    (member, decoration, list(operands))
+                    for decoration, operands in group_decorations
+                )
 
     def spirv_assembly_has_metadata_only_surface(self, types):
         metadata_type_kinds = {

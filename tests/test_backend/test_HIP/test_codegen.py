@@ -16482,6 +16482,41 @@ class TestHipCodeGen:
         assert "for x in h {" in result
         assert "&&" not in result.replace("(true && false)", "")
 
+    def test_cpp_alternative_operators_codegen_reparse(self):
+        # Sibling CUDA fixture provenance: NVIDIA/cutlass@1fc71b3,
+        # examples/common/dist_gemm_helpers.h, uses C++ alternative `not`.
+        code = """
+        void host(bool ready, bool done, bool fallback, int mask, int flag) {
+            bool keep = ready and not done or fallback;
+            int bits = (mask bitand flag) bitor compl flag;
+            mask and_eq flag;
+            bits xor_eq 3;
+            if (bits not_eq 0) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var keep: bool = ((ready && (!done)) || fallback);" in result
+        assert "var bits: i32 = ((mask & flag) | (~flag));" in result
+        assert "mask &= flag;" in result
+        assert "bits ^= 3;" in result
+        assert "if ((bits != 0)) {" in result
+        assert " and " not in result
+        assert " not " not in result
+        assert "bitand" not in result
+        assert "bitor" not in result
+        assert "compl" not in result
+        assert "not_eq" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_cpp_named_casts_conversion(self):
         code = """
         void host(const float* input, float* data, int i, int n) {

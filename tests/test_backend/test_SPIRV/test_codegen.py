@@ -6044,6 +6044,57 @@ def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_cross_decoration_group_resource_layout_codegen_reparse():
+    assembly = """
+    ; Reduced from:
+    ; Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    ; Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    ; Path: shaders/asm/comp/decoration-group.asm.comp
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint GLCompute %main "main" %gid
+    OpExecutionMode %main LocalSize 1 1 1
+    OpName %gid "gl_GlobalInvocationID"
+    OpName %values "values"
+    OpDecorate %gid BuiltIn GlobalInvocationId
+    OpDecorate %stride_group ArrayStride 4
+    OpDecorate %block_group BufferBlock
+    OpDecorate %offset_group Offset 0
+    %stride_group = OpDecorationGroup
+    %block_group = OpDecorationGroup
+    %offset_group = OpDecorationGroup
+    OpGroupDecorate %stride_group %runtime_float
+    OpGroupDecorate %block_group %Values
+    OpGroupMemberDecorate %offset_group %Values 0
+    OpDecorate %values DescriptorSet 0
+    OpDecorate %values Binding 2
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %uint = OpTypeInt 32 0
+    %float = OpTypeFloat 32
+    %v3uint = OpTypeVector %uint 3
+    %ptr_input_v3uint = OpTypePointer Input %v3uint
+    %runtime_float = OpTypeRuntimeArray %float
+    %Values = OpTypeStruct %runtime_float
+    %ptr_uniform_values = OpTypePointer Uniform %Values
+    %gid = OpVariable %ptr_input_v3uint Input
+    %values = OpVariable %ptr_uniform_values Uniform
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    ast = parse_code(tokenize_code(assembly))
+    generated_code = generate_code(ast)
+
+    assert ("BufferBlock", []) in ast.spirv_decorations["%Values"]
+    assert ("0", "Offset", ["0"]) in ast.spirv_member_decorations["%Values"]
+    assert "RWStructuredBuffer<values> values @set(0) @binding(2);" in generated_code
+    assert "float member0[];" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_spirv_cross_block_name_alias_global_codegen_reparse():
     assembly = """
     ; Reduced from SPIRV-Cross shaders/asm/comp/block-name-alias-global.asm.comp.

@@ -183,6 +183,38 @@ class TestHipLexer:
         assert "ARROW" in token_types
         assert "SCOPE" in token_types
 
+    def test_cpp_alternative_operator_tokenization(self):
+        # Sibling CUDA fixture provenance: NVIDIA/cutlass@1fc71b3,
+        # examples/common/dist_gemm_helpers.h, uses C++ alternative `not`.
+        code = "not ready and valid or fallback not_eq failed bitand mask bitor value compl bits xor other and_eq flag or_eq done xor_eq lane"
+        lexer = HipLexer(code)
+        tokens = [(token.type, token.value) for token in lexer.tokenize()]
+
+        assert tokens == [
+            ("NOT", "not"),
+            ("IDENTIFIER", "ready"),
+            ("AND", "and"),
+            ("IDENTIFIER", "valid"),
+            ("OR", "or"),
+            ("IDENTIFIER", "fallback"),
+            ("NE", "not_eq"),
+            ("IDENTIFIER", "failed"),
+            ("AMPERSAND", "bitand"),
+            ("IDENTIFIER", "mask"),
+            ("PIPE", "bitor"),
+            ("IDENTIFIER", "value"),
+            ("TILDE", "compl"),
+            ("IDENTIFIER", "bits"),
+            ("XOR", "xor"),
+            ("IDENTIFIER", "other"),
+            ("AND_ASSIGN", "and_eq"),
+            ("IDENTIFIER", "flag"),
+            ("OR_ASSIGN", "or_eq"),
+            ("IDENTIFIER", "done"),
+            ("XOR_ASSIGN", "xor_eq"),
+            ("IDENTIFIER", "lane"),
+        ]
+
     def test_numeric_literals(self):
         code = """
         42 3.14f 2.71828 0xFFu 0XCAFEull 0xFFFF'FFFF 0b1010u

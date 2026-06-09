@@ -1289,6 +1289,14 @@ class GLSLParser:
             return type_name
         return f"{type_name}{self.format_type_array_suffixes(array_sizes)}"
 
+    def parse_pointer_declarator_suffix(self):
+        suffix = ""
+        while self.current_token[0] == "MULTIPLY":
+            suffix += "*"
+            self.eat("MULTIPLY")
+            self.skip_newlines()
+        return suffix
+
     def is_name_token(self):
         return self.is_name_token_at(self.index)
 
@@ -1374,6 +1382,7 @@ class GLSLParser:
                 type_array_sizes = self.parse_array_suffixes()
         while True:
             self.skip_newlines()
+            declarator_type = type_name + self.parse_pointer_declarator_suffix()
             if not self.is_name_token():
                 raise SyntaxError(
                     f"Expected identifier in declaration, got {self.current_token}"
@@ -1403,7 +1412,7 @@ class GLSLParser:
                     semantic = self.parse_hlsl_semantic()
 
             var = VariableNode(
-                type_name,
+                declarator_type,
                 name,
                 value=value,
                 qualifiers=qualifiers or [],
@@ -1791,6 +1800,7 @@ class GLSLParser:
                 type_array_sizes = []
                 if self.current_token[0] == "LBRACKET":
                     type_array_sizes = self.parse_array_suffixes()
+                param_type += self.parse_pointer_declarator_suffix()
 
                 if self.current_token[0] in ("COMMA", "RPAREN"):
                     param_name = f"_param{len(params)}"

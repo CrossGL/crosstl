@@ -186,6 +186,30 @@ def test_codegen_multiline_for_header_from_graphicsfuzz_bubblesort():
     assert "for (int i = 0; (i < 2); (i++))" in crossgl
 
 
+def test_codegen_pointer_declarators_reparse_from_compiler_fixtures():
+    # Reduced from CrossGL-Compiler fixtures:
+    # StorageBufferArrayAccessShader.cgl and StorageBufferPointerHelperParamShader.cgl.
+    code = textwrap.dedent("""
+        #version 450 core
+        uniform float* values[2];
+
+        void writeScalar(float* dst, float value) {
+            dst[0] = value;
+        }
+
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            writeScalar(values[0], 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "float* values[2];" in crossgl
+    assert "void writeScalar(float* dst, float value)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar():
     # GLSL 4.60 layout-qualifier is "layout ( ... )"; newlines are whitespace.
     code = textwrap.dedent("""

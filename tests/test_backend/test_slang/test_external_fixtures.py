@@ -304,6 +304,49 @@ EXTERNAL_FIXTURES = [
     },
     {
         # Source: https://github.com/shader-slang/slang
+        # Commit: 142e00d9342eccf0613ed1b18d81cb003c5d6f09
+        # Path: tests/bugs/inf-float-literal.slang
+        "id": "slang_inf_float_literal_from_bug_fixture",
+        "repo": "shader-slang/slang-master-2026-06-09",
+        "path": "tests/bugs/inf-float-literal.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            [numthreads(4, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                int idx = int(dispatchThreadID.x);
+                float a;
+
+                switch (idx)
+                {
+                    default:
+                    case 0: a = 1.#INF; break;
+                    case 1: a = 2.4#INFf; break;
+                    case 2: a = float(234.5#INFl); break;
+                    case 3: a = -1.#INF; break;
+                }
+
+                outputBuffer[idx] = a;
+            }
+        """
+        ),
+        # CrossGL's frontend numeric grammar does not currently accept
+        # HLSL-style #INF spellings, so keep this as a Slang backend
+        # parse/codegen regression.
+        "crossgl": False,
+        "contains": [
+            "switch (idx) {",
+            "a = 1.#INF;",
+            "a = 2.4#INFf;",
+            "a = float(234.5#INFl);",
+            "a = -1.#INF;",
+            "outputBuffer[idx] = a;",
+        ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: tests/compute/comma-operator.slang
         "id": "slang_compute_return_comma_operator",

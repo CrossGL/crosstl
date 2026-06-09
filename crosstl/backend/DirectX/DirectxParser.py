@@ -442,6 +442,7 @@ class HLSLParser:
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
             attributes.extend(self.parse_attribute_list())
+            declarator_type = return_type + self.parse_pointer_declarator_suffix()
             if not self.is_declarator_identifier_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
@@ -451,13 +452,16 @@ class HLSLParser:
 
             if self.current_token[0] == "LPAREN":
                 synthetic_start = len(self.synthetic_structs)
-                func = self.parse_function(return_type, name, qualifiers, attributes)
+                func = self.parse_function(
+                    declarator_type, name, qualifiers, attributes
+                )
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 functions.append(func)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
                     return_type,
                     name,
+                    first_vtype=declarator_type,
                     qualifiers=qualifiers,
                     attributes=attributes,
                     allow_semantic=True,
@@ -984,6 +988,13 @@ class HLSLParser:
         type_name = self.parse_type_suffixes(type_name)
 
         return type_name
+
+    def parse_pointer_declarator_suffix(self):
+        suffix = ""
+        while self.current_token[0] == "MULTIPLY":
+            suffix += "*"
+            self.eat("MULTIPLY")
+        return suffix
 
     def parse_type_suffixes(self, type_name):
         while True:
@@ -2220,6 +2231,7 @@ class HLSLParser:
                 param_type = self.parse_type()
                 qualifiers.extend(self.parse_post_type_qualifiers())
                 attributes.extend(self.parse_attribute_list())
+                param_type += self.parse_pointer_declarator_suffix()
 
                 if self.is_declarator_identifier_token(self.current_token[0]):
                     name = self.parse_declarator_identifier()
@@ -2800,10 +2812,12 @@ class HLSLParser:
         vtype = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes.extend(self.parse_attribute_list())
+        declarator_type = vtype + self.parse_pointer_declarator_suffix()
         name = self.parse_declarator_identifier()
         declarations = self.parse_variable_declaration_list_rest(
             vtype,
             name,
+            first_vtype=declarator_type,
             qualifiers=qualifiers,
             attributes=attributes,
             allow_semantic=allow_semantic,
@@ -2815,6 +2829,7 @@ class HLSLParser:
         self,
         vtype,
         first_name,
+        first_vtype=None,
         qualifiers=None,
         attributes=None,
         allow_semantic=True,
@@ -2822,13 +2837,14 @@ class HLSLParser:
     ):
         declarations = []
         name = first_name
+        declarator_vtype = first_vtype or vtype
         while True:
             if name is None:
                 self.parse_anonymous_bitfield_declaration_rest()
             else:
                 declarations.append(
                     self.parse_variable_declaration_rest(
-                        vtype,
+                        declarator_vtype,
                         name,
                         qualifiers=qualifiers,
                         attributes=attributes,
@@ -2841,7 +2857,9 @@ class HLSLParser:
             self.eat("COMMA")
             if self.is_anonymous_bitfield_declarator_start():
                 name = None
+                declarator_vtype = vtype
             else:
+                declarator_vtype = vtype + self.parse_pointer_declarator_suffix()
                 name = self.parse_declarator_identifier()
 
         if consume_semicolon:

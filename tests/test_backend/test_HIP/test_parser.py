@@ -182,6 +182,49 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_cpp_alternative_operators_parse_as_canonical_operators(self):
+        # Sibling CUDA fixture provenance: NVIDIA/cutlass@1fc71b3,
+        # examples/common/dist_gemm_helpers.h, uses C++ alternative `not`.
+        code = """
+        void host(bool ready, bool done, bool fallback, int mask, int flag) {
+            if (ready and not done or fallback) {
+                mask and_eq flag;
+            }
+            int bits = (mask bitand flag) bitor compl flag;
+            bits xor_eq 3;
+            if (bits not_eq 0) {
+                return;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        condition = body[0].condition
+        assignment = body[0].if_body[0]
+        bits = body[1]
+        xor_assignment = body[2]
+        inequality = body[3].condition
+
+        assert isinstance(condition, BinaryOpNode)
+        assert condition.op == "||"
+        assert isinstance(condition.left, BinaryOpNode)
+        assert condition.left.op == "&&"
+        assert isinstance(condition.left.right, UnaryOpNode)
+        assert condition.left.right.op == "!"
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.operator == "&="
+
+        assert isinstance(bits.value, BinaryOpNode)
+        assert bits.value.op == "|"
+        assert bits.value.left.op == "&"
+        assert isinstance(bits.value.right, UnaryOpNode)
+        assert bits.value.right.op == "~"
+        assert isinstance(xor_assignment, AssignmentNode)
+        assert xor_assignment.operator == "^="
+        assert isinstance(inequality, BinaryOpNode)
+        assert inequality.op == "!="
+
     def test_public_hip_examples_typedef_struct_multi_alias_parsing(self):
         code = """
         typedef struct _GaussParms

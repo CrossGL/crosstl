@@ -227,6 +227,21 @@ def test_numeric_literal_tokenization():
     ]
 
 
+def test_hlsl_special_float_literal_tokenization_from_inf_bug_fixture():
+    # Source: shader-slang/slang tests/bugs/inf-float-literal.slang at
+    # 142e00d9342eccf0613ed1b18d81cb003c5d6f09.
+    tokens = tokenize_code("1.#INF 2.4#INFf 234.5#INFl -1.#INF")
+
+    assert tokens == [
+        ("NUMBER", "1.#INF"),
+        ("NUMBER", "2.4#INFf"),
+        ("NUMBER", "234.5#INFl"),
+        ("MINUS", "-"),
+        ("NUMBER", "1.#INF"),
+        ("EOF", ""),
+    ]
+
+
 def test_numeric_literal_underscore_tokenization_from_generated_conformance_sample():
     # Source: shader-slang/slang docs/generated/tests/conformance/
     # lexical-structure/integer-literal-underscore-ignored.slang at d25453d.

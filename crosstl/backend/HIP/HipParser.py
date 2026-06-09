@@ -703,10 +703,28 @@ class HipParser:
             self.consume("RPAREN")
             return "()"
         if self.match(*self.OVERLOADABLE_OPERATOR_TOKENS):
-            operator_value = self.current_token.value
+            operator_value = self.normalized_operator_value()
             self.advance()
             return operator_value
         return ""
+
+    def normalized_operator_value(self):
+        alternative_operators = {
+            "and": "&&",
+            "and_eq": "&=",
+            "bitand": "&",
+            "bitor": "|",
+            "compl": "~",
+            "not": "!",
+            "not_eq": "!=",
+            "or": "||",
+            "or_eq": "|=",
+            "xor": "^",
+            "xor_eq": "^=",
+        }
+        return alternative_operators.get(
+            self.current_token.value, self.current_token.value
+        )
 
     def is_declarator_name_token(self):
         return self.match(*self.DECLARATOR_NAME_TOKENS)
@@ -3570,7 +3588,7 @@ class HipParser:
             "LSHIFT_ASSIGN",
             "RSHIFT_ASSIGN",
         ):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_assignment_expression()
@@ -3599,7 +3617,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("LOGICAL_OR", "OR"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_logical_and_expression()
@@ -3613,7 +3631,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("LOGICAL_AND", "AND"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_bitwise_or_expression()
@@ -3627,7 +3645,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("BITWISE_OR", "PIPE"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_bitwise_xor_expression()
@@ -3641,7 +3659,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("BITWISE_XOR", "XOR"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_bitwise_and_expression()
@@ -3655,7 +3673,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("BITWISE_AND", "AMPERSAND"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_equality_expression()
@@ -3669,7 +3687,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("EQ", "NE"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_relational_expression()
@@ -3746,7 +3764,7 @@ class HipParser:
             "STAR",
             "AMPERSAND",
         ):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             operand = self.parse_unary_expression()
             return UnaryOpNode(op, operand)

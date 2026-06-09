@@ -501,6 +501,27 @@ def parse_crossgl(code: str):
     return parser.parse()
 
 
+def test_codegen_pointer_parameter_reparse_from_compiler_fixture():
+    # Reduced from CrossGL-Compiler StorageBufferPointerHelperParamShader.cgl.
+    hlsl = textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        void writeScalar(float* dst, float value) {
+            dst[0] = value;
+        }
+
+        [numthreads(1, 1, 1)]
+        void CSMain() {
+            writeScalar(values, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "void writeScalar(float* dst, float value)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_hlsl_psize_roundtrips_to_gl_point_size():
     crossgl = generate_crossgl("float pointSize() : PSIZE { return 1.0; }")
 

@@ -49,6 +49,8 @@ TOKENS = tuple(
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "NUMBER",
+            r"\d(?:_?\d)*\.(?:\d(?:_?\d)*)?"
+            r"#(?i:inf|ind|qnan|snan)[fFhHlL]?|"
             r"0[xX](?:(?:_?[0-9a-fA-F])+(?:\.(?:_?[0-9a-fA-F])*)?|"
             r"\.(?:_?[0-9a-fA-F])+)[pP][+-]?\d(?:_?\d)*[fFhH]?|"
             r"0[xX]_?[0-9a-fA-F](?:_?[0-9a-fA-F])*[uUlL]*|"

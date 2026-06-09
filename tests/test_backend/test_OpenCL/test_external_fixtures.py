@@ -112,6 +112,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/common.cl",
     },
+    "pocl_common_hadd_typename_const_alias_declarator": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/kernel/common_hadd.cl",
+    },
     "opencv_filter2d_small_block_macro_argument": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -761,6 +766,31 @@ def test_external_pocl_sizeof_constant_array_codegen_reparse():
 
     assert "sizeof(" not in crossgl
     assert "var<uniform> nvalues: i32 = (60 / 4);" in crossgl
+
+
+def test_external_pocl_typename_const_alias_declarator_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_common_hadd_typename_const_alias_declarator"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/kernel/common_hadd.cl"
+
+    source = """
+    typedef constant char *string;
+    string const typename = "char";
+
+    kernel void typename_probe(global int *out) {
+        out[0] = typename[0];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    global_name = ast.statements[1]
+    assert global_name.vtype == "string const"
+    assert global_name.name == "typename"
+    assert 'var typename: ptr<i8> = "char";' in crossgl
+    assert "out[0] = typename[0];" in crossgl
 
 
 def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
