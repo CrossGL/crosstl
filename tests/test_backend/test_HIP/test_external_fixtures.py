@@ -95,6 +95,11 @@ EXTERNAL_FIXTURE_SOURCES = {
             "catch/unit/deviceLib/popc.cc",
         ],
     },
+    "hip_tests_nested_sections": {
+        "url": "https://github.com/ROCm/hip-tests",
+        "commit": "8889ba5c7a89a85d5262dadcfbde17589a53ccfb",
+        "paths": ["catch/multiproc/hipIpcEventHandle.cc"],
+    },
     "hip_tests_cooperative_groups": {
         "url": "https://github.com/ROCm/hip-tests",
         "commit": "8889ba5c7a89a85d5262dadcfbde17589a53ccfb",
@@ -711,6 +716,37 @@ def test_external_hip_tests_catch_test_case_block_codegen_reparse():
         "// Kernel launch: funnelshift_kernel<<<vec3<u32>(1, 1, 1), "
         "vec3<u32>(1, 1, 1), 0, 0>>>()"
     ) in crossgl
+
+
+def test_external_hip_tests_nested_section_block_codegen_reparse():
+    # Upstream: ROCm/hip-tests@8889ba5c7a89a85d5262dadcfbde17589a53ccfb,
+    # catch/multiproc/hipIpcEventHandle.cc.
+    source = """
+    HIP_TEST_CASE(Unit_hipIpcEventHandle_ParameterValidation) {
+        hipIpcEventHandle_t eventHandle;
+        hipError_t ret;
+
+        SECTION("Get event handle with event(nullptr)") {
+            ret = hipIpcGetEventHandle(&eventHandle, nullptr);
+            REQUIRE(ret == hipErrorInvalidValue);
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    test_case = ast.statements[0]
+
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "Unit_hipIpcEventHandle_ParameterValidation"
+    assert test_case.qualifiers == ["HIP_TEST_CASE"]
+    assert len(test_case.body) == 4
+    assert isinstance(test_case.body[0], VariableNode)
+    assert test_case.body[0].vtype == "hipIpcEventHandle_t"
+    assert isinstance(test_case.body[1], VariableNode)
+    assert test_case.body[1].vtype == "hipError_t"
+    assert "SECTION" not in crossgl
+    assert "HIP IPC get event handle: output: eventHandle, event: nullptr" in crossgl
+    assert "REQUIRE((ret == hipErrorInvalidValue));" in crossgl
 
 
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():

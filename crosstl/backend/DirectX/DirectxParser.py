@@ -1877,6 +1877,10 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token_is_keyword("NAMESPACE", "namespace"):
+                namespace_ast = self.parse_namespace_block()
+                members.extend(namespace_ast.global_variables)
+                continue
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 members.append(self.parse_cbuffer(attributes=[]))
                 continue

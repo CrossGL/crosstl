@@ -12,6 +12,35 @@ HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
 
+    def _handle_include(
+        self, rest: str, file_path: Optional[str]
+    ) -> Optional[Tuple[str, str]]:
+        match = re.match(r"\s*([<\"])([^>\"]+)[>\"]", rest)
+        if not match:
+            return None
+        delimiter = match.group(1)
+        target = match.group(2)
+
+        search_paths: List[str] = []
+        if delimiter == '"' and file_path:
+            search_paths.append(os.path.dirname(file_path))
+        search_paths.extend(self.include_paths)
+
+        targets = [target]
+        normalized_target = target.replace("\\", os.sep)
+        if normalized_target != target:
+            targets.append(normalized_target)
+
+        for base in search_paths:
+            for include_target in targets:
+                candidate = os.path.join(base, include_target)
+                if os.path.isfile(candidate):
+                    return self._read_source_file(candidate), candidate
+
+        if self.strict:
+            raise FileNotFoundError(f"Include not found: {target}")
+        return None
+
     def _handle_define(self, rest: str):
         rest = rest.lstrip()
         name_match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", rest)

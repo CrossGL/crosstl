@@ -204,6 +204,15 @@ class HipParser:
         "TEMPLATE_TEST_CASE",
         "TEMPLATE_TEST_CASE_SIG",
     }
+    CATCH_NESTED_BLOCK_MACRO_NAMES = {
+        "AND_THEN",
+        "AND_WHEN",
+        "DYNAMIC_SECTION",
+        "GIVEN",
+        "SECTION",
+        "THEN",
+        "WHEN",
+    }
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
         "__DEVICE__",
@@ -738,6 +747,31 @@ class HipParser:
         test_name = self.catch_test_function_name(macro_name, args)
         return FunctionNode("void", test_name, [], body, qualifiers=[macro_name])
 
+    def is_catch_nested_block_macro(self):
+        if self.block_depth == 0:
+            return False
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.CATCH_NESTED_BLOCK_MACRO_NAMES
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        index = self.skip_balanced_group_at_pos(index, "LPAREN", "RPAREN")
+        if index is None:
+            return False
+        index = self.skip_newlines_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type == "LBRACE"
+
+    def parse_catch_nested_block_macro(self):
+        self.consume("IDENTIFIER")
+        self.consume_raw_macro_arguments()
+        self.skip_newlines()
+        return self.parse_block()
+
     def consume_raw_macro_arguments(self):
         self.consume("LPAREN")
         args = [[]]
@@ -1007,6 +1041,8 @@ class HipParser:
             return self.parse_hip_dynamic_shared_macro()
         if self.is_catch_test_block_macro():
             return self.parse_catch_test_block_macro()
+        if self.is_catch_nested_block_macro():
+            return self.parse_catch_nested_block_macro()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_label_statement_start():

@@ -26,6 +26,7 @@ class OpenCLParser(HipParser):
         *HipParser.IDENTIFIER_FUNCTION_SPECIFIER_VALUES,
         "__inline",
         "__inline__",
+        "_CL_NOINLINE",
         "INLINE_FUNC",
         "OPENCL_KERNEL",
     }

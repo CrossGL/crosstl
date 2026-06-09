@@ -4454,6 +4454,8 @@ class CudaParser:
             self.eat(self.current_token[0])
             return value
         elif self.current_token[0] == "IDENTIFIER":
+            if self.is_requires_expression_start():
+                return self.parse_requires_expression()
             if self.current_token[1] == "new":
                 return self.parse_new_expression()
 
@@ -4504,6 +4506,33 @@ class CudaParser:
             raise SyntaxError(
                 f"Unexpected token in primary expression: {self.current_token}"
             )
+
+    def is_requires_expression_start(self):
+        if (
+            self.current_token[0] != "IDENTIFIER"
+            or self.current_token[1] != "requires"
+            or self.current_index + 1 >= len(self.tokens)
+        ):
+            return False
+
+        next_type = self.tokens[self.current_index + 1][0]
+        if next_type == "LBRACE":
+            return True
+        if next_type != "LPAREN":
+            return False
+
+        body_index = self.skip_balanced_tokens_at_index(
+            self.current_index + 1, "LPAREN", "RPAREN"
+        )
+        return body_index < len(self.tokens) and self.tokens[body_index][0] == "LBRACE"
+
+    def parse_requires_expression(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+        return "true"
 
     def is_lambda_expression_start(self):
         if self.current_token[0] != "LBRACKET":

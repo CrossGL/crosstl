@@ -5,6 +5,9 @@ from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.backend.GLSL.preprocessor import GLSLPreprocessor
 
+GLSLANG_REPO = "https://github.com/KhronosGroup/glslang"
+GLSLANG_COMMIT = "98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515"
+
 
 def test_preprocessor_conditional_expansion():
     code = """
@@ -66,6 +69,42 @@ def test_preprocessor_include(tmp_path):
     tokens = GLSLLexer(code, include_paths=[str(tmp_path)]).tokenize()
     values = [tok[1] for tok in tokens]
     assert "from_include" in values
+
+
+def test_preprocessor_resolves_glslang_backslash_include_path(tmp_path):
+    # Reduced from KhronosGroup/glslang Test/include.vert.
+    source_url = f"{GLSLANG_REPO}/blob/{GLSLANG_COMMIT}/Test/include.vert"
+    (tmp_path / "bar.h").write_text("float4 i1;\n")
+    inc2 = tmp_path / "inc2"
+    inc2.mkdir()
+    (inc2 / "bar.h").write_text('#include "foo.h"\nfloat4 i5;\n')
+    (inc2 / "foo.h").write_text("float4 i6;\n")
+    shader_file = tmp_path / "include.vert"
+    shader_file.write_text("""
+        #version 450
+
+        #extension GL_GOOGLE_include_directive : enable
+
+        #define float4 vec4
+
+        #include "bar.h"
+        #include "inc2\\bar.h"
+
+        out vec4 color;
+
+        void main()
+        {
+            color = i1 + i5 + i6;
+        }
+        """)
+
+    tokens = GLSLLexer.from_file(str(shader_file)).tokenize()
+    values = [tok[1] for tok in tokens]
+    ast = GLSLParser(tokens, "vertex").parse()
+
+    assert source_url.startswith(GLSLANG_REPO)
+    assert {"i1", "i5", "i6"}.issubset(values)
+    assert any(var.name == "color" for var in ast.io_variables)
 
 
 def test_translate_resolves_quoted_include_from_source_file_dir(tmp_path):

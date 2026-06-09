@@ -79,6 +79,11 @@ EXTERNAL_SAMPLES = [
         ],
     },
     {
+        "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "4be2ca2ac374f25338da2586bd39acc171e524cd",
+        "paths": ["c/parallel/src/jit_templates/traits.h"],
+    },
+    {
         "repo": "https://github.com/NVIDIA/cutlass",
         "commit": "2599f2975b06a67d5ee25e4a7292afeda1475c9b",
         "paths": [
@@ -3014,4 +3019,31 @@ def test_llama_cpp_cuda_array_reference_parameter_codegen_reparse():
     ]
     assert "array<f32, experts_per_thread> vals" in crossgl
     assert "float (&vals)" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cccl_jit_traits_requires_expression_condition_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 4be2ca2ac374f25338da2586bd39acc171e524cd
+    # path: c/parallel/src/jit_templates/traits.h
+    source = """
+    template <typename Tag, typename Traits, typename... Args>
+    __device__ void get_specialization(Args... args) {
+      if constexpr (requires { Traits::template special<Tag>(args...); }) {
+        return;
+      }
+    }
+    """
+
+    ast = parse_cuda(source)
+    body = ast.functions[0].body
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].name == "get_specialization"
+    assert isinstance(body[0], IfNode)
+    assert body[0].is_constexpr is True
+    assert body[0].condition == "true"
+    assert "if (true)" in crossgl
+    assert "Traits::template special" not in crossgl
     assert_crossgl_reparse(crossgl)

@@ -91,6 +91,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/imgproc/src/opencl/morph3x3.cl",
     },
+    "pocl_noinline_function_specifier": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/kernel/test_as_type.cl",
+    },
 }
 
 
@@ -549,3 +554,30 @@ def test_external_opencv_morph3x3_vector_scalar_cast_codegen_reparse():
     ternary = ast.statements[0].body[0].right
     assert ternary.true_expr.target_type == "uchar16"
     assert "array<u8, 16>(0)" in crossgl
+
+
+def test_external_pocl_noinline_function_specifier_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_noinline_function_specifier"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/kernel/test_as_type.cl"
+
+    source = """
+    _CL_NOINLINE
+    void clear_bytes(uchar* p, uchar c, size_t n)
+    {
+      for (size_t i = 0; i < n; ++i) {
+        p[i] = c;
+      }
+    }
+
+    kernel void test_as_type(global uchar *out, uchar value) {
+      clear_bytes(out, value, 1);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    helper = ast.statements[0]
+    assert helper.name == "clear_bytes"
+    assert helper.qualifiers == ["_CL_NOINLINE"]
+    assert "void clear_bytes(ptr<u8> p, u8 c, u32 n)" in crossgl

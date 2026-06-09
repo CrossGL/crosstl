@@ -1609,6 +1609,26 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "llama_cpp_block_scope_static_assert_noop_struct",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_COMMIT,
+        "source_path": (
+            "ggml/src/ggml-metal/ggml-metal.metal:6140 after "
+            "ggml-common.h static_assert fallback expansion"
+        ),
+        "roundtrip": False,
+        "source": (
+            """
+            void flash_attn_ext_inner(threadgroup s_t * ss, short sgitg) {
+                threadgroup s_t * ps = ss;
+                ps += sgitg*(8*1);
+                struct global_scope_noop_trick;
+                constexpr short NC = (C/8)/NSG;
+            }
+        """
+        ),
+    },
+    {
         "name": "imgui_backend_uchar_color_half_sample",
         "repo_url": IMGUI_REPO,
         "commit": IMGUI_COMMIT,

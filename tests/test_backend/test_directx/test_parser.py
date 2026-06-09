@@ -1110,6 +1110,39 @@ def test_parse_anonymous_enum_constants_inside_namespace_from_directx_samples():
     assert [name for name, _ in ast.enums[1].members] == ["Histogram", "Key8b"]
 
 
+def test_parse_namespaces_inside_cbuffer_from_dxc_cbuffer_layout():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/HLSLFileCheck/hlsl/objects/Cbuffer/namespace_in_cb.hlsl
+    ast = parse_code("""
+    namespace N {
+    float a;
+    }
+
+    cbuffer B {
+      namespace N {
+      float c;
+      }
+      namespace N2 {
+        float d;
+      }
+    }
+
+    namespace N2 {
+      float b;
+    }
+
+    float main() : SV_Target {
+      return N::a + N::c + N2::d + N2::b;
+    }
+    """)
+
+    assert [variable.name for variable in ast.global_variables] == ["a", "b"]
+    assert ast.cbuffers[0].name == "B"
+    assert [member.name for member in ast.cbuffers[0].members] == ["c", "d"]
+    assert [member.vtype for member in ast.cbuffers[0].members] == ["float", "float"]
+    assert ast.functions[0].name == "main"
+
+
 def test_parse_resource_arrays_and_register_space():
     code = """
     Texture2D textures[4] : register(t0, space1);
