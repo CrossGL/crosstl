@@ -642,6 +642,9 @@ def test_project_include_resolution_documents_status_reporting():
         assert "project-define plus variant include provenance" in (
             backend_support["notes"]
         )
+        assert "structured variant fields and diagnostic variant rollups" in (
+            backend_support["notes"]
+        )
         assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
         )
@@ -1065,6 +1068,9 @@ def test_project_diagnostics_document_location_path_checks():
         assert "text output carries diagnostic location, original source location" in (
             backend_support["notes"]
         )
+        assert "variant-scoped include resolution diagnostics" in (
+            backend_support["notes"]
+        )
         assert "diagnostics whose targets are not declared by the report" in (
             backend_support["notes"]
         )
@@ -1085,6 +1091,11 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_diagnostics_preserve_original_locations"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_variant_define_backed_include_resolution_"
+            "diagnostics"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

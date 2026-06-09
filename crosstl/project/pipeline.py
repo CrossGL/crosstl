@@ -2851,6 +2851,7 @@ def _include_resolution_diagnostic(
                 f"could not be resolved{context_suffix}: {include_path}"
             ),
             location=location,
+            variant=variant,
             missing_capabilities=["include.resolution"],
         )
     if status == "outside-project":
@@ -2863,6 +2864,7 @@ def _include_resolution_diagnostic(
                 f"path{context_suffix}: {include_path}"
             ),
             location=location,
+            variant=variant,
             missing_capabilities=["include.resolution"],
         )
     return None

@@ -2528,6 +2528,8 @@ def test_scan_project_reports_variant_define_backed_include_resolution_diagnosti
         "Include directive in main.frag:1 could not be resolved "
         "(from variant debug define PROJECT_HEADER): missing-debug.inc"
     )
+    assert payload["diagnostics"][0]["variant"] == "debug"
+    assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
 
 
 def test_scan_project_records_variant_define_backed_include_resolution(tmp_path):
