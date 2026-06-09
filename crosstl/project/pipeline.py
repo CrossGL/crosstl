@@ -279,7 +279,15 @@ REPORT_ARTIFACT_INCLUDE_PATH_PROCESSING_FIELDS = frozenset(
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
 REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
-    ("schemaVersion", "path", "target", "generatedFile", "mappingGranularity", "hash")
+    (
+        "schemaVersion",
+        "path",
+        "target",
+        "generatedFile",
+        "mappingGranularity",
+        "mappingCount",
+        "hash",
+    )
 )
 REPORT_UNIT_FIELDS = frozenset(
     (
@@ -4360,6 +4368,7 @@ def _artifact_source_remap(
     artifact_path: str,
     remap_path: Path,
     mapping_granularity: str,
+    mapping_count: int,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": SOURCE_REMAP_SCHEMA_VERSION,
@@ -4367,6 +4376,7 @@ def _artifact_source_remap(
         "target": target,
         "generatedFile": artifact_path,
         "mappingGranularity": mapping_granularity,
+        "mappingCount": mapping_count,
         "hash": _source_hash(remap_path),
     }
 
@@ -4668,6 +4678,7 @@ def translate_project(
                             artifact["path"],
                             remap_path,
                             str(artifact["sourceMap"]["mappingGranularity"]),
+                            len(remap_payload["mappings"]),
                         )
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
@@ -6899,6 +6910,9 @@ def _inspection_source_remap_artifact(
             sample["sourceRemapHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["sourceRemapHash"] = hash_value
+    mapping_count = source_remap.get("mappingCount")
+    if _is_non_negative_int(mapping_count):
+        sample["mappingCount"] = mapping_count
     return {key: value for key, value in sample.items() if value is not None}
 
 
@@ -11601,13 +11615,13 @@ def _source_remap_contract_reasons(
         reasons.append(f"{prefix}.generatedFile must match artifacts[{index}].path")
 
     mapping_granularity = source_remap.get("mappingGranularity")
+    source_map = artifact.get("sourceMap")
     if mapping_granularity not in SOURCE_MAP_GRANULARITIES:
         reasons.append(
             f"{prefix}.mappingGranularity must be one of "
             f"{', '.join(SOURCE_MAP_GRANULARITIES)}"
         )
     else:
-        source_map = artifact.get("sourceMap")
         if isinstance(source_map, Mapping):
             source_map_granularity = source_map.get("mappingGranularity")
             if (
@@ -11618,6 +11632,19 @@ def _source_remap_contract_reasons(
                     f"{prefix}.mappingGranularity must match "
                     f"artifacts[{index}].sourceMap.mappingGranularity"
                 )
+    mapping_count = source_remap.get("mappingCount")
+    if mapping_count is None:
+        if required:
+            reasons.append(f"{prefix}.mappingCount must be a non-negative integer")
+    elif not _is_non_negative_int(mapping_count):
+        reasons.append(f"{prefix}.mappingCount must be a non-negative integer")
+    elif isinstance(source_map, Mapping):
+        mappings = source_map.get("mappings")
+        if isinstance(mappings, list) and mapping_count != len(mappings):
+            reasons.append(
+                f"{prefix}.mappingCount must match "
+                f"artifacts[{index}].sourceMap.mappings"
+            )
     reasons.extend(
         _hash_contract_reasons(
             f"{prefix}.hash",

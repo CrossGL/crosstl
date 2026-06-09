@@ -554,12 +554,14 @@ Project reports are JSON documents with:
   anchors as file spans and may include one or more positive-length mappings
   whose source and generated files match the anchors. Line-preserving source and
   generated artifacts include line-granularity mappings with UTF-8 byte offsets.
-  The report records the sidecar path, hash, generated-file identity, summary
-  rollups by target and source backend, and bounded inspection samples for
-  source-map and source-remap artifacts. Validation checks that artifact-level
-  source-map spans still cover the current source and generated files, recomputes
-  line-preserving mappings, and checks that compiler source-remap sidecars use
-  the closed schema-1 field set. The project pipeline emits line-granularity
+  The report records the sidecar path, mapping count, hash, generated-file
+  identity, summary rollups by target and source backend, and bounded inspection
+  samples for source-map and source-remap artifacts. Validation checks that
+  artifact-level source-map spans still cover the current source and generated
+  files, recomputes line-preserving mappings, requires source-remap metadata
+  mapping counts to match source-map mappings, and checks that compiler
+  source-remap sidecars use the closed schema-1 field set. The project pipeline
+  emits line-granularity
   source maps only when the generated artifact preserves the same logical lines
   after newline normalization, allowing a final-newline-only difference;
   translated artifacts keep file-granularity source maps until backend pipelines
@@ -641,8 +643,8 @@ Project reports are JSON documents with:
   positive-length finer-grained mappings, finer-grained mapping containment
   within artifact-level anchors, span consistency, anchor consistency, current
   file-level source-map span coverage,
-  source-remap metadata shape, sidecar hash, closed compiler sidecar field
-  sets, and sidecar content checks, external
+  source-remap metadata shape, mapping-count consistency, sidecar hash, closed
+  compiler sidecar field sets, and sidecar content checks, external
   corpus record, per-entry artifact count, required manifest-entry accounting,
   and summary checks, summary consistency checks, migration action shape,
   rollup, and target declaration checks,

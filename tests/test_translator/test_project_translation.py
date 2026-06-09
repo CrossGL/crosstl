@@ -6571,6 +6571,7 @@ def test_translate_project_records_line_preserving_source_maps(tmp_path):
         "target": "cgl",
         "generatedFile": "out/cgl/simple.cgl",
         "mappingGranularity": "line",
+        "mappingCount": len(source_map["mappings"]),
         "hash": project_pipeline._source_hash(source_remap_path),
     }
     assert source_remap_payload == {
@@ -12848,6 +12849,7 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
         encoding="utf-8",
     )
     artifact["sourceRemap"]["mappingGranularity"] = "file"
+    artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
     artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
     _refresh_artifact_summary(payload)
     report_path = repo / "out" / "incomplete-source-map-span-report.json"
@@ -12896,6 +12898,7 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_mappin
     assert source_map["mappingGranularity"] == "line"
     assert len(source_map["mappings"]) > 1
     source_map["mappings"].pop()
+    artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
     report_path = repo / "out" / "stale-line-source-map-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -13140,6 +13143,9 @@ def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_pat
         "artifacts[0].sourceRemap.mappingGranularity must match "
         "artifacts[0].sourceMap.mappingGranularity"
     ) in diagnostic["message"]
+    assert "artifacts[0].sourceRemap.mappingCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
     assert "artifacts[0].sourceRemap.hash.algorithm must be sha256" in (
         diagnostic["message"]
     )
@@ -13176,6 +13182,30 @@ def test_validate_project_report_rejects_non_crossgl_source_remap_metadata(tmp_p
     assert (
         "artifacts[0].sourceRemap must be omitted unless "
         "artifacts[0].target is CrossGL"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_source_remap_mapping_count_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    artifact = payload["artifacts"][0]
+    artifact["sourceRemap"]["mappingCount"] = len(artifact["sourceMap"]["mappings"]) + 1
+    report_path = repo / "out" / "source-remap-mapping-count-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceRemap.mappingCount must match "
+        "artifacts[0].sourceMap.mappings"
     ) in diagnostic["message"]
 
 
@@ -13348,6 +13378,7 @@ def test_validate_project_report_rejects_compiler_incompatible_source_remap_side
         encoding="utf-8",
     )
     artifact["sourceRemap"]["mappingGranularity"] = "file"
+    artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
     artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
     _refresh_artifact_summary(payload)
     report_path = repo / "out" / "compiler-incompatible-source-remap-report.json"
@@ -17041,6 +17072,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "line",
+                "mappingCount": len(
+                    project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+                ),
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
@@ -17734,6 +17768,9 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceRemapTarget": "cgl",
                 "generatedFile": "out/cgl/simple.cgl",
                 "mappingGranularity": "line",
+                "mappingCount": len(
+                    project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+                ),
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
