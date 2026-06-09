@@ -1610,10 +1610,26 @@ class MetalToCrossGLConverter:
         return code
 
     def map_function_return_type(self, return_type):
+        pointer_buffer_type = self.map_pointer_return_buffer_type(return_type)
+        if pointer_buffer_type:
+            return pointer_buffer_type
         mapped_type = self.map_type(return_type)
         if str(mapped_type).rstrip().endswith("&"):
             return str(mapped_type).rstrip()[:-1].rstrip()
         return mapped_type
+
+    def map_pointer_return_buffer_type(self, return_type):
+        element_type = self.pointer_element_type(return_type)
+        if not element_type:
+            return None
+
+        element_type = re.sub(
+            r"^(?:(?:const|device|thread|threadgroup|constant|volatile|restrict)\s+)+",
+            "",
+            str(element_type).strip(),
+        )
+        element_type = self.resolve_type_alias(element_type)
+        return f"RWStructuredBuffer<{self.map_type(element_type)}>"
 
     def function_output_name(self, func):
         host_name = self.function_host_name(func)
@@ -3214,35 +3230,22 @@ class MetalToCrossGLConverter:
         for case in node.cases:
             case_value = self.generate_expression(case.value, is_main)
             code += "    " * (indent + 1) + f"case {case_value}:\n"
-
-            for stmt in case.statements:
-                code += "    " * (indent + 2)
-                if isinstance(stmt, SwitchNode):
-                    code += self.generate_switch_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, IfNode):
-                    code += self.generate_if_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, ForNode):
-                    code += self.generate_for_loop(stmt, indent + 2, is_main)
-                else:
-                    code += self.generate_expression(stmt, is_main) + ";\n"
-
-            code += "    " * (indent + 2) + "break;\n"
+            code += self.generate_function_body(case.statements, indent + 2, is_main)
+            if not self.switch_case_has_explicit_terminator(case.statements):
+                code += "    " * (indent + 2) + "break;\n"
 
         if node.default:
             code += "    " * (indent + 1) + "default:\n"
-
-            for stmt in node.default:
-                code += "    " * (indent + 2)
-                if isinstance(stmt, SwitchNode):
-                    code += self.generate_switch_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, IfNode):
-                    code += self.generate_if_statement(stmt, indent + 2, is_main)
-                elif isinstance(stmt, ForNode):
-                    code += self.generate_for_loop(stmt, indent + 2, is_main)
-                else:
-                    code += self.generate_expression(stmt, is_main) + ";\n"
-
-            code += "    " * (indent + 2) + "break;\n"
+            code += self.generate_function_body(node.default, indent + 2, is_main)
+            if not self.switch_case_has_explicit_terminator(node.default):
+                code += "    " * (indent + 2) + "break;\n"
 
         code += "    " * indent + "}\n"
         return code
+
+    def switch_case_has_explicit_terminator(self, statements):
+        if not statements:
+            return False
+        return isinstance(
+            statements[-1], (BreakNode, ContinueNode, DiscardNode, ReturnNode)
+        )

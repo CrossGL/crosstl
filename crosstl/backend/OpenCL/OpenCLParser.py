@@ -63,6 +63,7 @@ class OpenCLParser(HipParser):
         "__SHARED__",
         "__CONSTANT__",
         "__MANAGED__",
+        "__GENERIC__",
     }
     TYPE_QUALIFIER_TOKENS = {
         *HipParser.TYPE_QUALIFIER_TOKENS,
@@ -70,6 +71,7 @@ class OpenCLParser(HipParser):
         "__SHARED__",
         "__CONSTANT__",
         "__MANAGED__",
+        "__GENERIC__",
         "READ_ONLY",
         "WRITE_ONLY",
         "READ_WRITE",
@@ -80,6 +82,7 @@ class OpenCLParser(HipParser):
         "__SHARED__",
         "__CONSTANT__",
         "__MANAGED__",
+        "__GENERIC__",
         "READ_ONLY",
         "WRITE_ONLY",
         "READ_WRITE",
@@ -508,6 +511,7 @@ class OpenCLParser(HipParser):
             if self.tokens[index].type in {
                 "__CONSTANT__",
                 "__DEVICE__",
+                "__GENERIC__",
                 "__MANAGED__",
                 "__SHARED__",
                 "READ_ONLY",

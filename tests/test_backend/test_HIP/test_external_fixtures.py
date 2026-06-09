@@ -250,6 +250,27 @@ def test_external_rocthrust_rocprim_namespace_macros_codegen_reparse():
     assert "ROCPRIM_NAMESPACE" not in crossgl
 
 
+def test_external_rocprim_enable_if_trailing_return_codegen_reparse():
+    # Reduced from ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+    # test/rocprim/test_block_histogram.kernels.hpp.
+    source = """
+    template<class T>
+    auto get_safe_maxval(size_t maxval)
+        -> std::enable_if_t<rocprim::is_floating_point<T>::value, bool> {
+        return maxval > 0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert isinstance(ast.statements[0], FunctionNode)
+    assert ast.statements[0].return_type == (
+        "std::enable_if_t<rocprim::is_floating_point<T>::value, bool>"
+    )
+    assert "void get_safe_maxval(u32 maxval)" in crossgl
+    assert "std::enable_if_t" not in crossgl
+
+
 def test_external_rocthrust_static_templated_constructor_declaration_codegen_reparse():
     # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d,
     # examples/sum.cu and examples/lexicographical_sort.cu.

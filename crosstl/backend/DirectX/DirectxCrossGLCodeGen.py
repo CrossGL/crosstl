@@ -71,6 +71,8 @@ class HLSLToCrossGLConverter:
             "uint16_t": "uint16",
             "int64_t": "int64",
             "uint64_t": "uint64",
+            "int8_t4_packed": "uint",
+            "uint8_t4_packed": "uint",
             # Vector Types - float
             "float2": "vec2",
             "float3": "vec3",

@@ -1797,6 +1797,34 @@ def test_codegen_fixed_width_vector_alias_constructors_from_hlsl_docs_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_sm66_packed_8bit_aliases_from_dxc_reparse():
+    # Reduced from microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/CodeGenSPIRV/intrinsics.sm6_6.unpack.hlsl.
+    hlsl = textwrap.dedent("""
+        float4 main(int16_t4 input1 : Inputs1, int16_t4 input2 : Inputs2) : SV_Target {
+          int8_t4_packed signedPacked;
+          uint8_t4_packed unsignedPacked;
+          int16_t4 up1 = unpack_s8s16(unsignedPacked);
+          int32_t4 up3 = unpack_s8s32(unsignedPacked);
+          uint16_t4 up5 = unpack_u8u16(signedPacked);
+          uint32_t4 up7 = unpack_u8u32(signedPacked);
+          return 0.xxxx;
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "uint signedPacked;" in output
+    assert "uint unsignedPacked;" in output
+    assert "i16vec4 up1 = unpack_s8s16(unsignedPacked);" in output
+    assert "ivec4 up3 = unpack_s8s32(unsignedPacked);" in output
+    assert "u16vec4 up5 = unpack_u8u16(signedPacked);" in output
+    assert "uvec4 up7 = unpack_u8u32(signedPacked);" in output
+    assert "int8_t4_packed" not in output
+    assert "uint8_t4_packed" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
     hlsl = textwrap.dedent("""

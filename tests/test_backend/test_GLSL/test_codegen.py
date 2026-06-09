@@ -1812,6 +1812,31 @@ def test_codegen_unnamed_function_parameters_get_stable_names():
     assert "ftd(1, 1.0, 2.0)" in crossgl
 
 
+def test_codegen_variadic_function_parameter_from_glslang_reparse():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/variadic.comp.
+    code = textwrap.dedent("""
+        #version 450
+
+        void foo(int n, ...)
+        {
+        }
+
+        void main()
+        {
+            foo(7);
+            foo(8, 43);
+            foo(9, 42.0, 21.05);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "void foo(int n)" in crossgl
+    assert "... ..." not in crossgl
+    assert "foo(9, 42.0, 21.05)" in crossgl
+
+
 def test_codegen_query_intrinsics_use_resource_descriptors():
     code = textwrap.dedent("""
         #version 450 core

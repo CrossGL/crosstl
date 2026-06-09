@@ -2704,6 +2704,8 @@ class GLSLToCrossGLConverter:
             param_type, param_name = param
             return f"{self.convert_type(param_type)} {param_name}"
         if isinstance(param, VariableNode):
+            if getattr(param, "is_variadic", False):
+                return None
             declaration = self.generate_variable_declaration(
                 param,
                 array_before_attributes=True,

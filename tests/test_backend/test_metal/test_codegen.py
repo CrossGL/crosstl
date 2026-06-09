@@ -1770,6 +1770,90 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid.x] = value * 2.0;" in metal
 
 
+def test_codegen_pointer_return_buffer_selector_reparses_from_compiler_fixture():
+    # Reduced from local CrossGL-Compiler build artifact:
+    # build/test-metal-storage-buffer-nonuniform-descriptor-array.cglb/backend/metal/
+    # MetalStorageBufferNonUniformDescriptorArrayShader.metal.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    device float* cgl_select_compute_values(int descriptorIndex,
+                                            device float* values_0,
+                                            device float* values_1) {
+        if (descriptorIndex < 0 || descriptorIndex >= 2) {
+            return values_0;
+        }
+        switch (descriptorIndex) {
+        case 0:
+            return values_0;
+        case 1:
+            return values_1;
+        default:
+            return values_0;
+        }
+    }
+
+    kernel void compute_main(device float* values_0 [[buffer(0)]],
+                             device float* values_1 [[buffer(1)]],
+                             device int* descriptors [[buffer(4)]]) {
+        int descriptor = descriptors[0];
+        float first = cgl_select_compute_values(
+            descriptor, values_0, values_1)[0];
+        values_0[1] = first;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<float> cgl_select_compute_values" in crossgl
+    assert "return values_0;" in crossgl
+    assert "return values_1;" in crossgl
+    assert "/* Unhandled expression: ReturnNode */" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_struct_pointer_return_buffer_selector_reparses_from_compiler_fixture():
+    # Reduced from local CrossGL-Compiler build artifact:
+    # build/test-metal-mixed-resource-descriptor-array.cglb/backend/metal/
+    # MixedResourceDescriptorArrayShader.metal.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Particle {
+        float3 position;
+        float mass;
+    };
+
+    device Particle* cgl_select_compute_particles(int descriptorIndex,
+                                                  device Particle* particles_0,
+                                                  device Particle* particles_1) {
+        switch (descriptorIndex) {
+        case 0:
+            return particles_0;
+        case 1:
+            return particles_1;
+        default:
+            return particles_0;
+        }
+    }
+
+    kernel void compute_main(device Particle* particles_0 [[buffer(0)]],
+                             device Particle* particles_1 [[buffer(1)]]) {
+        float mass = cgl_select_compute_particles(
+            1, particles_0, particles_1)[0].mass;
+        particles_0[1].mass = mass;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "RWStructuredBuffer<Particle> cgl_select_compute_particles" in crossgl
+    assert "return particles_0;" in crossgl
+    assert "return particles_1;" in crossgl
+    assert "/* Unhandled expression: ReturnNode */" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_buffer_pointer_typedef_resource_resolves_element_contract():
     code = """
     #include <metal_stdlib>

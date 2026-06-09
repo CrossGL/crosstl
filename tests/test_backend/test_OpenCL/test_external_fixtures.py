@@ -167,6 +167,16 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
         "path": "libclc/clc/lib/amdgpu/workitem/clc_get_num_groups.cl",
     },
+    "llvm_clang_opencl_c_base_half_literals": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/lib/Headers/opencl-c-base.h",
+    },
+    "llvm_clang_opencl_generic_address_space_keyword": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/include/clang/Basic/TokenKinds.def",
+    },
     "intel_compute_runtime_simple_spill_fill_kernel": {
         "url": "https://github.com/intel/compute-runtime",
         "commit": "5d9dec127a943c688c816e345c64a4ee2f99c7e6",
@@ -1099,6 +1109,54 @@ def test_external_llvm_libclc_constant_pointer_local_codegen_reparse():
     assert local.qualifiers == ["__constant__"]
     assert local.vtype == "amdhsa_implicit_kernarg_v5 *"
     assert "var<uniform> args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
+
+
+def test_external_llvm_clang_opencl_c_base_half_literal_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_c_base_half_literals"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/lib/Headers/opencl-c-base.h"
+
+    source = """
+    #define HALF_MAX ((0x1.ffcp15h))
+    #define M_E_H 2.71828182845904523536028747135266250h
+
+    kernel void half_literal_probe(global half *out) {
+        half maxv = HALF_MAX;
+        out[0] = maxv + M_E_H;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    value = ast.statements[0].body[0].value
+    assert value == "0x1.ffcp15h"
+    assert "0x1.ffcp15;" in crossgl
+    assert "2.71828182845904523536028747135266250h" not in crossgl
+    assert "out[0] = (maxv + 2.71828182845904523536028747135266250);" in crossgl
+
+
+def test_external_llvm_clang_generic_address_space_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_generic_address_space_keyword"
+    ]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/include/clang/Basic/TokenKinds.def"
+
+    source = """
+    int read_generic(generic int *p) {
+        return *p;
+    }
+
+    kernel void generic_probe(global int *out) {
+        out[0] = read_generic(out);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0] == {"type": "__generic__ int *", "name": "p"}
+    assert "i32 read_generic(ptr<i32> p)" in crossgl
+    assert "__generic" not in crossgl
 
 
 def test_external_compute_runtime_simple_spill_long_sum_codegen_reparse():

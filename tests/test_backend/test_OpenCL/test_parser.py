@@ -217,3 +217,19 @@ def test_darktable_gnu_statement_expression_switch_macro_parses():
     statement_expr = ast.statements[0].body[0]
     assert isinstance(statement_expr, OpenCLStatementExpressionNode)
     assert isinstance(statement_expr.statements[0], SwitchNode)
+
+
+def test_opencl_generic_address_space_pointer_parameter_parses():
+    ast = parse_code("""
+        int read_generic(generic int *p) {
+            return *p;
+        }
+
+        kernel void generic_probe(global int *out) {
+            out[0] = read_generic(out);
+        }
+        """)
+
+    helper = ast.statements[0]
+    assert helper.params[0] == {"type": "__generic__ int *", "name": "p"}
+    assert ast.statements[1].name == "generic_probe"

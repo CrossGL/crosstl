@@ -7251,6 +7251,10 @@ class HipToCrossGLConverter:
         if std_container_type is not None:
             return std_container_type
 
+        enable_if_type = self.convert_enable_if_type(hip_type)
+        if enable_if_type is not None:
+            return enable_if_type
+
         resource_type = self.convert_hip_resource_type(hip_type)
         if resource_type is not None:
             return resource_type
@@ -7309,6 +7313,12 @@ class HipToCrossGLConverter:
                 self.convert_hip_type_to_crossgl(arg) for arg in template_args
             ]
             return f"tuple<{', '.join(element_types)}>"
+        return None
+
+    def convert_enable_if_type(self, hip_type):
+        base_name, template_args = self.parse_cpp_template(hip_type)
+        if base_name in {"std::enable_if_t", "::std::enable_if_t"} and template_args:
+            return "void"
         return None
 
     def is_unique_ptr_type_name(self, type_name):

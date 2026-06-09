@@ -663,6 +663,42 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        "id": "slang_spirv_spec_constant_enum_typedef_alias_reparse",
+        "repo": "shader-slang/slang-master-2026-06-09",
+        "path": "tests/spirv/spec-constant-enum-typedef.slang",
+        "source": (
+            """
+            enum class Mode : uint32_t
+            {
+                Add = 2,
+                Multiply = 9,
+            }
+
+            typedef Mode ModeTypedef;
+
+            [vk::constant_id(5)]
+            const ModeTypedef mode = Mode::Add;
+
+            RWStructuredBuffer<uint> outputBuffer;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void main(uint3 id : SV_DispatchThreadID)
+            {
+                outputBuffer[id.x] = (uint)mode;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "enum Mode {",
+            "typealias ModeTypedef = Mode;",
+            "const ModeTypedef mode = Mode::Add;",
+            "outputBuffer[id.x] = uint(mode);",
+        ],
+        "not_contains": ["typedef Mode ModeTypedef;"],
+    },
+    {
         "id": "slang_func_keyword_default_parameter_from_current_docs",
         "repo": "shader-slang/slang-current-2026-06-04",
         "path": (

@@ -170,6 +170,95 @@ class SlangToCrossGLConverter:
         "ByteAddressBuffer",
         "RWByteAddressBuffer",
     }
+    CROSSGL_BUILTIN_TYPE_NAMES = {
+        "void",
+        "bool",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "f16",
+        "f32",
+        "f64",
+        "int",
+        "uint",
+        "float",
+        "double",
+        "half",
+        "char",
+        "string",
+        "vec2",
+        "vec3",
+        "vec4",
+        "ivec2",
+        "ivec3",
+        "ivec4",
+        "uvec2",
+        "uvec3",
+        "uvec4",
+        "bvec2",
+        "bvec3",
+        "bvec4",
+        "mat2",
+        "mat3",
+        "mat4",
+        "mat2x2",
+        "mat2x3",
+        "mat2x4",
+        "mat3x2",
+        "mat3x3",
+        "mat3x4",
+        "mat4x2",
+        "mat4x3",
+        "mat4x4",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+        "dmat2",
+        "dmat3",
+        "dmat4",
+        "dmat2x2",
+        "dmat2x3",
+        "dmat2x4",
+        "dmat3x2",
+        "dmat3x3",
+        "dmat3x4",
+        "dmat4x2",
+        "dmat4x3",
+        "dmat4x4",
+        "sampler",
+        "image1D",
+        "image1DArray",
+        "image2D",
+        "image2DArray",
+        "image2DMS",
+        "image2DMSArray",
+        "image3D",
+        "imageCube",
+        "imageCubeArray",
+        "iimage1D",
+        "iimage1DArray",
+        "iimage2D",
+        "iimage2DArray",
+        "iimage2DMS",
+        "iimage2DMSArray",
+        "iimage3D",
+        "iimageCube",
+        "iimageCubeArray",
+        "uimage1D",
+        "uimage1DArray",
+        "uimage2D",
+        "uimage2DArray",
+        "uimage2DMS",
+        "uimage2DMSArray",
+        "uimage3D",
+        "uimageCube",
+        "uimageCubeArray",
+    }
     BYTE_ADDRESS_BUFFER_METHOD_MAP = {
         "Load": "buffer_load",
         "Load2": "buffer_load2",
@@ -587,9 +676,7 @@ class SlangToCrossGLConverter:
                 code += self.generate_export(exp)
             code += "\n"
         for node in ast.typedefs:
-            code += (
-                f"    typedef {self.map_type(node.original_type)} {node.new_type};\n"
-            )
+            code += f"    {self.generate_typedef(node)}\n"
         for enum in getattr(ast, "enums", []) or []:
             if isinstance(enum, EnumNode):
                 code += f"    enum {enum.name} {{\n"
@@ -639,6 +726,20 @@ class SlangToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def generate_typedef(self, node):
+        original_type = self.map_type(node.original_type)
+        new_type = node.new_type
+        if self.requires_typealias_spelling(original_type):
+            return f"typealias {new_type} = {original_type};"
+        return f"typedef {original_type} {new_type};"
+
+    def requires_typealias_spelling(self, type_name):
+        type_name = str(type_name)
+        return (
+            type_name not in self.CROSSGL_BUILTIN_TYPE_NAMES
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", type_name) is not None
+        )
 
     def raise_for_unsupported_conformance_constructs(self, ast):
         constructs = []

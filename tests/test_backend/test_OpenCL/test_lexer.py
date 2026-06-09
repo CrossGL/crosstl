@@ -44,3 +44,18 @@ def test_darktable_hex_float_literal_tokenizes_as_single_float():
 
     assert ("FLOAT", "0x1.0p-24f") in tokens
     assert ("IDENTIFIER", "p") not in tokens
+
+
+def test_opencl_half_literal_suffixes_tokenize_as_single_float():
+    tokens = token_pairs("half lo = 0.5h; half hi = 0x1.ffcp15H;")
+
+    assert ("FLOAT", "0.5h") in tokens
+    assert ("FLOAT", "0x1.ffcp15H") in tokens
+    assert ("IDENTIFIER", "h") not in tokens
+    assert ("IDENTIFIER", "H") not in tokens
+
+
+def test_opencl_generic_address_space_token_is_normalized():
+    tokens = token_pairs("generic int *p; __generic float *q;")
+
+    assert tokens.count(("__GENERIC__", "__generic__")) == 2

@@ -37,6 +37,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "__private",
         "__private__",
         "private",
+        "__generic",
+        "__generic__",
+        "generic",
         "read_only",
         "write_only",
         "read_write",
@@ -210,10 +213,35 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "cl_double": 8,
     }
     OPENCL_SIZEOF_POINTER_SIZE = 8
+    OPENCL_HALF_FLOAT_LITERAL = re.compile(
+        r"^(?P<body>"
+        r"0[xX](?:"
+        r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
+        r"(?:\.(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)?)?"
+        r"|\.(?:[0-9a-fA-F](?:'?[0-9a-fA-F])*)"
+        r")"
+        r"[pP][+-]?\d(?:'?\d)*"
+        r"|(?:\d(?:'?\d)*\.(?:\d(?:'?\d)*)?|\.(?:\d(?:'?\d)*))(?:[eE][+-]?\d(?:'?\d)*)?"
+        r"|\d(?:'?\d)*[eE][+-]?\d(?:'?\d)*)"
+        r"[hH]$"
+    )
 
     def generate(self, ast_node):
         self.opencl_sizeof_symbols = {}
         return super().generate(ast_node)
+
+    def generic_visit(self, node):
+        if isinstance(node, str):
+            literal = self.normalize_opencl_numeric_literal(node)
+            if literal != node:
+                return literal
+        return super().generic_visit(node)
+
+    def normalize_opencl_numeric_literal(self, value):
+        half_literal = self.OPENCL_HALF_FLOAT_LITERAL.match(value)
+        if half_literal:
+            return half_literal.group("body").replace("'", "")
+        return value
 
     def visit_OpenCLProgramNode(self, node):
         """Render an OpenCL program AST as a CrossGL shader block."""
