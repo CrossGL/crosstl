@@ -361,6 +361,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "toolchainRunStatusByTool",
         "toolchainRunStatusByVariant",
         "sourceHashStatusCounts",
+        "sourceSizeStatusCounts",
         "generatedHashStatusCounts",
         "generatedSizeStatusCounts",
         "sourceMapStatusCounts",
@@ -382,6 +383,7 @@ VALIDATION_ARTIFACT_FIELDS = frozenset(
         "variant",
         "sourceBackend",
         "sourceHashStatus",
+        "sourceSizeStatus",
         "generatedHashStatus",
         "generatedSizeStatus",
         "sourceMapStatus",
@@ -394,6 +396,7 @@ VALIDATION_SUMMARY_FIELDS = frozenset(
         "okCount",
         "failedCount",
         "sourceHashStatusCounts",
+        "sourceSizeStatusCounts",
         "generatedHashStatusCounts",
         "generatedSizeStatusCounts",
         "sourceMapStatusCounts",
@@ -513,6 +516,9 @@ GIT_COMMIT_HEX_LENGTH = 40
 LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
 VALIDATION_ARTIFACT_STATUSES = frozenset(("ok", "failed"))
 SOURCE_HASH_VALIDATION_STATUSES = frozenset(
+    ("ok", "missing", "mismatch", "not-recorded", "outside-project")
+)
+SOURCE_SIZE_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-recorded", "outside-project")
 )
 GENERATED_HASH_VALIDATION_STATUSES = frozenset(
@@ -4902,6 +4908,9 @@ def _validation_summary(artifact_checks: Sequence[Any]) -> dict[str, Any]:
         "sourceHashStatusCounts": _status_counts(
             artifact_checks, "sourceHashStatus", SOURCE_HASH_VALIDATION_STATUSES
         ),
+        "sourceSizeStatusCounts": _status_counts(
+            artifact_checks, "sourceSizeStatus", SOURCE_SIZE_VALIDATION_STATUSES
+        ),
         "generatedHashStatusCounts": _status_counts(
             artifact_checks,
             "generatedHashStatus",
@@ -5484,12 +5493,19 @@ def _validate_artifacts(
             )
         exists = artifact_path.exists() if artifact_inside_project else False
         source_hash_status = "not-recorded"
+        source_size_status = "not-recorded"
         source_hash = artifact.get("sourceHash")
-        if isinstance(source_hash, Mapping):
+        source_size = artifact.get("sourceSizeBytes")
+        validate_source_hash = isinstance(source_hash, Mapping)
+        validate_source_size = _is_non_negative_int(source_size)
+        if validate_source_hash or validate_source_size:
             source_path = _resolve_report_path(config, artifact["source"])
             source_inside_project = _is_relative_to(source_path, config.root)
             if not source_inside_project:
-                source_hash_status = "outside-project"
+                if validate_source_hash:
+                    source_hash_status = "outside-project"
+                if validate_source_size:
+                    source_size_status = "outside-project"
                 diagnostics.append(
                     ProjectDiagnostic(
                         severity="error",
@@ -5504,7 +5520,10 @@ def _validate_artifacts(
                     )
                 )
             elif not source_path.exists():
-                source_hash_status = "missing"
+                if validate_source_hash:
+                    source_hash_status = "missing"
+                if validate_source_size:
+                    source_size_status = "missing"
                 diagnostics.append(
                     ProjectDiagnostic(
                         severity="error",
@@ -5519,24 +5538,44 @@ def _validate_artifacts(
                     )
                 )
             else:
-                actual_source_hash = _source_hash(source_path)
-                if not _hash_matches_report(actual_source_hash, source_hash):
-                    source_hash_status = "mismatch"
-                    diagnostics.append(
-                        ProjectDiagnostic(
-                            severity="error",
-                            code="project.validate.source-hash-mismatch",
-                            message=(
-                                "Source artifact hash does not match report: "
-                                f"{artifact['source']}"
-                            ),
-                            location=SourceLocation(file=str(artifact["source"])),
-                            **_artifact_diagnostic_context(artifact),
-                            missing_capabilities=["source.provenance"],
+                if validate_source_hash:
+                    actual_source_hash = _source_hash(source_path)
+                    if not _hash_matches_report(actual_source_hash, source_hash):
+                        source_hash_status = "mismatch"
+                        diagnostics.append(
+                            ProjectDiagnostic(
+                                severity="error",
+                                code="project.validate.source-hash-mismatch",
+                                message=(
+                                    "Source artifact hash does not match report: "
+                                    f"{artifact['source']}"
+                                ),
+                                location=SourceLocation(file=str(artifact["source"])),
+                                **_artifact_diagnostic_context(artifact),
+                                missing_capabilities=["source.provenance"],
+                            )
                         )
-                    )
-                else:
-                    source_hash_status = "ok"
+                    else:
+                        source_hash_status = "ok"
+                if validate_source_size:
+                    actual_source_size = source_path.stat().st_size
+                    if source_size != actual_source_size:
+                        source_size_status = "mismatch"
+                        diagnostics.append(
+                            ProjectDiagnostic(
+                                severity="error",
+                                code="project.validate.source-size-mismatch",
+                                message=(
+                                    "Source artifact size does not match report: "
+                                    f"{artifact['source']}"
+                                ),
+                                location=SourceLocation(file=str(artifact["source"])),
+                                **_artifact_diagnostic_context(artifact),
+                                missing_capabilities=["source.provenance"],
+                            )
+                        )
+                    else:
+                        source_size_status = "ok"
         if (
             artifact_inside_project
             and not exists
@@ -5657,6 +5696,7 @@ def _validate_artifacts(
                 and exists
                 and artifact.get("status") == "translated"
                 and source_hash_status in {"ok", "not-recorded"}
+                and source_size_status in {"ok", "not-recorded"}
                 and generated_hash_status in {"ok", "not-recorded"}
                 and generated_size_status in {"ok", "not-recorded"}
                 and not source_remap_diagnostics
@@ -5664,6 +5704,7 @@ def _validate_artifacts(
                 else "failed"
             ),
             "sourceHashStatus": source_hash_status,
+            "sourceSizeStatus": source_size_status,
             "generatedHashStatus": generated_hash_status,
             "generatedSizeStatus": generated_size_status,
             "sourceMapStatus": source_map_status,
@@ -6007,6 +6048,9 @@ def inspect_project_report(
             ),
             "sourceHashStatusCounts": dict(
                 validation_report.get("sourceHashStatusCounts", {})
+            ),
+            "sourceSizeStatusCounts": dict(
+                validation_report.get("sourceSizeStatusCounts", {})
             ),
             "generatedHashStatusCounts": dict(
                 validation_report.get("generatedHashStatusCounts", {})
@@ -6434,6 +6478,7 @@ def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
         "status": artifact.get("status"),
         "exists": artifact.get("exists"),
         "sourceHashStatus": artifact.get("sourceHashStatus"),
+        "sourceSizeStatus": artifact.get("sourceSizeStatus"),
         "generatedHashStatus": artifact.get("generatedHashStatus"),
         "generatedSizeStatus": artifact.get("generatedSizeStatus"),
         "sourceMapStatus": artifact.get("sourceMapStatus"),
@@ -7342,6 +7387,7 @@ def _inspection_artifact_validation_metadata(
     for field_name in (
         "exists",
         "sourceHashStatus",
+        "sourceSizeStatus",
         "generatedHashStatus",
         "generatedSizeStatus",
         "sourceMapStatus",
@@ -7534,6 +7580,7 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
     for field_name in (
         "exists",
         "sourceHashStatus",
+        "sourceSizeStatus",
         "generatedHashStatus",
         "generatedSizeStatus",
         "sourceMapStatus",
@@ -7635,6 +7682,7 @@ def _validation_report_payload(
         dict(validation_summary) if isinstance(validation_summary, Mapping) else {}
     )
     source_hash_status_counts = validation_summary.get("sourceHashStatusCounts")
+    source_size_status_counts = validation_summary.get("sourceSizeStatusCounts")
     generated_hash_status_counts = validation_summary.get("generatedHashStatusCounts")
     generated_size_status_counts = validation_summary.get("generatedSizeStatusCounts")
     source_map_status_counts = validation_summary.get("sourceMapStatusCounts")
@@ -7696,6 +7744,11 @@ def _validation_report_payload(
         "sourceHashStatusCounts": (
             dict(source_hash_status_counts)
             if isinstance(source_hash_status_counts, Mapping)
+            else {}
+        ),
+        "sourceSizeStatusCounts": (
+            dict(source_size_status_counts)
+            if isinstance(source_size_status_counts, Mapping)
             else {}
         ),
         "generatedHashStatusCounts": (
@@ -10576,6 +10629,7 @@ def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> b
     if artifact.get("exists") is not True:
         return status == "failed"
     source_hash_status = artifact.get("sourceHashStatus", "not-recorded")
+    source_size_status = artifact.get("sourceSizeStatus", "not-recorded")
     generated_hash_status = artifact.get("generatedHashStatus", "not-recorded")
     generated_size_status = artifact.get("generatedSizeStatus", "not-recorded")
     source_map_status = artifact.get("sourceMapStatus", "ok")
@@ -10583,6 +10637,7 @@ def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> b
     expected_status = (
         "ok"
         if source_hash_status in {"ok", "not-recorded"}
+        and source_size_status in {"ok", "not-recorded"}
         and generated_hash_status in {"ok", "not-recorded"}
         and generated_size_status in {"ok", "not-recorded"}
         and source_map_status in {"ok", "not-applicable", "not-recorded"}
@@ -10695,6 +10750,20 @@ def _validation_artifact_contract_reasons(
             f"{prefix}.sourceHashStatus must be one of "
             f"{', '.join(sorted(SOURCE_HASH_VALIDATION_STATUSES))}"
         )
+    source_size_status = artifact.get("sourceSizeStatus")
+    if require_status_fields and "sourceSizeStatus" not in artifact:
+        reasons.append(
+            f"{prefix}.sourceSizeStatus must be recorded "
+            "when validation.summary is present"
+        )
+    if (
+        "sourceSizeStatus" in artifact
+        and source_size_status not in SOURCE_SIZE_VALIDATION_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.sourceSizeStatus must be one of "
+            f"{', '.join(sorted(SOURCE_SIZE_VALIDATION_STATUSES))}"
+        )
     generated_hash_status = artifact.get("generatedHashStatus")
     if require_status_fields and "generatedHashStatus" not in artifact:
         reasons.append(
@@ -10774,6 +10843,10 @@ def _validation_artifact_contract_reasons(
             or source_hash_status in SOURCE_HASH_VALIDATION_STATUSES
         )
         and (
+            "sourceSizeStatus" not in artifact
+            or source_size_status in SOURCE_SIZE_VALIDATION_STATUSES
+        )
+        and (
             "generatedHashStatus" not in artifact
             or generated_hash_status in GENERATED_HASH_VALIDATION_STATUSES
         )
@@ -10833,6 +10906,7 @@ def _validation_summary_contract_reasons(
         )
     for field_name in (
         "sourceHashStatusCounts",
+        "sourceSizeStatusCounts",
         "generatedHashStatusCounts",
         "generatedSizeStatusCounts",
         "sourceMapStatusCounts",

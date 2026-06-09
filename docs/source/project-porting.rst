@@ -225,10 +225,10 @@ tool availability runs instead of claiming artifact compilation. Validation
 reports include
 severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, artifact source-backend,
-artifact variant, hash-status, generated-size status, source-map status,
-source-remap status, toolchain status, toolchain-run status, toolchain-run
-target, toolchain-run source backend, toolchain-run check kind, toolchain-run tool, and
-toolchain-run variant rollups for validation results.
+artifact variant, hash-status, source-size status, generated-size status,
+source-map status, source-remap status, toolchain status, toolchain-run status,
+toolchain-run target, toolchain-run source backend, toolchain-run check kind,
+toolchain-run tool, and toolchain-run variant rollups for validation results.
 The JSON validation report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift.
 The default output is JSON; ``--format text``
@@ -640,15 +640,17 @@ Project reports are JSON documents with:
   inspection summaries, unit and skipped record shape checks, artifact record
   shape checks, source and generated hash checks, duplicate artifact identity
   checks, required
-  source/generated hash, generated-size, and source-map/source-remap status
-  fields for summarized validation artifacts, aggregate validation artifact and
+  source/generated hash, source-size, generated-size, and
+  source-map/source-remap status fields for summarized validation artifacts,
+  aggregate validation artifact and
   validation status summary counts, direct validation report artifact target, source
-  backend, variant, hash-status, generated-size status, source-map status, source-remap status,
+  backend, variant, hash-status, source-size status, generated-size status,
+  source-map status, source-remap status,
   toolchain status, toolchain-run status rollups, toolchain-run check-kind
   metadata, toolchain-run tool rollups, and a closed standalone validation-report
   field set,
   failed-artifact text with
-  non-OK hash, generated-size, source-map, and source-remap statuses, bounded
+  non-OK hash, source-size, generated-size, source-map, and source-remap statuses, bounded
   validation artifact and validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, config hash
   shape and current-file checks, unit source hash and byte-size shape and
@@ -662,7 +664,8 @@ Project reports are JSON documents with:
   full-report source-map granularity, target, source-backend, and variant
   rollup checks,
   source-remap granularity, target, source-backend, and variant rollup checks,
-  source hash and source byte-size checks, generated artifact byte-size checks,
+  source hash and source byte-size checks, source-size validation status checks,
+  generated artifact byte-size checks,
   failed artifact error metadata checks, translated artifact error metadata
   rejection, required artifact
   provenance and provenance value checks, artifact provenance source-backend,
