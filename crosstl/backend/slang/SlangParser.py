@@ -242,6 +242,10 @@ class SlangParser:
                 typedefs.append(self.parse_typedef())
             elif self.is_namespace_declaration_start():
                 global_variables.extend(self.parse_namespace_declaration())
+            elif self.is_global_generic_value_param_declaration_start():
+                global_variables.append(
+                    self.parse_global_generic_value_param(attributes=pending_attributes)
+                )
             elif self.is_require_capability_declaration_start():
                 self.skip_semicolon_terminated_declaration()
             elif self.is_using_declaration_start():
@@ -516,6 +520,13 @@ class SlangParser:
 
     def is_require_capability_declaration_start(self):
         return self.current_token == ("IDENTIFIER", "__require_capability")
+
+    def is_global_generic_value_param_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        return current_pos < len(self.tokens) and self.tokens[current_pos] == (
+            "IDENTIFIER",
+            "__generic_value_param",
+        )
 
     def is_using_declaration_start(self):
         return self.current_token == ("IDENTIFIER", "using")
@@ -1324,6 +1335,36 @@ class SlangParser:
         if len(declarations) == 1:
             return declarations[0]
         return declarations
+
+    def parse_global_generic_value_param(self, attributes=None):
+        attributes = attributes or []
+        qualifiers = self.parse_qualifiers()
+        self.eat("IDENTIFIER")
+
+        var_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
+
+        var_type = self.parse_type_name(allow_array_suffix=True)
+        var_type += self.parse_pointer_suffix()
+        variable = VariableNode(
+            var_type,
+            var_name,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            array_sizes=[],
+            storage_modifier="__generic_value_param",
+        )
+
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            declaration = AssignmentNode(variable, self.parse_expression(), op)
+        else:
+            declaration = variable
+
+        self.eat("SEMICOLON")
+        return declaration
 
     def parse_import(self):
         self.eat("IMPORT")

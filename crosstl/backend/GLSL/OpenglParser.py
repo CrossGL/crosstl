@@ -1143,6 +1143,11 @@ class GLSLParser:
         return qualifiers
 
     def parse_type(self):
+        if self.is_unsigned_int_type_start_at(self.index):
+            self.eat("IDENTIFIER")
+            self.skip_newlines()
+            self.eat("INT")
+            return "uint"
         if self.current_token[0] in TYPE_TOKENS:
             type_name = self.current_token[1]
             self.advance()
@@ -1161,6 +1166,21 @@ class GLSLParser:
             self.eat("IDENTIFIER")
             return type_name + self.parse_type_template_suffix()
         raise SyntaxError(f"Expected type, got {self.current_token}")
+
+    def is_unsigned_int_type_start_at(self, index):
+        index = self.skip_newline_index(index)
+        token_type, token_value = self.token_at(index)
+        if token_type != "IDENTIFIER" or token_value != "unsigned":
+            return False
+        next_index = self.skip_newline_index(index + 1)
+        return self.token_at(next_index)[0] == "INT"
+
+    def skip_unsigned_int_type_index(self, index):
+        if not self.is_unsigned_int_type_start_at(index):
+            return index
+        index = self.skip_newline_index(index)
+        int_index = self.skip_newline_index(index + 1)
+        return self.skip_newline_index(int_index + 1)
 
     def parse_type_template_suffix(self):
         if self.current_token[0] != "LESS_THAN":
@@ -1269,8 +1289,13 @@ class GLSLParser:
         raise SyntaxError(f"Expected {context}, got {self.current_token}")
 
     def is_declaration_start(self):
-        if self.current_token[0] in TYPE_TOKENS:
-            index = self.skip_type_template_suffix_index(self.index + 1)
+        if self.current_token[0] in TYPE_TOKENS or self.is_unsigned_int_type_start_at(
+            self.index
+        ):
+            if self.is_unsigned_int_type_start_at(self.index):
+                index = self.skip_unsigned_int_type_index(self.index)
+            else:
+                index = self.skip_type_template_suffix_index(self.index + 1)
             index = self.skip_array_suffixes_index(index)
             return self.is_name_token_at(index)
         if (
@@ -1300,10 +1325,15 @@ class GLSLParser:
 
         if self.token_at(index)[0] == "STRUCT":
             return True
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
 
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
         return self.is_name_token_at(index)
 
@@ -1851,9 +1881,14 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
         if not self.is_name_token_at(index):
@@ -1875,9 +1910,14 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
         if not self.is_name_token_at(index):
@@ -1899,9 +1939,14 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
         if not self.is_name_token_at(index):
@@ -2486,6 +2531,8 @@ class GLSLParser:
         return self.can_start_cast_operand(self.token_at(next_index))
 
     def is_cast_type_token_at(self, index):
+        if self.is_unsigned_int_type_start_at(index):
+            return True
         token_type, token_value = self.token_at(index)
         if token_type in TYPE_TOKENS:
             return True
@@ -2501,6 +2548,8 @@ class GLSLParser:
         return bool(EXPLICIT_ARITHMETIC_TYPE_RE.match(str(value)))
 
     def skip_cast_type_index(self, index):
+        if self.is_unsigned_int_type_start_at(index):
+            return self.skip_unsigned_int_type_index(index)
         index = self.skip_newline_index(index + 1)
         return self.skip_type_template_suffix_index(index)
 

@@ -957,7 +957,7 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected struct type name, got {self.current_token[0]}"
                 )
-            return self.parse_identifier()
+            return self.parse_type_suffixes(self.parse_identifier())
 
         base = self.current_token[1]
         self.eat(self.current_token[0])
@@ -2664,7 +2664,12 @@ class HLSLParser:
             idx += 1
             if not self.is_identifier_token_at(idx):
                 return None
-            return idx + 1
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_angle_list_at(idx)
+                if idx is None:
+                    return None
+            return idx
 
         base = self.tokens[idx][1]
         idx += 1

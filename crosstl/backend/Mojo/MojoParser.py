@@ -2104,6 +2104,7 @@ class MojoParser:
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_expression_continuation(self.parse_assignment)
+            right = self.parse_indexed_call_continuation(right)
             return AssignmentNode(left, right, op)
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
@@ -2119,7 +2120,17 @@ class MojoParser:
             self.eat("ELSE")
             false_expr = self.parse_expression_continuation(self.parse_expression)
             left = TernaryOpNode(condition, true_expr, false_expr)
-        return left
+        return self.parse_indexed_call_continuation(left)
+
+    def parse_indexed_call_continuation(self, node):
+        if (
+            isinstance(node, ArrayAccessNode)
+            and self.current_token[0] == "NEWLINE"
+            and self.peek_non_layout_token()[0] == "LPAREN"
+        ):
+            self.skip_layout_tokens()
+            return self.parse_postfix_suffixes(node)
+        return node
 
     def is_inline_if_expression(self):
         layout_tokens = {"NEWLINE", "INDENT", "DEDENT"}

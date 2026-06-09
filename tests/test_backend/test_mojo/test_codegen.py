@@ -2701,6 +2701,33 @@ def test_multiline_expression_layout_codegen_from_modular_examples():
     ) in generated_code
 
 
+def test_newline_indexed_call_continuation_codegen_from_modular_scatternd():
+    # Reduced from https://github.com/modular/mojo.git commit
+    # 30d351c58441f196471c59211dad6e9ad91c1235,
+    # max/kernels/test/gpu/examples/test_scatterND.mojo test_scatternd_gpu.
+    code = """
+    fn main():
+        _ = test_case[
+            DType.float32,
+            d0=4,
+        ]
+        (
+            data,
+            indices,
+            updates,
+            output_ref,
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "_ = test_case[DType.float32, d0 = 4]" "(data, indices, updates, output_ref);"
+    ) in generated_code
+    assert "Unhandled statement type: TupleNode" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_generic_function_signature_codegen():
     code = """
     fn build(

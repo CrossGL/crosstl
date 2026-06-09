@@ -51,6 +51,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
         "path": "samples/extensions/khr/histogram/histogram.cl",
     },
+    "arrayfire_nearest_neighbour_bare_unsigned_parameter": {
+        "url": "https://github.com/arrayfire/arrayfire",
+        "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
+        "path": "src/backend/opencl/kernel/nearest_neighbour.cl",
+    },
 }
 
 
@@ -307,3 +312,24 @@ def test_external_khronos_opencl_sdk_histogram_newline_for_codegen_reparse():
     assert "for (var channel: u32 =" in crossgl
     assert "channel < min" in crossgl
     assert "channel++" in crossgl
+
+
+def test_external_arrayfire_bare_unsigned_parameter_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "arrayfire_nearest_neighbour_bare_unsigned_parameter"
+    ]
+    assert source_info["commit"] == "492718b5a256d4a9d5198fdce89d8fd21772bfda"
+    assert source_info["path"] == "src/backend/opencl/kernel/nearest_neighbour.cl"
+
+    source = """
+    __inline unsigned popcount(unsigned x) {
+        x = x - ((x >> 1) & 0x55555555);
+        return x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0] == {"type": "unsigned int", "name": "x"}
+    assert "u32 popcount(u32 x)" in crossgl
+    assert "unsigned x _param" not in crossgl

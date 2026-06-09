@@ -565,6 +565,33 @@ spv.1.4.OpEntryPoint.frag
                               FunctionEnd
 """
 
+SPIRV_GLSLANG_LEGACY_FLOAT_BITS_ASSEMBLY = """
+spv.constStruct.vert
+// Source repo: https://github.com/KhronosGroup/glslang
+// Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+// Source path: Test/baseResults/spv.constStruct.vert.out
+// Reduced from glslang's legacy numeric-id disassembly where a float constant
+// appears as its raw 32-bit word: 6(float) Constant 1065353216.
+// Module Version 10000
+Capability Shader
+1: ExtInstImport "GLSL.std.450"
+MemoryModel Logical GLSL450
+EntryPoint Vertex 4 "main"
+Name 4 "main"
+Name 9 "value"
+2: TypeVoid
+3: TypeFunction 2
+6: TypeFloat 32
+8: TypePointer Function 6(float)
+14: 6(float) Constant 1065353216
+4(main): 2 Function None 3
+5: Label
+9(value): 8(ptr) Variable Function
+Store 9(value) 14
+Return
+FunctionEnd
+"""
+
 SPIRV_GLSLANG_LEGACY_MULTIMODULE_ID_COLLISION_ASSEMBLY = """
 // Source repo: https://github.com/KhronosGroup/glslang
 // Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -5830,6 +5857,17 @@ def test_glslang_legacy_numeric_id_disassembly_codegen_reparse():
         in generated_code
     )
     assert "value_" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_legacy_float_bit_pattern_constants_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_LEGACY_FLOAT_BITS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "value = 1.0;" in generated_code
+    assert "1065353216" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

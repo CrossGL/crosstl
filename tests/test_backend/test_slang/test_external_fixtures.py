@@ -1864,6 +1864,47 @@ EXTERNAL_FIXTURES = [
             "outputBuffer[idx] = groupInRange & threadInRange;",
         ],
     },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: tests/compute/global-generic-value-param.slang
+        "id": "slang_global_generic_value_param",
+        "repo": "shader-slang/slang-main-2026-06-08",
+        "path": "tests/compute/global-generic-value-param.slang",
+        "source": (
+            """
+            __generic_value_param kOffset : uint = 0;
+
+            RWStructuredBuffer<uint> vals;
+
+            uint test(uint value)
+            {
+                return value * 16 + vals[(value + kOffset) & 0xF];
+            }
+
+            RWStructuredBuffer<uint> outputBuffer;
+
+            [numthreads(16, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                uint tid = dispatchThreadID.x;
+                outputBuffer[tid] = test(tid);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "uint kOffset = 0;",
+            "RWStructuredBuffer<uint> vals;",
+            "return value * 16 + vals[value + kOffset & 0xF];",
+            "layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;",
+            "outputBuffer[tid] = test(tid);",
+        ],
+        "not_contains": [
+            "__generic_value_param",
+            "Expected semantic name",
+        ],
+    },
 ]
 
 

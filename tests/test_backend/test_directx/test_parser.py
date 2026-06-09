@@ -1718,6 +1718,28 @@ def test_parse_template_specialized_struct_declarations_from_dxc_sfinae():
     assert ast.structs[1].members[0].value is True
 
 
+def test_parse_elaborated_template_struct_variable_from_dxc_template_struct():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/templateStruct.hlsl
+    ast = parse_code("""
+    template<typename T>
+    struct TS {
+      T t;
+    };
+
+    struct TS<float4> ts;
+
+    float4 main() : SV_Target {
+      return ts.t;
+    }
+    """)
+
+    assert [struct.name for struct in ast.structs] == ["TS"]
+    assert ast.global_variables[0].vtype == "TS<float4>"
+    assert ast.global_variables[0].name == "ts"
+    assert ast.functions[0].name == "main"
+
+
 def test_parse_dependent_typename_scoped_template_return_from_dxc_sfinae():
     # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
     # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl

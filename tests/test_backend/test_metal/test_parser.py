@@ -615,6 +615,34 @@ def test_parse_typedef_struct_gnu_attribute_from_apple_deferred_sample():
     ]
 
 
+def test_parse_struct_named_packed_vector_token_from_apple_raytracing_sample():
+    # Reduced from:
+    # Repo: https://github.com/donaldwuid/apple_metal_sample_code
+    # Commit: 0bc50e5b3670b3169855ab260e8da5ff07b53749
+    # Path:
+    # MetalSampleCodeLibrary/RayTracing/AcceleratingRayTracingUsingMetal/
+    # Renderer/ShaderTypes.h
+    code = """
+    struct packed_float3 {
+        float x;
+        float y;
+        float z;
+    };
+
+    struct Sphere {
+        packed_float3 origin;
+        float radiusSquared;
+        packed_float3 color;
+        float radius;
+    };
+    """
+    ast = parse_ok(code)
+
+    assert [struct.name for struct in ast.structs] == ["packed_float3", "Sphere"]
+    assert ast.structs[1].members[0].vtype == "packed_float3"
+    assert ast.structs[1].members[2].vtype == "packed_float3"
+
+
 def test_parse_leading_global_scope_expression_from_apple_hdr_sample():
     code = """
     struct GaussSample {

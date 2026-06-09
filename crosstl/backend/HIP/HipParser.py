@@ -5152,6 +5152,7 @@ class HipParser:
             "LPAREN",
             "LBRACE",
             "COMMA",
+            "RPAREN",
         }
 
     def is_hip_opaque_handle_type(self, type_name):

@@ -6490,6 +6490,31 @@ def test_codegen_template_specialized_struct_declarations_reparse_crossgl():
     parse_crossgl(output)
 
 
+def test_codegen_elaborated_template_struct_variable_from_dxc_reparse():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/templateStruct.hlsl
+    code = textwrap.dedent("""
+        template<typename T>
+        struct TS {
+          T t;
+        };
+
+        struct TS<float4> ts;
+
+        float4 main() : SV_Target {
+          return ts.t;
+        }
+    """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "struct TS" in output
+    assert "TS ts;" in output
+    assert "TS<float4>" not in output
+    assert "return ts.t;" in output
+    parse_crossgl(output)
+
+
 def test_codegen_dependent_typename_scoped_template_return_reparse_crossgl():
     # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
     # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl

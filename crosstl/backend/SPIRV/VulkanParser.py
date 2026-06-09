@@ -2,6 +2,7 @@
 
 import re
 import shlex
+import struct
 
 from ..common_ast import InitializerListNode
 from .VulkanAst import *
@@ -5588,8 +5589,9 @@ class VulkanParser:
                 for index, operand in enumerate(parts)
             ]
         elif result_id is not None and len(parts) >= 2 and parts[1] in known_opcodes:
+            result_type_token = parts.pop(0)
             result_type = self.legacy_glslang_spirv_id(
-                parts.pop(0), namespace=id_namespace
+                result_type_token, namespace=id_namespace
             )
             opcode = parts.pop(0)
             operands = [
@@ -5601,6 +5603,9 @@ class VulkanParser:
                     for index, operand in enumerate(parts)
                 ],
             ]
+            operands = self.normalize_legacy_glslang_float_constant_operands(
+                opcode, result_type_token, operands
+            )
         else:
             opcode = parts.pop(0)
             operands = [
@@ -5616,6 +5621,59 @@ class VulkanParser:
         if operands:
             instruction = f"{instruction} {' '.join(operands)}"
         return instruction
+
+    def normalize_legacy_glslang_float_constant_operands(
+        self, opcode, result_type_token, operands
+    ):
+        if opcode not in {"Constant", "SpecConstant"} or len(operands) < 2:
+            return operands
+
+        type_label = self.legacy_glslang_spirv_type_label(result_type_token)
+        literal_widths = {
+            "float16_t": 16,
+            "float": 32,
+            "float32_t": 32,
+            "double": 64,
+            "float64_t": 64,
+        }
+        width = literal_widths.get(type_label)
+        if width is None:
+            return operands
+
+        word_count = 2 if width == 64 else 1
+        literal_words = operands[1 : 1 + word_count]
+        if len(literal_words) != word_count:
+            return operands
+
+        literal = self.legacy_glslang_float_literal_from_words(literal_words, width)
+        if literal is None:
+            return operands
+        return [operands[0], literal, *operands[1 + word_count :]]
+
+    def legacy_glslang_spirv_type_label(self, token):
+        match = re.match(r"\d+\(([^)]*)\):?$", str(token))
+        return match.group(1) if match else None
+
+    def legacy_glslang_float_literal_from_words(self, words, width):
+        try:
+            integer_words = [int(str(word), 0) for word in words]
+        except (TypeError, ValueError):
+            return None
+
+        if width == 16:
+            data = (integer_words[0] & 0xFFFF).to_bytes(2, "little")
+            value = struct.unpack("<e", data)[0]
+        elif width == 32:
+            data = (integer_words[0] & 0xFFFFFFFF).to_bytes(4, "little")
+            value = struct.unpack("<f", data)[0]
+        elif width == 64:
+            data = b"".join(
+                (word & 0xFFFFFFFF).to_bytes(4, "little") for word in integer_words
+            )
+            value = struct.unpack("<d", data)[0]
+        else:
+            return None
+        return repr(value)
 
     def is_legacy_glslang_spirv_result_token(self, token):
         return bool(re.match(r"\d+(?:\([^)]*\))?:$", str(token)))

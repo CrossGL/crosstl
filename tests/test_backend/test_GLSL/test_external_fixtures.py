@@ -865,6 +865,36 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: Mesa Piglit
+    # Commit: ea22807ea068e400496742312eafe276a6c5e069
+    # Path: tests/spec/ext_gpu_shader4/execution/open-coded-bitfieldReverse.shader_test
+    # Reduced from GL_EXT_gpu_shader4 coverage using the legacy `unsigned int`
+    # spelling for return types, parameters, locals, and uniforms.
+    ExternalFixture(
+        name="piglit-ext-gpu-shader4-unsigned-int-bitfield-reverse",
+        repo="https://gitlab.freedesktop.org/mesa/piglit",
+        commit="ea22807ea068e400496742312eafe276a6c5e069",
+        path="tests/spec/ext_gpu_shader4/execution/open-coded-bitfieldReverse.shader_test",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 120
+            #extension GL_EXT_gpu_shader4: require
+
+            unsigned int reverse(unsigned int u)
+            {
+                unsigned int step1 = (u << 16) | (u >> 16);
+                return step1;
+            }
+
+            uniform unsigned int value;
+
+            void main()
+            {
+                unsigned int result = reverse(value);
+                gl_FragColor = vec4(float(result & 1u));
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-fragcoord-origin-layout-flags",
         repo="https://github.com/KhronosGroup/glslang",
@@ -2396,6 +2426,43 @@ def test_parse_glslang_subroutine_association_list_fixture():
         "subT2",
         "main",
     ]
+
+
+def test_parse_piglit_unsigned_int_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "piglit-ext-gpu-shader4-unsigned-int-bitfield-reverse"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    reverse = next(function for function in ast.functions if function.name == "reverse")
+    value = next(var for var in ast.uniforms if var.name == "value")
+    step1 = next(var for var in reverse.body if getattr(var, "name", None) == "step1")
+    main = next(function for function in ast.functions if function.name == "main")
+    result = next(var for var in main.body if getattr(var, "name", None) == "result")
+
+    assert reverse.return_type == "uint"
+    assert reverse.params[0].vtype == "uint"
+    assert value.vtype == "uint"
+    assert step1.vtype == "uint"
+    assert result.vtype == "uint"
+
+
+def test_codegen_piglit_unsigned_int_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "piglit-ext-gpu-shader4-unsigned-int-bitfield-reverse"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "uint reverse(uint u)" in crossgl
+    assert "uint value;" in crossgl
+    assert "uint result = reverse(value);" in crossgl
+    assert "unsigned int" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

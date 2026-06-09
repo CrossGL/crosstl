@@ -1777,8 +1777,10 @@ class MetalParser:
         )
         self.eat("STRUCT")
         alignas_specs.extend(self.parse_alignas_specifiers())
+        if not self.is_current_name_token():
+            raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        self.eat(self.current_token[0])
         self.known_types.add(name)
         if self.current_token[0] == "LESS_THAN":
             template_args = self.parse_template_argument_suffix()
@@ -1810,8 +1812,10 @@ class MetalParser:
         )
         self.eat("CLASS")
         alignas_specs.extend(self.parse_alignas_specifiers())
+        if not self.is_current_name_token():
+            raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
         name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        self.eat(self.current_token[0])
         self.known_types.add(name)
         if self.current_token[0] == "LESS_THAN":
             template_args = self.parse_template_argument_suffix()
@@ -1874,9 +1878,9 @@ class MetalParser:
 
     def parse_union(self):
         self.eat("IDENTIFIER")
-        name = self.current_token[1] if self.current_token[0] == "IDENTIFIER" else None
+        name = self.current_token[1] if self.is_current_name_token() else None
         if name:
-            self.eat("IDENTIFIER")
+            self.eat(self.current_token[0])
             self.known_types.add(name)
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")

@@ -1521,6 +1521,31 @@ def test_multiline_postfix_chain_parsing_from_modular_custom_ops():
     assert isinstance(fill_call.object.object, ArrayAccessNode)
 
 
+def test_newline_indexed_call_continuation_parsing_from_modular_scatternd():
+    # Reduced from https://github.com/modular/mojo.git commit
+    # 30d351c58441f196471c59211dad6e9ad91c1235,
+    # max/kernels/test/gpu/examples/test_scatterND.mojo test_scatternd_gpu.
+    code = """
+    fn main():
+        _ = test_case[
+            DType.float32,
+            d0=4,
+        ]
+        (
+            data,
+            indices,
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    assignment = find_function(ast, "main").body[0]
+    call = assignment.right
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, ArrayAccessNode)
+    assert [arg.name for arg in call.args] == ["data", "indices"]
+
+
 def test_multiline_index_expression_parsing_from_modular_pmpp_examples():
     code = """
     fn main():
