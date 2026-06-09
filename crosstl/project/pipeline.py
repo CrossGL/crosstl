@@ -317,6 +317,7 @@ REPORT_INCLUDE_DEPENDENCY_FIELDS = frozenset(
         "column",
         "resolvedPath",
         "resolvedHash",
+        "resolvedSizeBytes",
         "resolvedFrom",
         "resolvedFromDefine",
         "variant",
@@ -3029,10 +3030,10 @@ def _scan_include_dependencies_for_source(
                 if source_relative_path != unit_relative_path:
                     dependency["source"] = source_relative_path
                 if resolved_path:
+                    resolved_file = config.root / resolved_path
                     dependency["resolvedPath"] = resolved_path
-                    dependency["resolvedHash"] = _source_hash(
-                        config.root / resolved_path
-                    )
+                    dependency["resolvedHash"] = _source_hash(resolved_file)
+                    dependency["resolvedSizeBytes"] = resolved_file.stat().st_size
                 if resolved_from:
                     dependency["resolvedFrom"] = resolved_from
                 dependencies.append(dependency)
@@ -3112,8 +3113,10 @@ def _scan_include_dependencies_for_source(
         if source_relative_path != unit_relative_path:
             dependency["source"] = source_relative_path
         if resolved_path:
+            resolved_file = config.root / resolved_path
             dependency["resolvedPath"] = resolved_path
-            dependency["resolvedHash"] = _source_hash(config.root / resolved_path)
+            dependency["resolvedHash"] = _source_hash(resolved_file)
+            dependency["resolvedSizeBytes"] = resolved_file.stat().st_size
         if resolved_from:
             dependency["resolvedFrom"] = resolved_from
         dependencies.append(dependency)
@@ -6940,6 +6943,9 @@ def _inspection_include_dependency_sample(
 def _inspection_resolved_include_size(
     root_path: Path | None, dependency: Mapping[str, Any]
 ) -> int | None:
+    resolved_size = dependency.get("resolvedSizeBytes")
+    if _is_non_negative_int(resolved_size):
+        return resolved_size
     if root_path is None:
         return None
     resolved_path = dependency.get("resolvedPath")
@@ -9146,6 +9152,15 @@ def _include_dependency_contract_reasons(
             f"{prefix}.resolvedHash must be omitted unless status is resolved"
         )
 
+    resolved_size = dependency.get("resolvedSizeBytes")
+    if status == "resolved":
+        if not _is_non_negative_int(resolved_size):
+            reasons.append(f"{prefix}.resolvedSizeBytes must be a non-negative integer")
+    elif "resolvedSizeBytes" in dependency:
+        reasons.append(
+            f"{prefix}.resolvedSizeBytes must be omitted unless status is resolved"
+        )
+
     resolved_from = dependency.get("resolvedFrom")
     if "resolvedFrom" in dependency and resolved_from not in {"source", "include-dir"}:
         reasons.append(f"{prefix}.resolvedFrom must be source or include-dir")
@@ -9304,10 +9319,16 @@ def _current_include_dependency_contract_reasons(
     if dependency.get("resolvedFrom") != expected_from:
         reasons.append(f"{prefix}.resolvedFrom must match current include resolution")
     resolved_hash = dependency.get("resolvedHash")
+    include_path = (root_path / expected_path).resolve()
     if not _hash_contract_reasons(f"{prefix}.resolvedHash", resolved_hash):
-        include_path = (root_path / expected_path).resolve()
         if not _hash_matches_report(_source_hash(include_path), resolved_hash):
             reasons.append(f"{prefix}.resolvedHash must match current include file")
+    resolved_size = dependency.get("resolvedSizeBytes")
+    if (
+        _is_non_negative_int(resolved_size)
+        and resolved_size != include_path.stat().st_size
+    ):
+        reasons.append(f"{prefix}.resolvedSizeBytes must match current include file")
     return reasons
 
 

@@ -249,7 +249,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "include-directory status rollups" in backend_support["notes"]
         assert (
             "include dependency status, kind, and resolution-source rollups plus "
-            "resolved include hash metadata"
+            "resolved include hash and byte-size metadata"
         ) in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -602,8 +602,13 @@ def test_project_include_resolution_documents_status_reporting():
             in backend_support["notes"]
         )
         assert "unit source hash metadata" in backend_support["notes"]
-        assert "resolved include hash metadata" in backend_support["notes"]
-        assert "current byte-size metadata" in backend_support["notes"]
+        assert (
+            "resolved include hash and byte-size metadata" in backend_support["notes"]
+        )
+        assert (
+            "Resolved include dependency reports and inspection samples include "
+            "byte-size metadata"
+        ) in backend_support["notes"]
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "
             "variant-specific conditional output"
@@ -653,6 +658,7 @@ def test_project_include_resolution_documents_status_reporting():
         assert "current status, resolved path, resolved include hash" in (
             backend_support["notes"]
         )
+        assert "resolved include size" in backend_support["notes"]
         assert (
             "current-scan mismatch labels include resolved path, resolution source, "
             "and project-define provenance"

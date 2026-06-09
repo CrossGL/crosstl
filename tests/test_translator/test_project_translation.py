@@ -1151,6 +1151,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/local.inc",
             "resolvedHash": project_pipeline._source_hash(shader_dir / "local.inc"),
+            "resolvedSizeBytes": (shader_dir / "local.inc").stat().st_size,
             "resolvedFrom": "source",
         },
         {
@@ -1161,6 +1162,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             "column": 1,
             "resolvedPath": "includes/shared.inc",
             "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedSizeBytes": (include_dir / "shared.inc").stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -1186,6 +1188,7 @@ def test_scan_project_records_include_dependency_resolution(tmp_path):
             "resolvedFromDefine": "PROJECT_HEADER",
             "resolvedPath": "includes/shared.inc",
             "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedSizeBytes": (include_dir / "shared.inc").stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -1336,6 +1339,7 @@ def test_scan_project_skips_inactive_ifdef_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/fast.inc",
             "resolvedHash": project_pipeline._source_hash(shader_dir / "fast.inc"),
+            "resolvedSizeBytes": (shader_dir / "fast.inc").stat().st_size,
             "resolvedFrom": "source",
         }
     ]
@@ -1397,6 +1401,7 @@ def test_scan_project_records_variant_conditional_include_dependencies(tmp_path)
             "variant": "debug",
             "resolvedPath": "shaders/debug.inc",
             "resolvedHash": project_pipeline._source_hash(shader_dir / "debug.inc"),
+            "resolvedSizeBytes": (shader_dir / "debug.inc").stat().st_size,
             "resolvedFrom": "source",
         },
         {
@@ -1409,6 +1414,7 @@ def test_scan_project_records_variant_conditional_include_dependencies(tmp_path)
             "variant": "release",
             "resolvedPath": "includes/release.inc",
             "resolvedHash": project_pipeline._source_hash(include_dir / "release.inc"),
+            "resolvedSizeBytes": (include_dir / "release.inc").stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -1477,6 +1483,7 @@ def test_scan_project_limits_named_variants_to_selected(tmp_path):
             "variant": "debug",
             "resolvedPath": "shaders/debug.inc",
             "resolvedHash": project_pipeline._source_hash(shader_dir / "debug.inc"),
+            "resolvedSizeBytes": (shader_dir / "debug.inc").stat().st_size,
             "resolvedFrom": "source",
         }
     ]
@@ -1542,6 +1549,7 @@ def test_scan_project_uses_configured_selected_variants(tmp_path):
             "variant": "debug",
             "resolvedPath": "shaders/debug.inc",
             "resolvedHash": project_pipeline._source_hash(shader_dir / "debug.inc"),
+            "resolvedSizeBytes": (shader_dir / "debug.inc").stat().st_size,
             "resolvedFrom": "source",
         }
     ]
@@ -1597,6 +1605,7 @@ def test_scan_project_honors_ifndef_else_in_nested_include_dependencies(tmp_path
             "column": 1,
             "resolvedPath": "shaders/material.inc",
             "resolvedHash": project_pipeline._source_hash(shader_dir / "material.inc"),
+            "resolvedSizeBytes": (shader_dir / "material.inc").stat().st_size,
             "resolvedFrom": "source",
         },
         {
@@ -1608,6 +1617,7 @@ def test_scan_project_honors_ifndef_else_in_nested_include_dependencies(tmp_path
             "column": 1,
             "resolvedPath": "includes/shared.inc",
             "resolvedHash": project_pipeline._source_hash(include_dir / "shared.inc"),
+            "resolvedSizeBytes": (include_dir / "shared.inc").stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -2051,6 +2061,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/material.inc",
             "resolvedHash": material_hash,
+            "resolvedSizeBytes": material_size,
             "resolvedFrom": "source",
         },
         {
@@ -2062,6 +2073,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/constants.inc",
             "resolvedHash": constants_hash,
+            "resolvedSizeBytes": constants_size,
             "resolvedFrom": "source",
         },
         {
@@ -2073,6 +2085,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "column": 1,
             "resolvedPath": "includes/shared.inc",
             "resolvedHash": shared_hash,
+            "resolvedSizeBytes": shared_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -2186,6 +2199,7 @@ def test_scan_project_reports_nested_include_read_failures(tmp_path, monkeypatch
             "column": 1,
             "resolvedPath": "shaders/include/material.inc",
             "resolvedHash": project_pipeline._source_hash(material_path),
+            "resolvedSizeBytes": material_path.stat().st_size,
             "resolvedFrom": "source",
         }
     ]
@@ -2255,6 +2269,7 @@ def test_scan_project_reports_nested_include_cycles(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/a.inc",
             "resolvedHash": project_pipeline._source_hash(nested_dir / "a.inc"),
+            "resolvedSizeBytes": (nested_dir / "a.inc").stat().st_size,
             "resolvedFrom": "source",
         },
         {
@@ -2266,6 +2281,7 @@ def test_scan_project_reports_nested_include_cycles(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/b.inc",
             "resolvedHash": project_pipeline._source_hash(nested_dir / "b.inc"),
+            "resolvedSizeBytes": (nested_dir / "b.inc").stat().st_size,
             "resolvedFrom": "source",
         },
         {
@@ -2277,6 +2293,7 @@ def test_scan_project_reports_nested_include_cycles(tmp_path):
             "column": 1,
             "resolvedPath": "shaders/include/a.inc",
             "resolvedHash": project_pipeline._source_hash(nested_dir / "a.inc"),
+            "resolvedSizeBytes": (nested_dir / "a.inc").stat().st_size,
             "resolvedFrom": "source",
         },
     ]
@@ -2488,6 +2505,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "variant": "debug",
             "resolvedPath": "debug.inc",
             "resolvedHash": debug_hash,
+            "resolvedSizeBytes": debug_size,
             "resolvedFrom": "source",
         },
         {
@@ -2500,6 +2518,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "variant": "release",
             "resolvedPath": "includes/release.inc",
             "resolvedHash": release_hash,
+            "resolvedSizeBytes": release_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -2611,6 +2630,7 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     dependency["line"] = 0
     dependency["resolvedPath"] = "../outside.inc"
     dependency["resolvedHash"] = {"algorithm": "md5", "value": "not-a-sha"}
+    dependency["resolvedSizeBytes"] = -1
     dependency["resolvedFrom"] = "workspace"
     dependency["resolvedFromDefine"] = ""
     payload["summary"]["includeDependencyCount"] = 2
@@ -2645,6 +2665,10 @@ def test_validate_project_report_rejects_malformed_include_dependency_records(
     assert (
         "units[0].includeDependencies[0].resolvedHash.value must be a lowercase "
         "64-character hex digest"
+    ) in diagnostic["message"]
+    assert (
+        "units[0].includeDependencies[0].resolvedSizeBytes must be a "
+        "non-negative integer"
     ) in diagnostic["message"]
     assert (
         "units[0].includeDependencies[0].resolvedFrom must be source or include-dir"
@@ -2912,6 +2936,69 @@ def test_validate_project_report_rejects_stale_include_dependency_hashes(
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "units[0].includeDependencies[0].resolvedHash must match current "
+        "include file"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_missing_include_dependency_sizes(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "local.inc").write_text("vec4 local_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    payload["units"][0]["includeDependencies"][0].pop("resolvedSizeBytes")
+    report_path = repo / "missing-include-size-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].resolvedSizeBytes must be a "
+        "non-negative integer"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_stale_include_dependency_sizes(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    include_path = shader_dir / "local.inc"
+    include_path.write_text("vec4 local_color();\n", encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "local.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    include_path.write_text(
+        "vec4 changed_color_with_different_size();\n",
+        encoding="utf-8",
+    )
+    payload["units"][0]["includeDependencies"][0]["resolvedHash"] = (
+        project_pipeline._source_hash(include_path)
+    )
+    report_path = repo / "stale-include-size-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "units[0].includeDependencies[0].resolvedSizeBytes must match current "
         "include file"
     ) in diagnostic["message"]
 
@@ -4561,6 +4648,7 @@ def test_translate_project_named_variants_apply_native_opengl_preprocessor(
             "variant": "debug",
             "resolvedPath": "includes/palette.glsl",
             "resolvedHash": project_pipeline._source_hash(include_dir / "palette.glsl"),
+            "resolvedSizeBytes": (include_dir / "palette.glsl").stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -4572,6 +4660,7 @@ def test_translate_project_named_variants_apply_native_opengl_preprocessor(
             "variant": "release",
             "resolvedPath": "includes/palette.glsl",
             "resolvedHash": project_pipeline._source_hash(include_dir / "palette.glsl"),
+            "resolvedSizeBytes": (include_dir / "palette.glsl").stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -4690,6 +4779,7 @@ def test_translate_project_named_variants_apply_native_directx_preprocessor(
             "variant": "debug",
             "resolvedPath": "includes/palette.hlsli",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -4701,6 +4791,7 @@ def test_translate_project_named_variants_apply_native_directx_preprocessor(
             "variant": "release",
             "resolvedPath": "includes/palette.hlsli",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -4818,6 +4909,7 @@ def test_translate_project_named_variants_apply_native_metal_preprocessor(
             "variant": "debug",
             "resolvedPath": "includes/palette.metal",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -4829,6 +4921,7 @@ def test_translate_project_named_variants_apply_native_metal_preprocessor(
             "variant": "release",
             "resolvedPath": "includes/palette.metal",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -4947,6 +5040,7 @@ def test_translate_project_named_variants_apply_native_slang_preprocessor(
             "variant": "debug",
             "resolvedPath": "includes/palette.slang",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -4958,6 +5052,7 @@ def test_translate_project_named_variants_apply_native_slang_preprocessor(
             "variant": "release",
             "resolvedPath": "includes/palette.slang",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -5073,6 +5168,7 @@ def test_translate_project_named_variants_apply_native_vulkan_preprocessor(
             "variant": "debug",
             "resolvedPath": "includes/bindings.glsl",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -5084,6 +5180,7 @@ def test_translate_project_named_variants_apply_native_vulkan_preprocessor(
             "variant": "release",
             "resolvedPath": "includes/bindings.glsl",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]
@@ -5246,6 +5343,7 @@ def test_translate_project_named_variants_apply_cuda_hip_preprocessor(
             "variant": "fast",
             "resolvedPath": f"include/{local_header}",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
         {
@@ -5265,6 +5363,7 @@ def test_translate_project_named_variants_apply_cuda_hip_preprocessor(
             "variant": "safe",
             "resolvedPath": f"include/{local_header}",
             "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedSizeBytes": include_path.stat().st_size,
             "resolvedFrom": "include-dir",
         },
     ]

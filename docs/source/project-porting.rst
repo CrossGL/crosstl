@@ -521,8 +521,9 @@ Project reports are JSON documents with:
   include ``includeDependencies`` records for project-level include triage. Include scans
   ignore directives inside C-style block comments while still recognizing active
   directives after same-line block comments. Resolved include dependencies
-  record repository-relative include paths, resolution source, and SHA-256
-  hashes so report validation can detect include file content drift after scan.
+  record repository-relative include paths, resolution source, SHA-256 hashes,
+  and byte sizes so report validation can detect include file content or size
+  drift after scan.
   Full report validation also re-scans current source files and rejects missing
   or extra include dependency records. Recursive include scans stop at include
   cycles and
@@ -685,8 +686,9 @@ Project reports are JSON documents with:
   toolchain target coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,
   current include dependency status, resolved-path, resolved-hash,
-  source-backend status rollup, resolution-source checks, and project-define
-  include provenance checks, resolved and unresolved include inspection samples,
+  resolved-size, source-backend status rollup, resolution-source checks, and
+  project-define include provenance checks, resolved and unresolved include
+  inspection samples,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   current project scan coverage for omitted unit and skipped-source records,
