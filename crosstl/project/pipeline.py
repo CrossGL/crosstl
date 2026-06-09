@@ -2666,6 +2666,7 @@ def _preprocessor_diagnostic(
     column: int,
     directive: str,
     message: str,
+    variant: str | None = None,
 ) -> ProjectDiagnostic:
     severity = "error" if directive == "error" else "warning"
     code = f"project.scan.preprocessor-{directive}"
@@ -2684,6 +2685,7 @@ def _preprocessor_diagnostic(
             end_line=line_number,
             end_column=column,
         ),
+        variant=variant,
     )
 
 
@@ -2693,6 +2695,7 @@ def _scan_preprocessor_diagnostic_lines(
     relative_path: str,
     *,
     seen: set[tuple[str, int, str, str]],
+    variant: str | None = None,
 ) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     conditional_stack: list[_IncludeConditionalFrame] = []
@@ -2724,6 +2727,7 @@ def _scan_preprocessor_diagnostic_lines(
                 column=max(1, line.find("#") + 1),
                 directive=directive,
                 message=message,
+                variant=variant,
             )
         )
     return diagnostics
@@ -2994,6 +2998,7 @@ def _scan_include_dependencies_for_source(
             scan_lines,
             source_relative_path,
             seen=preprocessor_seen,
+            variant=variant,
         )
     )
 
@@ -3106,6 +3111,7 @@ def _scan_include_dependencies_for_source(
                         f"{body}"
                     ),
                     location=location,
+                    variant=variant,
                     missing_capabilities=["include.resolution"],
                 )
             )

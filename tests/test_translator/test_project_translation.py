@@ -1920,8 +1920,10 @@ def test_scan_project_reports_active_preprocessor_diagnostics_by_variant(tmp_pat
         "project.scan.preprocessor-warning": 1
     }
     assert debug_payload["summary"]["missingCapabilityCounts"] == {}
+    assert debug_payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
     debug_diagnostic = debug_payload["diagnostics"][0]
     assert debug_diagnostic["code"] == "project.scan.preprocessor-warning"
+    assert debug_diagnostic["variant"] == "debug"
     assert "debug path enabled" in debug_diagnostic["message"]
     assert "local comment" not in debug_diagnostic["message"]
     assert debug_diagnostic["location"]["file"] == "shaders/main.frag"
@@ -1931,8 +1933,10 @@ def test_scan_project_reports_active_preprocessor_diagnostics_by_variant(tmp_pat
     assert release_payload["summary"]["diagnosticsByCode"] == {
         "project.scan.preprocessor-error": 1
     }
+    assert release_payload["summary"]["diagnosticsByVariant"] == {"release": 1}
     release_diagnostic = release_payload["diagnostics"][0]
     assert release_diagnostic["code"] == "project.scan.preprocessor-error"
+    assert release_diagnostic["variant"] == "release"
     assert "release path blocked" in release_diagnostic["message"]
     assert "block commented" not in json.dumps(release_payload["diagnostics"])
     assert release_diagnostic["location"]["line"] == 5
@@ -2527,6 +2531,51 @@ def test_scan_project_reports_variant_define_backed_include_resolution_diagnosti
     assert payload["diagnostics"][0]["message"] == (
         "Include directive in main.frag:1 could not be resolved "
         "(from variant debug define PROJECT_HEADER): missing-debug.inc"
+    )
+    assert payload["diagnostics"][0]["variant"] == "debug"
+    assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
+
+
+def test_scan_project_reports_variant_dynamic_include_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.frag").write_text(
+        textwrap.dedent("""
+            #if defined(DEBUG_MODE)
+            #include RUNTIME_HEADER
+            #endif
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+
+            [project.variants.debug]
+            DEBUG_MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "RUNTIME_HEADER",
+            "kind": "dynamic",
+            "status": "dynamic",
+            "line": 2,
+            "column": 1,
+            "variant": "debug",
+        }
+    ]
+    assert payload["diagnostics"][0]["code"] == "project.scan.dynamic-include"
+    assert payload["diagnostics"][0]["message"] == (
+        "Include directive uses a dynamic target that cannot be resolved during "
+        "project scan (for variant debug): RUNTIME_HEADER"
     )
     assert payload["diagnostics"][0]["variant"] == "debug"
     assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
