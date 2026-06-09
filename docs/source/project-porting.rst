@@ -196,9 +196,9 @@ Validation exits nonzero when the report metadata is malformed, artifact
 records, source-map records, or preserved diagnostics are malformed, source-map
 mapping lists are empty, file-granularity source maps do not contain one
 file-level mapping, finer-grained mappings are not positive-length or fall
-outside artifact-level file anchors, source-map or diagnostic location spans
-are internally inconsistent, diagnostic location
-file paths or artifact source paths are not repository-relative, project target
+outside artifact-level file anchors, source-map, diagnostic location, or
+diagnostic ``originalLocation`` spans are internally inconsistent, diagnostic
+location file paths or artifact source paths are not repository-relative, project target
 lists are not normalized and deduplicated, diagnostic or artifact targets are
 not declared by the report, artifact sources are not declared translation units,
 embedded validation records reference artifacts not declared by the report,
@@ -281,6 +281,9 @@ reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for
 code-scanning workflows. SARIF locations include line and column metadata and
 positive-length character spans when diagnostics carry source offsets.
+Diagnostics with ``originalLocation`` keep the generated or validation
+location as the primary SARIF location and attach the original source span as a
+related location.
 Inspection exits nonzero when validation finds report errors.
 
 Configuration
@@ -605,12 +608,16 @@ Project reports are JSON documents with:
   translation units, and rejects missing or inconsistent retained-entry and
   manifest-entry summary counts.
 - ``diagnostics``: structured diagnostics using severity, code, message,
-  location, target, and missing-capability fields compatible with the compiler
-  diagnostic contract. Project-level include and define forwarding limitations
-  are warnings, not translation failures. Scan-time ``#define`` and ``#undef``
-  directives in translation units or resolved include files that shadow active
-  project or selected variant define names are also reported as warnings;
-  directives inside C-style block comments are ignored.
+  location, optional ``originalLocation``, target, source-backend, variant, and
+  missing-capability fields aligned with the compiler diagnostic contract.
+  ``location`` identifies the report or generated artifact span that produced
+  the diagnostic, while ``originalLocation`` preserves the original repository
+  source span when diagnostics are remapped through generated artifacts.
+  Project-level include and define forwarding limitations are warnings, not
+  translation failures. Scan-time ``#define`` and ``#undef`` directives in
+  translation units or resolved include files that shadow active project or
+  selected variant define names are also reported as warnings; directives inside
+  C-style block comments are ignored.
 - ``validation``: report contract checks, generated timestamp and generator
   metadata checks, report inspection summaries, failed
   source artifact checks, project metadata, target normalization, and config
@@ -654,8 +661,9 @@ Project reports are JSON documents with:
   corpus record, per-entry artifact count, required manifest-entry accounting,
   and summary checks, summary consistency checks, migration action shape,
   rollup, and target declaration checks,
-  preserved diagnostic shape, repository-relative file path, span consistency,
-  target declaration checks, diagnostic severity rollup checks, scan-scope
+  preserved diagnostic shape, repository-relative file path, location and
+  ``originalLocation`` span consistency, target declaration checks, diagnostic
+  severity rollup checks, scan-scope
   count consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact coverage,

@@ -808,6 +808,11 @@ def _format_project_diagnostic_line(diagnostic):
     location = _format_project_diagnostic_location(diagnostic.get("location"))
     if location:
         details.append(f"location={location}")
+    original_location = _format_project_diagnostic_location(
+        diagnostic.get("originalLocation")
+    )
+    if original_location:
+        details.append(f"originalLocation={original_location}")
     target = diagnostic.get("target")
     if isinstance(target, str) and target:
         details.append(f"target={target}")
@@ -868,8 +873,7 @@ def _sarif_region(location):
     return region
 
 
-def _sarif_location(diagnostic):
-    location = diagnostic.get("location")
+def _sarif_location_from_mapping(location):
     if not isinstance(location, Mapping):
         return None
 
@@ -882,6 +886,10 @@ def _sarif_location(diagnostic):
     if region:
         physical_location["region"] = region
     return {"physicalLocation": physical_location}
+
+
+def _sarif_location(diagnostic):
+    return _sarif_location_from_mapping(diagnostic.get("location"))
 
 
 def _sarif_non_negative_int(value):
@@ -951,6 +959,13 @@ def _format_project_diagnostics_sarif(
         location = _sarif_location(diagnostic)
         if location:
             result["locations"] = [location]
+        original_location = _sarif_location_from_mapping(
+            diagnostic.get("originalLocation")
+        )
+        if original_location:
+            original_location["id"] = 1
+            original_location["message"] = {"text": "Original source location"}
+            result["relatedLocations"] = [original_location]
 
         properties = {}
         target = diagnostic.get("target")

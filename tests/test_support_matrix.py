@@ -981,6 +981,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert "non-repository-relative diagnostic locations" in (
             backend_support["notes"]
         )
+        assert "optional originalLocation fields" in backend_support["notes"]
+        assert "original source locations as SARIF related locations" in (
+            backend_support["notes"]
+        )
         assert "include, source override, and exclude scan patterns" in (
             backend_support["notes"]
         )
@@ -990,7 +994,7 @@ def test_project_diagnostics_document_location_path_checks():
         assert "validation rejects missing diagnostic severity, code" in (
             backend_support["notes"]
         )
-        assert "text output carries diagnostic location, target, and" in (
+        assert "text output carries diagnostic location, original source location" in (
             backend_support["notes"]
         )
         assert "diagnostics whose targets are not declared by the report" in (
@@ -1009,6 +1013,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_validate_project_sarif_reports_generated_diagnostics"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_diagnostics_preserve_original_locations"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

@@ -246,6 +246,7 @@ REPORT_DIAGNOSTIC_FIELDS = frozenset(
         "code",
         "message",
         "location",
+        "originalLocation",
         "target",
         "sourceBackend",
         "variant",
@@ -3207,6 +3208,7 @@ class ProjectDiagnostic:
     source_backend: str | None = None
     variant: str | None = None
     missing_capabilities: Sequence[str] = ()
+    original_location: SourceLocation | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -3215,6 +3217,8 @@ class ProjectDiagnostic:
             "message": self.message,
             "location": self.location.to_json(),
         }
+        if self.original_location:
+            payload["originalLocation"] = self.original_location.to_json()
         if self.target:
             payload["target"] = self.target
         if self.source_backend:
@@ -12120,6 +12124,14 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     require_closed_fields=has_summary,
                 )
             )
+            if "originalLocation" in diagnostic:
+                reasons.extend(
+                    _diagnostic_location_contract_reasons(
+                        f"diagnostics[{index}].originalLocation",
+                        diagnostic.get("originalLocation"),
+                        require_closed_fields=has_summary,
+                    )
+                )
             if "target" in diagnostic:
                 reasons.extend(
                     _target_name_contract_reasons(

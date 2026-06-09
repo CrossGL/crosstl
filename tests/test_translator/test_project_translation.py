@@ -14178,6 +14178,16 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                             "endColumn": {},
                             "endOffset": "0",
                         },
+                        "originalLocation": {
+                            "file": "../outside.cgl",
+                            "line": 1,
+                            "column": 1,
+                            "offset": 2,
+                            "length": 3,
+                            "endLine": 1,
+                            "endColumn": 2,
+                            "endOffset": 4,
+                        },
                         "target": "",
                         "sourceBackend": "",
                         "variant": 0,
@@ -14221,12 +14231,88 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].location.endOffset must be a non-negative integer" in (
         diagnostic["message"]
     )
+    assert "diagnostics[0].originalLocation.file must be repository-relative" in (
+        diagnostic["message"]
+    )
     assert "diagnostics[0].target must be a string" in diagnostic["message"]
     assert "diagnostics[0].sourceBackend must be a string" in diagnostic["message"]
     assert "diagnostics[0].variant must be a string" in diagnostic["message"]
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
+
+
+def test_project_diagnostics_preserve_original_locations(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+    diagnostic = {
+        "severity": "warning",
+        "code": "project.test.remapped-diagnostic",
+        "message": "Compiler diagnostic remapped to the original source.",
+        "location": {
+            "file": "out/opengl/simple.glsl",
+            "line": 8,
+            "column": 5,
+            "offset": 42,
+            "length": 4,
+            "endLine": 8,
+            "endColumn": 9,
+            "endOffset": 46,
+        },
+        "originalLocation": {
+            "file": "simple.cgl",
+            "line": 2,
+            "column": 3,
+            "offset": 10,
+            "length": 4,
+            "endLine": 2,
+            "endColumn": 7,
+            "endOffset": 14,
+        },
+        "target": "opengl",
+        "sourceBackend": "cgl",
+        "missingCapabilities": ["source.provenance"],
+    }
+    payload["diagnostics"].append(diagnostic)
+    diagnostic_counts = {"note": 0, "warning": 1, "error": 0}
+    payload["diagnosticCounts"] = diagnostic_counts
+    payload["summary"]["diagnosticCounts"] = diagnostic_counts
+    payload["summary"]["diagnosticsByCode"] = {"project.test.remapped-diagnostic": 1}
+    payload["summary"]["diagnosticsByTarget"] = {"opengl": 1}
+    payload["summary"]["diagnosticsBySourceBackend"] = {"cgl": 1}
+    payload["summary"]["diagnosticsByVariant"] = {}
+    payload["summary"]["missingCapabilityCounts"] = {"source.provenance": 1}
+    report_path = repo / "remapped-diagnostic-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+    assert validation["diagnostics"][0]["originalLocation"] == (
+        diagnostic["originalLocation"]
+    )
+    text = crosstl_cli._format_project_validation_report(validation)
+    assert "location=out/opengl/simple.glsl:8:5" in text
+    assert "originalLocation=simple.cgl:2:3" in text
+    sarif_payload = crosstl_cli._format_project_diagnostics_sarif(validation)
+    result = sarif_payload["runs"][0]["results"][0]
+    assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == (
+        "out/opengl/simple.glsl"
+    )
+    related_location = result["relatedLocations"][0]
+    assert related_location["physicalLocation"]["artifactLocation"]["uri"] == (
+        "simple.cgl"
+    )
+    assert related_location["physicalLocation"]["region"] == {
+        "startLine": 2,
+        "startColumn": 3,
+        "endLine": 2,
+        "endColumn": 7,
+        "charOffset": 10,
+        "charLength": 4,
+    }
 
 
 def test_validate_project_report_rejects_unexpected_generated_diagnostic_fields(
@@ -14285,6 +14371,16 @@ def test_validate_project_report_rejects_inconsistent_diagnostic_location_spans(
                             "endColumn": 4,
                             "endOffset": 12,
                         },
+                        "originalLocation": {
+                            "file": "simple.cgl",
+                            "line": 1,
+                            "column": 1,
+                            "offset": 1,
+                            "length": 2,
+                            "endLine": 1,
+                            "endColumn": 3,
+                            "endOffset": 2,
+                        },
                         "missingCapabilities": ["repo.scan"],
                     },
                     {
@@ -14326,6 +14422,10 @@ def test_validate_project_report_rejects_inconsistent_diagnostic_location_spans(
     assert (
         "diagnostics[1].location.endColumn must be greater than or equal to "
         "diagnostics[1].location.column when endLine equals line"
+    ) in diagnostic["message"]
+    assert (
+        "diagnostics[0].originalLocation.endOffset must equal "
+        "diagnostics[0].originalLocation.offset plus length"
     ) in diagnostic["message"]
 
 
