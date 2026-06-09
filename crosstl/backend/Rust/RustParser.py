@@ -2017,23 +2017,20 @@ class RustParser:
     def should_parse_struct_initialization(self, name):
         if self.current_token[0] != "LBRACE":
             return False
+        if self.expression_stops_at_lbrace:
+            return self.looks_like_struct_literal_brace(require_field_syntax=True)
         if not self.is_struct_initialization_name(name):
-            return (
-                not self.expression_stops_at_lbrace
-                and self.looks_like_struct_literal_brace()
-            )
-        if not self.expression_stops_at_lbrace:
-            return True
-        return self.looks_like_struct_literal_brace()
+            return self.looks_like_struct_literal_brace()
+        return True
 
-    def looks_like_struct_literal_brace(self):
+    def looks_like_struct_literal_brace(self, require_field_syntax=False):
         first_index = self.current_index + 1
         if first_index >= len(self.tokens):
             return False
 
         first_type = self.tokens[first_index][0]
         if first_type == "RBRACE":
-            return True
+            return not require_field_syntax
         if first_type == "RANGE":
             return True
         if first_type != "IDENTIFIER":
@@ -2042,6 +2039,8 @@ class RustParser:
         second_index = first_index + 1
         if second_index >= len(self.tokens):
             return False
+        if require_field_syntax:
+            return self.tokens[second_index][0] == "COLON"
         return self.tokens[second_index][0] in {"COLON", "COMMA", "RBRACE"}
 
     def parse_function(
@@ -2543,6 +2542,9 @@ class RustParser:
             if self.current_token[0] == "POUND":
                 self.parse_attributes()
                 continue
+            if self.current_token[0] == "PIPE":
+                self.eat("PIPE")
+                continue
 
             pattern = self.parse_match_pattern()
 
@@ -2614,7 +2616,13 @@ class RustParser:
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            end = self.parse_match_pattern_atom()
+            if op == "..=" and self.is_range_expression_boundary():
+                raise SyntaxError("Expected range end after ..=")
+            end = (
+                None
+                if self.is_range_expression_boundary()
+                else self.parse_match_pattern_atom()
+            )
             return RangeNode(pattern, end, op == "..=")
 
         return pattern

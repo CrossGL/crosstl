@@ -69,6 +69,10 @@ class HipParser:
     IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {
         "APIENTRY",
         "CALLBACK",
+        "_CCCL_API",
+        "_CCCL_CONSTEXPR_CXX20",
+        "_CCCL_EXEC_CHECK_DISABLE",
+        "_CCCL_HIDE_FROM_ABI",
         "HIPCUB_DEVICE",
         "HIPCUB_FORCEINLINE",
         "HIPCUB_HOST",
@@ -244,6 +248,11 @@ class HipParser:
         "BEGIN_ROCPRIM_NAMESPACE",
         "CHECK_IMAGE_SUPPORT",
         "END_ROCPRIM_NAMESPACE",
+        "_CCCL_BEGIN_NAMESPACE_CUDA_STD",
+        "_CCCL_BEGIN_NAMESPACE_STD",
+        "_CCCL_END_NAMESPACE_CUDA_STD",
+        "_CCCL_END_NAMESPACE_STD",
+        "_CCCL_EXEC_CHECK_DISABLE",
         "THRUST_EXEC_CHECK_DISABLE",
         "THRUST_NAMESPACE_BEGIN",
         "THRUST_NAMESPACE_END",
@@ -254,7 +263,14 @@ class HipParser:
         "INSTANTIATE_TEST_CASE_P",
         "INSTANTIATE_TEST_SUITE_P",
     }
-    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
+    TYPE_ATTRIBUTE_IDENTIFIERS = {
+        "_CCCL_NODEBUG_ALIAS",
+        "_CCCL_TYPE_VISIBILITY_DEFAULT",
+        "__attribute__",
+        "__declspec",
+        "alignas",
+        "__align__",
+    }
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
         "__DEVICE__",
         "__HOST__",
@@ -1069,6 +1085,9 @@ class HipParser:
         if self.match("TEMPLATE"):
             return self.parse_template_prefixed_declaration()
 
+        if self.is_standalone_statement_macro():
+            return self.parse_standalone_statement_macro()
+
         if (
             self.match("STATIC")
             and self.peek()
@@ -1162,8 +1181,6 @@ class HipParser:
             return self.parse_catch_nested_block_macro()
         if self.is_bare_nested_block_macro():
             return self.parse_bare_nested_block_macro()
-        if self.is_standalone_statement_macro():
-            return self.parse_standalone_statement_macro()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_label_statement_start():
@@ -1462,8 +1479,12 @@ class HipParser:
         if self.match("NAMESPACE"):
             self.skip_until_semicolon()
             return None
+        if self.match("SCOPE"):
+            self.skip_until_semicolon()
+            return None
 
         name = self.consume("IDENTIFIER").value
+        self.parse_type_attribute_prefixes()
         if not self.match("ASSIGN"):
             self.skip_until_semicolon()
             return None

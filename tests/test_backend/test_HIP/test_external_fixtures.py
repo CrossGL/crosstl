@@ -2656,3 +2656,62 @@ def test_public_cuda_kernel_if_init_statement_hip_parity_codegen_reparse():
     assert "var r: auto = ((ti + (s * rows)) + row);" in crossgl
     assert "if (((r < num) && (di < dim))) {" in crossgl
     assert "out[r] = di;" in crossgl
+
+
+def test_current_cccl_pair_namespace_visibility_and_alias_macros_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    _CCCL_BEGIN_NAMESPACE_CUDA_STD
+
+    template <class _T1, class _T2>
+    struct _CCCL_TYPE_VISIBILITY_DEFAULT pair {
+      _CCCL_API inline _CCCL_CONSTEXPR_CXX20 void swap(pair& __p) noexcept {
+        using ::cuda::std::swap;
+        swap(first, __p.first);
+      }
+      _T1 first;
+    };
+
+    template <class _Tp, class _Up>
+    struct _CCCL_TYPE_VISIBILITY_DEFAULT tuple_element<0, pair<_Tp, _Up>> {
+      using type _CCCL_NODEBUG_ALIAS = _Tp;
+    };
+
+    _CCCL_END_NAMESPACE_CUDA_STD
+    _CCCL_BEGIN_NAMESPACE_STD
+    _CCCL_END_NAMESPACE_STD
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "pair"
+    assert ast.statements[1].name == "tuple_element<0, pair<_Tp, _Up>>"
+    assert "struct pair" in crossgl
+    assert "struct tuple_element_type_0_pair__Tp__Up" in crossgl
+    assert "_CCCL_TYPE_VISIBILITY_DEFAULT" not in crossgl
+    assert "_CCCL_NODEBUG_ALIAS" not in crossgl
+
+
+def test_external_llvm_amdgpu_numeric_template_kernel_name_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff
+    # path: clang/test/SemaCUDA/amdgpu-attrs.cu
+    source = """
+    template <int X, int Y>
+    __attribute__((amdgpu_flat_work_group_size(X, Y)))
+    __global__ void template_flat_work_group_size_32_64() {}
+
+    template __global__ void template_flat_work_group_size_32_64<32, 64>();
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].name == "template_flat_work_group_size_32_64"
+    assert ast.statements[1].name == "template_flat_work_group_size_32_64<32, 64>"
+    assert "fn template_flat_work_group_size_32_64(" in crossgl
+    assert crossgl.count("fn template_flat_work_group_size_32_64(") == 2
+    assert "fn template_flat_work_group_size_32_64<32, 64>" not in crossgl

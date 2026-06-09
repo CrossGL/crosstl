@@ -153,6 +153,96 @@ def test_if_expression_continues_through_bitwise_operator_chain():
     assert usage.value.op == "|"
 
 
+def test_if_statement_condition_path_does_not_steal_branch_block():
+    # Reduced from Rust-GPU/rustc_codegen_spirv codegen_cx/constant.rs.
+    code = """
+    fn const_ptr_byte_offset(offset: Size) -> Value {
+        if offset == Size::ZERO {
+            val
+        } else {
+            result
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    if_node = ast.functions[0].body[0]
+
+    assert isinstance(if_node, IfNode)
+    assert isinstance(if_node.condition, BinaryOpNode)
+    assert if_node.condition.right == "Size::ZERO"
+    assert if_node.if_body == ["val"]
+    assert if_node.else_body == ["result"]
+
+
+def test_if_let_condition_does_not_treat_empty_branch_as_struct_literal():
+    # Reduced from Rust-GPU/rustc_codegen_spirv codegen_cx/declare.rs.
+    code = """
+    fn declare(align_override: Option<Align>, attrs: Attrs) {
+        if let Some(_align) = align_override {}
+        if attrs.flags.contains(CodegenFnAttrFlags::THREAD_LOCAL) {}
+    }
+    """
+
+    ast = parse_code(code)
+    first_if, second_if = ast.functions[0].body
+
+    assert isinstance(first_if, IfNode)
+    assert isinstance(first_if.condition, LetPatternConditionNode)
+    assert first_if.condition.expression == "align_override"
+    assert first_if.if_body == []
+    assert isinstance(second_if, IfNode)
+
+
+def test_match_arm_accepts_leading_or_with_struct_rest_patterns():
+    # Reduced from Rust-GPU/rustc_codegen_spirv codegen_cx/type_.rs.
+    code = """
+    fn type_kind(ty: SpirvType) -> TypeKind {
+        match ty {
+            SpirvType::Function { .. } => TypeKind::Function,
+            | SpirvType::Image { .. }
+            | SpirvType::Sampler
+            | SpirvType::SampledImage { .. }
+                => TypeKind::Token,
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    match_node = ast.functions[0].body[0]
+
+    assert isinstance(match_node, MatchNode)
+    assert len(match_node.arms) == 2
+    assert isinstance(match_node.arms[1].pattern, MatchOrPatternNode)
+    assert any(
+        isinstance(pattern, MatchStructPatternNode) and pattern.has_rest
+        for pattern in match_node.arms[1].pattern.patterns
+    )
+
+
+def test_match_tuple_pattern_accepts_half_open_range():
+    # Reduced from Rust-GPU/rustc_codegen_spirv linker/spirt_passes/diagnostics.rs.
+    code = """
+    fn decode(pair: Pair) {
+        match pair {
+            (0, Imm::Short(k, w) | Imm::LongStart(k, w))
+            | (1.., Imm::LongCont(k, w)) => {
+                w
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    match_node = ast.functions[0].body[0]
+    second_pattern = match_node.arms[0].pattern.patterns[1]
+
+    assert isinstance(second_pattern, TupleNode)
+    assert isinstance(second_pattern.elements[0], RangeNode)
+    assert second_pattern.elements[0].start == "1"
+    assert second_pattern.elements[0].end is None
+
+
 def test_raw_borrow_and_nested_reference_closure_patterns_parse():
     code = """
     fn raw(reference: &mut T) -> Self {

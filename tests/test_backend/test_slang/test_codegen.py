@@ -3114,6 +3114,25 @@ def test_initialized_top_level_global_codegen():
     assert "gain = 1f" not in generated_code
 
 
+def test_const_static_globals_codegen_canonicalizes_for_crossgl_reparse():
+    # Source pattern: shader-slang/slang tests/spirv/mesh-primitive.slang.
+    code = """
+    const static uint MAX_VERTS = 6;
+    const static float2 positions[MAX_VERTS] = {
+        float2(0.0, -0.5),
+        float2(0.5, 0.0),
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const uint MAX_VERTS = 6;" in generated_code
+    assert "static const vec2 positions[MAX_VERTS]" in generated_code
+    assert "const static" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_extern_static_const_globals_codegen_from_link_time_constant_tests():
     # Source: shader-slang/slang link-time constant tests.
     code = """

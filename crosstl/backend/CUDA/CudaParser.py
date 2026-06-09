@@ -192,6 +192,7 @@ class CudaParser:
         "CUTE_HOST_DEVICE",
         "CUDARTAPI",
         "_CCCL_API",
+        "_CCCL_CONSTEXPR_CXX20",
         "_CCCL_DEVICE",
         "_CCCL_DEVICE_API",
         "_CCCL_EXEC_CHECK_DISABLE",
@@ -201,6 +202,7 @@ class CudaParser:
         "_CCCL_HOST_DEVICE",
         "_CCCL_HOST_DEVICE_API",
         "_CCCL_KERNEL_ATTRIBUTES",
+        "_CCCL_NODEBUG_ALIAS",
         "_CCCL_NODEBUG_HOST_API",
         "VKAPI_ATTR",
         "VKAPI_CALL",
@@ -231,6 +233,8 @@ class CudaParser:
         "MANAGED",
     }
     CUDA_DECLARATION_ATTRIBUTE_IDENTIFIERS = {
+        "_CCCL_TYPE_VISIBILITY_DEFAULT",
+        "_CCCL_NODEBUG_ALIAS",
         "__device_builtin__",
         "__device_builtin_",
         "__cudart_builtin__",
@@ -1624,6 +1628,7 @@ class CudaParser:
             self.skip_until_semicolon()
             return None
 
+        self.parse_cuda_declaration_attributes()
         self.eat("ASSIGN")
         if (
             self.is_decltype_alias_type_start()

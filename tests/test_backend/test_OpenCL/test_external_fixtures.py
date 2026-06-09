@@ -127,6 +127,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/common_hadd.cl",
     },
+    "pocl_core_math_typedef_union_designated_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "7bc17e135b393336fab370a4def48327f30d754b",
+        "path": "lib/kernel/core-math/acosf16.cl",
+    },
     "opencv_filter2d_small_block_macro_argument": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -869,6 +874,39 @@ def test_external_pocl_typename_const_alias_declarator_codegen_reparse():
     assert global_name.name == "typename"
     assert 'var typename: ptr<i8> = "char";' in crossgl
     assert "out[0] = typename[0];" in crossgl
+
+
+def test_external_pocl_core_math_typedef_union_designated_initializer_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_core_math_typedef_union_designated_initializer"
+    ]
+    assert source_info["commit"] == "7bc17e135b393336fab370a4def48327f30d754b"
+    assert source_info["path"] == "lib/kernel/core-math/acosf16.cl"
+
+    source = """
+    typedef union
+    {
+        float f;
+        uint u;
+    } b32u32_u;
+
+    _CL_OVERLOADABLE half acos(half x)
+    {
+        b32u32_u v = {.f = x};
+        uint au = v.u & 0x7fffffffu;
+        return au == 0u ? (half)v.f : x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    union_node = ast.statements[0]
+    init = ast.statements[1].body[0].value.elements[0]
+
+    assert union_node.name == "b32u32_u"
+    assert union_node.is_union is True
+    assert init.designators == [("field", "f")]
+    assert "struct b32u32_u" in crossgl
+    assert "{.f = x}" in crossgl
 
 
 def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():

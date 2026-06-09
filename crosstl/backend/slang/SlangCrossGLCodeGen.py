@@ -1073,7 +1073,7 @@ class SlangToCrossGLConverter:
             )
             for p in func.params
         )
-        semantic = self.map_semantic(func.semantic)
+        semantic = self.map_semantic(getattr(func, "semantic", None))
         semantic_suffix = f" {semantic}" if semantic else ""
         code += (
             f"    {self.map_type(func.return_type)} "
@@ -1424,12 +1424,7 @@ class SlangToCrossGLConverter:
 
     def format_global_variable_qualifiers(self, node):
         allowed_qualifiers = {"extern", "static", "const", "constexpr"}
-        qualifiers = [
-            qualifier
-            for qualifier in getattr(node, "qualifiers", []) or []
-            if str(qualifier).lower() in allowed_qualifiers
-        ]
-        return " ".join(qualifiers)
+        return self.format_ordered_storage_qualifiers(node, allowed_qualifiers)
 
     def generate_struct_member(self, struct_node, member):
         qualifiers = self.format_struct_member_qualifiers(member)
@@ -1449,12 +1444,26 @@ class SlangToCrossGLConverter:
 
     def format_struct_member_qualifiers(self, member):
         allowed_qualifiers = {"static", "const"} | self.interpolation_qualifiers
+        return self.format_ordered_storage_qualifiers(member, allowed_qualifiers)
+
+    def format_ordered_storage_qualifiers(self, node, allowed_qualifiers):
+        allowed = {str(qualifier).lower() for qualifier in allowed_qualifiers}
         qualifiers = [
-            qualifier
-            for qualifier in getattr(member, "qualifiers", []) or []
-            if str(qualifier).lower() in allowed_qualifiers
+            (index, str(qualifier))
+            for index, qualifier in enumerate(getattr(node, "qualifiers", []) or [])
+            if str(qualifier).lower() in allowed
         ]
-        return " ".join(qualifiers)
+        storage_order = {"extern": 0, "static": 1, "const": 2, "constexpr": 3}
+        return " ".join(
+            qualifier
+            for _index, qualifier in sorted(
+                qualifiers,
+                key=lambda item: (
+                    storage_order.get(item[1].lower(), len(storage_order)),
+                    item[0],
+                ),
+            )
+        )
 
     def format_variable_metadata(self, node):
         metadata = []

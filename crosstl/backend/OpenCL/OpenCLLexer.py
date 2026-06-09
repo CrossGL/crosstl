@@ -43,12 +43,12 @@ _HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
 _DECIMAL_DIGITS = r"\d(?:'?\d)*"
 OPENCL_HEX_FLOAT_LITERAL = (
     rf"0[xX](?:{_HEX_DIGITS}(?:\.(?:{_HEX_DIGITS})?)?|\.(?:{_HEX_DIGITS}))"
-    rf"[pP][+-]?{_DECIMAL_DIGITS}[fFdDlLhH]*"
+    rf"[pP][+-]?{_DECIMAL_DIGITS}(?:(?:[fF]16)|[fFdDlLhH])*"
 )
 OPENCL_HALF_FLOAT_LITERAL = (
     rf"(?:(?:{_DECIMAL_DIGITS}\.(?:{_DECIMAL_DIGITS})?|\.(?:{_DECIMAL_DIGITS}))"
     rf"(?:[eE][+-]?{_DECIMAL_DIGITS})?|{_DECIMAL_DIGITS}[eE][+-]?{_DECIMAL_DIGITS})"
-    rf"[hH]"
+    rf"(?:[hH]|[fF]16)"
 )
 OPENCL_LITERAL_TOKENS = (
     ("FLOAT", OPENCL_HEX_FLOAT_LITERAL),

@@ -153,6 +153,7 @@ class VulkanSPIRVCodeGen:
         self.value_types = {}
         self.constants = {}
         self.literal_int_constants = {}
+        self.literal_scalar_constants = {}
         self.vector_constants = {}
         self.composite_constants = {}
         self.specialization_constants = {}
@@ -825,12 +826,98 @@ class VulkanSPIRVCodeGen:
                 self.named_constants[name] = constant_id
                 return constant_id
 
+        scalar_value = self.evaluate_literal_scalar_constant(value, type_id)
+        if scalar_value is not None:
+            constant_id = self.register_constant(scalar_value, type_id)
+            self.emit_named_constant_debug_name(name, constant_id)
+            self.named_constants[name] = constant_id
+            self.literal_scalar_constants[name] = scalar_value
+            return constant_id
+
         constant_id = self.process_constant_expression(value, type_id)
         if constant_id is None:
             constant_id = self.default_value_for_type(type_id)
         self.emit_named_constant_debug_name(name, constant_id)
         self.named_constants[name] = constant_id
         return constant_id
+
+    def evaluate_literal_scalar_constant(
+        self, expr, type_id: SpirvId
+    ) -> Optional[Union[bool, int, float]]:
+        """Evaluate a narrow scalar constant expression for module-scope constants."""
+        type_name = self.normalize_primitive_name(type_id.type.base_type)
+        if type_name == "bool":
+            return self.coerce_scalar_constant_value(expr, type_id)
+        if type_name in {"int", "uint"}:
+            value = evaluate_literal_int_expression(expr, self.literal_int_constants)
+            if value is None:
+                return None
+            if type_name == "uint" and value < 0:
+                return None
+            return int(value)
+        if type_name not in {"float", "double"}:
+            return None
+
+        value = self.evaluate_literal_float_expression(expr)
+        return None if value is None else float(value)
+
+    def evaluate_literal_float_expression(self, expr) -> Optional[float]:
+        """Evaluate literal float arithmetic without emitting SPIR-V instructions."""
+        if expr is None or isinstance(expr, bool):
+            return None
+        if isinstance(expr, (int, float)):
+            return float(expr)
+        if isinstance(expr, str):
+            try:
+                return float(expr)
+            except ValueError:
+                value = self.literal_scalar_constants.get(expr)
+                if isinstance(value, (int, float)):
+                    return float(value)
+                int_value = self.literal_int_constants.get(expr)
+                return None if int_value is None else float(int_value)
+        if hasattr(expr, "value"):
+            value = self.evaluate_literal_float_expression(getattr(expr, "value"))
+            if value is not None:
+                return value
+        name = getattr(expr, "name", None)
+        if isinstance(name, str):
+            value = self.literal_scalar_constants.get(name)
+            if isinstance(value, (int, float)):
+                return float(value)
+            int_value = self.literal_int_constants.get(name)
+            return None if int_value is None else float(int_value)
+
+        class_name = expr.__class__.__name__
+        if "UnaryOp" in class_name:
+            operand = self.evaluate_literal_float_expression(
+                getattr(expr, "operand", None)
+            )
+            if operand is None:
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator == "+":
+                return operand
+            if operator == "-":
+                return -operand
+            return None
+        if "BinaryOp" not in class_name:
+            return None
+
+        left = self.evaluate_literal_float_expression(getattr(expr, "left", None))
+        right = self.evaluate_literal_float_expression(getattr(expr, "right", None))
+        if left is None or right is None:
+            return None
+        operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if operator == "+":
+            return left + right
+        if operator == "-":
+            return left - right
+        if operator == "*":
+            return left * right
+        if operator == "/" and right != 0.0:
+            return left / right
+        return None
 
     def image_offset_operand(self, offset_id: SpirvId) -> str:
         if self.is_constant_instruction(offset_id):
@@ -986,6 +1073,103 @@ class VulkanSPIRVCodeGen:
                 variable_id.type.base_type.replace("ptr_", "", 1)
             )
         return target_type
+
+    def pointer_type_pointee_type(
+        self, pointer_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        if pointer_type is None or pointer_type.type.storage_class is None:
+            return None
+        return self.find_registered_type_by_base(
+            pointer_type.type.base_type.replace("ptr_", "", 1)
+        )
+
+    def copy_array_pointer_to_function_storage(
+        self,
+        source_pointer: SpirvId,
+        target_array_type: SpirvId,
+        name: Optional[str] = None,
+    ) -> Optional[SpirvId]:
+        target_array_info = self.array_type_info_from_type(target_array_type)
+        if target_array_info is None:
+            return None
+
+        target_element_type, target_size = target_array_info
+        if target_size is None:
+            return None
+
+        source_array_type = self.pointer_pointee_type(source_pointer)
+        source_array_info = self.array_type_info_from_type(source_array_type)
+        if source_array_info is None:
+            return None
+
+        source_element_type, source_size = source_array_info
+        if source_size is not None and int(source_size) != int(target_size):
+            return None
+
+        scratch_array = self.create_variable(target_array_type, "Function", name)
+        index_type = self.register_primitive_type("int")
+        source_storage_class = source_pointer.type.storage_class or "Function"
+        source_element_ptr_type = self.register_pointer_type(
+            source_element_type, source_storage_class
+        )
+        target_element_ptr_type = self.register_pointer_type(
+            target_element_type, "Function"
+        )
+
+        for index_value in range(int(target_size)):
+            index = self.register_constant(index_value, index_type)
+            source_element_pointer = self.access_chain(
+                source_pointer, [index], source_element_ptr_type
+            )
+            self.variable_value_types[source_element_pointer.id] = source_element_type
+            self.propagate_storage_buffer_access_metadata(
+                source_pointer, source_element_pointer
+            )
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                source_pointer, source_element_pointer, index
+            )
+            self.propagate_resource_access_metadata(
+                source_pointer, source_element_pointer, source_element_type
+            )
+            self.propagate_readonly_builtin_pointer_name(
+                source_pointer, source_element_pointer
+            )
+            self.propagate_readonly_pointer_name(source_pointer, source_element_pointer)
+
+            target_element_pointer = self.access_chain(
+                scratch_array, [index], target_element_ptr_type
+            )
+            self.variable_value_types[target_element_pointer.id] = target_element_type
+
+            value = self.load_from_variable(source_element_pointer, source_element_type)
+            value = self.convert_value_to_type(value, target_element_type)
+            self.store_to_variable(target_element_pointer, value)
+
+        return scratch_array
+
+    def prepare_function_call_argument(
+        self, arg: SpirvId, expected_type: SpirvId
+    ) -> SpirvId:
+        if expected_type.type.storage_class is None:
+            return self.convert_value_to_type(arg, expected_type)
+
+        expected_pointee_type = self.pointer_type_pointee_type(expected_type)
+        if expected_pointee_type is None:
+            return arg
+
+        if arg.type.storage_class == expected_type.type.storage_class:
+            return arg
+
+        if expected_type.type.storage_class == "Function":
+            expected_array_info = self.array_type_info_from_type(expected_pointee_type)
+            if expected_array_info is not None:
+                copied_array = self.copy_array_pointer_to_function_storage(
+                    arg, expected_pointee_type
+                )
+                if copied_array is not None:
+                    return copied_array
+
+        return arg
 
     def is_sample_mask_builtin_variable(self, variable_id: SpirvId) -> bool:
         return self.builtin_names_by_variable_id.get(variable_id.id) == "SampleMask"
@@ -2509,14 +2693,12 @@ class VulkanSPIRVCodeGen:
         self.merge_function_interface_variables_from_callee(
             function_name, function_id.id
         )
-        args = [
-            (
-                self.convert_value_to_type(arg, param_types[index])
-                if index < len(param_types)
-                else arg
-            )
-            for index, arg in enumerate(args)
-        ]
+        prepared_args = []
+        for index, arg in enumerate(args):
+            if index < len(param_types):
+                arg = self.prepare_function_call_argument(arg, param_types[index])
+            prepared_args.append(arg)
+        args = prepared_args
 
         id_value = self.get_id()
 
@@ -10346,6 +10528,7 @@ class VulkanSPIRVCodeGen:
                 "sampled": 1,
                 "format": "Unknown",
             },
+            "comparison_sampler": {"kind": "sampler"},
             "sampler2DMS": {
                 "kind": "sampled_image",
                 "component_type": "float",
@@ -11595,6 +11778,10 @@ class VulkanSPIRVCodeGen:
         if type_str == "str":
             return self.register_primitive_type("int")
 
+        atomic_element_type_name = self.atomic_element_type_name(type_str)
+        if atomic_element_type_name is not None:
+            return self.map_crossgl_type(atomic_element_type_name)
+
         generic_enum_type = self.generic_enum_specialization_for_type(type_str)
         if generic_enum_type is not None:
             return generic_enum_type
@@ -11731,6 +11918,39 @@ class VulkanSPIRVCodeGen:
                 return f"{element_type}{size}"
         else:
             return str(type_node)
+
+    def pointer_pointee_type_name_from_string(self, type_name) -> Optional[str]:
+        """Return the pointee type for CrossGL pointer spelling such as T*."""
+        type_str = self.type_name_from_value(type_name)
+        if type_str is None:
+            return None
+
+        type_str = type_str.strip()
+        if not type_str.endswith("*"):
+            return None
+
+        pointee = type_str[:-1].strip()
+        return pointee or None
+
+    def atomic_element_type_name(self, type_name) -> Optional[str]:
+        """Return the scalar payload type for atomic<T> aliases."""
+        type_str = self.type_name_from_value(type_name)
+        if type_str is None:
+            return None
+
+        compact = re.sub(r"\s+", "", str(type_str))
+        atomic_match = re.fullmatch(r"atomic<(.+)>", compact)
+        if atomic_match:
+            return atomic_match.group(1)
+
+        return {
+            "atomic_int": "int",
+            "atomic_uint": "uint",
+        }.get(compact)
+
+    def storage_buffer_element_type_name(self, type_name) -> str:
+        atomic_type_name = self.atomic_element_type_name(type_name)
+        return atomic_type_name or self.type_name_from_value(type_name)
 
     def collect_enum_metadata(self, nodes):
         """Collect SPIR-V-lowerable enum types and variant discriminants."""
@@ -12336,9 +12556,24 @@ class VulkanSPIRVCodeGen:
         """Emit a GLSL-style buffer block or buffer-qualified array variable."""
         layout = self.glsl_buffer_block_layout(node)
         base_type_name = self.array_base_type_name(type_name)
-        is_named_block = base_type_name in self.struct_types
         outer_array = self.split_outer_array_type(type_name)
+        pointer_element_type_name = self.pointer_pointee_type_name_from_string(
+            type_name
+        )
+        is_pointer_descriptor_array = False
+        pointer_descriptor_array_size = None
+        if pointer_element_type_name is None and outer_array is not None:
+            pointer_element_type_name = self.pointer_pointee_type_name_from_string(
+                outer_array[0]
+            )
+            if pointer_element_type_name is not None:
+                is_pointer_descriptor_array = True
+                pointer_descriptor_array_size = outer_array[1]
+        is_named_block = base_type_name in self.struct_types
         if is_named_block and outer_array is not None and outer_array[1] is None:
+            self.require_capability("RuntimeDescriptorArray")
+            self.require_extension("SPV_EXT_descriptor_indexing")
+        if is_pointer_descriptor_array and pointer_descriptor_array_size is None:
             self.require_capability("RuntimeDescriptorArray")
             self.require_extension("SPV_EXT_descriptor_indexing")
 
@@ -12357,12 +12592,22 @@ class VulkanSPIRVCodeGen:
             variable_member_type = None
         else:
             variable_member_name = node.name
-            variable_member_type = self.storage_layout_type(
-                self.map_crossgl_type(
-                    getattr(node, "var_type", getattr(node, "vtype", "float"))
-                ),
-                layout,
-            )
+            if pointer_element_type_name is not None:
+                element_type_name = self.storage_buffer_element_type_name(
+                    pointer_element_type_name
+                )
+                element_type = self.storage_layout_type(
+                    self.map_crossgl_type(element_type_name),
+                    layout,
+                )
+                variable_member_type = self.register_array_type(element_type, None)
+            else:
+                variable_member_type = self.storage_layout_type(
+                    self.map_crossgl_type(
+                        getattr(node, "var_type", getattr(node, "vtype", "float"))
+                    ),
+                    layout,
+                )
             block_type = self.register_struct_type(
                 (
                     f"{node.name}Buffer"
@@ -12373,6 +12618,11 @@ class VulkanSPIRVCodeGen:
             )
             value_type = block_type
             block_members = [(variable_member_type, variable_member_name)]
+
+        if is_pointer_descriptor_array:
+            value_type = self.register_array_type(
+                block_type, pointer_descriptor_array_size
+            )
 
         self.decorate_storage_buffer_block_type(block_type, layout)
         memory_flags = self.storage_buffer_memory_flags(node)
@@ -12394,6 +12644,7 @@ class VulkanSPIRVCodeGen:
             block_members,
             variable_member_name,
             variable_member_type,
+            descriptor_array_type=(value_type if is_pointer_descriptor_array else None),
         )
         return var_id
 
@@ -12405,6 +12656,7 @@ class VulkanSPIRVCodeGen:
         block_members: List[Tuple[SpirvId, str]],
         variable_member_name: Optional[str],
         variable_member_type: Optional[SpirvId],
+        descriptor_array_type: Optional[SpirvId] = None,
     ):
         if len(block_members) != 1:
             return
@@ -12430,11 +12682,19 @@ class VulkanSPIRVCodeGen:
             "block_type": block_type,
             "member_index": 0,
             "member_name": variable_member_name or member_name,
+            "declared_type_name": self.type_name_from_value(
+                getattr(node, "var_type", getattr(node, "vtype", None))
+            ),
         }
+        if descriptor_array_type is not None:
+            metadata["descriptor_array"] = True
+            metadata["descriptor_array_type"] = descriptor_array_type
         self.structured_buffer_metadata[var_id.id] = metadata
         self.structured_buffer_metadata[block_type.id] = metadata
         if variable_member_type is not None:
             self.structured_buffer_metadata[variable_member_type.id] = metadata
+        if descriptor_array_type is not None:
+            self.structured_buffer_metadata[descriptor_array_type.id] = metadata
 
     def register_glsl_buffer_access_metadata(
         self,
@@ -13105,6 +13365,7 @@ class VulkanSPIRVCodeGen:
         param_types = []
         param_value_types = []
         resource_array_param_indices = set()
+        value_array_param_indices = set()
         patch_interface_parameters = []
         param_type_hints = self.resolve_function_resource_array_type_hints(
             function_node.name
@@ -13159,9 +13420,25 @@ class VulkanSPIRVCodeGen:
                 and param_resource_metadata.get("kind") == "storage_image"
                 and param_name in storage_image_pointer_params
             )
-            if self.is_resource_array_type(param_type) or is_storage_image_param:
+            is_value_array_param = (
+                self.array_type_info_from_type(param_type) is not None
+            )
+            if (
+                self.is_resource_array_type(param_type)
+                or is_storage_image_param
+                or is_value_array_param
+            ):
                 resource_array_param_indices.add(len(param_types))
-                param_type = self.register_pointer_type(param_type, "UniformConstant")
+                if is_value_array_param and not (
+                    self.is_resource_array_type(param_type) or is_storage_image_param
+                ):
+                    value_array_param_indices.add(len(param_types))
+                storage_class = (
+                    "UniformConstant"
+                    if self.is_resource_array_type(param_type) or is_storage_image_param
+                    else "Function"
+                )
+                param_type = self.register_pointer_type(param_type, storage_class)
 
             if not entry_point_uses_void_signature:
                 param_types.append(param_type)
@@ -13217,6 +13494,22 @@ class VulkanSPIRVCodeGen:
             self.register_declared_resource_metadata(param, param_id, param_value_type)
 
         self.begin_block()
+
+        if not entry_point_uses_void_signature:
+            for i, (param, _param_type, param_value_type) in enumerate(
+                runtime_parameters
+            ):
+                if i not in value_array_param_indices:
+                    continue
+                param_name = getattr(param, "name", f"param{i}")
+                param_id = self.local_variables.get(param_name)
+                if param_id is None:
+                    continue
+                local_copy = self.copy_array_pointer_to_function_storage(
+                    param_id, param_value_type, name=param_name
+                )
+                if local_copy is not None:
+                    self.local_variables[param_name] = local_copy
 
         previous_execution_model = self.current_execution_model
         previous_function_id = self.current_function_id
@@ -14371,13 +14664,10 @@ class VulkanSPIRVCodeGen:
                     arguments.append(self.default_value_for_type(param_type))
                     continue
 
-                source_type = self.variable_value_types.get(source_variable.id)
-                if source_type is None:
+                if self.variable_value_types.get(source_variable.id) is None:
                     arguments.append(self.default_value_for_type(param_type))
                 else:
-                    arguments.append(
-                        self.load_from_variable(source_variable, source_type)
-                    )
+                    arguments.append(source_variable)
                 continue
 
             builtin_argument = self.tessellation_patch_constant_builtin_argument(
@@ -16491,6 +16781,8 @@ class VulkanSPIRVCodeGen:
         metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
         if metadata is None:
             return None
+        if metadata.get("_access_path") == "member":
+            return None
 
         pointee_type = self.variable_value_types.get(buffer_pointer.id)
         descriptor_array = self.array_type_info_from_type(pointee_type)
@@ -16513,6 +16805,30 @@ class VulkanSPIRVCodeGen:
         access_metadata = {**metadata, "_access_path": "element"}
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
+
+    def single_struct_buffer_zero_index_alias(
+        self, buffer_pointer: SpirvId, index_expr
+    ) -> Optional[SpirvId]:
+        """Treat a single buffer block indexed as [0] as an alias for the block."""
+        if self.literal_int_argument(index_expr) != 0:
+            return None
+
+        if self.structured_buffer_metadata_for_pointer(buffer_pointer) is not None:
+            return None
+
+        metadata = self.storage_buffer_access_metadata_for_pointer(buffer_pointer)
+        if metadata is None or metadata.get("kind") != "glsl_buffer_block":
+            return None
+
+        value_type = self.variable_value_types.get(buffer_pointer.id)
+        if value_type is None:
+            return None
+        if self.array_type_info_from_type(value_type) is not None:
+            return None
+        if value_type.type.base_type not in self.current_struct_members:
+            return None
+
+        return buffer_pointer
 
     def structured_buffer_default_value(self, metadata) -> SpirvId:
         element_type = metadata.get("element_type") if metadata is not None else None
@@ -18105,6 +18421,12 @@ class VulkanSPIRVCodeGen:
                 array_variable, index, index_expr
             ):
                 return None, None
+
+            block_alias = self.single_struct_buffer_zero_index_alias(
+                array_variable, index_expr
+            )
+            if block_alias is not None:
+                return block_alias, self.variable_value_types.get(block_alias.id)
 
             structured_access = self.structured_buffer_element_pointer(
                 array_variable, index

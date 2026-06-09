@@ -1226,7 +1226,7 @@ class HipToCrossGLConverter:
         if self.is_simple_identifier(name):
             return self.sanitize_identifier_name(name)
         if not isinstance(name, str) or "::" not in name:
-            return name
+            return self.sanitize_crossgl_type_identifier(name)
 
         normalized_name = name.replace("::~", "::destructor_")
         return self.sanitize_qualified_variable_name(normalized_name) or name
@@ -4763,7 +4763,8 @@ class HipToCrossGLConverter:
                         self.register_variable_type(param_name, param_type)
                         params.append(f"{param_type} {output_name}")
 
-            self.emit(f"fn {kernel.name}(")
+            kernel_name = self.format_function_declaration_name(kernel.name)
+            self.emit(f"fn {kernel_name}(")
             self.indent_level += 1
             for i, param in enumerate(params):
                 if i == len(params) - 1:

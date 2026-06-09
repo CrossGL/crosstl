@@ -19853,17 +19853,19 @@ class TestVulkanSPIRVCodeGen:
         mutable_values = spirv_named_variable(
             spv_code, "values", storage_class="Function"
         )
-        assert re.search(
-            rf"OpStore {re.escape(mutable_values)} {re.escape(values_param)}",
-            spv_code,
-        )
-        assert not re.search(
+        param_value_elements = re.findall(
             rf"OpAccessChain %\d+ {re.escape(values_param)} ",
             spv_code,
         )
-        assert re.search(
-            rf"OpAccessChain %\d+ {re.escape(mutable_values)} %\d+",
+        mutable_value_elements = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(mutable_values)} %\d+",
             spv_code,
+        )
+        assert len(param_value_elements) >= 3
+        assert len(mutable_value_elements) >= 3
+        assert any(
+            f"OpStore {element_id} " in spv_code
+            for element_id in mutable_value_elements
         )
         assert "OpFAdd" in spv_code
         assert "OpFMul" in spv_code
@@ -20020,18 +20022,15 @@ class TestVulkanSPIRVCodeGen:
         mutable_values = spirv_named_variable(
             spv_code, "values", storage_class="Function"
         )
-        assert re.search(
-            rf"OpStore {re.escape(mutable_values)} {re.escape(values_param)}",
-            spv_code,
-        )
-        assert not re.search(
-            rf"OpAccessChain %\d+ {re.escape(values_param)} ",
+        source_rows = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ " rf"{re.escape(values_param)} %\d+",
             spv_code,
         )
         values_rows = re.findall(
             rf"(%\d+) = OpAccessChain %\d+ " rf"{re.escape(mutable_values)} %\d+",
             spv_code,
         )
+        assert source_rows
         assert values_rows
         assert any(
             re.search(rf"OpAccessChain %\d+ {re.escape(row)} %\d+", spv_code)
@@ -23312,7 +23311,9 @@ class TestVulkanSPIRVCodeGen:
         assert val_id
         assert "WARNING" not in spv_code
 
-    def test_array_access_warning_formats_expression_paths(self):
+    def test_array_access_through_runtime_struct_pointer_buffer_validates(
+        self, tmp_path
+    ):
         source_code = """
         shader ArrayAccessDiagnostic {
             const uint COLS = 3;
@@ -23336,13 +23337,14 @@ class TestVulkanSPIRVCodeGen:
             Parser(Lexer(source_code).tokens).parse()
         )
 
-        assert (
-            "; WARNING: Could not determine array element type for "
-            "particles[0].weights"
-        ) in spv_code
+        assert "OpTypeRuntimeArray" in spv_code
+        assert "OpAccessChain" in spv_code
+        assert "WARNING" not in spv_code
         assert "IdentifierNode(" not in spv_code
         assert "ArrayAccessNode(" not in spv_code
         assert "MemberAccessNode(" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_struct_declaration_and_member_access(self):
         source_code = """
@@ -26434,7 +26436,7 @@ class TestSpirvShaderValidation:
         with pytest.raises(ValueError, match="Duplicate SPIR-V output location 2"):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-    def test_unknown_struct_pointer_type_warning_does_not_leak_named_type_repr(self):
+    def test_struct_pointer_buffer_lowers_to_runtime_array(self, tmp_path):
         source_code = """
         shader VulkanStructPointerWarning {
             const int COUNT = 2;
@@ -26460,9 +26462,13 @@ class TestSpirvShaderValidation:
 
         assert "NamedType(" not in spv_code
         assert "PointerType(" not in spv_code
-        assert "; WARNING: Unknown type Particle*, using float as default" in spv_code
+        assert "OpTypeRuntimeArray" in spv_code
+        assert "OpDecorate" in spv_code
+        assert "ArrayStride" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_unknown_atomic_pointer_type_warning_does_not_leak_named_type_repr(self):
+    def test_atomic_pointer_buffer_lowers_to_runtime_array_atomics(self, tmp_path):
         warning_source = """
         shader VulkanAtomicPointerWarning {
             compute {
@@ -26488,9 +26494,147 @@ class TestSpirvShaderValidation:
         assert "NamedType(" not in spv_code
         assert "PointerType(" not in spv_code
         assert "PrimitiveType(" not in spv_code
-        assert (
-            "; WARNING: Unknown type atomic<int>*, using float as default" in spv_code
+        assert "OpTypeRuntimeArray" in spv_code
+        assert spv_code.count("OpAtomicIAdd") == 2
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_single_struct_buffer_zero_index_alias_validates(self, tmp_path):
+        source_code = """
+        shader VulkanStructBufferZeroIndex {
+            struct CompatCounters {
+                int active_count;
+                uint spawn_count;
+            }
+
+            compute {
+                layout(set = 0, binding = 0) buffer CompatCounters compat;
+                layout(set = 0, binding = 1) buffer int* values;
+
+                void main() {
+                    int oldCompat = atomicAdd(compat[0].active_count, 1);
+                    values[0] = oldCompat;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
         )
-        assert (
-            "; WARNING: Unknown type atomic<uint>*, using float as default" in spv_code
+
+        compat_var = spirv_named_variable(spv_code, "compat", storage_class="Uniform")
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(compat_var)} %\d+\n"
+            rf"%\d+ = OpAtomicIAdd",
+            spv_code,
         )
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_buffer_member_array_function_parameter_validates(self, tmp_path):
+        source_code = """
+        shader VulkanFunctionParameterArray {
+            const int COUNT = 2;
+
+            struct Particle {
+                float weights[COUNT];
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer Particle* particles;
+
+                float readWeight(float weights[COUNT]) {
+                    return weights[1];
+                }
+
+                void main() {
+                    float value = readWeight(particles[0].weights);
+                    particles[1].weights[0] = value;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" in spv_code
+        assert "OpTypePointer Function" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_glsl_pointer_buffer_descriptor_array_validates(self, tmp_path):
+        source_code = """
+        shader VulkanStorageBufferDescriptorArray {
+            struct FragmentOutput {
+                vec4 color;
+            }
+
+            fragment {
+                layout(set = 0, binding = 2) buffer vec4* debugValues[2];
+
+                FragmentOutput main() {
+                    FragmentOutput output;
+                    int targetIndex = 1;
+                    vec4 first = debugValues[0][0];
+                    debugValues[targetIndex][0] = first + debugValues[targetIndex][1];
+                    output.color = debugValues[targetIndex][0];
+                    return output;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpTypeRuntimeArray" in spv_code
+        assert "debugValuesBuffer" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_runtime_comparison_sampler_array_validates(self, tmp_path):
+        source_code = """
+        shader VulkanRuntimeComparisonSamplerArray {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* values;
+                layout(set = 0, binding = 1) uniform sampler2DShadow shadowMaps[];
+                layout(set = 0, binding = 2) comparison_sampler shadowSamplers[];
+
+                void main() {
+                    float visibility = textureCompareLod(
+                        shadowMaps[0],
+                        shadowSamplers[0],
+                        vec2(0.5, 0.5),
+                        0.25,
+                        0.0
+                    );
+                    values[0] = visibility;
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        spirv_named_variable(
+            spv_code, "shadowSamplers", storage_class="UniformConstant"
+        )
+        assert "OpTypeSampler" in spv_code
+        assert "OpImageSampleDrefExplicitLod" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)

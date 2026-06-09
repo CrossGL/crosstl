@@ -1813,6 +1813,132 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Path: tests/spirv/mesh-primitive.slang
+        "id": "slang_spirv_mesh_primitive_const_static_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": "tests/spirv/mesh-primitive.slang",
+        "source": (
+            """
+            const static uint MAX_VERTS = 6;
+            const static uint MAX_PRIMS = 2;
+
+            const static float2 positions[MAX_VERTS] = {
+              float2(0.0, -0.5),
+              float2(0.5, 0),
+              float2(-0.5, 0),
+              float2(0.0, 0.5),
+              float2(0.5, 0),
+              float2(-0.5, 0),
+            };
+
+            struct Vertex
+            {
+              float4 pos : SV_Position;
+            };
+
+            struct Primitive
+            {
+              [[vk::location(0)]] float3 color;
+            }
+
+            [outputtopology("triangle")]
+            [numthreads(MAX_VERTS, 1, 1)]
+            [shader("mesh")]
+            void entry_mesh(
+                in uint tig : SV_GroupThreadID,
+                OutputVertices<Vertex, MAX_VERTS> verts,
+                OutputIndices<uint3, MAX_PRIMS> triangles,
+                OutputPrimitives<Primitive, MAX_PRIMS> primitives)
+            {
+                const uint numVertices = MAX_VERTS;
+                const uint numPrimitives = MAX_PRIMS;
+                SetMeshOutputCounts(numVertices, numPrimitives);
+
+                if(tig < numVertices) {
+                    verts[tig] = {float4(positions[tig], 0, 1)};
+                }
+
+                if(tig < numPrimitives) {
+                    triangles[tig] = uint3(0,1,2) + tig * 3;
+                    primitives[tig] = { float3(1,0,0) };
+                }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "static const uint MAX_VERTS = 6;",
+            "static const uint MAX_PRIMS = 2;",
+            "static const vec2 positions[MAX_VERTS]",
+            "mesh {",
+            "void entry_mesh(in uint tig @ gl_LocalInvocationID",
+            "SetMeshOutputCounts(numVertices, numPrimitives);",
+        ],
+        "not_contains": ["const static"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Path: tests/language-feature/struct-field-initializers/
+        # struct-field-initializer-extension.slang
+        "id": "slang_struct_field_initializer_extension_constructor_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": (
+            "tests/language-feature/struct-field-initializers/"
+            "struct-field-initializer-extension.slang"
+        ),
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            struct DefaultStructNoInit
+            {
+                int data0 = 2;
+                int data1 = 2;
+            };
+            extension DefaultStructNoInit
+            {
+            }
+
+            struct DefaultStructWithInit
+            {
+                int data0;
+                int data1 = 3;
+                int data2;
+            };
+            extension DefaultStructWithInit
+            {
+                __init()
+                {
+                    data0 = 3;
+                    data2 = 3;
+                }
+            }
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID: SV_DispatchThreadID)
+            {
+                DefaultStructNoInit noInit = DefaultStructNoInit();
+                DefaultStructWithInit withInit = DefaultStructWithInit();
+                outputBuffer[0] = true
+                    && noInit.data0 == 2
+                    && noInit.data1 == 2
+                    && withInit.data0 == 3
+                    && withInit.data1 == 3
+                    && withInit.data2 == 3;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct DefaultStructNoInit {",
+            "int data0 = 2;",
+            "struct DefaultStructWithInit {",
+            "void __init()",
+            "outputBuffer[0] = true && noInit.data0 == 2",
+        ],
+    },
+    {
         "id": "slang_rhi_root_parameter_block_attributes",
         "repo": "shader-slang/slang-rhi",
         "path": "tests/test-root-shader-parameter.slang",

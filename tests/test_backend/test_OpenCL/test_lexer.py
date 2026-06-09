@@ -47,11 +47,17 @@ def test_darktable_hex_float_literal_tokenizes_as_single_float():
 
 
 def test_opencl_half_literal_suffixes_tokenize_as_single_float():
-    tokens = token_pairs("half lo = 0.5h; half hi = 0x1.ffcp15H;")
+    tokens = token_pairs(
+        "half lo = 0.5h; half mid = 0.0f16; "
+        "half hi = 0x1.ffcp15H; half huge = 0x1p15f16;"
+    )
 
     assert ("FLOAT", "0.5h") in tokens
+    assert ("FLOAT", "0.0f16") in tokens
     assert ("FLOAT", "0x1.ffcp15H") in tokens
+    assert ("FLOAT", "0x1p15f16") in tokens
     assert ("IDENTIFIER", "h") not in tokens
+    assert ("INTEGER", "16") not in tokens
     assert ("IDENTIFIER", "H") not in tokens
 
 

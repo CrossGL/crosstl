@@ -8,6 +8,7 @@ from crosstl.backend.HIP.HipAst import (
     FunctionCallNode,
     FunctionNode,
     KernelNode,
+    StructNode,
     TypeAliasNode,
     VariableNode,
 )
@@ -630,6 +631,74 @@ class OpenCLParser(HipParser):
         self.skip_declarator_attribute_suffixes()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def parse_typedef_alias(self):
+        if not self.match("TYPEDEF"):
+            return super().parse_typedef_alias()
+
+        typedef_pos = self.pos
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index < len(self.tokens) and self.tokens[index].type == "UNION":
+            self.consume("TYPEDEF")
+            return self.parse_typedef_union_alias()
+
+        self.pos = typedef_pos
+        self.current_token = self.tokens[self.pos]
+        return super().parse_typedef_alias()
+
+    def parse_typedef_union_alias(self):
+        self.consume("UNION")
+        self.skip_newlines()
+
+        tag_name = None
+        if self.match("IDENTIFIER"):
+            tag_name = self.current_token.value
+            self.advance()
+
+        self.skip_newlines()
+        if not self.match("LBRACE"):
+            alias = self.parse_type_alias_declarator(
+                f"union {tag_name}", allow_prefix=True
+            )
+            if self.match("SEMICOLON"):
+                self.advance()
+            return alias
+
+        self.consume("LBRACE")
+        members = self.parse_struct_members(tag_name)
+        self.consume("RBRACE")
+
+        alias_base_type = f"union {tag_name}" if tag_name else "union <anonymous>"
+        aliases = []
+        self.skip_newlines()
+        while self.current_token and not self.match("SEMICOLON"):
+            aliases.append(
+                self.parse_type_alias_declarator(alias_base_type, allow_prefix=True)
+            )
+            self.skip_newlines()
+            if not self.match("COMMA"):
+                break
+            self.advance()
+            self.skip_newlines()
+
+        alias_name = aliases[0].name if aliases else tag_name
+        if not alias_name:
+            self.error("Expected typedef union alias name")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+        self.type_aliases.add(alias_name)
+
+        extra_aliases = []
+        for alias in aliases[1:]:
+            alias.alias_type = self.replace_typedef_record_base_type(
+                alias.alias_type, alias_base_type, alias_name
+            )
+            extra_aliases.append(alias)
+
+        union_node = StructNode(alias_name, members)
+        union_node.is_union = True
+        return [union_node, *extra_aliases] if extra_aliases else union_node
 
     def consume_declarator_name_token(self):
         if self.is_declarator_name_token():
