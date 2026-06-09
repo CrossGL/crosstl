@@ -362,6 +362,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "toolchainRunStatusByVariant",
         "sourceHashStatusCounts",
         "generatedHashStatusCounts",
+        "generatedSizeStatusCounts",
         "sourceMapStatusCounts",
         "sourceRemapStatusCounts",
         "diagnostics",
@@ -382,6 +383,7 @@ VALIDATION_ARTIFACT_FIELDS = frozenset(
         "sourceBackend",
         "sourceHashStatus",
         "generatedHashStatus",
+        "generatedSizeStatus",
         "sourceMapStatus",
         "sourceRemapStatus",
     )
@@ -393,6 +395,7 @@ VALIDATION_SUMMARY_FIELDS = frozenset(
         "failedCount",
         "sourceHashStatusCounts",
         "generatedHashStatusCounts",
+        "generatedSizeStatusCounts",
         "sourceMapStatusCounts",
         "sourceRemapStatusCounts",
     )
@@ -513,6 +516,9 @@ SOURCE_HASH_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-recorded", "outside-project")
 )
 GENERATED_HASH_VALIDATION_STATUSES = frozenset(
+    ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
+)
+GENERATED_SIZE_VALIDATION_STATUSES = frozenset(
     ("ok", "missing", "mismatch", "not-applicable", "not-recorded", "outside-project")
 )
 SOURCE_MAP_VALIDATION_STATUSES = frozenset(
@@ -4901,6 +4907,11 @@ def _validation_summary(artifact_checks: Sequence[Any]) -> dict[str, Any]:
             "generatedHashStatus",
             GENERATED_HASH_VALIDATION_STATUSES,
         ),
+        "generatedSizeStatusCounts": _status_counts(
+            artifact_checks,
+            "generatedSizeStatus",
+            GENERATED_SIZE_VALIDATION_STATUSES,
+        ),
         "sourceMapStatusCounts": _status_counts(
             artifact_checks,
             "sourceMapStatus",
@@ -5546,14 +5557,18 @@ def _validate_artifacts(
             if artifact.get("status") == "translated"
             else "not-applicable"
         )
+        generated_size_status = generated_hash_status
         generated_hash = artifact.get("generatedHash")
+        generated_size = artifact.get("generatedSizeBytes")
         source_remap_diagnostics: list[ProjectDiagnostic] = []
         source_map_diagnostics: list[ProjectDiagnostic] = []
         if artifact.get("status") == "translated":
             if not artifact_inside_project:
                 generated_hash_status = "outside-project"
+                generated_size_status = "outside-project"
             elif not exists:
                 generated_hash_status = "missing"
+                generated_size_status = "missing"
             elif isinstance(generated_hash, Mapping):
                 actual_hash = _source_hash(artifact_path)
                 if not _hash_matches_report(actual_hash, generated_hash):
@@ -5573,6 +5588,25 @@ def _validate_artifacts(
                     )
                 else:
                     generated_hash_status = "ok"
+            if exists and _is_non_negative_int(generated_size):
+                actual_size = artifact_path.stat().st_size
+                if generated_size != actual_size:
+                    generated_size_status = "mismatch"
+                    diagnostics.append(
+                        ProjectDiagnostic(
+                            severity="error",
+                            code="project.validate.generated-size-mismatch",
+                            message=(
+                                "Generated artifact size does not match report: "
+                                f"{artifact['path']}"
+                            ),
+                            location=SourceLocation(file=str(artifact["source"])),
+                            **_artifact_diagnostic_context(artifact),
+                            missing_capabilities=["artifact.manifest"],
+                        )
+                    )
+                else:
+                    generated_size_status = "ok"
             source_remap_diagnostics = _source_remap_validation_diagnostics(
                 artifact, config
             )
@@ -5624,12 +5658,14 @@ def _validate_artifacts(
                 and artifact.get("status") == "translated"
                 and source_hash_status in {"ok", "not-recorded"}
                 and generated_hash_status in {"ok", "not-recorded"}
+                and generated_size_status in {"ok", "not-recorded"}
                 and not source_remap_diagnostics
                 and not source_map_diagnostics
                 else "failed"
             ),
             "sourceHashStatus": source_hash_status,
             "generatedHashStatus": generated_hash_status,
+            "generatedSizeStatus": generated_size_status,
             "sourceMapStatus": source_map_status,
             "sourceRemapStatus": source_remap_status,
         }
@@ -5974,6 +6010,9 @@ def inspect_project_report(
             ),
             "generatedHashStatusCounts": dict(
                 validation_report.get("generatedHashStatusCounts", {})
+            ),
+            "generatedSizeStatusCounts": dict(
+                validation_report.get("generatedSizeStatusCounts", {})
             ),
             "sourceMapStatusCounts": dict(
                 validation_report.get("sourceMapStatusCounts", {})
@@ -6396,6 +6435,7 @@ def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
         "exists": artifact.get("exists"),
         "sourceHashStatus": artifact.get("sourceHashStatus"),
         "generatedHashStatus": artifact.get("generatedHashStatus"),
+        "generatedSizeStatus": artifact.get("generatedSizeStatus"),
         "sourceMapStatus": artifact.get("sourceMapStatus"),
         "sourceRemapStatus": artifact.get("sourceRemapStatus"),
     }
@@ -7303,6 +7343,7 @@ def _inspection_artifact_validation_metadata(
         "exists",
         "sourceHashStatus",
         "generatedHashStatus",
+        "generatedSizeStatus",
         "sourceMapStatus",
         "sourceRemapStatus",
     ):
@@ -7494,6 +7535,7 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         "exists",
         "sourceHashStatus",
         "generatedHashStatus",
+        "generatedSizeStatus",
         "sourceMapStatus",
         "sourceRemapStatus",
     ):
@@ -7594,6 +7636,7 @@ def _validation_report_payload(
     )
     source_hash_status_counts = validation_summary.get("sourceHashStatusCounts")
     generated_hash_status_counts = validation_summary.get("generatedHashStatusCounts")
+    generated_size_status_counts = validation_summary.get("generatedSizeStatusCounts")
     source_map_status_counts = validation_summary.get("sourceMapStatusCounts")
     source_remap_status_counts = validation_summary.get("sourceRemapStatusCounts")
     return {
@@ -7658,6 +7701,11 @@ def _validation_report_payload(
         "generatedHashStatusCounts": (
             dict(generated_hash_status_counts)
             if isinstance(generated_hash_status_counts, Mapping)
+            else {}
+        ),
+        "generatedSizeStatusCounts": (
+            dict(generated_size_status_counts)
+            if isinstance(generated_size_status_counts, Mapping)
             else {}
         ),
         "sourceMapStatusCounts": (
@@ -7846,47 +7894,6 @@ def _generated_size_contract_reasons(
         return []
     if not _is_non_negative_int(artifact.get("generatedSizeBytes")):
         return [f"artifacts[{index}].generatedSizeBytes must be a non-negative integer"]
-    return []
-
-
-def _current_generated_size_contract_reasons(
-    index: int,
-    artifact: Mapping[str, Any],
-    *,
-    root_path: Path | None,
-    project_output_path: Path | None,
-) -> list[str]:
-    if (
-        root_path is None
-        or project_output_path is None
-        or artifact.get("status") != "translated"
-    ):
-        return []
-
-    path = artifact.get("path")
-    if not _is_non_empty_string(path) or not _is_report_identity_path(path):
-        return []
-
-    artifact_path = (root_path / path).resolve()
-    if not _is_relative_to(artifact_path, project_output_path):
-        return []
-    if not artifact_path.exists() or not artifact_path.is_file():
-        return []
-
-    generated_hash = artifact.get("generatedHash")
-    if not isinstance(generated_hash, Mapping):
-        return []
-    if not _hash_matches_report(_source_hash(artifact_path), generated_hash):
-        return []
-
-    generated_size = artifact.get("generatedSizeBytes")
-    if not _is_non_negative_int(generated_size):
-        return []
-    if generated_size != artifact_path.stat().st_size:
-        return [
-            f"artifacts[{index}].generatedSizeBytes must match "
-            "the current generated artifact"
-        ]
     return []
 
 
@@ -10570,12 +10577,14 @@ def _validation_artifact_status_matches_record(artifact: Mapping[str, Any]) -> b
         return status == "failed"
     source_hash_status = artifact.get("sourceHashStatus", "not-recorded")
     generated_hash_status = artifact.get("generatedHashStatus", "not-recorded")
+    generated_size_status = artifact.get("generatedSizeStatus", "not-recorded")
     source_map_status = artifact.get("sourceMapStatus", "ok")
     source_remap_status = artifact.get("sourceRemapStatus", "ok")
     expected_status = (
         "ok"
         if source_hash_status in {"ok", "not-recorded"}
         and generated_hash_status in {"ok", "not-recorded"}
+        and generated_size_status in {"ok", "not-recorded"}
         and source_map_status in {"ok", "not-applicable", "not-recorded"}
         and source_remap_status in {"ok", "not-applicable", "not-recorded"}
         else "failed"
@@ -10700,6 +10709,20 @@ def _validation_artifact_contract_reasons(
             f"{prefix}.generatedHashStatus must be one of "
             f"{', '.join(sorted(GENERATED_HASH_VALIDATION_STATUSES))}"
         )
+    generated_size_status = artifact.get("generatedSizeStatus")
+    if require_status_fields and "generatedSizeStatus" not in artifact:
+        reasons.append(
+            f"{prefix}.generatedSizeStatus must be recorded "
+            "when validation.summary is present"
+        )
+    if (
+        "generatedSizeStatus" in artifact
+        and generated_size_status not in GENERATED_SIZE_VALIDATION_STATUSES
+    ):
+        reasons.append(
+            f"{prefix}.generatedSizeStatus must be one of "
+            f"{', '.join(sorted(GENERATED_SIZE_VALIDATION_STATUSES))}"
+        )
     source_map_status = artifact.get("sourceMapStatus")
     if require_status_fields and "sourceMapStatus" not in artifact:
         reasons.append(
@@ -10734,6 +10757,7 @@ def _validation_artifact_contract_reasons(
     ):
         for field_name, value in (
             ("generatedHashStatus", generated_hash_status),
+            ("generatedSizeStatus", generated_size_status),
             ("sourceMapStatus", source_map_status),
             ("sourceRemapStatus", source_remap_status),
         ):
@@ -10754,6 +10778,10 @@ def _validation_artifact_contract_reasons(
             or generated_hash_status in GENERATED_HASH_VALIDATION_STATUSES
         )
         and (
+            "generatedSizeStatus" not in artifact
+            or generated_size_status in GENERATED_SIZE_VALIDATION_STATUSES
+        )
+        and (
             "sourceMapStatus" not in artifact
             or source_map_status in SOURCE_MAP_VALIDATION_STATUSES
         )
@@ -10764,7 +10792,7 @@ def _validation_artifact_contract_reasons(
         and not _validation_artifact_status_matches_record(artifact)
     ):
         reasons.append(
-            f"{prefix}.status must match exists, hash statuses, and provenance statuses"
+            f"{prefix}.status must match exists, hash, size, and provenance statuses"
         )
     if (
         status == "ok"
@@ -10806,6 +10834,7 @@ def _validation_summary_contract_reasons(
     for field_name in (
         "sourceHashStatusCounts",
         "generatedHashStatusCounts",
+        "generatedSizeStatusCounts",
         "sourceMapStatusCounts",
         "sourceRemapStatusCounts",
     ):
@@ -12757,14 +12786,6 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     index,
                     artifact,
                     required=has_summary and status == "translated",
-                )
-            )
-            reasons.extend(
-                _current_generated_size_contract_reasons(
-                    index,
-                    artifact,
-                    root_path=root_path,
-                    project_output_path=project_output_path,
                 )
             )
             reasons.extend(

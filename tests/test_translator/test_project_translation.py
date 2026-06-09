@@ -85,6 +85,19 @@ def _generated_hash_status_counts(**overrides):
     return counts
 
 
+def _generated_size_status_counts(**overrides):
+    counts = {
+        "missing": 0,
+        "mismatch": 0,
+        "not-applicable": 0,
+        "not-recorded": 0,
+        "ok": 0,
+        "outside-project": 0,
+    }
+    counts.update(overrides)
+    return counts
+
+
 def _source_map_status_counts(**overrides):
     counts = {
         "mismatch": 0,
@@ -4222,6 +4235,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
             "sourceRemapStatus": "not-recorded",
             "variant": "debug",
@@ -4235,6 +4249,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
             "sourceRemapStatus": "not-recorded",
             "variant": "release",
@@ -4249,6 +4264,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=2),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=2),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=2),
         "sourceMapStatusCounts": _source_map_status_counts(ok=2),
         "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 2}),
     }
@@ -6077,6 +6093,7 @@ def test_validate_project_report_allows_scan_reports_without_artifacts(tmp_path)
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(),
         "generatedHashStatusCounts": _generated_hash_status_counts(),
+        "generatedSizeStatusCounts": _generated_size_status_counts(),
         "sourceMapStatusCounts": _source_map_status_counts(),
         "sourceRemapStatusCounts": _source_remap_status_counts(),
     }
@@ -8303,6 +8320,7 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
             "sourceRemapStatus": "ok",
         }
@@ -8313,6 +8331,7 @@ def test_validate_project_report_accepts_generated_source_maps(tmp_path):
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
@@ -8375,6 +8394,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
         "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
     }
@@ -8449,6 +8469,7 @@ def test_validate_project_report_emits_closed_validation_report_schema(tmp_path)
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
@@ -8458,6 +8479,7 @@ def test_validate_project_report_emits_closed_validation_report_schema(tmp_path)
     assert payload["artifactStatusByVariant"] == {}
     assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(ok=1)
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(ok=1)
+    assert payload["generatedSizeStatusCounts"] == _generated_size_status_counts(ok=1)
     assert payload["sourceMapStatusCounts"] == _source_map_status_counts(ok=1)
     assert payload["sourceRemapStatusCounts"] == _source_remap_status_counts(ok=1)
     assert payload["toolchainStatusCounts"] == {
@@ -8488,10 +8510,11 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     payload = validate_project_report(report_path)
 
     assert payload["success"] is False
-    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 2}
     assert payload["validation"]["artifacts"][0]["status"] == "failed"
     assert payload["validation"]["artifacts"][0]["sourceHashStatus"] == "ok"
     assert payload["validation"]["artifacts"][0]["generatedHashStatus"] == "mismatch"
+    assert payload["validation"]["artifacts"][0]["generatedSizeStatus"] == "mismatch"
     assert payload["validation"]["artifacts"][0]["sourceMapStatus"] == "not-checked"
     assert payload["validation"]["artifacts"][0]["sourceRemapStatus"] == "ok"
     assert payload["validation"]["summary"] == {
@@ -8500,11 +8523,20 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(mismatch=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(mismatch=1),
         "sourceMapStatusCounts": _source_map_status_counts(**{"not-checked": 1}),
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.validate.generated-hash-mismatch"
+    diagnostic_codes = {diagnostic["code"] for diagnostic in payload["diagnostics"]}
+    assert diagnostic_codes == {
+        "project.validate.generated-hash-mismatch",
+        "project.validate.generated-size-mismatch",
+    }
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.validate.generated-hash-mismatch"
+    )
     assert diagnostic["location"]["file"] == "simple.cgl"
     assert diagnostic["target"] == "cgl"
     assert diagnostic["sourceBackend"] == "cgl"
@@ -8585,6 +8617,7 @@ def test_validate_project_report_groups_artifact_status_by_source_backend(tmp_pa
             "status": "ok",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "not-recorded",
+            "generatedSizeStatus": "not-recorded",
             "sourceMapStatus": "not-recorded",
             "sourceRemapStatus": "not-recorded",
         },
@@ -8597,6 +8630,7 @@ def test_validate_project_report_groups_artifact_status_by_source_backend(tmp_pa
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "missing",
+            "generatedSizeStatus": "missing",
             "sourceMapStatus": "not-recorded",
             "sourceRemapStatus": "not-recorded",
         },
@@ -8635,6 +8669,7 @@ def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(mismatch=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(**{"not-checked": 1}),
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
@@ -8671,6 +8706,7 @@ def test_validate_project_report_detects_missing_source_artifacts(tmp_path):
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(missing=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(**{"not-checked": 1}),
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
@@ -8855,6 +8891,7 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
             "status": "ok",
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
             "sourceRemapStatus": "not-recorded",
         }
@@ -8865,6 +8902,7 @@ def test_translate_project_validation_records_artifacts_and_toolchains(tmp_path)
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
         "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
     }
@@ -10139,12 +10177,19 @@ def test_validate_project_report_rejects_artifact_generated_size_mismatches_curr
     validation = validate_project_report(report_path)
 
     assert validation["success"] is False
-    diagnostic = validation["diagnostics"][0]
-    assert diagnostic["code"] == "project.validate.invalid-report"
-    assert (
-        "artifacts[0].generatedSizeBytes must match the current generated artifact"
-        in diagnostic["message"]
+    assert validation["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert validation["validation"]["artifacts"][0]["status"] == "failed"
+    assert validation["validation"]["artifacts"][0]["generatedHashStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["generatedSizeStatus"] == "mismatch"
+    assert validation["validation"]["summary"]["generatedSizeStatusCounts"] == (
+        _generated_size_status_counts(mismatch=1)
     )
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.generated-size-mismatch"
+    assert diagnostic["location"]["file"] == "simple.cgl"
+    assert diagnostic["target"] == "cgl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
 
 
 def test_translate_project_preserves_discovered_unit_source_metadata(tmp_path):
@@ -10491,6 +10536,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                             "sourceBackend": "",
                             "sourceHashStatus": "ready",
                             "generatedHashStatus": "ready",
+                            "generatedSizeStatus": "ready",
                             "sourceMapStatus": "ready",
                             "sourceRemapStatus": "ready",
                         },
@@ -10502,6 +10548,7 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
                         "failedCount": 0,
                         "sourceHashStatusCounts": {"ok": 2},
                         "generatedHashStatusCounts": [],
+                        "generatedSizeStatusCounts": [],
                     },
                     "toolchainRuns": [
                         {
@@ -10583,6 +10630,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
     assert "validation.artifacts[0].generatedHashStatus must be one of" in (
         diagnostic["message"]
     )
+    assert "validation.artifacts[0].generatedSizeStatus must be one of" in (
+        diagnostic["message"]
+    )
     assert "validation.artifacts[0].sourceMapStatus must be one of" in (
         diagnostic["message"]
     )
@@ -10601,6 +10651,9 @@ def test_validate_project_report_rejects_malformed_generator_and_validation_reco
         in diagnostic["message"]
     )
     assert "validation.summary.generatedHashStatusCounts must be an object" in (
+        diagnostic["message"]
+    )
+    assert "validation.summary.generatedSizeStatusCounts must be an object" in (
         diagnostic["message"]
     )
     assert "validation.toolchainRuns[0].source must be a string" in (
@@ -11177,11 +11230,11 @@ def test_validate_project_report_rejects_inconsistent_validation_artifact_status
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.artifacts[0].status must match exists, hash statuses, "
+        "validation.artifacts[0].status must match exists, hash, size, "
         "and provenance statuses" in diagnostic["message"]
     )
     assert (
-        "validation.artifacts[1].status must match exists, hash statuses, "
+        "validation.artifacts[1].status must match exists, hash, size, "
         "and provenance statuses" in diagnostic["message"]
     )
 
@@ -11197,6 +11250,7 @@ def test_validate_project_report_rejects_summarized_validation_without_status_fi
     validation_artifact = payload["validation"]["artifacts"][0]
     validation_artifact.pop("sourceHashStatus")
     validation_artifact.pop("generatedHashStatus")
+    validation_artifact.pop("generatedSizeStatus")
     validation_artifact.pop("sourceMapStatus")
     validation_artifact.pop("sourceRemapStatus")
     payload["validation"]["summary"][
@@ -11205,6 +11259,9 @@ def test_validate_project_report_rejects_summarized_validation_without_status_fi
     payload["validation"]["summary"][
         "generatedHashStatusCounts"
     ] = _generated_hash_status_counts()
+    payload["validation"]["summary"][
+        "generatedSizeStatusCounts"
+    ] = _generated_size_status_counts()
     payload["validation"]["summary"][
         "sourceMapStatusCounts"
     ] = _source_map_status_counts()
@@ -11226,6 +11283,10 @@ def test_validate_project_report_rejects_summarized_validation_without_status_fi
     ) in diagnostic["message"]
     assert (
         "validation.artifacts[0].generatedHashStatus must be recorded "
+        "when validation.summary is present"
+    ) in diagnostic["message"]
+    assert (
+        "validation.artifacts[0].generatedSizeStatus must be recorded "
         "when validation.summary is present"
     ) in diagnostic["message"]
     assert (
@@ -11330,6 +11391,7 @@ def test_validate_project_report_rejects_validation_status_metadata_for_failed_r
                             "status": "failed",
                             "sourceHashStatus": "not-recorded",
                             "generatedHashStatus": "ok",
+                            "generatedSizeStatus": "ok",
                             "sourceMapStatus": "ok",
                             "sourceRemapStatus": "not-recorded",
                         }
@@ -11348,6 +11410,10 @@ def test_validate_project_report_rejects_validation_status_metadata_for_failed_r
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "validation.artifacts[0].generatedHashStatus must be not-applicable "
+        "when report.artifacts[0].status is failed"
+    ) in diagnostic["message"]
+    assert (
+        "validation.artifacts[0].generatedSizeStatus must be not-applicable "
         "when report.artifacts[0].status is failed"
     ) in diagnostic["message"]
     assert (
@@ -11749,6 +11815,7 @@ def test_validate_project_report_rejects_validation_summary_missing_artifact_che
                         "failedCount": 0,
                         "sourceHashStatusCounts": _source_hash_status_counts(),
                         "generatedHashStatusCounts": _generated_hash_status_counts(),
+                        "generatedSizeStatusCounts": _generated_size_status_counts(),
                         "sourceMapStatusCounts": _source_map_status_counts(),
                         "sourceRemapStatusCounts": _source_remap_status_counts(),
                     },
@@ -11885,6 +11952,7 @@ def test_validate_project_report_rejects_duplicate_validation_record_identities(
         "failedCount": 0,
         "sourceHashStatusCounts": {"ok": 2},
         "generatedHashStatusCounts": {"ok": 2},
+        "generatedSizeStatusCounts": {"ok": 2},
         "sourceMapStatusCounts": {"ok": 2},
         "sourceRemapStatusCounts": {"not-recorded": 2},
     }
@@ -11950,6 +12018,7 @@ def test_validate_project_report_accepts_legacy_validation_without_summary(tmp_p
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(),
         "generatedHashStatusCounts": _generated_hash_status_counts(),
+        "generatedSizeStatusCounts": _generated_size_status_counts(),
         "sourceMapStatusCounts": _source_map_status_counts(),
         "sourceRemapStatusCounts": _source_remap_status_counts(),
     }
@@ -15744,6 +15813,7 @@ def test_validate_project_report_records_toolchain_failures(
             "exists": True,
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "not-recorded",
+            "generatedSizeStatus": "not-recorded",
             "sourceMapStatus": "not-recorded",
             "sourceRemapStatus": "not-recorded",
         }
@@ -15813,8 +15883,8 @@ def test_validate_project_report_records_toolchain_failures(
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
         "(status=ok, exists=true, sourceHash=not-recorded, "
-        "generatedHash=not-recorded, sourceMap=not-recorded, "
-        "sourceRemap=not-recorded)"
+        "generatedHash=not-recorded, generatedSize=not-recorded, "
+        "sourceMap=not-recorded, sourceRemap=not-recorded)"
     ) in stdout
     assert "Validation toolchain run samples:" in stdout
     assert (
@@ -16241,6 +16311,7 @@ def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "missing",
+            "generatedSizeStatus": "missing",
             "sourceMapStatus": "not-recorded",
             "sourceRemapStatus": "not-recorded",
         }
@@ -16251,6 +16322,7 @@ def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts(
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(**{"not-recorded": 1}),
         "generatedHashStatusCounts": _generated_hash_status_counts(missing=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(missing=1),
         "sourceMapStatusCounts": _source_map_status_counts(**{"not-recorded": 1}),
         "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-recorded": 1}),
     }
@@ -16301,6 +16373,7 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "not-applicable",
+            "generatedSizeStatus": "not-applicable",
             "sourceMapStatus": "not-applicable",
             "sourceRemapStatus": "not-applicable",
         }
@@ -16313,6 +16386,9 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
         "generatedHashStatusCounts": _generated_hash_status_counts(
             **{"not-applicable": 1}
         ),
+        "generatedSizeStatusCounts": _generated_size_status_counts(
+            **{"not-applicable": 1}
+        ),
         "sourceMapStatusCounts": _source_map_status_counts(**{"not-applicable": 1}),
         "sourceRemapStatusCounts": _source_remap_status_counts(**{"not-applicable": 1}),
     }
@@ -16323,6 +16399,9 @@ def test_validate_project_report_records_failed_artifacts(tmp_path):
         **{"not-recorded": 1}
     )
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(
+        **{"not-applicable": 1}
+    )
+    assert payload["generatedSizeStatusCounts"] == _generated_size_status_counts(
         **{"not-applicable": 1}
     )
     assert payload["sourceMapStatusCounts"] == _source_map_status_counts(
@@ -16473,6 +16552,7 @@ def test_validate_project_report_rejects_artifacts_outside_project(
             "status": "failed",
             "sourceHashStatus": "not-recorded",
             "generatedHashStatus": "outside-project",
+            "generatedSizeStatus": "outside-project",
             "sourceMapStatus": "not-recorded",
             "sourceRemapStatus": "not-recorded",
         }
@@ -16483,6 +16563,9 @@ def test_validate_project_report_rejects_artifacts_outside_project(
         "failedCount": 1,
         "sourceHashStatusCounts": _source_hash_status_counts(**{"not-recorded": 1}),
         "generatedHashStatusCounts": _generated_hash_status_counts(
+            **{"outside-project": 1}
+        ),
+        "generatedSizeStatusCounts": _generated_size_status_counts(
             **{"outside-project": 1}
         ),
         "sourceMapStatusCounts": _source_map_status_counts(**{"not-recorded": 1}),
@@ -17986,6 +18069,9 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(
         **{"not-applicable": 1}
     )
+    assert payload["generatedSizeStatusCounts"] == _generated_size_status_counts(
+        **{"not-applicable": 1}
+    )
     assert payload["diagnostics"][0]["code"] == "project.validate.failed-artifact"
 
     text_result = subprocess.run(
@@ -18583,6 +18669,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["validation"]["generatedHashStatusCounts"] == (
         _generated_hash_status_counts(ok=1)
     )
+    assert payload["validation"]["generatedSizeStatusCounts"] == (
+        _generated_size_status_counts(ok=1)
+    )
     assert payload["validation"]["sourceMapStatusCounts"] == (
         _source_map_status_counts(ok=1)
     )
@@ -18615,6 +18704,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             "exists": True,
             "sourceHashStatus": "ok",
             "generatedHashStatus": "ok",
+            "generatedSizeStatus": "ok",
             "sourceMapStatus": "ok",
             "sourceRemapStatus": "ok",
         }
@@ -18628,6 +18718,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "failedCount": 0,
         "sourceHashStatusCounts": _source_hash_status_counts(ok=1),
         "generatedHashStatusCounts": _generated_hash_status_counts(ok=1),
+        "generatedSizeStatusCounts": _generated_size_status_counts(ok=1),
         "sourceMapStatusCounts": _source_map_status_counts(ok=1),
         "sourceRemapStatusCounts": _source_remap_status_counts(ok=1),
     }
@@ -19602,6 +19693,7 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
     assert release_provenance["exists"] is True
     assert release_provenance["sourceHashStatus"] == "ok"
     assert release_provenance["generatedHashStatus"] == "mismatch"
+    assert release_provenance["generatedSizeStatus"] == "mismatch"
     assert release_provenance["sourceMapStatus"] == "not-checked"
     assert release_provenance["sourceRemapStatus"] == "ok"
     debug_provenance = next(
@@ -19620,6 +19712,7 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
             "exists": True,
             "sourceHashStatus": "ok",
             "generatedHashStatus": "mismatch",
+            "generatedSizeStatus": "mismatch",
             "sourceMapStatus": "not-checked",
             "sourceRemapStatus": "ok",
             "validationStatus": "failed",
@@ -19633,13 +19726,14 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
     assert (
         "- simple.cgl -> cgl (variant: release) at "
         "out/cgl/release/simple.cgl: validation failed "
-        "(generated hash: mismatch; source map: not-checked)"
+        "(generated hash: mismatch; generated size: mismatch; "
+        "source map: not-checked)"
     ) in result.stdout
     assert "Artifact provenance samples:" in result.stdout
     assert (
         "validation=failed, exists=true, sourceHashStatus=ok, "
-        "generatedHashStatus=mismatch, sourceMapStatus=not-checked, "
-        "sourceRemapStatus=ok"
+        "generatedHashStatus=mismatch, generatedSizeStatus=mismatch, "
+        "sourceMapStatus=not-checked, sourceRemapStatus=ok"
     ) in result.stdout
     assert validation_text.returncode == 1
     assert (
@@ -20162,7 +20256,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl "
         "(status=ok, exists=true, sourceHash=ok, generatedHash=ok, "
-        "sourceMap=ok, sourceRemap=ok)"
+        "generatedSize=ok, sourceMap=ok, sourceRemap=ok)"
     ) in result.stdout
 
 
@@ -20793,6 +20887,7 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
             "exists": True,
             "sourceHashStatus": "ok",
             "generatedHashStatus": "mismatch",
+            "generatedSizeStatus": "mismatch",
             "sourceMapStatus": "not-checked",
             "sourceRemapStatus": "ok",
             "validationStatus": "failed",
@@ -20813,12 +20908,13 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
         }
     }
     assert payload["validation"]["diagnosticsByCode"] == {
-        "project.validate.generated-hash-mismatch": 1
+        "project.validate.generated-hash-mismatch": 1,
+        "project.validate.generated-size-mismatch": 1,
     }
-    assert payload["validation"]["diagnosticsByTarget"] == {"cgl": 1}
-    assert payload["validation"]["diagnosticsBySourceBackend"] == {"cgl": 1}
+    assert payload["validation"]["diagnosticsByTarget"] == {"cgl": 2}
+    assert payload["validation"]["diagnosticsBySourceBackend"] == {"cgl": 2}
     assert payload["validation"]["diagnosticsByVariant"] == {}
-    assert payload["validation"]["missingCapabilityCounts"] == {"artifact.manifest": 1}
+    assert payload["validation"]["missingCapabilityCounts"] == {"artifact.manifest": 2}
     assert result.returncode == 1
     assert "Validation toolchains: not-configured=1" in result.stdout
     assert "Validation artifacts: 0 ok, 1 failed" in result.stdout
@@ -20831,19 +20927,21 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
         in result.stdout
     )
     assert (
-        "Validation diagnostic codes: project.validate.generated-hash-mismatch=1"
-        in result.stdout
+        "Validation diagnostic codes: project.validate.generated-hash-mismatch=1, "
+        "project.validate.generated-size-mismatch=1" in result.stdout
     )
-    assert "Validation diagnostics by target: cgl=1" in result.stdout
-    assert "Validation diagnostics by source backend: cgl=1" in result.stdout
-    assert "Validation missing capabilities: artifact.manifest=1" in result.stdout
+    assert "Validation diagnostics by target: cgl=2" in result.stdout
+    assert "Validation diagnostics by source backend: cgl=2" in result.stdout
+    assert "Validation missing capabilities: artifact.manifest=2" in result.stdout
     assert "Validation source hashes: ok=1" in result.stdout
     assert "Validation generated hashes: mismatch=1" in result.stdout
+    assert "Validation generated sizes: mismatch=1" in result.stdout
     assert "Validation source maps: not-checked=1" in result.stdout
     assert "Validation source remaps: ok=1" in result.stdout
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl: "
-        "validation failed (generated hash: mismatch; source map: not-checked)"
+        "validation failed (generated hash: mismatch; generated size: mismatch; "
+        "source map: not-checked)"
     ) in result.stdout
     assert "project.validate.generated-hash-mismatch" in result.stdout
 

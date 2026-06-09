@@ -724,6 +724,11 @@ def _format_project_validation_report(payload):
             include_zero=False,
         ),
         _format_count_rollup(
+            "Validation generated sizes",
+            payload.get("generatedSizeStatusCounts"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
             "Validation source maps",
             payload.get("sourceMapStatusCounts"),
             include_zero=False,
@@ -1534,6 +1539,9 @@ def _format_artifact_provenance_line(artifact):
     generated_hash_status = artifact.get("generatedHashStatus")
     if isinstance(generated_hash_status, str) and generated_hash_status:
         details.append(f"generatedHashStatus={generated_hash_status}")
+    generated_size_status = artifact.get("generatedSizeStatus")
+    if isinstance(generated_size_status, str) and generated_size_status:
+        details.append(f"generatedSizeStatus={generated_size_status}")
     source_map_status = artifact.get("sourceMapStatus")
     if isinstance(source_map_status, str) and source_map_status:
         details.append(f"sourceMapStatus={source_map_status}")
@@ -1767,6 +1775,9 @@ def _format_validation_artifact_sample_line(artifact):
     generated_hash = artifact.get("generatedHashStatus")
     if isinstance(generated_hash, str) and generated_hash:
         details.append(f"generatedHash={generated_hash}")
+    generated_size = artifact.get("generatedSizeStatus")
+    if isinstance(generated_size, str) and generated_size:
+        details.append(f"generatedSize={generated_size}")
     source_map = artifact.get("sourceMapStatus")
     if isinstance(source_map, str) and source_map:
         details.append(f"sourceMap={source_map}")
@@ -3077,6 +3088,13 @@ def _format_project_report_inspection(payload):
         )
         if generated_hashes:
             lines.append(generated_hashes)
+        generated_sizes = _format_count_rollup(
+            "Validation generated sizes",
+            validation_summary.get("generatedSizeStatusCounts"),
+            include_zero=False,
+        )
+        if generated_sizes:
+            lines.append(generated_sizes)
         source_maps = _format_count_rollup(
             "Validation source maps",
             validation_summary.get("sourceMapStatusCounts"),
@@ -3174,6 +3192,7 @@ def _format_project_report_inspection(payload):
                 for field_name, label in (
                     ("sourceHashStatus", "source hash"),
                     ("generatedHashStatus", "generated hash"),
+                    ("generatedSizeStatus", "generated size"),
                     ("sourceMapStatus", "source map"),
                     ("sourceRemapStatus", "source remap"),
                 ):
