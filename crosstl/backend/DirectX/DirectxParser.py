@@ -2326,7 +2326,7 @@ class HLSLParser:
             self.eat("RETURN")
             value = None
             if self.current_token[0] != "SEMICOLON":
-                value = self.parse_expression()
+                value = self.parse_expression(allow_comma=True)
             self.eat("SEMICOLON")
             return self.attach_attributes(ReturnNode(value), attributes)
 
@@ -2403,7 +2403,7 @@ class HLSLParser:
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
-        expr = self.parse_expression()
+        expr = self.parse_expression(allow_comma=True)
         self.eat("SEMICOLON")
         return self.attach_attributes(expr, attributes)
 
@@ -3253,8 +3253,15 @@ class HLSLParser:
         self.eat("RBRACE")
         return body, cases, default_body
 
-    def parse_expression(self):
-        return self.parse_assignment_expression()
+    def parse_expression(self, allow_comma=False):
+        expr = self.parse_assignment_expression()
+        if allow_comma:
+            while self.current_token[0] == "COMMA":
+                op = self.current_token[1]
+                self.eat("COMMA")
+                right = self.parse_assignment_expression()
+                expr = BinaryOpNode(expr, op, right)
+        return expr
 
     def parse_assignment_expression(self):
         left = self.parse_conditional_expression()

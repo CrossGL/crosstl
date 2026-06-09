@@ -54,6 +54,7 @@ DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
 DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_MATRIX_COMMA_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SDK_SAMPLES_REWORKED_REPO = (
     "https://github.com/walbourn/directx-sdk-samples-reworked"
 )
@@ -706,6 +707,27 @@ EXTERNAL_FIXTURES = [
             "static const vec4 b = (2).xxxx;",
             "static const ivec4 c = (3.5).xxxx;",
             "return (a + b) + c;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_matrix_comma_expression",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_MATRIX_COMMA_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/matrix/matrix_comma.hlsl",
+        code=textwrap.dedent("""
+            float4 vecret(float2x2 pmat : M, float4 pvec : V) : SV_Target {
+              return pmat , pvec;
+            }
+
+            export
+            float2x2 matret(float2x2 pmat : M, float4 pvec : V) {
+              return pmat;
+            }
+        """).strip(),
+        contains=(
+            "vec4 vecret(mat2 pmat @ M, vec4 pvec @ V) @ gl_FragColor",
+            "return pmat , pvec;",
+            "mat2 matret(mat2 pmat @ M, vec4 pvec @ V)",
         ),
     ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler
