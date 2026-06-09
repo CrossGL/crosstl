@@ -809,6 +809,10 @@ def test_project_macro_variants_document_artifact_define_maps():
             "active #define or #undef directives in translation units or resolved "
             "include files shadow configured project or selected variant define names"
         ) in backend_support["notes"]
+        assert (
+            "active #error and #warning directives scoped by project and "
+            "selected variant conditionals"
+        ) in backend_support["notes"]
         assert "ignoring block-commented directives" in backend_support["notes"]
         assert (
             "inspection summaries and text output expose variant names, "

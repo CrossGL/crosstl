@@ -557,6 +557,9 @@ INCLUDE_CONDITION_TOKEN_RE = re.compile(
 DEFINE_DIRECTIVE_RE = re.compile(
     r"^\s*#\s*(?P<directive>define|undef)\s+" r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
 )
+PREPROCESSOR_DIAGNOSTIC_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*(?P<directive>error|warning)\b(?P<body>.*?)\s*$"
+)
 REPORT_PATH_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -2641,6 +2644,76 @@ def _scan_define_shadowing_lines(
     return diagnostics
 
 
+def _preprocessor_diagnostic(
+    *,
+    relative_path: str,
+    line_number: int,
+    column: int,
+    directive: str,
+    message: str,
+) -> ProjectDiagnostic:
+    severity = "error" if directive == "error" else "warning"
+    code = f"project.scan.preprocessor-{directive}"
+    rendered_message = message or "(no message)"
+    return ProjectDiagnostic(
+        severity=severity,
+        code=code,
+        message=(
+            f"Active preprocessor #{directive} directive in "
+            f"{relative_path}:{line_number}: {rendered_message}"
+        ),
+        location=SourceLocation(
+            file=relative_path,
+            line=line_number,
+            column=column,
+            end_line=line_number,
+            end_column=column,
+        ),
+    )
+
+
+def _scan_preprocessor_diagnostic_lines(
+    config: ProjectConfig,
+    lines: Sequence[str],
+    relative_path: str,
+    *,
+    seen: set[tuple[str, int, str, str]],
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    conditional_stack: list[_IncludeConditionalFrame] = []
+    for line_number, line in enumerate(lines, start=1):
+        conditional = INCLUDE_CONDITIONAL_DIRECTIVE_RE.match(line)
+        if conditional:
+            _apply_include_conditional_directive(
+                config,
+                conditional_stack,
+                conditional.group("directive"),
+                conditional.group("body"),
+            )
+            continue
+        if not _include_conditionals_active(conditional_stack):
+            continue
+        directive_match = PREPROCESSOR_DIAGNOSTIC_DIRECTIVE_RE.match(line)
+        if not directive_match:
+            continue
+        directive = directive_match.group("directive")
+        message = _strip_preprocessor_line_comment(directive_match.group("body"))
+        key = (relative_path, line_number, directive, message)
+        if key in seen:
+            continue
+        seen.add(key)
+        diagnostics.append(
+            _preprocessor_diagnostic(
+                relative_path=relative_path,
+                line_number=line_number,
+                column=max(1, line.find("#") + 1),
+                directive=directive,
+                message=message,
+            )
+        )
+    return diagnostics
+
+
 def _include_conditionals_active(stack: Sequence[_IncludeConditionalFrame]) -> bool:
     return all(frame.branch_active for frame in stack)
 
@@ -2825,6 +2898,7 @@ def _scan_resolved_include_dependencies(
     include_stack: tuple[str, ...],
     scanned_sources: set[str],
     define_shadowing_seen: set[tuple[str, int, str, str]],
+    preprocessor_seen: set[tuple[str, int, str, str]],
     diagnostic_config: ProjectConfig,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
@@ -2847,6 +2921,7 @@ def _scan_resolved_include_dependencies(
         include_stack=(*include_stack, resolved_path),
         scanned_sources=scanned_sources,
         define_shadowing_seen=define_shadowing_seen,
+        preprocessor_seen=preprocessor_seen,
         diagnostic_config=diagnostic_config,
         variant=variant,
     )
@@ -2861,6 +2936,7 @@ def _scan_include_dependencies_for_source(
     include_stack: tuple[str, ...],
     scanned_sources: set[str],
     define_shadowing_seen: set[tuple[str, int, str, str]],
+    preprocessor_seen: set[tuple[str, int, str, str]],
     diagnostic_config: ProjectConfig,
     variant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[ProjectDiagnostic]]:
@@ -2893,6 +2969,14 @@ def _scan_include_dependencies_for_source(
             source_relative_path,
             seen=define_shadowing_seen,
             diagnostic_config=diagnostic_config,
+        )
+    )
+    diagnostics.extend(
+        _scan_preprocessor_diagnostic_lines(
+            config,
+            scan_lines,
+            source_relative_path,
+            seen=preprocessor_seen,
         )
     )
 
@@ -2973,6 +3057,7 @@ def _scan_include_dependencies_for_source(
                             include_stack=include_stack,
                             scanned_sources=scanned_sources,
                             define_shadowing_seen=define_shadowing_seen,
+                            preprocessor_seen=preprocessor_seen,
                             diagnostic_config=diagnostic_config,
                             variant=variant,
                         )
@@ -3052,6 +3137,7 @@ def _scan_include_dependencies_for_source(
                     include_stack=include_stack,
                     scanned_sources=scanned_sources,
                     define_shadowing_seen=define_shadowing_seen,
+                    preprocessor_seen=preprocessor_seen,
                     diagnostic_config=diagnostic_config,
                     variant=variant,
                 )
@@ -3068,6 +3154,7 @@ def _scan_include_dependencies(
     dependencies: list[dict[str, Any]] = []
     diagnostics: list[ProjectDiagnostic] = []
     define_shadowing_seen: set[tuple[str, int, str, str]] = set()
+    preprocessor_seen: set[tuple[str, int, str, str]] = set()
     for variant, defines in _variant_jobs(config):
         scan_config = (
             replace(config, defines=defines) if variant is not None else config
@@ -3081,6 +3168,7 @@ def _scan_include_dependencies(
                 include_stack=(relative_path,),
                 scanned_sources=set(),
                 define_shadowing_seen=define_shadowing_seen,
+                preprocessor_seen=preprocessor_seen,
                 diagnostic_config=config,
                 variant=variant,
             )

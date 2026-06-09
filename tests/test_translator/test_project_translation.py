@@ -1830,6 +1830,115 @@ def test_scan_project_scopes_define_shadowing_to_selected_variants(tmp_path):
     assert payload["summary"]["missingCapabilityCounts"] == {}
 
 
+def test_scan_project_reports_active_preprocessor_diagnostics_by_variant(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #version 450
+            #if defined(DEBUG_MODE)
+            #warning debug path enabled // local comment
+            #else
+            #error release path blocked
+            #endif
+            /* #error block commented */
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.variants.debug]
+            DEBUG_MODE = "1"
+
+            [project.variants.release]
+            RELEASE_MODE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    debug_payload = (
+        scan_project(load_project_config(repo), variants=["debug"])
+        .to_report(targets=["cgl"])
+        .to_json()
+    )
+    release_payload = (
+        scan_project(load_project_config(repo), variants=["release"])
+        .to_report(targets=["cgl"])
+        .to_json()
+    )
+
+    assert debug_payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert debug_payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.preprocessor-warning": 1
+    }
+    assert debug_payload["summary"]["missingCapabilityCounts"] == {}
+    debug_diagnostic = debug_payload["diagnostics"][0]
+    assert debug_diagnostic["code"] == "project.scan.preprocessor-warning"
+    assert "debug path enabled" in debug_diagnostic["message"]
+    assert "local comment" not in debug_diagnostic["message"]
+    assert debug_diagnostic["location"]["file"] == "shaders/main.frag"
+    assert debug_diagnostic["location"]["line"] == 3
+
+    assert release_payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert release_payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.preprocessor-error": 1
+    }
+    release_diagnostic = release_payload["diagnostics"][0]
+    assert release_diagnostic["code"] == "project.scan.preprocessor-error"
+    assert "release path blocked" in release_diagnostic["message"]
+    assert "block commented" not in json.dumps(release_payload["diagnostics"])
+    assert release_diagnostic["location"]["line"] == 5
+
+
+def test_scan_project_reports_preprocessor_diagnostics_from_resolved_includes(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "material.inc").write_text(
+        textwrap.dedent("""
+            #ifndef DISABLE_MATERIAL_WARNING
+            #warning material include requires review
+            #endif
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "material.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.scan.preprocessor-warning": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "shaders/material.inc"
+    assert diagnostic["location"]["line"] == 2
+    assert "material include requires review" in diagnostic["message"]
+    assert [
+        (dependency["include"], dependency["status"])
+        for dependency in payload["units"][0]["includeDependencies"]
+    ] == [("material.inc", "resolved")]
+
+
 def test_scan_project_keeps_includes_for_unsupported_conditional_expressions(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

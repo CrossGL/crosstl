@@ -363,6 +363,10 @@ define maps that were not requested or could not be consumed by that frontend.
 When configured defines cannot be forwarded, translation reports emit a
 non-blocking warning diagnostic with a missing-capability rollup so the
 limitation appears in validation and inspection summaries.
+Scan reports also emit diagnostics for active ``#error`` and ``#warning``
+directives after evaluating project and selected variant conditionals. Active
+``#error`` directives are reported as errors, while active ``#warning``
+directives are reported as warnings.
 Scan reports also emit non-blocking warning diagnostics when active
 ``#define`` or ``#undef`` directives in translation units or resolved include
 files shadow configured project or selected variant define names. The
