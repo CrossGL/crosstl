@@ -260,8 +260,9 @@ Report inspection includes inspection identity, SARIF invocation metadata, and
 source report schema/kind metadata, source report generation metadata,
 validation status,
 invalid/unavailable report status, project counts, project configuration path,
-project root, output directory, and configuration counts, failed artifacts with
-variant labels when present, diagnostic code and missing-capability rollups,
+project root, output directory, configuration counts, normalized source-root,
+include-pattern, exclude-pattern, and include-directory lists, failed artifacts
+with variant labels when present, diagnostic code and missing-capability rollups,
 validation diagnostic-code, missing-capability, artifact target,
 artifact source-backend, artifact variant, hash-status, source-map status,
 source-remap status, toolchain status, and toolchain-run target,

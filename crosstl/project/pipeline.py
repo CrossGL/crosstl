@@ -6667,6 +6667,15 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     config_hash = project.get("configHash")
     if isinstance(config_hash, Mapping):
         summary["configHash"] = dict(config_hash)
+    for field_name in (
+        "sourceRoots",
+        "includePatterns",
+        "excludePatterns",
+        "includeDirs",
+    ):
+        values = project.get(field_name)
+        if isinstance(values, list):
+            summary[field_name] = [value for value in values if isinstance(value, str)]
     defines = project.get("defines")
     if isinstance(defines, Mapping):
         define_names = _inspection_define_names(defines)

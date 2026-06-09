@@ -1040,6 +1040,28 @@ def _format_project_config_counts(project):
     return "Project config: " + ", ".join(entries)
 
 
+def _format_project_string_list(project, label, field_name):
+    if not isinstance(project, Mapping):
+        return None
+
+    values = project.get(field_name)
+    if not isinstance(values, list):
+        return None
+
+    entries = [value for value in values if isinstance(value, str) and value]
+    if not entries:
+        return None
+    return f"{label}: " + ", ".join(entries)
+
+
+def _format_project_source_roots(project):
+    return _format_project_string_list(project, "Project source roots", "sourceRoots")
+
+
+def _format_project_include_dirs(project):
+    return _format_project_string_list(project, "Project include dirs", "includeDirs")
+
+
 def _format_project_variant_names(project):
     if not isinstance(project, Mapping):
         return None
@@ -2602,6 +2624,8 @@ def _format_project_report_inspection(payload):
     lines.append("Targets: " + (", ".join(target_names) if target_names else "(none)"))
     for project_line in (
         _format_project_config_counts(project),
+        _format_project_source_roots(project),
+        _format_project_include_dirs(project),
         _format_project_source_overrides(project),
         _format_project_define_names(project),
         _format_project_define_fingerprint(project),

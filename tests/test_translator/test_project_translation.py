@@ -20322,11 +20322,13 @@ def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp
 def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
+    (repo / "includes").mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
             [project]
             targets = ["cgl"]
+            include_dirs = ["includes"]
 
             [project.sources]
             "*.cgl" = "cgl"
@@ -20400,8 +20402,16 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
     assert (
         "Project config: sourceRoots=1, includePatterns=0, excludePatterns="
         f"{len(project_pipeline.DEFAULT_EXCLUDE_PATTERNS)}, sourceOverrides=1, "
-        "includeDirs=0, defines=1, variants=2" in result.stdout
+        "includeDirs=1, defines=1, variants=2" in result.stdout
     )
+    assert payload["report"]["project"]["sourceRoots"] == ["."]
+    assert payload["report"]["project"]["includePatterns"] == []
+    assert payload["report"]["project"]["excludePatterns"] == list(
+        project_pipeline.DEFAULT_EXCLUDE_PATTERNS
+    )
+    assert payload["report"]["project"]["includeDirs"] == ["includes"]
+    assert "Project source roots: ." in result.stdout
+    assert "Project include dirs: includes" in result.stdout
     assert payload["report"]["project"]["variantNames"] == ["debug", "release"]
     assert payload["report"]["project"]["variantDefineCounts"] == {
         "debug": 1,
