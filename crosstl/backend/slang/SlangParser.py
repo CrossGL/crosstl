@@ -3038,7 +3038,11 @@ class SlangParser:
     def parse_if_statement(self):
         self.eat("IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        if_binding = self.parse_optional_if_binding()
+        if if_binding is not None:
+            condition = VariableNode("", if_binding.left.name)
+        else:
+            condition = self.parse_expression()
         self.eat("RPAREN")
         if_body = self.parse_statement_or_block()
         else_body = None
@@ -3047,7 +3051,29 @@ class SlangParser:
             else_body = self.parse_statement_or_block()
         elif self.current_token[0] == "ELSE_IF":
             else_body = self.parse_else_if_statement()
-        return IfNode(condition, if_body, else_body)
+        node = IfNode(condition, if_body, else_body)
+        if if_binding is not None:
+            node.if_binding = if_binding
+        return node
+
+    def parse_optional_if_binding(self):
+        if not (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.MODERN_VARIABLE_KEYWORDS
+            and self.pos + 2 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+            and self.tokens[self.pos + 2][0] in self.ASSIGNMENT_TOKENS
+        ):
+            return None
+
+        binding_type = self.current_token[1]
+        self.eat("IDENTIFIER")
+        name = self.parse_contextual_identifier()
+        op = self.current_token[1]
+        self.eat(self.current_token[0])
+        return AssignmentNode(
+            VariableNode(binding_type, name), self.parse_expression(), op
+        )
 
     def parse_else_if_statement(self):
         self.eat("ELSE_IF")

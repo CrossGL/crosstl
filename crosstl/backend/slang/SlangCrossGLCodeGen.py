@@ -1266,9 +1266,15 @@ class SlangToCrossGLConverter:
         return code
 
     def generate_if_statement(self, node, indent, is_main, deferred_scopes=None):
+        binding = getattr(node, "if_binding", None)
+        code = ""
+        if binding is not None:
+            code += self.generate_assignment(binding, is_main) + ";\n"
+            code += "    " * indent
+
         condition = self.generate_expression(node.condition, is_main)
 
-        code = f"if ({condition}) {{\n"
+        code += f"if ({condition}) {{\n"
         code += self.generate_function_body(
             node.if_body, indent + 1, is_main, deferred_scopes
         )

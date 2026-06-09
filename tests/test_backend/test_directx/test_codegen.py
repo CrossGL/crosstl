@@ -1845,6 +1845,15 @@ def test_codegen_pre_2018_fixed_width_typedef_names_from_dxc_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_const_incomplete_array_typedef_from_dxc_reparse():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/types/array/incomp_array.hlsl
+    output = generate_crossgl("typedef const int inta[];")
+
+    assert "type inta = [int];" in output
+    parse_crossgl(output)
+
+
 def test_codegen_signedness_prefixed_int1_aliases_from_microsoft_docs_reparse():
     # Sources: Microsoft Learn HLSL vector and scalar type docs.
     # URLs:

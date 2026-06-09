@@ -137,6 +137,16 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/runtime/test_clBuildProgram_macros.cl",
     },
+    "pocl_einstein_nested_mad_initializer": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "examples/EinsteinToolkit/ML_BSSN_CL_RHS2.cl",
+    },
+    "intel_compute_runtime_simple_spill_fill_kernel": {
+        "url": "https://github.com/intel/compute-runtime",
+        "commit": "5d9dec127a943c688c816e345c64a4ee2f99c7e6",
+        "path": "opencl/test/unit_test/test_files/simple_spill_fill_kernel.cl",
+    },
 }
 
 
@@ -836,6 +846,53 @@ def test_external_pocl_private_const_address_space_codegen_reparse():
     assert "array<vec2<i8>>" in crossgl
 
 
+def test_external_pocl_opencl_c_typedef_builtin_alias_name_parses():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_private_const"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    typedef __SIZE_TYPE__ size_t;
+    typedef __PTRDIFF_TYPE__ ptrdiff_t;
+    typedef char char2 __attribute__((ext_vector_type(2))) __attribute__((aligned(2)));
+    """
+
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+
+    assert [stmt.name for stmt in ast.statements] == ["size_t", "ptrdiff_t", "char2"]
+
+
+def test_external_pocl_opencl_c_sync_builtin_declarations_parse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_private_const"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    void barrier(cl_mem_fence_flags flags);
+    void mem_fence(cl_mem_fence_flags flags);
+    int atomic_add(volatile global int *p, int val);
+    void __attribute__((overloadable)) atomic_init(volatile global atomic_int *p,
+                                                  int val);
+    kernel void use_barrier(global int *out) {
+        barrier(CLK_LOCAL_MEM_FENCE);
+        mem_fence(CLK_GLOBAL_MEM_FENCE);
+        out[0] = 1;
+    }
+    """
+
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+
+    assert [stmt.name for stmt in ast.statements[:4]] == [
+        "barrier",
+        "mem_fence",
+        "atomic_add",
+        "atomic_init",
+    ]
+    assert ast.statements[4].name == "use_barrier"
+    assert ast.statements[4].body[0].sync_type == "barrier"
+    assert ast.statements[4].body[1].sync_type == "mem_fence"
+
+
 def test_external_pocl_feature_gated_error_codegen_reparse():
     source_info = EXTERNAL_FIXTURE_SOURCES["pocl_build_program_feature_error"]
     assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
@@ -858,3 +915,58 @@ def test_external_pocl_feature_gated_error_codegen_reparse():
     assert ast.statements[0].name == "kernel_1"
     assert "#error" not in OpenCLLexer(source).code
     assert "fn kernel_1(" in crossgl
+
+
+def test_external_pocl_einstein_nested_mad_initializer_parses():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_einstein_nested_mad_initializer"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "examples/EinsteinToolkit/ML_BSSN_CL_RHS2.cl"
+
+    nested = "x"
+    for index in range(1200):
+        nested = f"mad(x, x, ({nested}))"
+
+    source = f"""
+    kernel void einstein_nested_mad_probe(global double *out, double x) {{
+        double acc = {nested};
+        out[0] = acc;
+    }}
+    """
+
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+
+    assert ast.statements[0].name == "einstein_nested_mad_probe"
+    assert ast.statements[0].body[0].name == "acc"
+
+
+def test_external_compute_runtime_simple_spill_long_sum_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "intel_compute_runtime_simple_spill_fill_kernel"
+    ]
+    assert source_info["commit"] == "5d9dec127a943c688c816e345c64a4ee2f99c7e6"
+    assert (
+        source_info["path"]
+        == "opencl/test/unit_test/test_files/simple_spill_fill_kernel.cl"
+    )
+
+    declarations = "\n".join(
+        f"        int _data{index} = in[get_global_id(0) + offset[{index}]];"
+        for index in range(128)
+    )
+    weighted_sum = " + ".join(f"_data{index} * {index}" for index in range(128))
+    square_sum = " + ".join(f"_data{index} * _data{index}" for index in range(128))
+    source = f"""
+    kernel void spill_test(global const int *in,
+                           global int *out,
+                           global const uint *offset) {{
+{declarations}
+        out[get_global_id(0) * 2] = {weighted_sum};
+        out[get_global_id(0) * 2 + 1] = {square_sum};
+    }}
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "out[(gl_GlobalInvocationID.x * 2)] =" in crossgl
+    assert crossgl.count("_data127") >= 2
+    assert "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((" not in crossgl

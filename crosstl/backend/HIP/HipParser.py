@@ -500,13 +500,17 @@ class HipParser:
             index = self.skip_launch_bounds_at_pos(index)
             index = self.skip_newlines_at_pos(index)
 
-        while index < len(self.tokens) and self.is_identifier_function_specifier_token(
+        while index < len(self.tokens) and self.is_interleaved_function_specifier_token(
             self.tokens[index]
         ):
             index += 1
             index = self.skip_newlines_at_pos(index)
 
-        if self.skip_function_name_at(index) is not None:
+        parameter_list_start = self.skip_function_name_at(index)
+        if (
+            parameter_list_start is not None
+            and self.is_plausible_function_parameter_list_at_pos(parameter_list_start)
+        ):
             return index
 
         return None
@@ -537,6 +541,20 @@ class HipParser:
             "__LAUNCH_BOUNDS__",
             "CONSTEXPR",
         } or self.is_identifier_function_specifier_token(token)
+
+    def is_interleaved_function_specifier_token(self, token=None):
+        token = token or self.current_token
+        return token is not None and (
+            token.type
+            in {
+                "__DEVICE__",
+                "__HOST__",
+                "__GLOBAL__",
+                "__FORCEINLINE__",
+                "__NOINLINE__",
+            }
+            or self.is_identifier_function_specifier_token(token)
+        )
 
     def error(self, message: str):
         token_info = (
@@ -1734,7 +1752,7 @@ class HipParser:
             attributes.append(self.parse_launch_bounds_attribute())
             self.skip_newlines()
 
-        while self.is_identifier_function_specifier_token():
+        while self.is_interleaved_function_specifier_token():
             qualifiers.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
@@ -1806,7 +1824,7 @@ class HipParser:
 
         return_type = self.parse_type()
         self.skip_newlines()
-        while self.is_identifier_function_specifier_token():
+        while self.is_interleaved_function_specifier_token():
             qualifiers.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
@@ -4867,7 +4885,7 @@ class HipParser:
             index = self.skip_newlines_at_pos(index)
             while index < len(
                 self.tokens
-            ) and self.is_identifier_function_specifier_token(self.tokens[index]):
+            ) and self.is_interleaved_function_specifier_token(self.tokens[index]):
                 index += 1
                 index = self.skip_newlines_at_pos(index)
             parameter_list_start = self.skip_function_name_at(index)

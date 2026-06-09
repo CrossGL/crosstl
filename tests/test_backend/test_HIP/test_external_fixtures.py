@@ -250,6 +250,58 @@ def test_external_rocthrust_rocprim_namespace_macros_codegen_reparse():
     assert "ROCPRIM_NAMESPACE" not in crossgl
 
 
+def test_external_rocthrust_static_templated_constructor_declaration_codegen_reparse():
+    # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d,
+    # examples/sum.cu and examples/lexicographical_sort.cu.
+    source = """
+    int my_rand(void)
+    {
+        static thrust::uniform_int_distribution<int> dist(0, 9999);
+        return dist(rng);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+    declaration = function.body[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert declaration.qualifiers == ["static"]
+    assert declaration.vtype == "thrust::uniform_int_distribution<int>"
+    assert declaration.name == "dist"
+    assert isinstance(declaration.value, FunctionCallNode)
+    assert declaration.value.name == "thrust::uniform_int_distribution<int>"
+    assert declaration.value.args == ["0", "9999"]
+    assert (
+        "var dist: thrust::uniform_int_distribution<int> = "
+        "thrust::uniform_int_distribution<int>(0, 9999);" in crossgl
+    )
+
+
+def test_external_rocthrust_return_type_followed_by_hip_qualifiers_codegen_reparse():
+    # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d,
+    # examples/cuda/range_view.cu.
+    source = """
+    template <class Iterator, class Size>
+    range_view<Iterator> __host__ __device__
+    make_range_view(Iterator first, Size n)
+    {
+        return range_view<Iterator>(first, first + n);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+
+    assert isinstance(function, FunctionNode)
+    assert function.return_type == "range_view<Iterator>"
+    assert function.name == "make_range_view"
+    assert function.qualifiers == ["__host__", "__device__"]
+    assert "range_view<Iterator> make_range_view(Iterator first, Size n)" in crossgl
+    assert "__host__" not in crossgl
+    assert "__device__" not in crossgl
+
+
 def test_external_rocm_device_globals_symbol_api_codegen_reparse():
     source = """
     constexpr unsigned int device_array_size = 16;

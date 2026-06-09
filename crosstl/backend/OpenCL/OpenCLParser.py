@@ -1,6 +1,7 @@
 """OpenCL parser for converting OpenCL C tokens to AST."""
 
 import re
+import sys
 
 from crosstl.backend.HIP.HipAst import (
     ForNode,
@@ -24,6 +25,19 @@ from .OpenCLLexer import OpenCLLexer
 class OpenCLParser(HipParser):
     """Parse OpenCL C tokens into the OpenCL backend AST."""
 
+    DECLARATOR_NAME_TOKENS = {
+        *HipParser.DECLARATOR_NAME_TOKENS,
+        *HipParser.ATOMIC_FUNCTION_TOKENS,
+        *HipParser.VECTOR_TYPE_TOKENS,
+        "SIZE_T",
+        "SYNCTHREADS",
+        "SYNCWARP",
+    }
+    FUNCTION_NAME_TOKENS = {
+        *HipParser.FUNCTION_NAME_TOKENS,
+        "SYNCTHREADS",
+        "SYNCWARP",
+    }
     FUNCTION_DECLARATION_SPECIFIER_TOKENS = {
         *HipParser.FUNCTION_DECLARATION_SPECIFIER_TOKENS,
         "__GLOBAL__",
@@ -182,19 +196,29 @@ class OpenCLParser(HipParser):
     }
 
     def parse(self):
+        previous_recursion_limit = sys.getrecursionlimit()
+        if len(self.tokens) > previous_recursion_limit:
+            sys.setrecursionlimit(
+                min(50000, max(previous_recursion_limit, len(self.tokens) * 10))
+            )
+
         statements = []
 
-        while self.current_token:
-            if self.match("NEWLINE", "SEMICOLON"):
-                self.advance()
-                continue
+        try:
+            while self.current_token:
+                if self.match("NEWLINE", "SEMICOLON"):
+                    self.advance()
+                    continue
 
-            stmt = self.parse_statement()
-            if stmt:
-                if isinstance(stmt, list):
-                    statements.extend(stmt)
-                else:
-                    statements.append(stmt)
+                stmt = self.parse_statement()
+                if stmt:
+                    if isinstance(stmt, list):
+                        statements.extend(stmt)
+                    else:
+                        statements.append(stmt)
+        finally:
+            if sys.getrecursionlimit() != previous_recursion_limit:
+                sys.setrecursionlimit(previous_recursion_limit)
 
         return OpenCLProgramNode(statements)
 
@@ -294,12 +318,17 @@ class OpenCLParser(HipParser):
         return index
 
     def skip_post_return_function_specifiers_at_pos(self, index):
-        while index < len(self.tokens) and (
-            self.tokens[index].type in self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS
-            or self.is_identifier_function_specifier_token(self.tokens[index])
-        ):
-            index += 1
+        while index < len(self.tokens):
             index = self.skip_newlines_at_pos(index)
+            index = self.skip_cpp_attributes_at_pos(index)
+            index = self.skip_type_attribute_prefixes_at_pos(index)
+            if index >= len(self.tokens) or not (
+                self.tokens[index].type
+                in self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS
+                or self.is_identifier_function_specifier_token(self.tokens[index])
+            ):
+                return index
+            index += 1
         return index
 
     def consume_function_name(self):
@@ -447,7 +476,32 @@ class OpenCLParser(HipParser):
                 self.opencl_block_type_name(alias_type, parameter_suffix), name
             )
 
-        return super().parse_type_alias_declarator(alias_type, allow_prefix=False)
+        function_pointer_name = self.parse_function_pointer_parameter_declarator()
+        if function_pointer_name is not None:
+            alias_type += " (*)"
+            self.type_aliases.add(function_pointer_name)
+            return TypeAliasNode(alias_type, function_pointer_name)
+
+        name = self.consume_declarator_name_token().value
+        self.skip_newlines()
+        self.skip_declarator_attribute_suffixes()
+        if self.match("LPAREN"):
+            self.consume_function_type_parameter_list()
+            self.skip_declarator_attribute_suffixes()
+            self.type_aliases.add(name)
+            return TypeAliasNode(alias_type, name)
+
+        alias_type += self.parse_array_suffix()
+        self.skip_declarator_attribute_suffixes()
+        self.type_aliases.add(name)
+        return TypeAliasNode(alias_type, name)
+
+    def consume_declarator_name_token(self):
+        if self.is_declarator_name_token():
+            token = self.current_token
+            self.advance()
+            return token
+        return self.consume("IDENTIFIER")
 
     def is_function_pointer_parameter_start_at_pos(self, index):
         if super().is_function_pointer_parameter_start_at_pos(index):
@@ -608,12 +662,18 @@ class OpenCLParser(HipParser):
 
         return_type = self.parse_type()
         self.skip_newlines()
+        self.skip_cpp_attributes()
+        attributes.extend(self.parse_type_attribute_prefixes())
+        self.skip_newlines()
         while (
             self.match(*self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS)
             or self.is_identifier_function_specifier_token()
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            attributes.extend(self.parse_type_attribute_prefixes())
             self.skip_newlines()
 
         name = self.consume_function_name()

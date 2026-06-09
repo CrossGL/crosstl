@@ -1000,6 +1000,18 @@ def test_parse_enum_and_typedef():
     assert ast.typedefs[2].qualifiers == ["precise", "const"]
 
 
+def test_parse_const_incomplete_array_typedef_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/types/array/incomp_array.hlsl
+    ast = parse_code("typedef const int inta[];")
+
+    typedef = ast.typedefs[0]
+    assert typedef.name == "inta"
+    assert typedef.alias_type == "int"
+    assert typedef.qualifiers == ["const"]
+    assert typedef.array_sizes == [None]
+
+
 def test_parse_using_alias_declarations_from_hlsl_spec():
     ast = parse_code("""
     using Float = float;

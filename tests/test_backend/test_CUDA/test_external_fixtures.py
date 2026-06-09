@@ -3375,6 +3375,36 @@ def test_current_cutlass_decltype_scoped_value_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_current_cutlass_postfix_volatile_alias_specializations_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3
+    # path: include/cute/util/type_traits.hpp
+    sources = [
+        """
+        template <class Src, class Dst>
+        struct copy_cv<Src volatile, Dst> {
+          using type = Dst volatile;
+        };
+        """,
+        """
+        template <class Src, class Dst>
+        struct copy_cv<Src const volatile, Dst> {
+          using type = Dst const volatile;
+        };
+        """,
+    ]
+
+    for source in sources:
+        ast = parse_cuda(source)
+        crossgl = cuda_to_crossgl(source)
+
+        assert ast.structs[0].name.startswith("copy_cv<Src")
+        assert "volatile" in ast.structs[0].name
+        assert "struct copy_cv_Src_Dst" in crossgl
+        assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_scoped_enum_value_is_not_sanitized_codegen_reparse():
     source = """
     enum class Mode { kA = 0 };

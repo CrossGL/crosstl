@@ -1513,6 +1513,20 @@ class HLSLToCrossGLConverter:
                 parts.append(f"[{self.generate_expression(size, is_main)}]")
         return "".join(parts)
 
+    def format_type_alias_target(self, alias_type, alias):
+        mapped_type = self.map_type(alias_type)
+        sizes = getattr(alias, "array_sizes", None) or []
+        if not any(size is None for size in sizes):
+            return f"{mapped_type}{self.format_array_suffixes(alias)}"
+
+        type_text = mapped_type
+        for size in reversed(sizes):
+            if size is None:
+                type_text = f"[{type_text}]"
+            else:
+                type_text = f"{type_text}[{self.generate_expression(size)}]"
+        return type_text
+
     def generate_enum(self, enum, indent=1):
         code = "    " * indent + f"enum {enum.name} {{\n"
         for member_name, member_value in enum.members:
@@ -2926,10 +2940,9 @@ class HLSLToCrossGLConverter:
                     alias, "original_type", None
                 )
                 if alias_type is not None:
-                    array_suffix = self.format_array_suffixes(alias)
                     code += (
                         f"    type {alias.name} = "
-                        f"{self.map_type(alias_type)}{array_suffix};\n"
+                        f"{self.format_type_alias_target(alias_type, alias)};\n"
                     )
         if enums:
             for enum in enums:

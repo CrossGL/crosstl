@@ -2173,6 +2173,31 @@ def test_logical_and_keeps_equality_operands_grouped():
     assert expression.right.op == "=="
 
 
+def test_if_let_binding_from_slang_gfx_link_time_constants_parse():
+    # Reduced from shader-slang/slang@142e00d9342eccf0613ed1b18d81cb003c5d6f09,
+    # tools/gfx-unit-test/link-time-logical-operators.slang.
+    code = """
+    void main(ValueHolder notValue) {
+        if (let v = notValue.get())
+            result += v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    if_stmt = find_function(ast, "main").body[0]
+    binding = if_stmt.if_binding
+
+    assert isinstance(if_stmt, IfNode)
+    assert isinstance(binding, AssignmentNode)
+    assert binding.left.vtype == "let"
+    assert binding.left.name == "v"
+    assert isinstance(binding.right, MethodCallNode)
+    assert binding.right.method == "get"
+    assert if_stmt.condition.name == "v"
+    assert isinstance(if_stmt.if_body[0], AssignmentNode)
+
+
 def test_binary_bitwise_and_shift_precedence_parsing():
     code = """
     uint combine(uint a, uint b, uint c, uint d) {

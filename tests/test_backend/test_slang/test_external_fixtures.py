@@ -28,6 +28,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "6b9f98ff90facc35306a0ba643dfecb59a870156",
     },
+    "shader-slang/slang-master-2026-06-09": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "142e00d9342eccf0613ed1b18d81cb003c5d6f09",
+    },
     "shader-slang/slang-main-2026-06-09-dyn-interface": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "1fc15d23f67005325103a888a175a96ba1782ac2",
@@ -164,6 +168,36 @@ EXTERNAL_FIXTURES = [
             "return helper(val) + helper(val, 256);",
         ],
         "not_contains": ["int a, = , 16", "int a = 16"],
+    },
+    {
+        "id": "slang_gfx_link_time_conditional_if_let_binding",
+        "repo": "shader-slang/slang-master-2026-06-09",
+        "path": "tools/gfx-unit-test/link-time-logical-operators.slang",
+        "source": (
+            """
+            struct ConditionalValue
+            {
+                float get() { return 1.0f; }
+            }
+
+            float sum(ConditionalValue notValue)
+            {
+                float result = 0.0f;
+
+                if (let v = notValue.get())
+                    result += v;
+
+                return result;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "let v = notValue.get();",
+            "if (v) {",
+            "result += v;",
+        ],
+        "not_contains": ["if (let v"],
     },
     {
         "id": "slang_autodiff_generic_where_clause",

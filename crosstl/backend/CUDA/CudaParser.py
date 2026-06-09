@@ -54,7 +54,7 @@ class CudaParser:
         "GRID_CONSTANT",
         "TYPENAME",
     }
-    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "RESTRICT"}
+    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}
     ELABORATED_TYPE_TOKENS = {"CLASS", "STRUCT", "UNION", "ENUM"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}

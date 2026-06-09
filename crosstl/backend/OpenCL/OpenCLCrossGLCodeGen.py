@@ -4,6 +4,7 @@ import re
 
 from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
+    BinaryOpNode,
     FunctionNode,
     KernelNode,
     StructNode,
@@ -464,6 +465,38 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if builtin is not None:
                 return builtin
         return super().visit_FunctionCallNode(node)
+
+    def visit_BinaryOpNode(self, node):
+        flattened = self.format_flat_opencl_binary_chain(node)
+        if flattened is not None:
+            return flattened
+        return super().visit_BinaryOpNode(node)
+
+    def format_flat_opencl_binary_chain(self, node):
+        op = getattr(node, "op", None)
+        if op not in {"+", "*", "&", "|", "^", "&&", "||"}:
+            return None
+
+        operands = self.collect_opencl_binary_chain_operands(node, op)
+        if len(operands) < 4:
+            return None
+
+        rendered = [self.visit(operand) for operand in operands]
+        return f"({f' {op} '.join(rendered)})"
+
+    def collect_opencl_binary_chain_operands(self, node, op):
+        operands = []
+        current = node
+
+        while isinstance(current, BinaryOpNode) and getattr(current, "op", None) == op:
+            if isinstance(current.right, BinaryOpNode) and current.right.op == op:
+                return [node]
+            operands.append(current.right)
+            current = current.left
+
+        operands.append(current)
+        operands.reverse()
+        return operands
 
     def register_opencl_sizeof_symbol(self, node):
         name = getattr(node, "name", None)
