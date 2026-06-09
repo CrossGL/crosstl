@@ -11735,6 +11735,15 @@ def _validation_contract_reasons(
     artifact_checks = validation.get("artifacts")
     toolchain_runs = validation.get("toolchainRuns")
     summarized_validation = "summary" in validation
+    if (
+        require_validation
+        and not summarized_validation
+        and isinstance(artifact_checks, list)
+        and artifact_checks
+    ):
+        reasons.append(
+            "validation.summary must be recorded when validation.artifacts are recorded"
+        )
     if not isinstance(artifact_checks, list):
         reasons.append("validation.artifacts must be a list")
     else:
