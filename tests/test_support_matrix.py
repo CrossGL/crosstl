@@ -230,10 +230,12 @@ def test_project_report_inspection_is_first_class_support_feature():
             backend_support["notes"]
         )
         assert (
-            "report-or-translation-artifact-derived metadata source, does not "
-            "derive artifact-matrix gaps for scan-only reports, plus sampled "
-            "missing and extra artifact identities"
+            "report-or-translation-artifact-derived metadata source, text "
+            "inspection of artifact-matrix source provenance"
         ) in backend_support["notes"]
+        assert "text inspection of artifact-matrix source provenance" in (
+            backend_support["notes"]
+        )
         assert (
             "validation status, diagnostic-code, missing-capability, "
             "toolchain-status, toolchain-run target, source-backend, check-kind, "

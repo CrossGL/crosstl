@@ -21245,6 +21245,7 @@ def test_project_cli_inspect_report_text_includes_artifact_matrix(tmp_path):
         "Artifact matrix: 1 emitted of 1 expected "
         "(1 translated, 0 failed, 0 missing, 0 extra; variants=none)"
     ) in result.stdout
+    assert "Artifact matrix source: report" in result.stdout
     assert (
         "Artifact matrix by target: cgl=1/1 emitted "
         "(1 translated, 0 failed, 0 missing, 0 extra, complete)"
@@ -21316,6 +21317,7 @@ def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps(tmp_path):
         "Artifact matrix: 2 emitted of 2 expected "
         "(2 translated, 0 failed, 1 missing, 1 extra; variants=none)"
     ) in result.stdout
+    assert "Artifact matrix source: report" in result.stdout
     assert (
         "Artifact matrix by target: cgl=2/2 emitted "
         "(2 translated, 0 failed, 1 missing, 1 extra, incomplete)"
@@ -21359,6 +21361,7 @@ def test_project_cli_inspect_report_text_derives_missing_artifact_matrix_gaps(
         "Artifact matrix: 2 emitted of 2 expected "
         "(2 translated, 0 failed, 1 missing, 1 extra; variants=none)"
     ) in result.stdout
+    assert "Artifact matrix source: derived" in result.stdout
     assert "Artifact matrix missing artifacts:" in result.stdout
     assert "- second.cgl -> cgl at out/cgl/second.cgl" in result.stdout
     assert "Artifact matrix extra artifacts:" in result.stdout

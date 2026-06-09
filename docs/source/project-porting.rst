@@ -270,8 +270,8 @@ source-backend, source override mappings, file-extension, and artifact
 target rollups, source-map count, granularity, target, and source-backend
 rollups, source-remap count, mapping-count, granularity, target, and
 source-backend rollups,
-artifact matrix completion counts, target and variant completion rollups,
-sampled missing and extra artifact identities,
+artifact matrix completion counts, matrix source provenance, target and
+variant completion rollups, sampled missing and extra artifact identities,
 bounded validation artifact and validation toolchain-run samples with
 truncation counts, failed validation metadata on artifact provenance samples,
 include-directory status counts, inactive source-root and include-directory
@@ -619,8 +619,9 @@ Project reports are JSON documents with:
   translated, and failed artifacts so automation can review planned outputs
   before artifact generation. Report inspection also includes sampled missing
   and extra artifact identities from report-provided or translation
-  artifact-derived matrix metadata, so incomplete batch outputs are visible
-  without opening every artifact record.
+  artifact-derived matrix metadata, and text inspection identifies which matrix
+  source was used, so incomplete batch outputs are visible without opening
+  every artifact record.
 - ``externalCorpus``: optional manifest-backed corpus accounting with declared
   entries, present/missing and discovered-unit status, source-backend and target
   rollups, valid/invalid manifest-entry counts, and translated/failed artifact

@@ -1659,6 +1659,18 @@ def _format_artifact_matrix_summary(artifact_matrix):
     )
 
 
+def _format_artifact_matrix_source(artifact_matrix):
+    if not isinstance(artifact_matrix, Mapping):
+        return None
+    if not artifact_matrix.get("available"):
+        return None
+
+    matrix_source = artifact_matrix.get("source")
+    if matrix_source not in {"report", "derived"}:
+        return None
+    return f"Artifact matrix source: {matrix_source}"
+
+
 def _format_artifact_matrix_rollup(label, counts):
     if not isinstance(counts, Mapping):
         return None
@@ -2726,6 +2738,9 @@ def _format_project_report_inspection(payload):
     artifact_matrix = _format_artifact_matrix_summary(artifact_matrix_payload)
     if artifact_matrix:
         lines.append(artifact_matrix)
+    artifact_matrix_source = _format_artifact_matrix_source(artifact_matrix_payload)
+    if artifact_matrix_source:
+        lines.append(artifact_matrix_source)
     if isinstance(artifact_matrix_payload, Mapping):
         artifact_matrix_by_target = _format_artifact_matrix_rollup(
             "Artifact matrix by target",
