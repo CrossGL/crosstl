@@ -1647,6 +1647,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "required full-report artifact source hashes" in (
             backend_support["notes"]
         )
+        assert (
+            "expected/actual hash and byte-size mismatch context"
+            in backend_support["notes"]
+        )
         assert "failed artifact error metadata" in backend_support["notes"]
         assert "translated artifact error metadata rejection" in (
             backend_support["notes"]

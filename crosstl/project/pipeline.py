@@ -817,6 +817,19 @@ def _hash_matches_report(
     )
 
 
+def _hash_mismatch_context(
+    actual: Mapping[str, str], expected: Mapping[str, Any]
+) -> str:
+    return (
+        f"expected {expected.get('algorithm')}:{expected.get('value')}, "
+        f"actual {actual['algorithm']}:{actual['value']}"
+    )
+
+
+def _size_mismatch_context(expected: int, actual: int) -> str:
+    return f"expected {expected} bytes, actual {actual} bytes"
+
+
 def _source_frontend_supports_lexer_keyword(source_backend: str, keyword: str) -> bool:
     register_default_sources()
     discover_backend_plugins()
@@ -5332,14 +5345,16 @@ def _source_remap_validation_diagnostics(
     expected_size = source_remap.get("sizeBytes")
     if not isinstance(expected_size, int) or isinstance(expected_size, bool):
         expected_size = None
-    if expected_size is not None and expected_size != remap_path.stat().st_size:
+    actual_remap_size = remap_path.stat().st_size
+    if expected_size is not None and expected_size != actual_remap_size:
         diagnostics.append(
             ProjectDiagnostic(
                 severity="error",
                 code="project.validate.source-remap-size-mismatch",
                 message=(
                     "Source remap sidecar size does not match report: "
-                    f"{source_remap['path']}"
+                    f"{source_remap['path']} "
+                    f"({_size_mismatch_context(expected_size, actual_remap_size)})"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
                 **_artifact_diagnostic_context(artifact),
@@ -5347,8 +5362,9 @@ def _source_remap_validation_diagnostics(
             )
         )
 
+    actual_remap_hash = _source_hash(remap_path)
     source_remap_hash_matches = _hash_matches_report(
-        _source_hash(remap_path), source_remap["hash"]
+        actual_remap_hash, source_remap["hash"]
     )
     if not source_remap_hash_matches:
         diagnostics.append(
@@ -5357,7 +5373,8 @@ def _source_remap_validation_diagnostics(
                 code="project.validate.source-remap-hash-mismatch",
                 message=(
                     "Source remap sidecar hash does not match report: "
-                    f"{source_remap['path']}"
+                    f"{source_remap['path']} "
+                    f"({_hash_mismatch_context(actual_remap_hash, source_remap['hash'])})"
                 ),
                 location=SourceLocation(file=str(artifact["source"])),
                 **_artifact_diagnostic_context(artifact),
@@ -5560,7 +5577,8 @@ def _validate_artifacts(
                                 code="project.validate.source-hash-mismatch",
                                 message=(
                                     "Source artifact hash does not match report: "
-                                    f"{artifact['source']}"
+                                    f"{artifact['source']} "
+                                    f"({_hash_mismatch_context(actual_source_hash, source_hash)})"
                                 ),
                                 location=SourceLocation(file=str(artifact["source"])),
                                 **_artifact_diagnostic_context(artifact),
@@ -5579,7 +5597,8 @@ def _validate_artifacts(
                                 code="project.validate.source-size-mismatch",
                                 message=(
                                     "Source artifact size does not match report: "
-                                    f"{artifact['source']}"
+                                    f"{artifact['source']} "
+                                    f"({_size_mismatch_context(source_size, actual_source_size)})"
                                 ),
                                 location=SourceLocation(file=str(artifact["source"])),
                                 **_artifact_diagnostic_context(artifact),
@@ -5630,7 +5649,8 @@ def _validate_artifacts(
                             code="project.validate.generated-hash-mismatch",
                             message=(
                                 "Generated artifact hash does not match report: "
-                                f"{artifact['path']}"
+                                f"{artifact['path']} "
+                                f"({_hash_mismatch_context(actual_hash, generated_hash)})"
                             ),
                             location=SourceLocation(file=str(artifact["source"])),
                             **_artifact_diagnostic_context(artifact),
@@ -5649,7 +5669,8 @@ def _validate_artifacts(
                             code="project.validate.generated-size-mismatch",
                             message=(
                                 "Generated artifact size does not match report: "
-                                f"{artifact['path']}"
+                                f"{artifact['path']} "
+                                f"({_size_mismatch_context(generated_size, actual_size)})"
                             ),
                             location=SourceLocation(file=str(artifact["source"])),
                             **_artifact_diagnostic_context(artifact),

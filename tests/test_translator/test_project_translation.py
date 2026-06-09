@@ -8689,8 +8689,10 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     report_path = repo / "portability-report.json"
 
     report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_payload = report.to_json()
     report.write_json(report_path)
-    (repo / "out" / "cgl" / "simple.cgl").write_text(
+    generated_path = repo / "out" / "cgl" / "simple.cgl"
+    generated_path.write_text(
         SIMPLE_CROSSL + "\n// edited after report\n", encoding="utf-8"
     )
 
@@ -8730,6 +8732,23 @@ def test_validate_project_report_detects_modified_generated_artifacts(tmp_path):
     assert diagnostic["target"] == "cgl"
     assert diagnostic["sourceBackend"] == "cgl"
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+    expected_hash = report_payload["artifacts"][0]["generatedHash"]
+    actual_hash = project_pipeline._source_hash(generated_path)
+    assert (
+        f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
+    ) in diagnostic["message"]
+    size_diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.validate.generated-size-mismatch"
+    )
+    expected_size = report_payload["artifacts"][0]["generatedSizeBytes"]
+    actual_size = generated_path.stat().st_size
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
+        in size_diagnostic["message"]
+    )
 
 
 def test_validate_project_report_groups_artifact_status_by_source_backend(tmp_path):
@@ -8842,6 +8861,7 @@ def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
     report_path = repo / "portability-report.json"
 
     report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_payload = report.to_json()
     report.write_json(report_path)
     source.write_text(SIMPLE_CROSSL + "\n// edited after report\n", encoding="utf-8")
 
@@ -8879,6 +8899,23 @@ def test_validate_project_report_detects_modified_source_artifacts(tmp_path):
     assert diagnostic["location"]["file"] == "simple.cgl"
     assert diagnostic["target"] == "cgl"
     assert diagnostic["missingCapabilities"] == ["source.provenance"]
+    expected_hash = report_payload["artifacts"][0]["sourceHash"]
+    actual_hash = project_pipeline._source_hash(source)
+    assert (
+        f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
+    ) in diagnostic["message"]
+    size_diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.validate.source-size-mismatch"
+    )
+    expected_size = report_payload["artifacts"][0]["sourceSizeBytes"]
+    actual_size = source.stat().st_size
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
+        in size_diagnostic["message"]
+    )
 
 
 def test_validate_project_report_detects_missing_source_artifacts(tmp_path):
@@ -10395,6 +10432,12 @@ def test_validate_project_report_rejects_artifact_generated_size_mismatches_curr
     assert diagnostic["target"] == "cgl"
     assert diagnostic["sourceBackend"] == "cgl"
     assert diagnostic["missingCapabilities"] == ["artifact.manifest"]
+    expected_size = payload["artifacts"][0]["generatedSizeBytes"]
+    actual_size = (repo / payload["artifacts"][0]["path"]).stat().st_size
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
+        in diagnostic["message"]
+    )
 
 
 def test_translate_project_preserves_discovered_unit_source_metadata(tmp_path):
@@ -14746,6 +14789,12 @@ def test_validate_project_report_rejects_source_remap_size_mismatches(tmp_path):
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["missingCapabilities"] == ["source.provenance"]
     assert "Source remap sidecar size does not match report" in diagnostic["message"]
+    expected_size = artifact["sourceRemap"]["sizeBytes"]
+    actual_size = (repo / artifact["sourceRemap"]["path"]).stat().st_size
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_backslash_source_remap_metadata(tmp_path):
@@ -18750,9 +18799,11 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
     report = translate_project(repo, targets=["opengl"], output_dir="out")
+    report_payload = report.to_json()
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
-    (repo / "out" / "opengl" / "simple.glsl").write_text(
+    generated_path = repo / "out" / "opengl" / "simple.glsl"
+    generated_path.write_text(
         "void main() {}\n",
         encoding="utf-8",
     )
@@ -18797,8 +18848,12 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     )
     assert sarif_result["ruleId"] == "project.validate.generated-hash-mismatch"
     assert sarif_result["level"] == "error"
+    expected_hash = report_payload["artifacts"][0]["generatedHash"]
+    actual_hash = project_pipeline._source_hash(generated_path)
     assert sarif_result["message"]["text"] == (
-        "Generated artifact hash does not match report: out/opengl/simple.glsl"
+        "Generated artifact hash does not match report: out/opengl/simple.glsl "
+        f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
     )
     assert sarif_result["locations"][0]["physicalLocation"] == {
         "artifactLocation": {"uri": "simple.cgl"},
