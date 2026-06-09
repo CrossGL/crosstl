@@ -1514,6 +1514,14 @@ def _format_artifact_provenance_line(artifact):
     )
     if generated_hash_preview:
         details.append(f"generatedHash={generated_hash_preview}")
+    generated_size = artifact.get("generatedSizeBytes")
+    if (
+        isinstance(generated_size, int)
+        and not isinstance(generated_size, bool)
+        and generated_size >= 0
+    ):
+        size_label = "byte" if generated_size == 1 else "bytes"
+        details.append(f"generatedSize={generated_size} {size_label}")
     validation_status = artifact.get("validationStatus")
     if isinstance(validation_status, str) and validation_status:
         details.append(f"validation={validation_status}")

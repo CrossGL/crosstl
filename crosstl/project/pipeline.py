@@ -268,6 +268,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "variant",
         "error",
         "generatedHash",
+        "generatedSizeBytes",
         "sourceMap",
         "sourceRemap",
     )
@@ -4685,6 +4686,7 @@ def translate_project(
                         defines=defines,
                     )
                     artifact["generatedHash"] = _source_hash(output_path)
+                    artifact["generatedSizeBytes"] = output_path.stat().st_size
                     artifact["sourceMap"] = _artifact_source_map(
                         config, unit, target, output_path
                     )
@@ -4706,6 +4708,7 @@ def translate_project(
                     artifact["status"] = "failed"
                     artifact["error"] = str(exc)
                     artifact.pop("generatedHash", None)
+                    artifact.pop("generatedSizeBytes", None)
                     artifact.pop("sourceMap", None)
                     artifact.pop("sourceRemap", None)
                     diagnostics.append(
@@ -7177,6 +7180,9 @@ def _inspection_artifact_provenance_artifact(
             sample["generatedHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["generatedHash"] = hash_value
+    generated_size = artifact.get("generatedSizeBytes")
+    if _is_non_negative_int(generated_size):
+        sample["generatedSizeBytes"] = generated_size
     sample.update(
         _inspection_artifact_validation_metadata(
             artifact,
@@ -7610,6 +7616,19 @@ def _generated_hash_contract_reasons(
         artifact.get("generatedHash"),
         require_closed_fields=require_closed_fields,
     )
+
+
+def _generated_size_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+) -> list[str]:
+    if "generatedSizeBytes" not in artifact and not required:
+        return []
+    if not _is_non_negative_int(artifact.get("generatedSizeBytes")):
+        return [f"artifacts[{index}].generatedSizeBytes must be a non-negative integer"]
+    return []
 
 
 def _expected_provenance_intermediate(artifact: Mapping[str, Any]) -> str | None:
@@ -12076,6 +12095,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].generatedHash must be omitted "
                         "for failed artifacts"
                     )
+                if "generatedSizeBytes" in artifact:
+                    reasons.append(
+                        f"artifacts[{index}].generatedSizeBytes must be omitted "
+                        "for failed artifacts"
+                    )
                 if "sourceMap" in artifact:
                     reasons.append(
                         f"artifacts[{index}].sourceMap must be omitted "
@@ -12160,6 +12184,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     require_closed_fields=has_summary,
                 )
             )
+            reasons.extend(_generated_size_contract_reasons(index, artifact))
             reasons.extend(
                 _provenance_contract_reasons(
                     index,

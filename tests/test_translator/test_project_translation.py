@@ -6535,6 +6535,7 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["artifacts"][0]["generatedHash"] == project_pipeline._source_hash(
         output
     )
+    assert payload["artifacts"][0]["generatedSizeBytes"] == output.stat().st_size
     assert "sourceRemap" not in payload["artifacts"][0]
     assert payload["summary"]["sourceRemapCount"] == 0
     assert payload["summary"]["sourceRemapsByGranularity"] == {}
@@ -6582,6 +6583,8 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert set(artifact["generatedHash"]) == project_pipeline.REPORT_HASH_FIELDS
+    assert isinstance(artifact["generatedSizeBytes"], int)
+    assert artifact["generatedSizeBytes"] >= 0
     assert set(artifact["defineProcessing"]) == (
         project_pipeline.REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS
     )
@@ -6706,10 +6709,12 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     direct_generated_hash = project_pipeline._source_hash(
         repo / "out" / "opengl" / "direct.glsl"
     )
+    direct_generated_size = (repo / "out" / "opengl" / "direct.glsl").stat().st_size
     bridged_source_hash = project_pipeline._source_hash(repo / "shader.rs")
     bridged_generated_hash = project_pipeline._source_hash(
         repo / "out" / "opengl" / "shader.glsl"
     )
+    bridged_generated_size = (repo / "out" / "opengl" / "shader.glsl").stat().st_size
 
     assert payload["success"] is True
     assert provenance["artifactCount"] == 2
@@ -6726,6 +6731,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
         direct_artifact["generatedHashAlgorithm"] == direct_generated_hash["algorithm"]
     )
     assert direct_artifact["generatedHash"] == direct_generated_hash["value"]
+    assert direct_artifact["generatedSizeBytes"] == direct_generated_size
     assert bridged_artifact["source"] == "shader.rs"
     assert bridged_artifact["intermediate"] == "crossgl"
     assert bridged_artifact["sourceHashAlgorithm"] == bridged_source_hash["algorithm"]
@@ -6735,6 +6741,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
         == bridged_generated_hash["algorithm"]
     )
     assert bridged_artifact["generatedHash"] == bridged_generated_hash["value"]
+    assert bridged_artifact["generatedSizeBytes"] == bridged_generated_size
 
     result = subprocess.run(
         [
@@ -6771,7 +6778,8 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
         "(sourceBackend=cgl, target=opengl, "
         "pipeline=single-file-translate, intermediate=none, "
         f"sourceHash={direct_source_hash_preview}, "
-        f"generatedHash={direct_generated_hash_preview})"
+        f"generatedHash={direct_generated_hash_preview}, "
+        f"generatedSize={direct_generated_size} bytes)"
     ) in result.stdout
     assert "Bridged artifact provenance samples:" in result.stdout
     bridged_source_hash_preview = crosstl_cli._format_hash_preview(
@@ -6787,7 +6795,8 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
         "(sourceBackend=rust, target=opengl, "
         "pipeline=single-file-translate, intermediate=crossgl, "
         f"sourceHash={bridged_source_hash_preview}, "
-        f"generatedHash={bridged_generated_hash_preview})"
+        f"generatedHash={bridged_generated_hash_preview}, "
+        f"generatedSize={bridged_generated_size} bytes)"
     ) in result.stdout
 
 
@@ -12485,10 +12494,24 @@ def test_validate_project_report_rejects_failed_artifacts_without_error(tmp_path
     artifact = payload["artifacts"][0]
     artifact["status"] = "failed"
     artifact.pop("error", None)
+    artifact.pop("generatedHash")
+    artifact.pop("generatedSizeBytes")
+    artifact.pop("sourceMap")
+    artifact.pop("sourceRemap")
     payload["summary"]["translatedCount"] = 0
     payload["summary"]["failedCount"] = 1
     payload["summary"]["artifactsByTarget"]["cgl"]["translatedCount"] = 0
     payload["summary"]["artifactsByTarget"]["cgl"]["failedCount"] = 1
+    payload["summary"]["sourceMapCount"] = 0
+    payload["summary"]["fineGrainedSourceMapCount"] = 0
+    payload["summary"]["sourceRemapCount"] = 0
+    payload["summary"]["sourceRemapMappingCount"] = 0
+    payload["summary"]["sourceMapsByGranularity"] = {}
+    payload["summary"]["sourceMapsByTarget"] = {}
+    payload["summary"]["sourceMapsBySourceBackend"] = {}
+    payload["summary"]["sourceRemapsByGranularity"] = {}
+    payload["summary"]["sourceRemapsByTarget"] = {}
+    payload["summary"]["sourceRemapsBySourceBackend"] = {}
     report_path = repo / "out" / "missing-failed-artifact-error-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -12538,6 +12561,7 @@ def test_validate_project_report_rejects_failed_artifacts_without_source_hash(
     artifact["error"] = "translation failed"
     artifact.pop("sourceHash")
     artifact.pop("generatedHash")
+    artifact.pop("generatedSizeBytes")
     artifact.pop("sourceMap")
     artifact.pop("sourceRemap")
     payload["summary"]["translatedCount"] = 0
@@ -12591,6 +12615,10 @@ def test_validate_project_report_rejects_failed_artifacts_with_generated_metadat
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
         "artifacts[0].generatedHash must be omitted for failed artifacts"
+        in diagnostic["message"]
+    )
+    assert (
+        "artifacts[0].generatedSizeBytes must be omitted for failed artifacts"
         in diagnostic["message"]
     )
     assert (
@@ -13534,6 +13562,7 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
                             "algorithm": "sha1",
                             "value": "not-a-hash",
                         },
+                        "generatedSizeBytes": -1,
                         "provenance": {
                             "pipeline": "",
                             "intermediate": [],
@@ -13564,6 +13593,9 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     assert (
         "artifacts[0].generatedHash.value must be a lowercase 64-character hex digest"
         in diagnostic["message"]
+    )
+    assert "artifacts[0].generatedSizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
     )
     assert "artifacts[0].provenance.pipeline must be a string" in (
         diagnostic["message"]
@@ -17803,6 +17835,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     payload = inspect_project_report(report_path)
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
+    generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
@@ -17910,6 +17943,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceHash": source_hash["value"],
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
+                "generatedSizeBytes": generated_size,
             }
         ],
         "directArtifactCount": 1,
@@ -17926,6 +17960,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceHash": source_hash["value"],
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
+                "generatedSizeBytes": generated_size,
             }
         ],
         "bridgedArtifactCount": 0,
@@ -18505,6 +18540,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     payload = json.loads(output.read_text(encoding="utf-8"))
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
+    generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
@@ -18613,6 +18649,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceHash": source_hash["value"],
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
+                "generatedSizeBytes": generated_size,
             }
         ],
         "directArtifactCount": 1,
@@ -18629,6 +18666,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceHash": source_hash["value"],
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
+                "generatedSizeBytes": generated_size,
             }
         ],
         "bridgedArtifactCount": 0,
@@ -19595,6 +19633,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     )
     assert "Artifact provenance samples:" in result.stdout
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
+    generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     generated_hash_preview = (
         f"{generated_hash['algorithm']}:{generated_hash['value'][:12]}..."
     )
@@ -19602,7 +19641,8 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "- simple.cgl -> out/cgl/simple.cgl "
         "(sourceBackend=cgl, target=cgl, "
         "pipeline=single-file-translate, intermediate=none, "
-        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview})"
+        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview}, "
+        f"generatedSize={generated_size} bytes)"
     ) in result.stdout
     assert "Validation artifact samples:" in result.stdout
     assert (

@@ -1357,8 +1357,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         ) in backend_support["notes"]
         assert (
             "bounded direct, bridged, and combined artifact provenance "
-            "inspection samples with source and generated hash metadata, failed "
-            "validation status metadata"
+            "inspection samples with source and generated hash plus generated "
+            "byte-size metadata, failed validation status metadata"
         ) in backend_support["notes"]
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]
