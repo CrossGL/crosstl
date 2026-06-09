@@ -2550,6 +2550,39 @@ def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
     assert pack_call.args[0].operand.name == "us"
 
 
+def test_parse_dependent_enable_if_return_type_from_tinygrad_metal():
+    # Reduced from:
+    # Repo: https://github.com/tinygrad/tinygrad
+    # Commit: 12addee14f1d728793648ceca307a5fde2b24cea
+    # Path: extra/thunder/metal/include/ops/group/memory/tile/shared_to_register.metal
+    code = """
+    template<typename RT, typename ST>
+    METAL_FUNC static typename metal::enable_if<
+        ducks::is_row_register_tile<RT>() && ducks::is_shared_tile<ST>(),
+        void>::type
+    load(thread RT &dst, threadgroup const ST &src, const int threadIdx) {
+        return;
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+
+    assert function.name == "load"
+    assert function.template_parameters == [("typename", "RT"), ("typename", "ST")]
+    assert function.return_type == (
+        "metal::enable_if<"
+        "ducks::is_row_register_tile<RT>()&&ducks::is_shared_tile<ST>(),void"
+        ">::type"
+    )
+    assert [
+        (param.vtype, param.name, param.qualifiers) for param in function.params
+    ] == [
+        ("RT&", "dst", ["thread"]),
+        ("ST&", "src", ["threadgroup", "const"]),
+        ("int", "threadIdx", ["const"]),
+    ]
+
+
 def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     code = """
     #define instantiate_metal_math_funcs(itype, otype, ctype, mfast) \\

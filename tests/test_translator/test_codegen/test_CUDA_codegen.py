@@ -12097,6 +12097,41 @@ class TestCudaCodeGen:
         assert "cudaTextureObject_t linearSamplers[2];" in cuda_code
         assert "cudaTextureObject_t shadowSamplers[2];" in cuda_code
 
+    def test_texture_and_image_descriptor_array_source_bindings_do_not_expand_cuda_ranges(
+        self,
+    ):
+        source_code = """
+        shader CudaTextureImageDescriptorArrayBindings {
+            sampler2D colorTextures[2] @set(0) @binding(0);
+            sampler2D normalTextures[2] @set(0) @binding(1);
+            image2D colorImages[2] @rgba16f @set(0) @binding(2);
+            uimage2D maskImages[2] @r32ui @set(0) @binding(3);
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=colorTextures kind=texture set=0 "
+            "binding=0 binding_source=explicit count=2" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=normalTextures kind=texture set=0 "
+            "binding=1 binding_source=explicit count=2" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=colorImages kind=image set=0 "
+            "binding=2 binding_source=explicit count=2" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=maskImages kind=image set=0 "
+            "binding=3 binding_source=explicit count=2" in cuda_code
+        )
+
     def test_texture_and_sampler_binding_namespaces_are_independent_for_cuda_codegen(
         self,
     ):

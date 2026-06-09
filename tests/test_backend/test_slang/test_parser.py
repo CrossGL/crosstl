@@ -3712,6 +3712,30 @@ def test_parenthesized_comma_expression_from_slang_shaders():
     assert "(0.75, 1.0)" in generated
 
 
+def test_bracket_array_literal_from_slang_generic_lambda_issue_parse():
+    # Source: shader-slang/slang#10866.
+    code = """
+    void upsample()
+    {
+        let positions = [int2(0,0), int2(1, 0), int2(-1, 0),];
+        var first = positions[0];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    upsample = find_function(ast, "upsample")
+    positions = upsample.body[0]
+
+    assert isinstance(positions.right, InitializerListNode)
+    assert [element.name for element in positions.right.elements] == [
+        "int2",
+        "int2",
+        "int2",
+    ]
+    assert isinstance(positions.right.elements[2].args[0], UnaryOpNode)
+
+
 def test_return_comma_operator_from_slang_compute_test():
     # Source: shader-slang/slang tests/compute/comma-operator.slang at
     # 5230a81f2fe68afe5cb8d04a1b09d56476f6b960.

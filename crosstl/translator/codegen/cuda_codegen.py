@@ -9806,7 +9806,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def cuda_resource_binding_validation_count(self, node, resource_kind, count):
         if (
-            resource_kind == "sampler"
+            resource_kind in {"image", "sampler", "texture"}
             and count != 1
             and self.cuda_explicit_resource_binding_attribute(node) == "binding"
         ):

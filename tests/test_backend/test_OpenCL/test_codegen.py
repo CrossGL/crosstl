@@ -49,6 +49,22 @@ def test_opencl_local_memory_and_barrier_codegen_reparse():
     assert "out[gl_WorkGroupID.x] = scratch[0];" in crossgl
 
 
+def test_opencl_local_pointer_kernel_param_uses_workgroup_storage():
+    crossgl = generate_crossgl("""
+        kernel void local_arg_first(uint scale, local float *scratch, global float *out) {
+            uint lid = get_local_id(0);
+            scratch[lid] = out[lid] * scale;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[lid] = scratch[lid];
+        }
+        """)
+
+    assert "var<workgroup> scratch: array<f32>" in crossgl
+    assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
+    assert "var<storage, read_write> scratch" not in crossgl
+    assert "@binding(1) var<storage, read_write> out" not in crossgl
+
+
 def test_opencl_vector_constructor_cast_codegen_reparse():
     crossgl = generate_crossgl("""
         __kernel void gaussian_filter(__read_only image2d_t srcImg,

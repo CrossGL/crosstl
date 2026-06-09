@@ -218,12 +218,103 @@ def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
     return True
 
 
+COMPILER_MANUAL_SAMPLER_FIXTURE = """
+shader DirectXMixedManualSamplerUsageUnsupportedShader {
+  compute {
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(set = 0, binding = 0) buffer vec4* values;
+    layout(set = 0, binding = 2) uniform sampler2DShadow shadowMap;
+    layout(set = 0, binding = 3) uniform sampler2DArrayShadow shadowAtlas;
+    layout(set = 0, binding = 5) sampler sharedShadowSampler;
+
+    void main() {
+      float visibility =
+          textureCompare(shadowMap, sharedShadowSampler,
+                         vec2(0.5, 0.5), 0.25);
+      float manualVisibility =
+          textureCompareLodManual(shadowAtlas, sharedShadowSampler,
+                                  vec3(0.25, 0.5, 1.0), 0.33, 2.0,
+                                  less_equal);
+      values[0] = vec4(visibility, manualVisibility, 0.0, 1.0);
+      return;
+    }
+  }
+}
+"""
+
+
+COMPILER_MATRIX_CONSTRUCTOR_FIXTURE = """
+shader MatrixConstructorComputeShader {
+  compute {
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    layout(set = 0, binding = 0) buffer float* values;
+
+    void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis) {
+      values[0] = 1.0;
+      return;
+    }
+
+    void main() {
+      mat2 flattened = mat2(1.0, 2.0, 3.0, 4.0);
+      mat2 diagonal = mat2(5.0);
+      mat3 expanded = mat3(flattened);
+      vec3 c0 = vec3(1.0, 2.0, 3.0);
+      vec3 c1 = vec3(4.0, 5.0, 6.0);
+      vec3 c2 = vec3(7.0, 8.0, 9.0);
+      mat3 basis = mat3(c0, c1, c2);
+      keep(flattened, diagonal, expanded, basis);
+      return;
+    }
+  }
+}
+"""
+
+
+def assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(source):
+    cuda_code = crossgl_to_cuda(source)
+    assert "struct float2x2" in cuda_code
+
+    crossgl = cuda_to_crossgl(cuda_code)
+
+    assert "struct float2x2" not in crossgl
+    assert "operator_multiply" not in crossgl
+    assert "CGL_COLUMNS" not in crossgl
+    assert_crossgl_reparse(crossgl)
+    return crossgl
+
+
 def test_external_fixture_metadata_records_repositories_and_commits():
     assert all(
         sample["repo"].startswith("https://github.com/") for sample in EXTERNAL_SAMPLES
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_compiler_manual_sampler_fixture_reverse_codegen_prunes_cuda_helpers():
+    # Reduced from CrossGL-Compiler/tests/fixtures/
+    # DirectXMixedManualSamplerUsageUnsupportedShader.cgl.
+    crossgl = assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(
+        COMPILER_MANUAL_SAMPLER_FIXTURE
+    )
+
+    assert len(crossgl) < 2_000
+    assert "textureCompareLodManual(" in crossgl
+    assert "var visibility: f32 = 0.0f;" in crossgl
+
+
+def test_compiler_matrix_constructor_fixture_reverse_codegen_prunes_cuda_helpers():
+    # Reduced from CrossGL-Compiler/tests/fixtures/MatrixConstructorComputeShader.cgl.
+    crossgl = assert_cuda_fixture_reverse_codegen_prunes_generated_matrix_helpers(
+        COMPILER_MATRIX_CONSTRUCTOR_FIXTURE
+    )
+
+    assert len(crossgl) < 2_000
+    assert (
+        "void keep(mat2 flattened, mat2 diagonal, mat3 expanded, mat3 basis)" in crossgl
+    )
+    assert "var flattened: mat2 = mat2(1.0, 2.0, 3.0, 4.0);" in crossgl
+    assert "var basis: mat3 = mat3(c0, c1, c2);" in crossgl
 
 
 def test_llvm_cuda_consteval_device_function_codegen_reparse():

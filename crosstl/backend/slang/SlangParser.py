@@ -3557,6 +3557,9 @@ class SlangParser:
             self.eat("RBRAKET")
             return expr
 
+        if self.current_token[0] == "LBRACKET":
+            return self.parse_initializer_list("LBRACKET", "RBRACKET")
+
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
 
@@ -3587,20 +3590,20 @@ class SlangParser:
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
-    def parse_initializer_list(self):
+    def parse_initializer_list(self, open_token="LBRACE", close_token="RBRACE"):
         elements = []
-        self.eat("LBRACE")
-        while self.current_token[0] != "RBRACE":
+        self.eat(open_token)
+        while self.current_token[0] != close_token:
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated initializer list")
             elements.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-            elif self.current_token[0] != "RBRACE":
+            elif self.current_token[0] != close_token:
                 raise SyntaxError(
-                    f"Expected COMMA or RBRACE in initializer list, got {self.current_token[0]}"
+                    f"Expected COMMA or {close_token} in initializer list, got {self.current_token[0]}"
                 )
-        self.eat("RBRACE")
+        self.eat(close_token)
         return InitializerListNode(elements)
 
     def parse_vector_constructor(

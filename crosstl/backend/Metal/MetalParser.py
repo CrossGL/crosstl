@@ -996,6 +996,22 @@ class MetalParser:
         ):
             type_name = f"{self.tokens[idx][1]} {self.tokens[idx + 1][1]}"
             idx += 2
+        elif (
+            tok_type == "IDENTIFIER"
+            and self.tokens[idx][1] == "typename"
+            and idx + 1 < len(self.tokens)
+            and (
+                self.tokens[idx + 1][0] in {"METAL", "SCOPE"}
+                or (
+                    self.tokens[idx + 1][0] == "IDENTIFIER"
+                    and idx + 2 < len(self.tokens)
+                    and self.tokens[idx + 2][0] == "SCOPE"
+                )
+            )
+        ):
+            idx += 1
+            type_name = self.tokens[idx][1]
+            idx = self.skip_scoped_type_name_at(idx)
         elif tok_type not in TYPE_TOKENS:
             return False
         else:
@@ -1005,6 +1021,7 @@ class MetalParser:
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
             idx = self.skip_template_argument_list_at(idx)
+            idx = self.skip_scoped_type_suffix_at(idx)
 
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",

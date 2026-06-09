@@ -61,6 +61,25 @@ def test_codegen_preserves_variadic_pack_expansion_from_mlx_integral_constant():
     assert parse_crossgl(generated) is not None
 
 
+def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
+    # Reduced from tinygrad/tinygrad
+    # extra/thunder/metal/include/ops/group/memory/tile/shared_to_register.metal.
+    code = """
+    template<typename RT, typename ST>
+    METAL_FUNC static typename metal::enable_if<
+        ducks::is_row_register_tile<RT>() && ducks::is_shared_tile<ST>(),
+        void>::type
+    load(thread RT &dst, threadgroup const ST &src, const int threadIdx) {
+        return;
+    }
+    """
+    generated = convert(code)
+
+    assert "type load(thread RT& dst, threadgroup ST& src, int threadIdx)" in generated
+    assert "return;" in generated
+    assert parse_crossgl(generated) is not None
+
+
 def test_codegen_emits_shader_and_stages():
     code = """
     #include <metal_stdlib>

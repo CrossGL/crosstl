@@ -623,6 +623,8 @@ def test_external_opencv_opencl_const_parameter_codegen_reparse():
         "name": "src",
     }
     assert "var<storage, read_write> src: array<f32>" in crossgl
+    assert "var<workgroup> smem: array<f32>" in crossgl
+    assert "var<storage, read_write> smem: array<f32>" not in crossgl
     assert "__const" not in crossgl
 
 

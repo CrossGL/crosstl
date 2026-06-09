@@ -246,6 +246,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.cuda_record_names = set()
+        self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
 
@@ -257,6 +258,9 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.vector1_name_scopes = [{}]
+        self.generated_matrix_helper_types = self.collect_generated_matrix_helper_types(
+            ast_node
+        )
         self.user_function_names = self.collect_user_function_names(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
@@ -530,7 +534,8 @@ class CudaToCrossGLConverter:
             name = getattr(current, "name", None)
             body = getattr(current, "body", None)
             if name is not None and body is not None:
-                names.add(name)
+                if not self.is_generated_matrix_helper_function(current):
+                    names.add(name)
 
             for function in getattr(current, "functions", []):
                 collect(function)
@@ -540,6 +545,79 @@ class CudaToCrossGLConverter:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_generated_matrix_helper_types(self, node):
+        return {
+            struct.name
+            for struct in getattr(node, "structs", []) or []
+            if self.is_generated_matrix_helper_struct(struct)
+        }
+
+    def native_matrix_helper_dimensions(self, type_name):
+        match = re.fullmatch(r"(float|double)([234])x([234])", str(type_name))
+        if match is None:
+            return None
+        scalar_type, columns, rows = match.groups()
+        return scalar_type, int(columns), int(rows)
+
+    def convert_native_matrix_helper_name_to_crossgl(self, type_name):
+        if type_name not in self.generated_matrix_helper_types:
+            return None
+
+        dimensions = self.native_matrix_helper_dimensions(type_name)
+        if dimensions is None:
+            return None
+
+        scalar_type, columns, rows = dimensions
+        prefix = "dmat" if scalar_type == "double" else "mat"
+        suffix = str(columns) if columns == rows else f"{columns}x{rows}"
+        return f"{prefix}{suffix}"
+
+    def is_generated_matrix_helper_struct(self, node):
+        dimensions = self.native_matrix_helper_dimensions(getattr(node, "name", ""))
+        if dimensions is None:
+            return False
+
+        scalar_type, columns, rows = dimensions
+        members = getattr(node, "members", []) or []
+        member_by_name = {
+            getattr(member, "name", None): member
+            for member in members
+            if getattr(member, "name", None)
+        }
+
+        matrix_values = member_by_name.get("m")
+        column_count = member_by_name.get("CGL_COLUMNS")
+        row_count = member_by_name.get("CGL_ROWS")
+        if matrix_values is None or column_count is None or row_count is None:
+            return False
+
+        return (
+            getattr(matrix_values, "vtype", None) == f"{scalar_type}[{columns * rows}]"
+            and getattr(column_count, "vtype", None) == "const int"
+            and str(getattr(column_count, "value", "")).strip() == str(columns)
+            and "static" in (getattr(column_count, "qualifiers", []) or [])
+            and getattr(row_count, "vtype", None) == "const int"
+            and str(getattr(row_count, "value", "")).strip() == str(rows)
+            and "static" in (getattr(row_count, "qualifiers", []) or [])
+        )
+
+    def is_generated_matrix_helper_function(self, node):
+        if getattr(node, "name", None) not in {"operator*", "transpose", "inverse"}:
+            return False
+        if not self.function_references_generated_matrix_helper_type(node):
+            return False
+        qualifiers = set(getattr(node, "qualifiers", []) or [])
+        return {"__host__", "__device__", "inline"}.issubset(qualifiers)
+
+    def function_references_generated_matrix_helper_type(self, node):
+        candidate_types = [getattr(node, "return_type", "")]
+        candidate_types.extend(getattr(param, "vtype", "") for param in node.params)
+        return any(
+            self.strip_type_qualifiers(candidate_type).strip()
+            in self.generated_matrix_helper_types
+            for candidate_type in candidate_types
+        )
 
     def add_resource_object_type_hint(self, hints, name, resource_type):
         if not name or not resource_type:
@@ -3913,6 +3991,8 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "structs") and node.structs:
             for struct in node.structs:
+                if self.is_generated_matrix_helper_struct(struct):
+                    continue
                 self.visit(struct)
                 self.emit("")
 
@@ -3929,6 +4009,8 @@ class CudaToCrossGLConverter:
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
+                    continue
+                if self.is_generated_matrix_helper_function(func):
                     continue
                 self.emit(f"// Function: {func.name}")
                 self.visit(func)
@@ -6344,6 +6426,10 @@ class CudaToCrossGLConverter:
         cuda_type = self.strip_dependent_template_disambiguators(cuda_type)
         cuda_type = self.strip_type_qualifiers(cuda_type)
 
+        matrix_type = self.convert_native_matrix_helper_name_to_crossgl(cuda_type)
+        if matrix_type is not None:
+            return matrix_type
+
         elaborated_type = self.convert_cuda_elaborated_type_to_crossgl(cuda_type)
         if elaborated_type is not None:
             return elaborated_type
@@ -6840,6 +6926,11 @@ class CudaToCrossGLConverter:
         }
 
         normalized_func_name = self.normalize_cuda_builtin_function_name(func_name)
+        matrix_constructor = self.convert_native_matrix_helper_name_to_crossgl(
+            normalized_func_name
+        )
+        if matrix_constructor is not None:
+            return matrix_constructor
         return function_mapping.get(normalized_func_name, func_name)
 
     def normalize_cuda_builtin_function_name(self, func_name):

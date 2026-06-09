@@ -6435,6 +6435,41 @@ class TestHipCodeGen:
         assert "hipTextureObject_t linearSamplers[2];" in hip_code
         assert "hipTextureObject_t shadowSamplers[2];" in hip_code
 
+    def test_texture_and_image_descriptor_array_source_bindings_do_not_expand_hip_ranges(
+        self,
+    ):
+        source_code = """
+        shader HipTextureImageDescriptorArrayBindings {
+            sampler2D colorTextures[2] @set(0) @binding(0);
+            sampler2D normalTextures[2] @set(0) @binding(1);
+            image2D colorImages[2] @rgba16f @set(0) @binding(2);
+            uimage2D maskImages[2] @r32ui @set(0) @binding(3);
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=colorTextures kind=texture set=0 "
+            "binding=0 binding_source=explicit count=2" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=normalTextures kind=texture set=0 "
+            "binding=1 binding_source=explicit count=2" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=colorImages kind=image set=0 "
+            "binding=2 binding_source=explicit count=2" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=maskImages kind=image set=0 "
+            "binding=3 binding_source=explicit count=2" in hip_code
+        )
+
     def test_duplicate_resource_bindings_are_rejected_for_hip_codegen(self):
         duplicate_texture_binding = """
         shader DuplicateHipTextureBindings {

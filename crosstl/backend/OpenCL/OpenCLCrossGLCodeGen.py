@@ -333,6 +333,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         self.push_variable_type_scope()
         self.push_identifier_name_scope()
         try:
+            resource_binding = 0
             for param in getattr(kernel, "params", []) or []:
                 if isinstance(param, dict):
                     raw_type = param.get("type", "int")
@@ -346,11 +347,12 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                     output_name = self.register_identifier_name(param_name)
                     self.register_variable_type(param_name, f"array<{element_type}>")
                     params.append(
-                        "@group(0) "
-                        f"@binding({len(params)}) "
-                        "var<storage, read_write> "
-                        f"{output_name}: array<{element_type}>"
+                        self.format_opencl_kernel_pointer_parameter(
+                            raw_type, output_name, element_type, resource_binding
+                        )
                     )
+                    if not self.is_opencl_local_pointer_type(raw_type):
+                        resource_binding += 1
                 else:
                     param_type = self.convert_hip_variable_type_to_crossgl(
                         raw_type, param_name
@@ -404,6 +406,23 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             if match:
                 return re.sub(r"\s*,\s*", ", ", match.group(1).strip())
         return "1, 1, 1"
+
+    def format_opencl_kernel_pointer_parameter(
+        self, raw_type, output_name, element_type, binding
+    ):
+        if self.is_opencl_local_pointer_type(raw_type):
+            return f"var<workgroup> {output_name}: array<{element_type}>"
+
+        return (
+            "@group(0) "
+            f"@binding({binding}) "
+            "var<storage, read_write> "
+            f"{output_name}: array<{element_type}>"
+        )
+
+    def is_opencl_local_pointer_type(self, raw_type):
+        qualifiers = set(str(raw_type).split())
+        return bool(qualifiers & {"__shared__", "__local", "__local__", "local"})
 
     def visit_PreprocessorNode(self, node):
         content = self.format_preprocessor_content(node.content)

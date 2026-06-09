@@ -3127,6 +3127,24 @@ def test_initializer_list_declaration_codegen():
     assert "{.5f, 1f" not in generated_code
 
 
+def test_bracket_array_literal_codegen_from_slang_generic_lambda_issue_reparse():
+    # Source: shader-slang/slang#10866.
+    code = """
+    void upsample()
+    {
+        let positions = [int2(0,0), int2(1, 0), int2(-1, 0),];
+        var first = positions[0];
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "let positions = {ivec2(0, 0), ivec2(1, 0), ivec2(-1, 0)};" in generated_code
+    assert "var first = positions[0];" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_typed_brace_constructor_codegen():
     code = """
     float4 tint = float4{1.0, .5f, 0.0, 1.0};
