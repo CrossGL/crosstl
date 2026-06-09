@@ -5890,6 +5890,104 @@ def test_translate_project_records_define_processing_without_frontend_support(
     ) in result.stdout
 
 
+def test_project_cli_inspect_report_text_names_unforwarded_include_dirs(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    include_dir.joinpath("shared.inc").write_text("// shared\n", encoding="utf-8")
+    (repo / "shader.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del file_path, backend, format_output, source_backend, include_paths, defines
+        Path(save_shader).write_text("// translated\n", encoding="utf-8")
+        return "// translated\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    inspection = inspect_project_report(report_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert validation["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.include-paths-not-forwarded": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"include.forwarding": 1}
+    assert payload["artifacts"][0]["includePathProcessing"] == {
+        "status": "not-supported",
+        "frontend": "lexer",
+        "supportsIncludePaths": False,
+        "includePathCount": 1,
+    }
+    assert inspection["includePathProcessing"]["notSupportedArtifacts"] == [
+        {
+            "source": "shader.rs",
+            "sourceBackend": "rust",
+            "target": "cgl",
+            "path": "translated/cgl/shader.cgl",
+            "status": "not-supported",
+            "frontend": "lexer",
+            "supportsIncludePaths": False,
+            "includePathCount": 1,
+        }
+    ]
+    assert inspection["includePathProcessing"]["frontendVisibleIncludeDirs"] == [
+        {
+            "path": "includes",
+            "resolvedPath": str(include_dir.resolve()),
+            "status": "active",
+            "frontendVisible": True,
+        }
+    ]
+    assert result.returncode == 0
+    assert "Include path processing issues:" in result.stdout
+    assert (
+        "- shader.rs -> cgl at translated/cgl/shader.cgl: "
+        "1 include path not forwarded by rust lexer frontend "
+        "(includeDirs=includes)"
+    ) in result.stdout
+
+
 def test_translate_project_records_artifact_matrix_metadata(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()

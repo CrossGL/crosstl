@@ -2170,7 +2170,29 @@ def _format_define_processing_artifact_lines(define_processing):
     return lines
 
 
-def _format_include_path_processing_issue_line(artifact):
+def _include_path_processing_frontend_visible_dirs(include_path_processing):
+    if not isinstance(include_path_processing, Mapping):
+        return []
+
+    records = include_path_processing.get("frontendVisibleIncludeDirs")
+    if not isinstance(records, list):
+        records = include_path_processing.get("includeDirs")
+    if not isinstance(records, list):
+        return []
+
+    paths = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        if record.get("frontendVisible") is not True:
+            continue
+        path = record.get("path")
+        if isinstance(path, str) and path:
+            paths.append(path)
+    return paths
+
+
+def _format_include_path_processing_issue_line(artifact, include_dirs=None):
     line = _format_artifact_identity_line(artifact)
     if not line:
         return None
@@ -2194,9 +2216,12 @@ def _format_include_path_processing_issue_line(artifact):
         f" {frontend} frontend" if isinstance(frontend, str) and frontend else ""
     )
     include_path_label = "include path" if include_path_count == 1 else "include paths"
+    suffix = ""
+    if include_dirs:
+        suffix = f" (includeDirs={','.join(include_dirs)})"
     return (
         f"{line}: {include_path_count} {include_path_label} not forwarded"
-        f"{source_backend_label}{frontend_label}"
+        f"{source_backend_label}{frontend_label}{suffix}"
     )
 
 
@@ -2207,9 +2232,12 @@ def _format_include_path_processing_issue_lines(include_path_processing):
     if not isinstance(artifacts, list) or not artifacts:
         return []
 
+    include_dirs = _include_path_processing_frontend_visible_dirs(
+        include_path_processing
+    )
     lines = ["Include path processing issues:"]
     for artifact in artifacts:
-        line = _format_include_path_processing_issue_line(artifact)
+        line = _format_include_path_processing_issue_line(artifact, include_dirs)
         if line:
             lines.append(line)
     if len(lines) == 1:

@@ -416,7 +416,9 @@ artifact-level include forwarding state can be triaged from the report summary.
 Inspection summaries also include configured include-directory status records
 plus frontend-visible and inactive directory counts, so report consumers can
 distinguish directories that reached the frontend from missing, non-directory,
-or outside-project entries.
+or outside-project entries. Text issue lines for unsupported include-path
+forwarding name the frontend-visible configured include directories so the
+affected configuration is visible next to the artifact identity.
 During scan, project reports also record ``#include`` directives discovered in
 translation units. Each dependency record keeps the include target, local,
 system, or dynamic kind, line and column, and a status of ``resolved``,
