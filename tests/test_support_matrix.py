@@ -1410,6 +1410,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert "line-preserving source-map mappings" in (backend_support["notes"])
         assert "line-preserving source-map validation" in backend_support["notes"]
+        assert "expected/actual line-preserving mapping mismatch context" in (
+            backend_support["notes"]
+        )
         assert "non-empty source-map mappings" in backend_support["notes"]
         assert "file-level source-map mapping cardinality" in backend_support["notes"]
         assert "fine-grained positive-length source-map mappings" in (

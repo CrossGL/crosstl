@@ -1,3 +1,4 @@
+import copy
 import json
 import subprocess
 import sys
@@ -14567,6 +14568,8 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
     artifact = payload["artifacts"][0]
     source_map = artifact["sourceMap"]
     source_map["mappingGranularity"] = "file"
+    source_length = source_map["source"]["length"]
+    generated_length = source_map["generated"]["length"]
     for span in (source_map["source"], source_map["generated"]):
         span["length"] -= 1
         span["endOffset"] -= 1
@@ -14617,7 +14620,13 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
     assert "sourceMap.source.length must match source file length" in (
         diagnostic["message"]
     )
+    assert f"expected {source_length}, actual {source_length - 1}" in (
+        diagnostic["message"]
+    )
     assert "sourceMap.generated.length must match generated artifact length" in (
+        diagnostic["message"]
+    )
+    assert f"expected {generated_length}, actual {generated_length - 1}" in (
         diagnostic["message"]
     )
 
@@ -14635,7 +14644,9 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_mappin
     source_map = artifact["sourceMap"]
     assert source_map["mappingGranularity"] == "line"
     assert len(source_map["mappings"]) > 1
+    expected_mapping_count = len(source_map["mappings"])
     source_map["mappings"].pop()
+    stale_mapping_count = len(source_map["mappings"])
     artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
     payload["summary"]["sourceRemapMappingCount"] = len(source_map["mappings"])
     report_path = repo / "out" / "stale-line-source-map-report.json"
@@ -14665,6 +14676,43 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_mappin
         "sourceMap.mappings count must match current line-preserving line count"
         in diagnostic["message"]
     )
+    assert f"expected {expected_mapping_count}, actual {stale_mapping_count}" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_stale_line_preserving_source_map_span(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    source_map = payload["artifacts"][0]["sourceMap"]
+    assert source_map["mappingGranularity"] == "line"
+    original_mapping = copy.deepcopy(source_map["mappings"][0])
+    source_map["mappings"][0]["source"]["column"] += 1
+    stale_mapping = source_map["mappings"][0]
+    report_path = repo / "out" / "stale-line-source-map-span-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = next(
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if diagnostic["code"] == "project.validate.source-map-line-span-mismatch"
+    )
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+    assert (
+        "sourceMap.mappings[0] must match current line-preserving line span"
+        in diagnostic["message"]
+    )
+    assert f"expected {original_mapping}" in diagnostic["message"]
+    assert f"actual {stale_mapping}" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):

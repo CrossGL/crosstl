@@ -5166,7 +5166,8 @@ def _source_map_file_span_mismatch_reasons(
             expected_field_name = "path" if field_name == "file" else field_name
             reasons.append(
                 f"{prefix}.{field_name} must match "
-                f"{expected_name} {expected_field_name}"
+                f"{expected_name} {expected_field_name} "
+                f"({_value_mismatch_context(expected_span[field_name], span.get(field_name))})"
             )
     return reasons
 
@@ -5196,16 +5197,21 @@ def _source_map_line_preserving_mapping_reasons(
         return []
     if len(mappings) != len(expected_mappings):
         return [
-            f"{prefix}.mappings count must match current line-preserving line count"
+            f"{prefix}.mappings count must match current line-preserving line count "
+            f"({_value_mismatch_context(len(expected_mappings), len(mappings))})"
         ]
     for mapping_index, expected_mapping in enumerate(expected_mappings):
         mapping = mappings[mapping_index]
         if not isinstance(mapping, Mapping) or dict(mapping) != expected_mapping:
             return [
                 f"{prefix}.mappings[{mapping_index}] must match current "
-                "line-preserving line span"
+                "line-preserving line span "
+                f"({_value_mismatch_context(expected_mapping, mapping)})"
             ]
-    return [f"{prefix}.mappings must match current line-preserving line spans"]
+    return [
+        f"{prefix}.mappings must match current line-preserving line spans "
+        f"({_value_mismatch_context(expected_mappings, mappings)})"
+    ]
 
 
 def _source_map_file_span_validation_diagnostics(
