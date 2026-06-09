@@ -10105,6 +10105,39 @@ def test_validate_project_report_rejects_stale_include_dir_resolved_path(tmp_pat
     )
 
 
+def test_validate_project_report_rejects_stale_include_dir_frontend_visibility(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    include_dir = repo / "includes"
+    repo.mkdir()
+    include_dir.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            include_dirs = ["includes"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["includeDirStatus"][0]["frontendVisible"] = False
+    report_path = repo / "out" / "stale-include-dir-frontend-visibility-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.includeDirStatus[0].frontendVisible must match status" in (
+        diagnostic["message"]
+    )
+    assert "(expected False, actual True)" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_stale_source_root_status(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -10176,6 +10209,37 @@ def test_validate_project_report_rejects_stale_source_root_resolved_path(tmp_pat
         f"(expected {other_shader_dir.resolve()}, actual {shader_dir.resolve()})"
         in diagnostic["message"]
     )
+
+
+def test_validate_project_report_rejects_stale_source_root_scan_visibility(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    repo.mkdir()
+    shader_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["sourceRootStatus"][0]["scanVisible"] = False
+    report_path = repo / "out" / "stale-source-root-scan-visibility-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceRootStatus[0].scanVisible must match status" in (
+        diagnostic["message"]
+    )
+    assert "(expected False, actual True)" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_unexpected_generated_project_status_fields(

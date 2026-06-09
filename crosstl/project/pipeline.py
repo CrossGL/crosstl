@@ -10286,8 +10286,12 @@ def _include_dir_status_contract_reasons(
                 f"{prefix}.status must match the resolved include directory "
                 f"({_value_mismatch_context(status, expected_status)})"
             )
-        if frontend_visible != (expected_status == "active"):
-            reasons.append(f"{prefix}.frontendVisible must match status")
+        expected_visible = expected_status == "active"
+        if frontend_visible != expected_visible:
+            reasons.append(
+                f"{prefix}.frontendVisible must match status "
+                f"({_value_mismatch_context(frontend_visible, expected_visible)})"
+            )
 
     if require_counts or "includeDirStatusCounts" in project:
         counts = project.get("includeDirStatusCounts")
@@ -10396,8 +10400,12 @@ def _source_root_status_contract_reasons(
                 f"{prefix}.status must match the resolved source root "
                 f"({_value_mismatch_context(status, expected_status)})"
             )
-        if scan_visible != (expected_status == "active"):
-            reasons.append(f"{prefix}.scanVisible must match status")
+        expected_visible = expected_status == "active"
+        if scan_visible != expected_visible:
+            reasons.append(
+                f"{prefix}.scanVisible must match status "
+                f"({_value_mismatch_context(scan_visible, expected_visible)})"
+            )
 
     if require_counts or "sourceRootStatusCounts" in project:
         counts = project.get("sourceRootStatusCounts")

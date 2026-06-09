@@ -291,8 +291,8 @@ def test_project_repo_scan_documents_source_root_status():
     for backend_support in feature["support"].values():
         assert "source-root status counts" in backend_support["notes"]
         assert (
-            "expected/actual source-root status and resolved-path validation context"
-            in backend_support["notes"]
+            "expected/actual source-root status, resolved-path, and scan-visibility "
+            "validation context" in backend_support["notes"]
         )
         assert "roots that resolve to non-directory paths" in (backend_support["notes"])
         assert "validates skipped source override provenance" in (
@@ -351,6 +351,10 @@ def test_project_repo_scan_documents_source_root_status():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_stale_source_root_resolved_path"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_source_root_scan_visibility"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -580,8 +584,8 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "current include-directory resolved paths" in (backend_support["notes"])
         assert (
-            "expected/actual include-directory status and resolved-path "
-            "validation context" in backend_support["notes"]
+            "expected/actual include-directory status, resolved-path, and "
+            "frontend-visibility validation context" in backend_support["notes"]
         )
         assert "non-directory paths" in backend_support["notes"]
         assert "only active existing repository-contained resolved paths" in (
@@ -761,6 +765,11 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_stale_include_dir_resolved_path"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_include_dir_frontend_"
+            "visibility"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1701,6 +1710,15 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_stale_source_root_resolved_path"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_source_root_scan_visibility"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_stale_include_dir_frontend_"
+            "visibility"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
