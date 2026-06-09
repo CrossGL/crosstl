@@ -298,6 +298,9 @@ def test_project_repo_scan_documents_source_root_status():
         assert "validates skipped source override provenance" in (
             backend_support["notes"]
         )
+        assert "expected/actual source override provenance mismatch context" in (
+            backend_support["notes"]
+        )
         assert "scan/report CLI source-root overrides" in (backend_support["notes"])
         assert "source override rollups" in (backend_support["notes"])
         assert "omit currently scanned units or skipped sources" in (
@@ -1387,6 +1390,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert "inconsistent unit and skipped source override provenance" in (
+            backend_support["notes"]
+        )
+        assert "expected/actual source override provenance mismatch context" in (
             backend_support["notes"]
         )
         assert "artifact source hashes that do not match declared" in (

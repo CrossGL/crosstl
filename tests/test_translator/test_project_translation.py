@@ -3569,7 +3569,7 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("skipped_override", "message"),
+    ("skipped_override", "message", "context"),
     [
         (
             None,
@@ -3577,6 +3577,7 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
                 "skipped[0].sourceOverride must be recorded for "
                 "unsupported-source-override records"
             ),
+            None,
         ),
         (
             "other-backend",
@@ -3584,6 +3585,7 @@ def test_scan_project_reports_unsupported_source_overrides(tmp_path):
                 "skipped[0].sourceOverride must match project.sourceOverrides "
                 "for skipped[0].path"
             ),
+            "(expected ['unknown-backend'], actual other-backend)",
         ),
     ],
 )
@@ -3591,6 +3593,7 @@ def test_validate_project_report_rejects_inconsistent_skipped_source_overrides(
     tmp_path,
     skipped_override,
     message,
+    context,
 ):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -3622,6 +3625,8 @@ def test_validate_project_report_rejects_inconsistent_skipped_source_overrides(
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert message in diagnostic["message"]
+    if context is not None:
+        assert context in diagnostic["message"]
 
 
 def test_scan_project_reports_unsupported_source_override_without_matches(tmp_path):
@@ -6695,7 +6700,7 @@ def test_validate_project_report_rejects_invalid_unit_source_backends(
 
 
 @pytest.mark.parametrize(
-    ("source_overrides", "source_override", "message"),
+    ("source_overrides", "source_override", "message", "context"),
     [
         (
             {"gpu/*.shader": "cgl"},
@@ -6704,11 +6709,13 @@ def test_validate_project_report_rejects_invalid_unit_source_backends(
                 "units[0].sourceOverride must match project.sourceOverrides "
                 "for units[0].path"
             ),
+            "(expected ['cgl'], actual directx)",
         ),
         (
             {"gpu/*.shader": "directx"},
             "directx",
             "units[0].sourceOverride must resolve to units[0].sourceBackend",
+            "(expected cgl, actual directx)",
         ),
     ],
 )
@@ -6717,6 +6724,7 @@ def test_validate_project_report_rejects_inconsistent_unit_source_overrides(
     source_overrides,
     source_override,
     message,
+    context,
 ):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
@@ -6751,6 +6759,7 @@ def test_validate_project_report_rejects_inconsistent_unit_source_overrides(
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert message in diagnostic["message"]
+    assert context in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_noncanonical_project_targets(tmp_path):

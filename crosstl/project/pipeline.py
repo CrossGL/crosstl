@@ -9236,12 +9236,19 @@ def _unit_source_override_contract_reasons(
     ):
         return []
 
-    matching_override = any(
-        source_override == backend and fnmatch.fnmatch(source_path, pattern)
+    matching_override_backends = [
+        backend
         for pattern, backend in source_overrides.items()
+        if fnmatch.fnmatch(source_path, pattern)
+    ]
+    matching_override = any(
+        source_override == backend for backend in matching_override_backends
     )
     if not matching_override:
-        return [f"{prefix} must match project.sourceOverrides for units[{index}].path"]
+        return [
+            f"{prefix} must match project.sourceOverrides for units[{index}].path "
+            f"({_value_mismatch_context(matching_override_backends, source_override)})"
+        ]
 
     register_default_sources()
     discover_backend_plugins()
@@ -9249,7 +9256,10 @@ def _unit_source_override_contract_reasons(
     if canonical_name is None:
         return [f"{prefix} must be a registered source backend"]
     if canonical_name != source_backend:
-        return [f"{prefix} must resolve to units[{index}].sourceBackend"]
+        return [
+            f"{prefix} must resolve to units[{index}].sourceBackend "
+            f"({_value_mismatch_context(source_backend, canonical_name)})"
+        ]
     return []
 
 
@@ -9912,13 +9922,18 @@ def _skipped_source_override_contract_reasons(
     ):
         return []
 
-    matching_override = any(
-        source_override == backend and fnmatch.fnmatch(skipped_path, pattern)
+    matching_override_backends = [
+        backend
         for pattern, backend in source_overrides.items()
+        if fnmatch.fnmatch(skipped_path, pattern)
+    ]
+    matching_override = any(
+        source_override == backend for backend in matching_override_backends
     )
     if not matching_override:
         return [
-            f"{prefix} must match project.sourceOverrides for skipped[{index}].path"
+            f"{prefix} must match project.sourceOverrides for skipped[{index}].path "
+            f"({_value_mismatch_context(matching_override_backends, source_override)})"
         ]
     return []
 
