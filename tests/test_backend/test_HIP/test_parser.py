@@ -309,6 +309,29 @@ class TestHipParser:
         assert function.name == "add"
         assert "__device__" in function.qualifiers
 
+    def test_public_hipblaslt_thread_local_extern_declaration_parse(self):
+        # Reduced from ROCm/hipBLASLt@3a609b06926c8227e753b62087555e1f435bf2d4,
+        # clients/include/hipblaslt_random.hpp.
+        code = """
+        using hipblaslt_rng_t = std::mt19937;
+        extern thread_local hipblaslt_rng_t t_hipblaslt_rng;
+        extern thread_local int t_hipblaslt_rand_idx;
+        """
+        ast = self.parse_code(code)
+
+        rng = ast.statements[1]
+        rand_idx = ast.statements[2]
+
+        assert isinstance(rng, VariableNode)
+        assert rng.vtype == "hipblaslt_rng_t"
+        assert rng.name == "t_hipblaslt_rng"
+        assert rng.qualifiers == ["extern", "thread_local"]
+
+        assert isinstance(rand_idx, VariableNode)
+        assert rand_idx.vtype == "int"
+        assert rand_idx.name == "t_hipblaslt_rand_idx"
+        assert rand_idx.qualifiers == ["extern", "thread_local"]
+
     def test_cuda_samples_style_const_dim3_constructor_global_parses(self):
         code = """
         const dim3 windowSize(512, 512);

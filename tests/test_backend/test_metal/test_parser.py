@@ -2338,6 +2338,26 @@ def test_parse_restrict_parameter_qualifier_from_vllm_metal():
     assert params[1].name == "out"
 
 
+def test_parse_materialx_out_parameter_qualifier_from_xcode_genmsl():
+    # Reduced from Xcode's bundled MaterialX MSL library:
+    # /Applications/Xcode.app/.../USDLib_FormatLoaderProxy_Xcode.framework/
+    # Resources/libraries/stdlib/genmsl/mx_normalmap.metal
+    code = """
+    void mx_normalmap_vector2(vec3 value,
+                              int map_space,
+                              vec2 normal_scale,
+                              out vec3 result) {
+        result = value;
+    }
+    """
+    ast = parse_ok(code)
+    result_param = ast.functions[0].params[-1]
+
+    assert result_param.vtype == "vec3"
+    assert result_param.name == "result"
+    assert result_param.qualifiers == ["out"]
+
+
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     code = """
     void reduce(uint j, uint limit, device float* dst_row) {

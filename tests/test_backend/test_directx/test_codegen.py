@@ -2904,6 +2904,30 @@ def test_codegen_cbuffer_name_matching_struct_is_renamed_for_crossgl():
     parse_crossgl(output)
 
 
+def test_codegen_cbuffer_struct_named_crossgl_keyword_is_renamed():
+    # Reduced from microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/CodeGenSPIRV/vk.layout.cbuffer.fxc.matrix.struct.hlsl
+    hlsl = textwrap.dedent("""
+        cbuffer buffer0 {
+            struct layout {
+                float1x2 foo;
+            } bar;
+        };
+
+        float4 main(float4 color : COLOR) : SV_Target {
+            color.x += bar.foo._12;
+            return color;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "struct layout_ {" in output
+    assert "layout_ bar;" in output
+    assert "layout bar;" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_duplicate_cbuffer_names_are_renamed_for_crossgl():
     # Source: microsoft/DirectX-Graphics-Samples
     # Libraries/D3D12RaytracingFallback/src/FallbackLayerUnitTests/ReadRootConstants.hlsl

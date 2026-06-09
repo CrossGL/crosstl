@@ -107,6 +107,7 @@ class HipParser:
         "__MANAGED__",
         "__DEVICE__",
         "STATIC",
+        "THREAD_LOCAL",
         "EXTERN",
         "CONSTEXPR",
         "INLINE",

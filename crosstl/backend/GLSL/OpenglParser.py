@@ -342,6 +342,13 @@ GEOMETRY_OUTPUT_LAYOUT_QUALIFIERS = {
     "triangle_strip",
     "max_vertices",
 }
+HLSL_GEOMETRY_PARAMETER_QUALIFIERS = {
+    "point",
+    "line",
+    "triangle",
+    "lineadj",
+    "triangleadj",
+}
 GEOMETRY_BUILTINS = {
     "EmitVertex",
     "EndPrimitive",
@@ -1029,6 +1036,9 @@ class GLSLParser:
             return False
 
         identifier = self.current_token[1]
+        if identifier in self.known_type_names:
+            return False
+
         if identifier in DECLARATION_ANNOTATION_PREFIXES:
             if self.peek()[0] != "LPAREN":
                 return False
@@ -1725,6 +1735,25 @@ class GLSLParser:
         function.semantic = semantic
         return function
 
+    def parse_parameter_prefix(self):
+        qualifiers, layout = self.parse_declaration_prefix()
+        if self.shader_type != "geometry" and not self.should_infer_shader_type:
+            return qualifiers, layout
+
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in HLSL_GEOMETRY_PARAMETER_QUALIFIERS
+        ):
+            qualifiers.append(self.current_token[1])
+            self.eat("IDENTIFIER")
+            self.skip_newlines()
+            trailing_qualifiers, trailing_layout = self.parse_declaration_prefix()
+            qualifiers.extend(trailing_qualifiers)
+            if trailing_layout:
+                layout = self.merge_layout_qualifiers(layout, trailing_layout)
+
+        return qualifiers, layout
+
     def parse_parameters(self):
         self.eat("LPAREN")
         params = []
@@ -1749,7 +1778,7 @@ class GLSLParser:
                         raise SyntaxError("GLSL variadic parameter must be last")
                     break
 
-                qualifiers, layout = self.parse_declaration_prefix()
+                qualifiers, layout = self.parse_parameter_prefix()
                 param_type = self.parse_type()
                 type_array_sizes = []
                 if self.current_token[0] == "LBRACKET":

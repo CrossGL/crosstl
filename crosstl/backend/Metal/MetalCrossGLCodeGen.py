@@ -463,6 +463,7 @@ class MetalToCrossGLConverter:
             "get_depth",
             "get_array_size",
         }
+        self.parameter_direction_qualifiers = ("inout", "out")
         self.fragment_execution_attribute_names = {
             "early_fragment_tests",
         }
@@ -1525,24 +1526,35 @@ class MetalToCrossGLConverter:
 
     def format_parameter_decl(self, var, index, semantic_context=None):
         if getattr(var, "name", None):
-            return self.format_decl(
+            declaration = self.format_decl(
                 var,
                 include_semantic=True,
                 semantic_context=semantic_context,
             )
+            return self.with_parameter_direction_qualifier(var, declaration)
 
         generated_name = self.reserve_generated_identifier(f"_unnamed_param_{index}")
         original_name = var.name
         var.name = generated_name
         try:
-            return self.format_decl(
+            declaration = self.format_decl(
                 var,
                 include_semantic=True,
                 declare_name=False,
                 semantic_context=semantic_context,
             )
+            return self.with_parameter_direction_qualifier(var, declaration)
         finally:
             var.name = original_name
+
+    def with_parameter_direction_qualifier(self, var, declaration):
+        qualifiers = [
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        ]
+        for qualifier in self.parameter_direction_qualifiers:
+            if qualifier in qualifiers:
+                return f"{qualifier} {declaration}"
+        return declaration
 
     def format_global_decl(self, var, include_semantic=False):
         declaration = self.format_decl(var, include_semantic=include_semantic)

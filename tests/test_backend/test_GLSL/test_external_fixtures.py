@@ -1656,6 +1656,77 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.basic.geom.
+    # Reduced from HLSL-style geometry entry parameters that put primitive
+    # topology qualifiers before optional in/out parameter qualifiers.
+    ExternalFixture(
+        name="glslang-hlsl-geometry-primitive-parameter-qualifiers",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.basic.geom",
+        shader_type="geometry",
+        code=textwrap.dedent("""
+            struct PSInput
+            {
+                float myfloat : SOME_SEMANTIC;
+            };
+
+            [maxvertexcount(4)]
+            void main(triangle in uint vertexID[3] : VertexID,
+                      triangle uint weights[3] : FOO,
+                      inout LineStream<PSInput> outputStream)
+            {
+                PSInput vert;
+                vert.myfloat = weights[0] + weights[1] + weights[2];
+
+                outputStream.Append(vert);
+                outputStream.RestartStrip();
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.hull.1.tesc.
+    # Reduced from HLSL tessellation shaders with all-caps user struct return
+    # types, which should not be treated as declaration-prefix macros.
+    ExternalFixture(
+        name="glslang-hlsl-hull-uppercase-struct-return-type",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.hull.1.tesc",
+        shader_type="tessellation_control",
+        code=textwrap.dedent("""
+            struct VS_OUT
+            {
+                float3 cpoint : CPOINT;
+            };
+
+            struct HS_CONSTANT_OUT
+            {
+                float edges[2] : SV_TessFactor;
+            };
+
+            struct HS_OUT
+            {
+                float3 cpoint : CPOINT;
+            };
+
+            [outputcontrolpoints(4)]
+            HS_OUT main(InputPatch<VS_OUT, 4> ip,
+                        uint cpid : SV_OutputControlPointID)
+            {
+                HS_OUT output;
+                output.cpoint = ip[0].cpoint;
+                return output;
+            }
+
+            HS_CONSTANT_OUT PCF(uint pid : SV_PrimitiveId)
+            {
+                HS_CONSTANT_OUT output;
+                output.edges[0] = 2.0f;
+                output.edges[1] = 8.0f;
+                return output;
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -1733,6 +1804,41 @@ def test_parse_glslang_perprimitive_nv_interface_block_fixture():
     assert member.layout == {"location": "0"}
     assert output.qualifiers == ["out"]
     assert output.layout == {"location": "8"}
+
+
+def test_parse_glslang_hlsl_geometry_parameter_primitive_qualifiers():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-geometry-primitive-parameter-qualifiers"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    vertex_id, weights, output_stream = ast.functions[0].params
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert vertex_id.qualifiers == ["triangle", "in"]
+    assert vertex_id.semantic == "VertexID"
+    assert weights.qualifiers == ["triangle"]
+    assert weights.semantic == "FOO"
+    assert output_stream.qualifiers == ["inout"]
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_parse_glslang_hlsl_hull_uppercase_struct_return_type():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-hull-uppercase-struct-return-type"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert [function.name for function in ast.functions] == ["main", "PCF"]
+    assert ast.functions[1].return_type == "HS_CONSTANT_OUT"
+    assert ast.functions[1].params[0].semantic == "SV_PrimitiveId"
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_parse_glslang_anonymous_struct_declarator_fixture():

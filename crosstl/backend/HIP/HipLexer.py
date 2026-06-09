@@ -80,6 +80,7 @@ TOKENS = tuple(
         ("TYPENAME", r"\btypename\b"),
         ("EXTERN", r"\bextern\b"),
         ("STATIC", r"\bstatic\b"),
+        ("THREAD_LOCAL", r"\bthread_local\b"),
         ("CONSTEXPR", r"\bconstexpr\b"),
         ("INLINE", r"\b(?:inline|__inline__)\b"),
         ("CONST", r"\bconst\b"),

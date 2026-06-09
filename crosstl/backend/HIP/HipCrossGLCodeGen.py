@@ -1105,6 +1105,9 @@ class HipToCrossGLConverter:
         operator_name = self.format_cpp_operator_function_name(name)
         if operator_name is not None:
             return operator_name
+        base_name, template_args = self.parse_cpp_template(name)
+        if template_args:
+            return self.format_function_declaration_name(base_name)
         if self.is_simple_identifier(name):
             return self.sanitize_identifier_name(name)
         if not isinstance(name, str) or "::" not in name:
@@ -6642,7 +6645,26 @@ class HipToCrossGLConverter:
         if template_alias is not None:
             return template_alias
 
+        scoped_alias = self.convert_reparsable_scoped_alias(alias_type)
+        if scoped_alias is not None:
+            return scoped_alias
+
         return alias_type
+
+    def convert_reparsable_scoped_alias(self, alias_type):
+        if not isinstance(alias_type, str):
+            return None
+
+        alias_type = alias_type.strip()
+        if "<" in alias_type or ">" in alias_type or "::" not in alias_type:
+            return None
+        if not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)+",
+            alias_type,
+        ):
+            return None
+
+        return "ptr<void>"
 
     def convert_type_member_alias(self, alias_type):
         parsed = self.parse_cpp_template_member_type(alias_type)

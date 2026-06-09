@@ -1350,7 +1350,7 @@ class HLSLParser:
             if self.current_token[0] == "ENUM":
                 members.append(self.parse_enum())
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     name,
                     qualifiers=qualifiers,
@@ -1458,7 +1458,7 @@ class HLSLParser:
             if self.current_token[0] == "ENUM":
                 nested_members.append(self.parse_enum())
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     nested_name or parent_name,
                     qualifiers=member_qualifiers,
@@ -1498,6 +1498,9 @@ class HLSLParser:
 
         if not self.is_declarator_identifier_token(self.current_token[0]):
             if nested_name is None:
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                    return nested_members
                 raise SyntaxError("Expected identifier after anonymous struct member")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -1702,7 +1705,7 @@ class HLSLParser:
             if self.current_token[0] == "ENUM":
                 members.append(self.parse_enum())
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     explicit_name or "AnonymousStruct",
                     qualifiers=member_qualifiers,
@@ -1854,6 +1857,21 @@ class HLSLParser:
         if depth != 0:
             raise SyntaxError(f"Unterminated {open_token} block")
 
+    def looks_like_nested_struct_definition(self):
+        if self.current_token[0] != "STRUCT":
+            return False
+        if self.peek()[0] == "LBRACE":
+            return True
+        if not self.is_identifier_token(self.peek()[0]):
+            return False
+
+        idx = self.current_index + 2
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
+                return False
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+
     def parse_cbuffer(self, attributes=None):
         buffer_kind = self.current_token[1]
         self.eat(self.current_token[0])
@@ -1886,7 +1904,7 @@ class HLSLParser:
             qualifiers = self.parse_qualifiers()
             if self.skip_unexpanded_member_macro():
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     name,
                     qualifiers=qualifiers,

@@ -432,6 +432,47 @@ def test_parse_elaborated_struct_function_signature_and_local_from_vkd3d():
     assert local_output.name == "o"
 
 
+def test_parse_elaborated_struct_member_from_dxc_cast_subscript():
+    # Source: microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/HLSLFileCheck/hlsl/types/cast/mat_cast_sub_write.hlsl
+    ast = parse_code(textwrap.dedent("""
+            struct B {
+                uint4 ui;
+            };
+
+            struct M {
+                struct B base;
+                float4 color;
+            };
+            """))
+
+    members = ast.structs[1].members
+
+    assert members[0].vtype == "B"
+    assert members[0].name == "base"
+    assert members[1].vtype == "float4"
+    assert members[1].name == "color"
+
+
+def test_parse_anonymous_embedded_struct_members_from_dxc_workgraphs():
+    # Source: microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/HLSLFileCheck/hlsl/workgraph/nested_sv_dispatchgrid.hlsl
+    ast = parse_code(textwrap.dedent("""
+            struct Record1 {
+                struct {
+                    uint3 grid : SV_DispatchGrid;
+                };
+            };
+            """))
+
+    record = ast.structs[0]
+
+    assert len(record.members) == 1
+    assert record.members[0].vtype == "uint3"
+    assert record.members[0].name == "grid"
+    assert record.members[0].semantic == "SV_DispatchGrid"
+
+
 def test_parse_elaborated_struct_declarations_from_dxc_rewriter():
     ast = parse_code(textwrap.dedent("""
             struct my_struct_type_decl {

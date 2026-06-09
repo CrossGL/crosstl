@@ -152,6 +152,21 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
         "path": "clang/test/AST/ast-dump-pipe.cl",
     },
+    "llvm_clang_opencl_pipe_builtin_parameters": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/test/CodeGenOpenCL/pipe_builtin.cl",
+    },
+    "llvm_libclc_clc_workitem_specifier_macros": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "libclc/clc/lib/amdgpu/workitem/clc_get_sub_group_size.cl",
+    },
+    "llvm_libclc_implicit_args_constant_pointer": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "libclc/clc/lib/amdgpu/workitem/clc_get_num_groups.cl",
+    },
     "intel_compute_runtime_simple_spill_fill_kernel": {
         "url": "https://github.com/intel/compute-runtime",
         "commit": "5d9dec127a943c688c816e345c64a4ee2f99c7e6",
@@ -995,6 +1010,95 @@ def test_external_llvm_clang_pipe_typedefs_codegen_reparse():
     assert "// OpenCL pipe typedef: pipe_i32 pipetype" in crossgl
     assert "// OpenCL pipe typedef: pipe_vec4_f32 pipetype3" in crossgl
     assert "void takes_pipe(pipe_i32 p, pipe_i32 q, pipe_vec4_f32 r)" in crossgl
+
+
+def test_external_llvm_clang_pipe_builtin_parameters_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_pipe_builtin_parameters"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/test/CodeGenOpenCL/pipe_builtin.cl"
+
+    source = """
+    void test_read_pipe_parameter(read_only pipe int p, global int *ptr) {
+        read_pipe(p, ptr);
+        reserve_id_t rid = reserve_read_pipe(p, 2);
+        read_pipe(p, rid, 2, ptr);
+        commit_read_pipe(p, rid);
+    }
+
+    void test_write_pipe_parameter(write_only pipe int p, global int *ptr) {
+        write_pipe(p, ptr);
+        reserve_id_t rid = reserve_write_pipe(p, 2);
+        write_pipe(p, rid, 2, ptr);
+        commit_write_pipe(p, rid);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0]["type"] == "read_only pipe int"
+    assert ast.statements[1].params[0]["type"] == "write_only pipe int"
+    assert "void test_read_pipe_parameter(pipe_i32 p, ptr<i32> ptr)" in crossgl
+    assert "void test_write_pipe_parameter(pipe_i32 p, ptr<i32> ptr)" in crossgl
+
+
+def test_external_llvm_libclc_function_specifier_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_libclc_clc_workitem_specifier_macros"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert (
+        source_info["path"]
+        == "libclc/clc/lib/amdgpu/workitem/clc_get_sub_group_size.cl"
+    )
+
+    source = """
+    _CLC_DEF _CLC_OVERLOAD _CLC_CONST uint __clc_get_sub_group_size(void) {
+        uint wavesize = __builtin_amdgcn_wavefrontsize();
+        uint lid = (uint)__clc_get_local_linear_id();
+        return min(wavesize, 64 - (lid & ~(wavesize - 1)));
+    }
+
+    _CLC_DECL _CLC_OVERLOAD _CLC_CONST uint __clc_get_max_sub_group_size(void);
+    _CLC_INLINE uint __clc_inline_probe(uint x) { return x; }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].qualifiers == [
+        "_CLC_DEF",
+        "_CLC_OVERLOAD",
+        "_CLC_CONST",
+    ]
+    assert ast.statements[1].qualifiers == [
+        "_CLC_DECL",
+        "_CLC_OVERLOAD",
+        "_CLC_CONST",
+    ]
+    assert ast.statements[2].qualifiers == ["_CLC_INLINE"]
+    assert "u32 __clc_get_sub_group_size()" in crossgl
+
+
+def test_external_llvm_libclc_constant_pointer_local_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_libclc_implicit_args_constant_pointer"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "libclc/clc/lib/amdgpu/workitem/clc_get_num_groups.cl"
+
+    source = """
+    _CLC_OVERLOAD _CLC_DEF size_t __clc_get_num_groups(uint dim) {
+        if (dim > 2)
+            return 1;
+
+        __constant amdhsa_implicit_kernarg_v5 *args =
+            (__constant amdhsa_implicit_kernarg_v5 *)
+                __builtin_amdgcn_implicitarg_ptr();
+        return args->block_count[dim] + (args->remainder[dim] > 0);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    local = ast.statements[0].body[1]
+    assert local.qualifiers == ["__constant__"]
+    assert local.vtype == "amdhsa_implicit_kernarg_v5 *"
+    assert "var<uniform> args: ptr<amdhsa_implicit_kernarg_v5>" in crossgl
 
 
 def test_external_compute_runtime_simple_spill_long_sum_codegen_reparse():

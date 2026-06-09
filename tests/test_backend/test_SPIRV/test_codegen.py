@@ -434,6 +434,60 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSSGL_CLIP_POSITION_SHIFTED_VARYINGS_ASSEMBLY = """
+; Reduced from local generated artifact:
+; examples/output/vulkan/cross_platform/UniversalPBRShader.spvasm.
+; CrossGL's SPIR-V generator emitted clip_position as Location 0, then numbered
+; remaining vertex varyings one slot higher than the fragment inputs.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "main" %clip %v_world %v_uv
+OpEntryPoint Fragment %fs "main" %f_color %f_world %f_uv
+OpExecutionMode %fs OriginUpperLeft
+OpName %clip "CrossGL_vertex_output_main_clip_position"
+OpName %v_world "CrossGL_vertex_output_main_world_position"
+OpName %v_uv "CrossGL_vertex_output_main_uv"
+OpName %f_world "CrossGL_fragment_input_input_world_position"
+OpName %f_uv "CrossGL_fragment_input_input_uv"
+OpName %f_color "CrossGL_fragment_output_main"
+OpDecorate %clip Location 0
+OpDecorate %v_world Location 1
+OpDecorate %v_uv Location 2
+OpDecorate %f_world Location 0
+OpDecorate %f_uv Location 1
+OpDecorate %f_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v3float = OpTypeVector %float 3
+%v4float = OpTypeVector %float 4
+%ptr_out_v4 = OpTypePointer Output %v4float
+%ptr_out_v3 = OpTypePointer Output %v3float
+%ptr_out_v2 = OpTypePointer Output %v2float
+%ptr_in_v3 = OpTypePointer Input %v3float
+%ptr_in_v2 = OpTypePointer Input %v2float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%clip_value = OpConstantComposite %v4float %zero %zero %zero %one
+%clip = OpVariable %ptr_out_v4 Output
+%v_world = OpVariable %ptr_out_v3 Output
+%v_uv = OpVariable %ptr_out_v2 Output
+%f_world = OpVariable %ptr_in_v3 Input
+%f_uv = OpVariable %ptr_in_v2 Input
+%f_color = OpVariable %ptr_out_v4 Output
+%vs = OpFunction %void None %fn
+%vs_label = OpLabel
+OpStore %clip %clip_value
+OpReturn
+OpFunctionEnd
+%fs = OpFunction %void None %fn
+%fs_label = OpLabel
+OpStore %f_color %clip_value
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_MATRIX_INTERFACE_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -5921,6 +5975,29 @@ def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_p
             [spirv_val, "--target-env", "vulkan1.0", str(binary_path)],
             check=True,
         )
+
+
+def test_spirv_crossgl_clip_position_output_shifts_varying_locations():
+    tokens = tokenize_code(SPIRV_CROSSGL_CLIP_POSITION_SHIFTED_VARYINGS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
+    assert "gl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert (
+        "float3 CrossGL_vertex_output_main_world_position " "@output @location(0);"
+    ) in generated_code
+    assert (
+        "float2 CrossGL_vertex_output_main_uv @output @location(1);"
+    ) in generated_code
+    assert (
+        "float3 CrossGL_fragment_input_input_world_position " "@input @location(0);"
+    ) in generated_code
+    assert (
+        "float2 CrossGL_fragment_input_input_uv @input @location(1);"
+    ) in generated_code
+    assert "CrossGL_vertex_output_main_clip_position @output" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_spirv_assembly_matrix_interface_codegen():

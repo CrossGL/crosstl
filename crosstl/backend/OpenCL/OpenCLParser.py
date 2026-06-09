@@ -48,6 +48,11 @@ class OpenCLParser(HipParser):
         "__inline",
         "__inline__",
         "_CL_NOINLINE",
+        "_CLC_CONST",
+        "_CLC_DECL",
+        "_CLC_DEF",
+        "_CLC_INLINE",
+        "_CLC_OVERLOAD",
         "INLINE_FUNC",
         "OPENCL_KERNEL",
     }
@@ -346,6 +351,34 @@ class OpenCLParser(HipParser):
 
         return type_name
 
+    def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
+        original_index = index
+        index = super().skip_type_at_pos(
+            index,
+            allow_unknown_identifier_pointers=allow_unknown_identifier_pointers,
+        )
+        if index is None:
+            return None
+
+        consumed_values = {
+            token.value
+            for token in self.tokens[original_index:index]
+            if token.type != "NEWLINE"
+        }
+        if (
+            "pipe" in consumed_values
+            and index < len(self.tokens)
+            and self.is_type_start_token_at_pos(index)
+        ):
+            element_end = super().skip_type_at_pos(
+                index,
+                allow_unknown_identifier_pointers=allow_unknown_identifier_pointers,
+            )
+            if element_end is not None:
+                return element_end
+
+        return index
+
     def is_current_token_type_start(self):
         if self.current_token is None:
             return False
@@ -355,6 +388,15 @@ class OpenCLParser(HipParser):
             or self.match(*self.RESOURCE_TYPE_TOKENS)
             or self.match(*self.ELABORATED_TYPE_TOKENS)
             or self.match("IDENTIFIER")
+        )
+
+    def is_type_start_token_at_pos(self, index):
+        return index < len(self.tokens) and (
+            self.is_builtin_type_token(self.tokens[index])
+            or self.tokens[index].type in self.VECTOR_TYPE_TOKENS
+            or self.tokens[index].type in self.RESOURCE_TYPE_TOKENS
+            or self.tokens[index].type in self.ELABORATED_TYPE_TOKENS
+            or self.tokens[index].type == "IDENTIFIER"
         )
 
     def skip_function_name_at(self, index):
@@ -458,31 +500,74 @@ class OpenCLParser(HipParser):
             return True
 
         index = self.pos
+        saw_opencl_qualifier = False
         while index < len(self.tokens) and self.tokens[index].type in {
             *self.DECLARATION_QUALIFIER_TOKENS,
             *self.TYPE_QUALIFIER_TOKENS,
         }:
+            if self.tokens[index].type in {
+                "__CONSTANT__",
+                "__DEVICE__",
+                "__MANAGED__",
+                "__SHARED__",
+                "READ_ONLY",
+                "WRITE_ONLY",
+                "READ_WRITE",
+            }:
+                saw_opencl_qualifier = True
             index += 1
 
         index = self.skip_cpp_attributes_at_pos(index)
         index = self.skip_type_attribute_prefixes_at_pos(index)
-        index = self.skip_type_at_pos(index)
-        if index is None:
+        type_end = self.skip_type_at_pos(
+            index,
+            allow_unknown_identifier_pointers=saw_opencl_qualifier,
+        )
+        if type_end is None:
             return False
 
-        index = self.skip_newlines_at_pos(index)
-        index = self.skip_opencl_block_pointer_declarator_at_pos(index)
-        if index is None:
+        index = self.skip_newlines_at_pos(type_end)
+        block_declarator_end = self.skip_opencl_block_pointer_declarator_at_pos(index)
+        if block_declarator_end is not None:
+            block_declarator_end = self.skip_newlines_at_pos(block_declarator_end)
+            block_declarator_end = self.skip_type_attribute_prefixes_at_pos(
+                block_declarator_end
+            )
+            block_declarator_end = self.skip_newlines_at_pos(block_declarator_end)
+            return block_declarator_end < len(self.tokens) and self.tokens[
+                block_declarator_end
+            ].type in {
+                "SEMICOLON",
+                "ASSIGN",
+                "COMMA",
+            }
+
+        index = self.skip_newlines_at_pos(type_end)
+        declarator_name_end = self.skip_variable_declarator_name_at_pos(index)
+        if declarator_name_end is None:
             return False
 
+        index = self.skip_newlines_at_pos(declarator_name_end)
+        index = self.skip_array_suffix_at_pos(index)
         index = self.skip_newlines_at_pos(index)
         index = self.skip_type_attribute_prefixes_at_pos(index)
         index = self.skip_newlines_at_pos(index)
         return index < len(self.tokens) and self.tokens[index].type in {
             "SEMICOLON",
             "ASSIGN",
+            "LBRACKET",
+            "LPAREN",
+            "LBRACE",
             "COMMA",
         }
+
+    def skip_opencl_qualifiers_at_pos(self, index):
+        while index < len(self.tokens) and self.tokens[index].type in {
+            *self.DECLARATION_QUALIFIER_TOKENS,
+            *self.TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+        return index
 
     def parse_type_alias_declarator(self, base_type, allow_prefix):
         alias_type = base_type

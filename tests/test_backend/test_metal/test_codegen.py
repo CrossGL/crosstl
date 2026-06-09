@@ -2981,6 +2981,26 @@ def test_codegen_skips_mlx_decltype_kernel_template_id_instantiation():
     parse_crossgl(crossgl)
 
 
+def test_codegen_preserves_materialx_out_parameter_qualifier_from_xcode_genmsl():
+    # Reduced from Xcode's bundled MaterialX MSL library:
+    # /Applications/Xcode.app/.../USDLib_FormatLoaderProxy_Xcode.framework/
+    # Resources/libraries/stdlib/genmsl/mx_burn_float.metal
+    code = """
+    void mx_burn_float(float fg, float bg, float mixval, out float result) {
+        if (abs(fg) < M_FLOAT_EPS) {
+            result = 0.0;
+            return;
+        }
+        result = mixval * (1.0 - ((1.0 - bg) / fg)) + ((1.0 - mixval) * bg);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "out float result" in crossgl
+    assert "float out" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     code = """
     #include <metal_stdlib>

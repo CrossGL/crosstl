@@ -202,6 +202,7 @@ class CudaParser:
         "VKAPI_ATTR",
         "VKAPI_CALL",
         "WINAPI",
+        "consteval",
     }
     DECLARATION_QUALIFIER_TOKENS = {
         "CONST",

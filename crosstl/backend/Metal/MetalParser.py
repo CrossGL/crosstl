@@ -126,6 +126,7 @@ IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {
     "__restrict__",
     "object_data",
 }
+IDENTIFIER_PREFIX_TYPE_QUALIFIERS = {"out", "inout"}
 RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
@@ -1111,6 +1112,8 @@ class MetalParser:
             and value in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
         ):
             return True
+        if tok_type == "IDENTIFIER" and value in IDENTIFIER_PREFIX_TYPE_QUALIFIERS:
+            return self.prefix_type_qualifier_followed_by_type_at(idx)
         return tok_type == "IDENTIFIER" and value in TYPE_QUALIFIER_FUNCTIONS
 
     def parse_preprocessor_directive(self):
@@ -1719,6 +1722,11 @@ class MetalParser:
             in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
         ):
             return True
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in IDENTIFIER_PREFIX_TYPE_QUALIFIERS
+        ):
+            return self.prefix_type_qualifier_followed_by_type_at(self.pos)
         return (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in TYPE_QUALIFIER_FUNCTIONS
@@ -1728,7 +1736,11 @@ class MetalParser:
         if self.current_token[0] in QUALIFIER_TOKENS or (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1]
-            in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
+            in (
+                IDENTIFIER_TYPE_QUALIFIERS
+                | RAYTRACING_TYPE_QUALIFIERS
+                | IDENTIFIER_PREFIX_TYPE_QUALIFIERS
+            )
         ):
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
@@ -1766,6 +1778,23 @@ class MetalParser:
         if depth != 0:
             raise SyntaxError(error_message)
         return self.format_generic_type_tokens(tokens)
+
+    def prefix_type_qualifier_followed_by_type_at(self, idx):
+        next_idx = idx + 1
+        if next_idx >= len(self.tokens):
+            return False
+        token_type, token_value = self.tokens[next_idx]
+        if token_type != "IDENTIFIER":
+            return token_type in TYPE_TOKENS
+        return token_value in self.known_types or self.identifier_type_name_at(next_idx)
+
+    def identifier_type_name_at(self, idx):
+        return (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx][0] == "IDENTIFIER"
+            and self.tokens[idx + 1][0]
+            in {"IDENTIFIER", "MULTIPLY", "BITWISE_AND", "LESS_THAN", "SCOPE"}
+        )
 
     def format_generic_type_tokens(self, tokens):
         text = ""

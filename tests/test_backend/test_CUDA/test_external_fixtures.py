@@ -139,6 +139,11 @@ EXTERNAL_SAMPLES = [
         ],
     },
     {
+        "repo": "https://github.com/llvm/llvm-project",
+        "commit": "6d5c94203652a52b51b37ad4768bc1a7066f029c",
+        "paths": ["clang/test/SemaCUDA/consteval-func.cu"],
+    },
+    {
         "repo": "https://github.com/NVIDIA/nvidia-hpcg",
         "commit": "7dd63cd06c0620dddd5702ad7b4fca376c19813e",
         "paths": ["src/CudaKernels.cu"],
@@ -214,6 +219,34 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_llvm_cuda_consteval_device_function_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 6d5c94203652a52b51b37ad4768bc1a7066f029c
+    # path: clang/test/SemaCUDA/consteval-func.cu
+    source = """
+    __device__ consteval int f() { return 0; }
+    int main() { return f(); }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    function_signatures = [
+        (function.name, function.return_type, function.qualifiers)
+        for function in ast.functions
+    ]
+    assert function_signatures == [
+        ("f", "int", ["__device__", "consteval"]),
+        ("main", "int", []),
+    ]
+    assert "i32 f()" in crossgl
+    assert "i32 main()" in crossgl
+    assert "return f();" in crossgl
+    assert "consteval" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_current_cccl_function_try_block_main_parses_and_codegen_reparse():

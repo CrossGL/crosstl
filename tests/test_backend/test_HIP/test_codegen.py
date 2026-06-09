@@ -16696,6 +16696,52 @@ class TestHipCodeGen:
         assert "consume(h, owned);" in result
         assert "using namespace" not in result
 
+    def test_public_hipblaslt_scoped_type_alias_codegen_reparse(self):
+        # Reduced from ROCm/hipBLASLt@3a609b06926c8227e753b62087555e1f435bf2d4,
+        # clients/include/hipblaslt_random.hpp.
+        code = """
+        using hipblaslt_rng_t = std::mt19937;
+        extern thread_local hipblaslt_rng_t t_hipblaslt_rng;
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "typedef ptr<void> hipblaslt_rng_t;" in result
+        assert "typedef std::mt19937" not in result
+        assert "var t_hipblaslt_rng: hipblaslt_rng_t;" in result
+
+    def test_public_hipblaslt_function_specialization_name_codegen_reparse(self):
+        # Reduced from ROCm/hipBLASLt@3a609b06926c8227e753b62087555e1f435bf2d4,
+        # clients/include/hipblaslt_random.hpp.
+        code = """
+        template <typename T>
+        T random_generator() {
+            return T(0);
+        }
+
+        template <>
+        float random_generator<float>() {
+            return 1.0f;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "f32 random_generator()" in result
+        assert "f32 random_generator<float>" not in result
+
     def test_typedef_multi_declarator_alias_conversion(self):
         code = """
         typedef float Real, *RealPtr;
