@@ -7849,6 +7849,47 @@ def _generated_size_contract_reasons(
     return []
 
 
+def _current_generated_size_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    root_path: Path | None,
+    project_output_path: Path | None,
+) -> list[str]:
+    if (
+        root_path is None
+        or project_output_path is None
+        or artifact.get("status") != "translated"
+    ):
+        return []
+
+    path = artifact.get("path")
+    if not _is_non_empty_string(path) or not _is_report_identity_path(path):
+        return []
+
+    artifact_path = (root_path / path).resolve()
+    if not _is_relative_to(artifact_path, project_output_path):
+        return []
+    if not artifact_path.exists() or not artifact_path.is_file():
+        return []
+
+    generated_hash = artifact.get("generatedHash")
+    if not isinstance(generated_hash, Mapping):
+        return []
+    if not _hash_matches_report(_source_hash(artifact_path), generated_hash):
+        return []
+
+    generated_size = artifact.get("generatedSizeBytes")
+    if not _is_non_negative_int(generated_size):
+        return []
+    if generated_size != artifact_path.stat().st_size:
+        return [
+            f"artifacts[{index}].generatedSizeBytes must match "
+            "the current generated artifact"
+        ]
+    return []
+
+
 def _expected_provenance_intermediate(artifact: Mapping[str, Any]) -> str | None:
     source_backend = artifact.get("sourceBackend")
     target = artifact.get("target")
@@ -12711,7 +12752,21 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     require_closed_fields=has_summary,
                 )
             )
-            reasons.extend(_generated_size_contract_reasons(index, artifact))
+            reasons.extend(
+                _generated_size_contract_reasons(
+                    index,
+                    artifact,
+                    required=has_summary and status == "translated",
+                )
+            )
+            reasons.extend(
+                _current_generated_size_contract_reasons(
+                    index,
+                    artifact,
+                    root_path=root_path,
+                    project_output_path=project_output_path,
+                )
+            )
             reasons.extend(
                 _provenance_contract_reasons(
                     index,

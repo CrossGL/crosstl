@@ -85,9 +85,10 @@ Use these report fields to decide the next action:
      - Confirm the expected unit, target, and named-variant artifact plan before
        translation, then identify missing or extra artifacts after translation.
    * - ``validation``
-     - Check current source hashes and byte sizes, generated artifact hashes,
-       source maps, source remaps, optional toolchain availability, and opt-in
-       artifact or availability smoke test results after translation.
+     - Check current source hashes and byte sizes, generated artifact hashes
+       and byte sizes, source maps, source remaps, optional toolchain
+       availability, and opt-in artifact or availability smoke test results
+       after translation.
    * - ``externalCorpus``
      - Compare pinned reduced corpus entries with discovered units and emitted
        artifacts without treating the manifest as whole-repository semantic
@@ -540,10 +541,10 @@ Project reports are JSON documents with:
 - ``artifacts``: attempted outputs with stable repository-relative POSIX source
   and output paths, source backend, target, applied define map, optional variant
   name, target/variant-scoped output path with the target backend suffix,
-  status, source hash, source byte size, generated artifact hash,
-  pipeline provenance, and file-span source-map anchors for successful
-  translations. Full reports require every artifact to carry a source hash and
-  source byte size,
+  status, source hash, source byte size, generated artifact hash, generated
+  artifact byte size, pipeline provenance, and file-span source-map anchors for
+  successful translations. Full reports require every artifact to carry a source
+  hash and source byte size,
   artifact source hashes to match their declared translation-unit source
   hashes, artifact source byte sizes to match their declared translation-unit
   source byte sizes,
@@ -661,8 +662,9 @@ Project reports are JSON documents with:
   full-report source-map granularity, target, source-backend, and variant
   rollup checks,
   source-remap granularity, target, source-backend, and variant rollup checks,
-  source hash and source byte-size checks, failed artifact error metadata
-  checks, translated artifact error metadata rejection, required artifact
+  source hash and source byte-size checks, generated artifact byte-size checks,
+  failed artifact error metadata checks, translated artifact error metadata
+  rejection, required artifact
   provenance and provenance value checks, artifact provenance source-backend,
   target, and variant rollup checks,
   failed artifact generated metadata rejection, required translated artifact
@@ -694,9 +696,9 @@ Project reports are JSON documents with:
   current project scan coverage for omitted unit and skipped-source records,
   translated artifact existence checks, escaped output directory and
   artifact-path checks, source artifact existence and hash mismatch checks,
-  generated artifact hash mismatch checks, optional external toolchain
-  availability, and opt-in toolchain smoke results including bounded timeout
-  failures.
+  generated artifact hash and byte-size mismatch checks, optional external
+  toolchain availability, and opt-in toolchain smoke results including bounded
+  timeout failures.
 - ``migration``: actionable manual follow-up work outside shader/kernel
   translation. The report records documented non-goals for runtime API
   migration, build-system rewrites, and backend framework integration. Each

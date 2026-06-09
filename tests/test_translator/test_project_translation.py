@@ -10106,6 +10106,47 @@ def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_so
     )
 
 
+def test_validate_project_report_rejects_missing_artifact_generated_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifacts"][0].pop("generatedSizeBytes")
+    report_path = repo / "out" / "missing-artifact-generated-size-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].generatedSizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifacts"][0]["generatedSizeBytes"] += 1
+    report_path = repo / "out" / "artifact-generated-size-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].generatedSizeBytes must match the current generated artifact"
+        in diagnostic["message"]
+    )
+
+
 def test_translate_project_preserves_discovered_unit_source_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
