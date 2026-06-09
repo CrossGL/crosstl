@@ -12233,7 +12233,7 @@ def _run_toolchain_smoke(
                 cwd=str(root),
                 input=(
                     artifact_path.read_text(encoding="utf-8", errors="replace")
-                    if command[-1] == "--stdin"
+                    if "--stdin" in command
                     else None
                 ),
                 capture_output=True,
@@ -12276,10 +12276,39 @@ def _toolchain_smoke_command(
     target: str, tools: Sequence[str], artifact_path: Path
 ) -> tuple[list[str], str] | None:
     if target == "opengl":
-        return [tools[0], "--stdin"], "artifact"
+        return [tools[0], "--stdin", "-S", _glslang_stage(artifact_path)], "artifact"
     if target == "vulkan":
         return [tools[0], str(artifact_path)], "artifact"
     availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(target)
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _glslang_stage(artifact_path: Path) -> str:
+    suffix_stage = {
+        ".vert": "vert",
+        ".vs": "vert",
+        ".frag": "frag",
+        ".fs": "frag",
+        ".geom": "geom",
+        ".tesc": "tesc",
+        ".tese": "tese",
+        ".comp": "comp",
+        ".cs": "comp",
+    }.get(artifact_path.suffix.lower())
+    if suffix_stage:
+        return suffix_stage
+
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        return "comp"
+
+    if "local_size_" in source or "gl_globalinvocationid" in source:
+        return "comp"
+    if "gl_position" in source:
+        return "vert"
+    if "gl_fragcoord" in source or "gl_fragcolor" in source:
+        return "frag"
+    return "comp"

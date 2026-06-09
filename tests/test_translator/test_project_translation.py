@@ -7702,7 +7702,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
 
     def run_toolchain(command, **kwargs):
         commands.append((command, kwargs))
-        assert command == ["glslangValidator", "--stdin"]
+        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
         assert kwargs["cwd"] == str(repo)
         assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
         assert kwargs["input"]
@@ -7749,7 +7749,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
             "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
-            "command": ["glslangValidator", "--stdin"],
+            "command": ["glslangValidator", "--stdin", "-S", "comp"],
             "checkKind": "artifact",
             "returncode": 0,
             "status": "ok",
@@ -7757,6 +7757,23 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
             "stderr": "",
         }
     ]
+
+
+def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
+    vertex_shader = tmp_path / "shader.glsl"
+    vertex_shader.write_text(
+        "#version 450\nvoid main() { gl_Position = vec4(0.0); }\n",
+        encoding="utf-8",
+    )
+    fragment_shader = tmp_path / "shader.frag"
+    fragment_shader.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], vertex_shader
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], fragment_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
 
 
 def test_validate_project_report_emits_closed_validation_report_schema(tmp_path):
@@ -14557,7 +14574,7 @@ def test_validate_project_report_records_toolchain_failures(
             "checkKind": "artifact",
             "status": "failed",
             "returncode": 2,
-            "command": ["glslangValidator", "--stdin"],
+            "command": ["glslangValidator", "--stdin", "-S", "comp"],
             "stdoutLength": 0,
             "stderrLength": len("shader validation failed"),
         }
@@ -14619,7 +14636,8 @@ def test_validate_project_report_records_toolchain_failures(
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
         "(sourceBackend=cgl, status=failed, checkKind=artifact, returncode=2, "
-        "command=glslangValidator --stdin, stdout=0 chars, stderr=24 chars)"
+        "command=glslangValidator --stdin -S comp, stdout=0 chars, "
+        "stderr=24 chars)"
     ) in stdout
 
 

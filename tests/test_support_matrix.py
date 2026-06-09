@@ -955,6 +955,7 @@ def test_project_macro_variants_document_artifact_define_maps():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_project_mapping_keys"
         ) in backend_support["evidence"]
+
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_quotes_variant_keys_with_punctuation"
@@ -1794,6 +1795,16 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_empty_project_mapping_keys"
         ) in backend_support["evidence"]
+
+    opengl_support = feature["support"]["opengl"]
+    assert (
+        "OpenGL glslangValidator stdin smoke checks with an explicit inferred stage"
+        in (opengl_support["notes"])
+    )
+    assert (
+        "tests/test_translator/test_project_translation.py::def "
+        "test_opengl_toolchain_smoke_command_selects_glslang_stage"
+    ) in opengl_support["evidence"]
 
 
 def test_project_external_corpus_coverage_documents_entry_consistency_checks():
