@@ -282,6 +282,43 @@ def test_generic_typealias_codegen_from_slang_neural_modules():
     assert "typedef Array<uint32_t, Dim> uvec<intDim>;" in generated_code
 
 
+def test_typealias_logical_not_generic_argument_codegen_reparse():
+    # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
+    # tests/compute/logical-operators-constant-fold.slang.
+    code = """
+    static const bool FALSE_VAL = false;
+    static const bool TRUE_VAL = true;
+
+    struct ValueHolder<bool condition>
+    {
+        static const int value = condition ? 1 : 0;
+    };
+
+    typealias TestNotFalse = ValueHolder<!FALSE_VAL>;
+    typealias TestAnd = ValueHolder<TRUE_VAL && !FALSE_VAL>;
+    typealias TestOr = ValueHolder<FALSE_VAL || !FALSE_VAL>;
+
+    [numthreads(1, 1, 1)]
+    void computeMain(int3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        bool allCorrect =
+            TestNotFalse.value == 1 &&
+            TestAnd.value == 1 &&
+            TestOr.value == 1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "typedef ValueHolder<not_FALSE_VAL> TestNotFalse;" in generated_code
+    assert "typedef ValueHolder<TRUE_VAL&&not_FALSE_VAL> TestAnd;" in generated_code
+    assert "typedef ValueHolder<FALSE_VAL||not_FALSE_VAL> TestOr;" in generated_code
+    assert "ValueHolder<!FALSE_VAL>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     code = """
     public struct AdamState

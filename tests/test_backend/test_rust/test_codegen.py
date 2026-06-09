@@ -205,6 +205,90 @@ def test_wgpu_surface_wrapper_lifetime_reference_return_reparse():
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_wgpu_lifetime_transmute_generic_call_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/indirect_validation/utils.rs.
+    code = """
+    struct BufferBarrierScratch<'b>(Vec<BufferBarrier<'b>>);
+
+    struct BufferBarriers<'a, 'b> {
+        scratch: &'a mut BufferBarrierScratch<'b>,
+    }
+
+    impl<'a, 'b> BufferBarriers<'a, 'b> {
+        fn new(scratch: &'a mut BufferBarrierScratch<'_>) -> Self {
+            let scratch = unsafe {
+                core::mem::transmute::<
+                    &'a mut BufferBarrierScratch<'_>,
+                    &'a mut BufferBarrierScratch<'b>,
+                >(scratch)
+            };
+            Self { scratch }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "core::mem::transmute<BufferBarrierScratch, BufferBarrierScratch>" in result
+    assert "transmute<&" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_struct_initializer_lifetime_type_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/track/mod.rs.
+    code = """
+    struct UsageScope<'a> {
+        pool: &'a UsageScopePool,
+        buffers: BufferUsageScope,
+        textures: TextureUsageScope,
+    }
+
+    impl UsageScope<'static> {
+        fn new_pooled<'d>(
+            pool: &'d UsageScopePool,
+            pooled: (BufferUsageScope, TextureUsageScope),
+        ) -> UsageScope<'d> {
+            let mut scope = UsageScope::<'d> {
+                pool,
+                buffers: pooled.0,
+                textures: pooled.1,
+            };
+            scope
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "let scope = UsageScope { pool: pool, buffers: pooled.field0, textures: pooled.field1 };"
+        in result
+    )
+    assert "UsageScope::<'d>" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_global_tuple_field_access_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # tests/wgpu-gpu/shader/zero_init_workgroup_mem.rs.
+    code = """
+    const DISPATCH_SIZE: (u32, u32, u32) = (64, 64, 64);
+    const TOTAL_WORK_GROUPS: u32 =
+        DISPATCH_SIZE.0 * DISPATCH_SIZE.1 * DISPATCH_SIZE.2;
+    """
+
+    result = parse_and_generate(code)
+
+    assert "DISPATCH_SIZE.field0" in result
+    assert "DISPATCH_SIZE.0" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_rust_gpu_unresolved_associated_static_calls_reparse():
     # Reduced from Rust-GPU rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d compiletests:
@@ -549,8 +633,8 @@ def test_vulkan_shader_examples_compute_atomic_const_generics_codegen():
     assert "int lod_count[6];" in result
     assert (
         "atomic_i_add<i32, {spirv_std::memory::Scope::Device as u32}, "
-        "{spirv_std::memory::Semantics::NONE.bits()},>"
-        "(ubo_out.lod_count[(uint)lod_level], 1);"
+        "{spirv_std::memory::Semantics::NONE.bits()}>"
+        "(ubo_out.lod_count[uint(lod_level)], 1);"
     ) in result
 
 
@@ -592,7 +676,7 @@ def test_vulkan_shader_examples_emboss_2d_compute_image_macro_codegen():
     assert "image2D input_image @ set(0) @ binding(0)" in result
     assert "image2D result_image @ set(0) @ binding(1)" in result
     assert "@numthreads(16, 16, 1)" in result
-    assert "let coord = ivec2((int)global_id.x, (int)global_id.y);" in result
+    assert "let coord = ivec2(int(global_id.x), int(global_id.y));" in result
     assert "vec4 rgb = imageLoad(input_image, coord);" in result
     assert "let gray = (((rgb.x + rgb.y) + rgb.z) / 3.0);" in result
     assert "imageStore(result_image, coord, res);" in result
@@ -1851,7 +1935,7 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     assert "let neg_one = ivec4(-1, -1, -1, -1);" in result
     assert (
         "return vec4((zero + one), (axes.x + down.y), axes.y, "
-        "((float)uv.x + (float)neg_one.w));"
+        "(float(uv.x) + float(neg_one.w)));"
     ) in result
     assert "::ZERO" not in result
     assert "::ONE" not in result
@@ -2129,7 +2213,7 @@ def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     assert "void main(uvec3 id @ gl_GlobalInvocationID" in result
     assert "uint prime_indices[] @ set(0) @ binding(0)" in result
     assert "@numthreads(64, 1, 1)" in result
-    assert "let index = (uint)id.x;" in result
+    assert "let index = uint(id.x);" in result
     assert (
         "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(4294967295);"
         in result
@@ -5852,7 +5936,7 @@ def test_gpu_multisample_image_sample_helpers_convert_to_crossgl_intrinsics():
     )
     assert (
         "swapped = imageAtomicCompSwap("
-        "ms_signed_layers, pixel_layer, sample_index, 0, (int)previous);" in result
+        "ms_signed_layers, pixel_layer, sample_index, 0, int(previous));" in result
     )
     assert "image_load_sample" not in result
     assert "image_store_sample" not in result
@@ -5906,7 +5990,7 @@ def test_aliased_reference_resource_helpers_convert_to_crossgl_intrinsics():
     assert "previous = imageAtomicAdd(image, pixel, amount);" in result
     assert "value = buffer_load(values, index);" in result
     assert "weight = buffer_load(weights, index);" in result
-    assert "buffer_store(values, index, (value + (int)previous));" in result
+    assert "buffer_store(values, index, (value + int(previous)));" in result
     assert "&ColorTexture" not in result
     assert "&mut StorageImage" not in result
     assert "&ReadBuffer" not in result
@@ -5963,7 +6047,7 @@ def test_gpu_resource_method_calls_convert_to_crossgl_intrinsics():
     assert "previous = imageAtomicAdd(counter_image, pixel, amount);" in result
     assert "value = buffer_load(values, index);" in result
     assert "weight = buffer_load(weights, index);" in result
-    assert "buffer_store(values, index, (value + (int)previous));" in result
+    assert "buffer_store(values, index, (value + int(previous)));" in result
     assert ".sample_sampler" not in result
     assert ".sample_bias" not in result
     assert ".texture_size_lod" not in result
@@ -8371,7 +8455,7 @@ def test_wgpu_shader_loading_host_types_codegen_reparse():
     result = parse_and_generate(code)
 
     assert "void init(wgpu_Device device)" in result
-    assert "wgpu::ShaderModuleDescriptor {" in result
+    assert "wgpu_ShaderModuleDescriptor {" in result
     assert 'include_str!("shader.wgsl")' in result
     assert 'wgpu::include_wgsl!("shader.wgsl")' in result
     crosstl.translator.parse(result)
@@ -8487,12 +8571,12 @@ def test_type_casting_conversion():
     try:
         result = parse_and_generate(code)
         assert "x = 42;" in result
-        assert "(double)x" in result
-        assert "(int)y" in result
-        assert "chained = (int)(float)x;" in result
-        assert "from_deref = (float)ptr;" in result
-        assert "from_ref = (float)value;" in result
-        assert "from_swizzle = (vec3)color.xyz;" in result
+        assert "double(x)" in result
+        assert "int(y)" in result
+        assert "chained = int(float(x));" in result
+        assert "from_deref = float(ptr);" in result
+        assert "from_ref = float(value);" in result
+        assert "from_swizzle = vec3(color.xyz);" in result
         assert "42i32" not in result
         assert ".xyz()" not in result
         assert "*ptr" not in result
@@ -8533,7 +8617,7 @@ def test_numeric_literal_suffix_conversion():
         assert "sized = 7;" in result
         assert "float32 = 1.5;" in result
         assert "float64 = 2.0;" in result
-        assert "casted = (int)1;" in result
+        assert "casted = int(1);" in result
         assert "int repeated[3] = {4, 4, 4};" in result
         assert "grouped = 1000;" in result
         assert "hexed = 255;" in result
@@ -10373,7 +10457,7 @@ def test_spirv_std_fragment_example_codegen_from_docs():
     assert "fragment {" in result
     assert "vec4 in_frag_coord @ gl_FragCoord" in result
     assert "ShaderConstants constants @ push_constant" in result
-    assert "vec2((float)constants.width, (float)constants.height)" in result
+    assert "vec2(float(constants.width), float(constants.height))" in result
     assert "uv.y = (-uv.y);" in result
     assert "output = tonemap(color).extend(1.0);" in result
 
@@ -10398,7 +10482,7 @@ def test_spirv_specialization_and_workgroup_attribute_codegen_from_dev_guide():
 
     assert "uint x_u64_lo @ constant_id(100)" in result
     assert "uint x_u64_hi @ constant_id(101)" in result
-    assert "let x_u64 = (((uint64_t)x_u64_hi << 32) | (uint64_t)x_u64_lo);" in result
+    assert "let x_u64 = ((uint64_t(x_u64_hi) << 32) | uint64_t(x_u64_lo));" in result
     assert "compute shared_" in result
     assert "void main(vec4 tile[4] @ groupshared) @numthreads(32, 1, 1)" in result
     crosstl.translator.parse(result)
@@ -10684,7 +10768,7 @@ def test_rust_gpu_struct_literal_field_attributes_codegen():
     result = parse_and_generate(code)
 
     assert "#[cfg" not in result
-    assert "wgpu::InstanceDescriptor {" in result
+    assert "wgpu_InstanceDescriptor {" in result
     assert "backends: wgpu::Backends::VULKAN" in result
     assert "backends: wgpu::Backends::PRIMARY" in result
     crosstl.translator.parse(result)
@@ -11022,7 +11106,7 @@ def test_struct_literal_in_condition_codegen_reparse_from_naga_interface():
 
     result = parse_and_generate(code)
 
-    assert "crate::BuiltIn::Position { invariant: false }" in result
+    assert "crate_BuiltIn_Position { invariant: false }" in result
     crosstl.translator.parse(result)
 
 

@@ -748,7 +748,7 @@ class RustToCrossGLConverter:
         self.impl_method_signatures = {}
         self.impl_receiver_method_names = set()
         self.impl_associated_function_names = set()
-        self.value_type_scopes = []
+        self.value_type_scopes = [{}]
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
         self.local_function_item_counter = 0
@@ -823,7 +823,7 @@ class RustToCrossGLConverter:
             self.impl_receiver_method_names,
             self.impl_associated_function_names,
         ) = self.collect_impl_method_name_sets()
-        self.value_type_scopes = []
+        self.value_type_scopes = [{}]
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
         self.local_function_item_counter = 0
@@ -853,12 +853,14 @@ class RustToCrossGLConverter:
 
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
+                self.add_value_type(global_var.name, global_var.vtype)
                 declarator = self.format_global_declarator(
                     global_var.vtype, global_var.name
                 )
                 value = self.generate_global_initializer(global_var.value)
                 code += f"    const {declarator} = {value};\n"
             elif isinstance(global_var, StaticNode):
+                self.add_value_type(global_var.name, global_var.vtype)
                 mutability = "mut " if global_var.is_mutable else ""
                 declarator = self.format_global_declarator(
                     global_var.vtype, global_var.name
@@ -1619,10 +1621,23 @@ class RustToCrossGLConverter:
         if not isinstance(function_name, str):
             return function_name, []
 
+        function_name = self.normalize_associated_type_path(function_name)
         generic = self.parse_generic_type(function_name)
         if generic is None:
             return function_name, []
         return generic
+
+    def format_function_type_arguments(self, function_name, type_args):
+        if not type_args:
+            return function_name
+
+        normalized_args = [
+            self.normalize_unmapped_generic_argument(arg) for arg in type_args
+        ]
+        normalized_args = [arg for arg in normalized_args if arg]
+        if not normalized_args:
+            return function_name
+        return f"{function_name}<{', '.join(normalized_args)}>"
 
     def lookup_user_function_signature(self, function_name):
         if not isinstance(function_name, str):
@@ -2054,6 +2069,18 @@ class RustToCrossGLConverter:
             return member_name
 
         field_name = self.tuple_field_member_name(member_name)
+        tuple_elements = self.split_tuple_type(receiver_type)
+        if tuple_elements is not None and int(member_name) < len(tuple_elements):
+            return field_name
+
+        generic = self.parse_generic_type(receiver_type)
+        if (
+            generic is not None
+            and generic[0] == "Tuple"
+            and int(member_name) < len(generic[1])
+        ):
+            return field_name
+
         if self.lookup_struct_member_type(receiver_type, field_name) is None:
             return member_name
         return field_name
@@ -5303,7 +5330,8 @@ class RustToCrossGLConverter:
             code += field_code
             fields.append(f"{field_name}: {field_value}")
 
-        return code, f"{expression.struct_name} {{ {', '.join(fields)} }}"
+        struct_name = self.format_struct_initialization_name(expression.struct_name)
+        return code, f"{struct_name} {{ {', '.join(fields)} }}"
 
     def generate_try_block_expression(self, try_block):
         previous_return_type = self.current_function_return_type
@@ -8668,7 +8696,8 @@ class RustToCrossGLConverter:
                 )
                 code += field_code
                 fields.append(f"{field_name}: {value}")
-            return code, f"{expression.struct_name} {{ {', '.join(fields)} }}"
+            struct_name = self.format_struct_initialization_name(expression.struct_name)
+            return code, f"{struct_name} {{ {', '.join(fields)} }}"
 
         return "", self.generate_expression(expression)
 
@@ -9017,7 +9046,8 @@ class RustToCrossGLConverter:
                 f"{field_name}: {self.generate_expression(field_value)}"
                 for field_name, field_value in expr.fields
             )
-            return f"{expr.struct_name} {{ {fields} }}"
+            struct_name = self.format_struct_initialization_name(expr.struct_name)
+            return f"{struct_name} {{ {fields} }}"
         elif isinstance(expr, (int, float, bool)):
             return str(expr).lower() if isinstance(expr, bool) else str(expr)
         else:
@@ -9027,6 +9057,11 @@ class RustToCrossGLConverter:
         if isinstance(arg, str):
             return self.normalize_macro_body(arg)
         return self.generate_expression(arg)
+
+    def format_struct_initialization_name(self, struct_name):
+        if struct_name == "Self":
+            return struct_name
+        return self.map_type(struct_name)
 
     def generate_global_initializer(self, value):
         if self.is_reparseable_global_macro(value):
@@ -9076,7 +9111,7 @@ class RustToCrossGLConverter:
         mapped_type = self.map_type(target_type)
         if mapped_type == "_":
             return expression
-        return f"({mapped_type}){expression}"
+        return f"{mapped_type}({expression})"
 
     def normalize_macro_body(self, body):
         return body.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
@@ -11022,6 +11057,8 @@ class RustToCrossGLConverter:
         stripped_func, type_args = self.split_function_type_arguments(rust_func)
         if type_args and self.lookup_user_function_signature(stripped_func) is not None:
             rust_func = stripped_func
+        else:
+            rust_func = self.format_function_type_arguments(stripped_func, type_args)
 
         local_callable = self.lookup_local_callable_name(stripped_func)
         if local_callable is not None:
@@ -11036,6 +11073,8 @@ class RustToCrossGLConverter:
             return current_module_function
 
         mapped = self.function_map.get(rust_func)
+        if mapped is None and type_args:
+            mapped = self.function_map.get(stripped_func)
         if mapped is not None:
             return mapped
 

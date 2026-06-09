@@ -255,6 +255,7 @@ class OpenCLParser(HipParser):
         index = self.pos
 
         index = self.skip_cpp_attributes_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
         index = self.skip_function_specifiers_at_pos(index)
         index = self.skip_type_at_pos(
             index, allow_unknown_identifier_pointers=self.block_depth == 0
@@ -410,6 +411,7 @@ class OpenCLParser(HipParser):
         qualifiers = []
         attributes = []
         self.skip_cpp_attributes()
+        attributes.extend(self.parse_type_attribute_prefixes())
         while (
             self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
             or self.is_identifier_function_specifier_token()
@@ -417,6 +419,7 @@ class OpenCLParser(HipParser):
             qualifiers.append(self.current_token.value)
             self.advance()
             self.skip_cpp_attributes()
+            attributes.extend(self.parse_type_attribute_prefixes())
 
         return_type = self.parse_type()
         self.skip_newlines()
@@ -545,7 +548,13 @@ class OpenCLParser(HipParser):
             and token.type
             not in {*self.TYPE_QUALIFIER_TOKENS, *self.POSTFIX_TYPE_QUALIFIER_TOKENS}
         ]
-        return len(parts) == 1 and self.is_opencl_vector_type_name(parts[0])
+        if len(parts) != 1:
+            return False
+        if self.is_opencl_vector_type_name(parts[0]):
+            return True
+        return self.is_probable_identifier_type_name(
+            parts[0]
+        ) and self.has_top_level_comma_in_group_at_pos(type_end + 1)
 
     def parse_opencl_vector_constructor_cast(self):
         self.consume("LPAREN")
@@ -566,6 +575,25 @@ class OpenCLParser(HipParser):
         if len(parts) == 1 and self.is_opencl_vector_type_name(parts[0]):
             return parts[0]
         return type_name
+
+    def has_top_level_comma_in_group_at_pos(self, index):
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return False
+            elif token_type == "COMMA" and depth == 1:
+                return True
+            index += 1
+
+        return False
 
     def is_opencl_vector_type_name(self, type_name):
         return bool(

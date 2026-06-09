@@ -1556,6 +1556,8 @@ class HLSLParser:
         )
 
     def parse_member_declarator_name(self):
+        if self.is_anonymous_bitfield_declarator_start():
+            return None
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "operator"
@@ -2744,25 +2746,47 @@ class HLSLParser:
         declarations = []
         name = first_name
         while True:
-            declarations.append(
-                self.parse_variable_declaration_rest(
-                    vtype,
-                    name,
-                    qualifiers=qualifiers,
-                    attributes=attributes,
-                    allow_semantic=allow_semantic,
-                    consume_semicolon=False,
+            if name is None:
+                self.parse_anonymous_bitfield_declaration_rest()
+            else:
+                declarations.append(
+                    self.parse_variable_declaration_rest(
+                        vtype,
+                        name,
+                        qualifiers=qualifiers,
+                        attributes=attributes,
+                        allow_semantic=allow_semantic,
+                        consume_semicolon=False,
+                    )
                 )
-            )
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
-            name = self.parse_declarator_identifier()
+            if self.is_anonymous_bitfield_declarator_start():
+                name = None
+            else:
+                name = self.parse_declarator_identifier()
 
         if consume_semicolon:
             self.eat("SEMICOLON")
 
         return declarations
+
+    def is_anonymous_bitfield_declarator_start(self):
+        return self.current_token[0] == "COLON" and self.peek()[0] in {
+            "NUMBER",
+            "HEX_NUMBER",
+            "BINARY_NUMBER",
+            "OCT_NUMBER",
+        }
+
+    def parse_anonymous_bitfield_declaration_rest(self):
+        bit_width = self.parse_bitfield_width()
+        if bit_width is None:
+            raise SyntaxError(
+                f"Expected anonymous bitfield width, got {self.current_token[0]}"
+            )
+        self.parse_attribute_list()
 
     def parse_variable_declaration_rest(
         self,

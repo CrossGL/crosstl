@@ -3451,6 +3451,37 @@ def test_parse_struct_bitfield_members_from_dxc_swizzle_fixture():
     assert [member.semantic for member in struct.members] == [None, None, None]
 
 
+def test_parse_anonymous_and_packed_struct_bitfields_from_dxc_debug_fixture():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/HLSLFileCheck/hlsl/types/struct/bitfields.hlsl
+    ast = parse_code("""
+        struct foo {
+          int x : 8;
+          int : 8;
+          int y : 16;
+        };
+
+        struct P1 {
+          uint l_Packed;
+          uint k_Packed : 6,
+            i_Packed : 15,
+            j_Packed : 11;
+        };
+    """)
+
+    foo, packed = ast.structs
+
+    assert [member.name for member in foo.members] == ["x", "y"]
+    assert [member.bit_width for member in foo.members] == [8, 16]
+    assert [member.name for member in packed.members] == [
+        "l_Packed",
+        "k_Packed",
+        "i_Packed",
+        "j_Packed",
+    ]
+    assert [member.bit_width for member in packed.members] == [None, 6, 15, 11]
+
+
 def test_parse_min_precision_scalar_constructor_from_dxc_tests():
     ast = parse_code("""
         int main(min16int a : A) : SV_Target {

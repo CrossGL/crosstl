@@ -41,6 +41,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/core/src/opencl/cvtclr_dx.cl",
     },
+    "opencv_fft_leading_attribute_type_macro_constructor": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/core/src/opencl/fft.cl",
+    },
     "khronos_opencl_sdk_reduce_shared_parameter_name": {
         "url": "https://github.com/KhronosGroup/OpenCL-SDK",
         "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
@@ -263,6 +268,33 @@ def test_external_opencv_multiline_constant_address_space_array_codegen_reparse(
     assert ast.statements[0].vtype == "__constant__ float[5]"
     assert "var c_YUV2RGBCoeffs_420: array<f32, 5>" in crossgl
     assert "var<uniform> coeffs: ptr<f32> = c_YUV2RGBCoeffs_420;" in crossgl
+
+
+def test_external_opencv_fft_leading_attribute_type_macro_constructor_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "opencv_fft_leading_attribute_type_macro_constructor"
+    ]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/core/src/opencl/fft.cl"
+
+    source = """
+    __attribute__((always_inline))
+    CT mul_complex(CT a, CT b) {
+        return (CT)(fma(a.x, b.x, -a.y * b.y), fma(a.x, b.y, a.y * b.x));
+    }
+
+    kernel void fft_probe(global CT *out, global const CT *twiddles) {
+        CT a = twiddles[0];
+        out[0] = mul_complex(a, twiddles[1]);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].return_type == "CT"
+    assert ast.statements[0].params[0] == {"type": "CT", "name": "a"}
+    assert "CT mul_complex(CT a, CT b)" in crossgl
+    assert "return CT(fma(a.x, b.x" in crossgl
 
 
 def test_external_khronos_opencl_sdk_shared_parameter_name_codegen_reparse():

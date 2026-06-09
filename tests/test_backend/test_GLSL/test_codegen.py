@@ -1708,6 +1708,31 @@ def test_codegen_parenthesized_comma_assignment_expression():
     assert "float((a = 3, b))" in crossgl
 
 
+def test_codegen_parenthesized_assignment_array_access_from_glslang_coopmat():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.coopmat.comp, which uses .length() on an indexed value and
+    # indexes the result of a compound assignment.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        vec4 mats[3];
+        int elementCount[mats[1].length()];
+
+        void main() {
+            vec4 m = vec4(1.0);
+            float md1 = 0.0;
+            md1 += (m += m)[2];
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "int elementCount[(mats[1]).length()];" in crossgl
+    assert "md1 += (m += m)[2];" in crossgl
+    assert "mats[1].length()" not in crossgl
+    assert "md1 += m += m[2];" not in crossgl
+
+
 def test_codegen_unnamed_function_parameters_get_stable_names():
     code = textwrap.dedent("""
         #version 400 core

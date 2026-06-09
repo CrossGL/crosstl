@@ -3315,6 +3315,8 @@ class GLSLToCrossGLConverter:
                 object_name = node.object.name
         else:
             object_name = self.generate_expression(node.object)
+            if isinstance(node.object, ArrayAccessNode) and node.member == "length":
+                object_name = f"({object_name})"
 
         return f"{object_name}.{node.member}"
 
@@ -3344,9 +3346,15 @@ class GLSLToCrossGLConverter:
             buffer_expr, index_expr = structured_access
             return f"buffer_load({buffer_expr}, {index_expr})"
 
-        array = self.generate_expression(node.array)
+        array = self.generate_postfix_base_expression(node.array)
         index = self.generate_expression(node.index)
         return f"{array}[{index}]"
+
+    def generate_postfix_base_expression(self, node):
+        expression = self.generate_expression(node)
+        if isinstance(node, AssignmentNode):
+            return f"({expression})"
+        return expression
 
     def structured_buffer_access_parts(self, node):
         if not isinstance(node, ArrayAccessNode):

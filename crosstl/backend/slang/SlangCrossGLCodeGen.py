@@ -1726,8 +1726,14 @@ class SlangToCrossGLConverter:
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
+            mapped_type = self.sanitize_generic_type_expression_arguments(mapped_type)
             return f"{mapped_type}{pointer_suffix}"
         return slang_type
+
+    def sanitize_generic_type_expression_arguments(self, type_name):
+        if "<" not in str(type_name):
+            return type_name
+        return re.sub(r"!(?=[A-Za-z_])", "not_", str(type_name))
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))

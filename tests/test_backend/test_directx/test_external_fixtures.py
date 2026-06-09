@@ -766,6 +766,46 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_anonymous_and_packed_struct_bitfields",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/struct/bitfields.hlsl",
+        code=textwrap.dedent("""
+            RWByteAddressBuffer BufferOut : register(u0);
+
+            struct foo {
+              int x : 8;
+              int : 8;
+              int y : 16;
+            };
+
+            struct P1 {
+              uint l_Packed;
+              uint k_Packed : 6,
+                i_Packed : 15,
+                j_Packed : 11;
+            };
+
+            int main(struct foo p : IN0, uint3 xyz : IN1) : OUT {
+              P1 packed;
+              packed.k_Packed = xyz.x;
+              packed.i_Packed = xyz.y;
+              packed.j_Packed = xyz.z;
+              BufferOut.Store(p.x, asuint(p.y));
+              return p.x + p.y + packed.i_Packed;
+            }
+        """).strip(),
+        contains=(
+            "struct foo {",
+            "int x;",
+            "int y;",
+            "uint k_Packed;",
+            "uint i_Packed;",
+            "uint j_Packed;",
+            "buffer_store(BufferOut, p.x, asuint(p.y));",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_block_scope_using_linalg_aliases",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
