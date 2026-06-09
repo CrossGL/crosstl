@@ -10006,6 +10006,7 @@ def test_validate_project_report_rejects_include_dir_status_count_mismatches(
     assert "project.includeDirStatusCounts must match project.includeDirStatus" in (
         diagnostic["message"]
     )
+    assert "(expected {'missing': 1}, actual {'active': 1})" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_source_root_status_count_mismatches(
@@ -10038,6 +10039,7 @@ def test_validate_project_report_rejects_source_root_status_count_mismatches(
     assert "project.sourceRootStatusCounts must match project.sourceRootStatus" in (
         diagnostic["message"]
     )
+    assert "(expected {'missing': 1}, actual {'active': 1})" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_stale_include_dir_status(tmp_path):

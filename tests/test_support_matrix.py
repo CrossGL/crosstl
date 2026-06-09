@@ -1648,6 +1648,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "expected/actual project-config count mismatch context" in (
             backend_support["notes"]
         )
+        assert "expected/actual report count and rollup mismatch context" in (
+            backend_support["notes"]
+        )
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "scan-only artifactMatrix plans" in backend_support["notes"]

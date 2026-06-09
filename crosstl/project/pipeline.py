@@ -8093,7 +8093,10 @@ def _count_field_contract_reasons(
     if not _is_non_negative_int(value):
         return [f"{prefix} must be a non-negative integer"]
     if value != expected:
-        return [f"{prefix} must match {source_name}"]
+        return [
+            f"{prefix} must match {source_name} "
+            f"({_value_mismatch_context(value, expected)})"
+        ]
     return []
 
 
@@ -8103,7 +8106,10 @@ def _mapping_field_contract_reasons(
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
     if dict(value) != dict(expected):
-        return [f"{prefix} must match {source_name}"]
+        return [
+            f"{prefix} must match {source_name} "
+            f"({_value_mismatch_context(dict(value), dict(expected))})"
+        ]
     return []
 
 
