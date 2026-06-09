@@ -14067,6 +14067,7 @@ def test_validate_project_report_rejects_malformed_source_maps(tmp_path):
     assert "artifacts[0].sourceMap.target must match artifacts[0].target" in (
         diagnostic["message"]
     )
+    assert "(expected metal, actual opengl)" in diagnostic["message"]
     assert "artifacts[0].sourceMap.generated must be an object" in (
         diagnostic["message"]
     )
@@ -14232,10 +14233,15 @@ def test_validate_project_report_rejects_fine_grained_source_map_file_mismatches
         "artifacts[0].sourceMap.mappings[0].source.file must match "
         "artifacts[0].sourceMap.source.file"
     ) in diagnostic["message"]
+    assert "(expected other.cgl, actual simple.cgl)" in diagnostic["message"]
     assert (
         "artifacts[0].sourceMap.mappings[0].generated.file must match "
         "artifacts[0].sourceMap.generated.file"
     ) in diagnostic["message"]
+    assert (
+        "(expected out/cgl/other.cgl, actual out/cgl/simple.cgl)"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_zero_length_fine_grained_source_map_spans(
@@ -14445,17 +14451,26 @@ def test_validate_project_report_rejects_inconsistent_source_map_anchors(tmp_pat
     assert "artifacts[0].sourceMap.source.file must match artifacts[0].source" in (
         diagnostic["message"]
     )
+    assert "(expected other.cgl, actual simple.cgl)" in diagnostic["message"]
     assert "artifacts[0].sourceMap.generated.file must match artifacts[0].path" in (
         diagnostic["message"]
+    )
+    assert (
+        "(expected out/opengl/other.glsl, actual out/opengl/simple.glsl)"
+        in diagnostic["message"]
     )
     assert (
         "artifacts[0].sourceMap.mappings[0].source must match "
         "artifacts[0].sourceMap.source"
     ) in diagnostic["message"]
+    assert "expected {'file': 'simple.cgl'" in diagnostic["message"]
+    assert "actual {'file': 'other.cgl'" in diagnostic["message"]
     assert (
         "artifacts[0].sourceMap.mappings[0].generated must match "
         "artifacts[0].sourceMap.generated"
     ) in diagnostic["message"]
+    assert "expected {'file': 'out/opengl/simple.glsl'" in diagnostic["message"]
+    assert "actual {'file': 'out/opengl/other.glsl'" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_inconsistent_source_map_spans(tmp_path):
@@ -14824,12 +14839,20 @@ def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_pat
     assert "artifacts[0].sourceRemap.path must match artifacts[0].path" in (
         diagnostic["message"]
     )
+    assert (
+        "(expected out/cgl/wrong.source-remap.json, "
+        "actual out/cgl/simple.source-remap.json)"
+    ) in diagnostic["message"]
     assert "artifacts[0].sourceRemap.target must match artifacts[0].target" in (
         diagnostic["message"]
     )
+    assert "(expected opengl, actual cgl)" in diagnostic["message"]
     assert (
         "artifacts[0].sourceRemap.generatedFile must match artifacts[0].path"
         in diagnostic["message"]
+    )
+    assert "(expected out/cgl/wrong.cgl, actual out/cgl/simple.cgl)" in (
+        diagnostic["message"]
     )
     assert (
         "artifacts[0].sourceRemap.mappingGranularity must match "

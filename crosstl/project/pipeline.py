@@ -12399,13 +12399,15 @@ def _source_map_anchor_reasons(
         if _is_non_empty_string(artifact.get("source")):
             if source.get("file") != artifact.get("source"):
                 reasons.append(
-                    f"{prefix}.source.file must match artifacts[{index}].source"
+                    f"{prefix}.source.file must match artifacts[{index}].source "
+                    f"({_value_mismatch_context(source.get('file'), artifact.get('source'))})"
                 )
     if isinstance(generated, Mapping) and _is_non_empty_string(generated.get("file")):
         if _is_non_empty_string(artifact.get("path")):
             if generated.get("file") != artifact.get("path"):
                 reasons.append(
-                    f"{prefix}.generated.file must match artifacts[{index}].path"
+                    f"{prefix}.generated.file must match artifacts[{index}].path "
+                    f"({_value_mismatch_context(generated.get('file'), artifact.get('path'))})"
                 )
 
     mappings = source_map.get("mappings")
@@ -12421,7 +12423,8 @@ def _source_map_anchor_reasons(
             if is_file_granularity:
                 if dict(mapping_source) != dict(source):
                     reasons.append(
-                        f"{mapping_prefix}.source must match {prefix}.source"
+                        f"{mapping_prefix}.source must match {prefix}.source "
+                        f"({_value_mismatch_context(dict(mapping_source), dict(source))})"
                     )
             elif (
                 _is_non_empty_string(source.get("file"))
@@ -12429,14 +12432,16 @@ def _source_map_anchor_reasons(
                 and mapping_source.get("file") != source.get("file")
             ):
                 reasons.append(
-                    f"{mapping_prefix}.source.file must match {prefix}.source.file"
+                    f"{mapping_prefix}.source.file must match {prefix}.source.file "
+                    f"({_value_mismatch_context(mapping_source.get('file'), source.get('file'))})"
                 )
         mapping_generated = mapping.get("generated")
         if isinstance(generated, Mapping) and isinstance(mapping_generated, Mapping):
             if is_file_granularity:
                 if dict(mapping_generated) != dict(generated):
                     reasons.append(
-                        f"{mapping_prefix}.generated must match {prefix}.generated"
+                        f"{mapping_prefix}.generated must match {prefix}.generated "
+                        f"({_value_mismatch_context(dict(mapping_generated), dict(generated))})"
                     )
             elif (
                 _is_non_empty_string(generated.get("file"))
@@ -12445,7 +12450,8 @@ def _source_map_anchor_reasons(
             ):
                 reasons.append(
                     f"{mapping_prefix}.generated.file must match "
-                    f"{prefix}.generated.file"
+                    f"{prefix}.generated.file "
+                    f"({_value_mismatch_context(mapping_generated.get('file'), generated.get('file'))})"
                 )
     return reasons
 
@@ -12553,7 +12559,10 @@ def _source_map_contract_reasons(
         and _is_non_empty_string(artifact.get("target"))
         and target != artifact["target"]
     ):
-        reasons.append(f"{prefix}.target must match artifacts[{index}].target")
+        reasons.append(
+            f"{prefix}.target must match artifacts[{index}].target "
+            f"({_value_mismatch_context(target, artifact['target'])})"
+        )
 
     reasons.extend(
         _source_map_span_reasons(f"{prefix}.source", source_map.get("source"))
@@ -12670,7 +12679,10 @@ def _source_remap_contract_reasons(
     if _is_non_empty_string(path) and _is_non_empty_string(artifact_path):
         expected_path = _source_remap_report_path(artifact_path)
         if path != expected_path:
-            reasons.append(f"{prefix}.path must match artifacts[{index}].path")
+            reasons.append(
+                f"{prefix}.path must match artifacts[{index}].path "
+                f"({_value_mismatch_context(path, expected_path)})"
+            )
 
     target = source_remap.get("target")
     target_reasons = _target_name_contract_reasons(
@@ -12685,13 +12697,19 @@ def _source_remap_contract_reasons(
         and _is_non_empty_string(artifact.get("target"))
         and target != artifact["target"]
     ):
-        reasons.append(f"{prefix}.target must match artifacts[{index}].target")
+        reasons.append(
+            f"{prefix}.target must match artifacts[{index}].target "
+            f"({_value_mismatch_context(target, artifact['target'])})"
+        )
 
     generated_file = source_remap.get("generatedFile")
     if not _is_non_empty_string(generated_file):
         reasons.append(f"{prefix}.generatedFile must be a string")
     elif _is_non_empty_string(artifact_path) and generated_file != artifact_path:
-        reasons.append(f"{prefix}.generatedFile must match artifacts[{index}].path")
+        reasons.append(
+            f"{prefix}.generatedFile must match artifacts[{index}].path "
+            f"({_value_mismatch_context(generated_file, artifact_path)})"
+        )
 
     mapping_granularity = source_remap.get("mappingGranularity")
     source_map = artifact.get("sourceMap")
@@ -12709,7 +12727,8 @@ def _source_remap_contract_reasons(
             ):
                 reasons.append(
                     f"{prefix}.mappingGranularity must match "
-                    f"artifacts[{index}].sourceMap.mappingGranularity"
+                    f"artifacts[{index}].sourceMap.mappingGranularity "
+                    f"({_value_mismatch_context(mapping_granularity, source_map_granularity)})"
                 )
     mapping_count = source_remap.get("mappingCount")
     if mapping_count is None:
@@ -12722,7 +12741,8 @@ def _source_remap_contract_reasons(
         if isinstance(mappings, list) and mapping_count != len(mappings):
             reasons.append(
                 f"{prefix}.mappingCount must match "
-                f"artifacts[{index}].sourceMap.mappings"
+                f"artifacts[{index}].sourceMap.mappings "
+                f"({_value_mismatch_context(mapping_count, len(mappings))})"
             )
     size_bytes = source_remap.get("sizeBytes")
     if size_bytes is None:

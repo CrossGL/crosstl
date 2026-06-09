@@ -1403,6 +1403,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             "fine-grained source-map byte and line/column span containment"
             in backend_support["notes"]
         )
+        assert "expected/actual source-map and source-remap mismatch context" in (
+            backend_support["notes"]
+        )
         assert "source-map summary rollups" in backend_support["notes"]
         assert "source-map summary rollups including variant rollups" in (
             backend_support["notes"]
