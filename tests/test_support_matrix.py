@@ -488,9 +488,9 @@ def test_project_report_inspection_documents_rollups():
             "validation toolchain-run, and skipped-source samples with custom limits"
         ) in backend_support["notes"]
         assert (
-            "migration scope, non-goals, action count and kind, severity, and "
-            "target rollups, bounded migration action samples with custom limits, "
-            "target lists, and truncation metadata"
+            "migration scope and non-goal text output, action count and kind, "
+            "severity, and target rollups, bounded migration action samples with "
+            "custom limits, target lists, and truncation metadata"
         ) in backend_support["notes"]
         assert "does not derive artifact-matrix gaps for scan-only reports" in (
             backend_support["notes"]

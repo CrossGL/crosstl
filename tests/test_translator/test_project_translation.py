@@ -19919,6 +19919,11 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
     )
 
     assert result.returncode == 0
+    assert "Migration scope: shader-kernel-translation" in result.stdout
+    assert (
+        "Migration non-goals: automatic runtime API migration, "
+        "application build-system rewrites, backend framework integration"
+    ) in result.stdout
     assert "Migration actions by kind: manual-runtime-integration=1" in result.stdout
     assert "Migration actions by severity: note=1" in result.stdout
     assert "Migration actions by target: cgl=1" in result.stdout

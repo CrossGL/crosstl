@@ -3261,6 +3261,19 @@ def _format_project_report_inspection(payload):
         )
 
     migration = payload.get("migration")
+    if isinstance(migration, Mapping):
+        migration_scope = migration.get("scope")
+        if isinstance(migration_scope, str) and migration_scope:
+            lines.append(f"Migration scope: {migration_scope}")
+        migration_non_goals = migration.get("nonGoals")
+        if isinstance(migration_non_goals, list):
+            non_goal_labels = [
+                non_goal
+                for non_goal in migration_non_goals
+                if isinstance(non_goal, str) and non_goal
+            ]
+            if non_goal_labels:
+                lines.append(f"Migration non-goals: {', '.join(non_goal_labels)}")
     actions = migration.get("actions", []) if isinstance(migration, Mapping) else []
     if actions:
         for line in (
