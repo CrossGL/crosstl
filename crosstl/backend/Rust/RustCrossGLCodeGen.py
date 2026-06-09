@@ -1313,6 +1313,8 @@ class RustToCrossGLConverter:
     def infer_value_type(self, expression):
         if isinstance(expression, StructInitializationNode):
             return expression.struct_name
+        if isinstance(expression, LabeledBlockNode):
+            return self.infer_block_expression_value_type(expression.body)
         if isinstance(expression, BinaryOpNode):
             return self.infer_binary_expression_value_type(expression)
         if isinstance(expression, FunctionCallNode):
@@ -2655,6 +2657,10 @@ class RustToCrossGLConverter:
 
         if isinstance(stmt.value, LoopNode):
             return self.generate_loop_expression_let(stmt, indent, loop_contexts)
+        if isinstance(stmt.value, LabeledBlockNode):
+            return self.generate_labeled_block_expression_let(
+                stmt, indent, loop_contexts
+            )
         if self.is_block_expression_node(stmt.value):
             return self.generate_block_expression_let(stmt, indent, loop_contexts)
         if isinstance(stmt.value, IfNode):
@@ -3144,6 +3150,35 @@ class RustToCrossGLConverter:
             result_target=self.return_result_target,
             loop_contexts=loop_contexts,
         )
+
+    def generate_labeled_block_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+        target_name = self.declare_local_alias(stmt.name)
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(target_name, inferred_type)
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}"
+                f"{self.format_typed_declarator(stmt.vtype, target_name)};\n"
+            )
+        elif inferred_type:
+            code += (
+                f"{indent_str}"
+                f"{self.format_typed_declarator(inferred_type, target_name)};\n"
+            )
+        else:
+            code += f"{indent_str}auto {target_name};\n"
+
+        code += self.generate_labeled_block_expression_result(
+            stmt.value,
+            indent,
+            target_name,
+            loop_contexts,
+        )
+        return code
 
     def generate_block_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
@@ -3661,6 +3696,46 @@ class RustToCrossGLConverter:
         finally:
             self.pop_local_callable_scope()
 
+    def generate_labeled_block_expression_result(
+        self, node, indent, result_target, loop_contexts=None
+    ):
+        block_node = self.get_block_expression_node(node.body)
+        indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(
+            loop_contexts,
+            node,
+            result_target=result_target,
+        )
+        loop_context = nested_contexts[-1]
+
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_labeled_control_declarations(loop_context, indent)
+            code += f"{indent_str}while (true) {{\n"
+            code += self.generate_function_body(
+                block_node.statements,
+                indent + 1,
+                nested_contexts,
+            )
+
+            expression = self.get_block_expression(block_node)
+            if expression is not None:
+                code += self.generate_expression_result(
+                    expression,
+                    indent + 1,
+                    result_target,
+                    nested_contexts,
+                )
+                if not self.branch_guarantees_control_transfer(expression):
+                    code += f"{indent_str}    break;\n"
+            elif not self.branch_guarantees_control_transfer(block_node):
+                code += f"{indent_str}    break;\n"
+
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.pop_local_callable_scope()
+
     def generate_expression_result(
         self, expression, indent, result_target, loop_contexts=None
     ):
@@ -3679,6 +3754,13 @@ class RustToCrossGLConverter:
             return self.generate_break_statement(expression, indent, loop_contexts)
         if isinstance(expression, ContinueNode):
             return self.generate_continue_statement(expression, indent, loop_contexts)
+        if isinstance(expression, LabeledBlockNode):
+            return self.generate_labeled_block_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
         if isinstance(expression, LoopNode):
             return self.generate_loop(
                 expression,
@@ -7633,6 +7715,8 @@ class RustToCrossGLConverter:
             return self.branch_guarantees_control_transfer(
                 self.get_block_expression(block_node)
             )
+        if isinstance(body, LabeledBlockNode):
+            return self.branch_guarantees_control_transfer(body.body)
         if isinstance(body, IfNode):
             if body.else_body is None:
                 return False
@@ -7687,6 +7771,12 @@ class RustToCrossGLConverter:
             if nested_loop_depth != 0:
                 return False
             return node.label is None or node.label == current_label
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_current_loop_break_in_switch(
+                node.body,
+                current_label,
+                nested_loop_depth + 1,
+            )
         if isinstance(node, LoopNode):
             return self.contains_current_loop_break_in_switch(
                 node.body,
@@ -7911,6 +8001,13 @@ class RustToCrossGLConverter:
             return self.generate_discarded_block_expression(
                 expression,
                 indent,
+                loop_contexts,
+            )
+        if isinstance(expression, LabeledBlockNode):
+            return self.generate_labeled_block_expression_result(
+                expression,
+                indent,
+                None,
                 loop_contexts,
             )
         if isinstance(expression, LoopNode):
@@ -8194,6 +8291,12 @@ class RustToCrossGLConverter:
             )
         if isinstance(node, (BreakNode, ContinueNode)):
             return node.label == label and nested_loop_depth > 0
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_labeled_control_target(
+                node.body,
+                label,
+                nested_loop_depth + 1,
+            )
         if isinstance(node, LoopNode):
             return self.contains_labeled_control_target(
                 node.body,
@@ -8343,6 +8446,8 @@ class RustToCrossGLConverter:
             return not self.match_requires_if_chain(node) or any(
                 self.contains_switch_match(arm.body) for arm in node.arms
             )
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_switch_match(node.body)
         if self.is_block_expression_node(node):
             block_node = self.get_block_expression_node(node)
             return self.contains_switch_match(
@@ -8369,6 +8474,8 @@ class RustToCrossGLConverter:
             )
         if isinstance(node, (BreakNode, ContinueNode)):
             return node.label == label
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_labeled_control_reference(node.body, label)
         if isinstance(node, LoopNode):
             return self.contains_labeled_control_reference(node.body, label)
         if isinstance(node, WhileNode):
@@ -8426,7 +8533,10 @@ class RustToCrossGLConverter:
         return contexts[-1]["result_target"]
 
     def is_inline_result_expression(self, expression):
-        if isinstance(expression, (LoopNode, IfNode, MatchNode, AssignmentNode)):
+        if isinstance(
+            expression,
+            (LoopNode, LabeledBlockNode, IfNode, MatchNode, AssignmentNode),
+        ):
             return True
 
         if self.is_block_expression_node(expression):
@@ -8996,7 +9106,10 @@ class RustToCrossGLConverter:
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
-        elif isinstance(expr, (LoopNode, IfNode, MatchNode, AssignmentNode)):
+        elif isinstance(
+            expr,
+            (LoopNode, LabeledBlockNode, IfNode, MatchNode, AssignmentNode),
+        ):
             return self.generate_inline_result_expression(expr)
         elif self.is_block_expression_node(expr):
             return self.generate_inline_block_expression(expr)

@@ -26,6 +26,7 @@ from .RustAst import (
     FunctionNode,
     IfNode,
     ImplNode,
+    LabeledBlockNode,
     LetNode,
     LetPatternConditionNode,
     LoopNode,
@@ -733,10 +734,10 @@ class RustParser:
             return self.parse_while_loop(label)
         if self.current_token[0] == "FOR":
             return self.parse_for_loop(label)
+        if self.current_token[0] == "LBRACE":
+            return self.parse_labeled_block_expression(label)
 
-        raise SyntaxError(
-            f"Expected loop, while, or for after label, got {self.current_token[0]}"
-        )
+        raise SyntaxError(f"Expected labeled expression, got {self.current_token[0]}")
 
     def parse_loop_expression(self):
         label = None
@@ -744,10 +745,16 @@ class RustParser:
             label = self.parse_control_label()
             self.eat("COLON")
 
+        if self.current_token[0] == "LBRACE":
+            return self.parse_labeled_block_expression(label)
+
         if self.current_token[0] != "LOOP":
             raise SyntaxError(f"Expected loop expression, got {self.current_token[0]}")
 
         return self.parse_loop(label)
+
+    def parse_labeled_block_expression(self, label):
+        return LabeledBlockNode(label, self.parse_block_expression())
 
     def parse_use_statement(self, visibility=None, attributes=None):
         self.eat("USE")
@@ -1875,6 +1882,8 @@ class RustParser:
 
     def split_shift_right_token(self):
         self.tokens[self.current_index] = ("GREATER_THAN", ">")
+        self.tokens.insert(self.current_index + 1, ("GREATER_THAN", ">"))
+        self.current_index += 1
         self.current_token = self.tokens[self.current_index]
 
     def format_token_parts(self, parts):

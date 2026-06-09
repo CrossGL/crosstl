@@ -365,6 +365,69 @@ def test_wgpu_underscore_separated_integer_suffix_codegen_reparse():
     crosstl.translator.parse(result)
 
 
+def test_wgpu_labeled_block_expression_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/device/queue.rs.
+    code = """
+    fn submit(submission: Submission) {
+        let submit_index = submission.index;
+        let res = 'error: {
+            let mut used_surface_textures = TextureUsageScope::default();
+            if should_stop() {
+                break 'error Err(QueueError::DeviceLost);
+            }
+            Ok(submit_index)
+        };
+        finish(res);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto res;" in result
+    assert "while (true) {" in result
+    assert "res = Err(QueueError::DeviceLost);" in result
+    assert "res = Ok(submit_index);" in result
+    assert "'error" not in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_labeled_block_turbofish_shift_right_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/device/queue.rs.
+    code = """
+    fn submit() {
+        let res = 'error: {
+            let mut used_surface_textures = TextureUsageScope::default();
+            let texture_barriers = trackers
+                .textures
+                .set_from_usage_scope_and_drain_transitions(
+                    &used_surface_textures,
+                    &submission.snatch_guard,
+                )
+                .collect::<Vec<_>>();
+            unsafe { baked.encoder.raw.transition_textures(&texture_barriers); };
+            if let Err(e) = baked.encoder.close() {
+                break 'error Err(e.into());
+            }
+            Ok(())
+        };
+        finish(res);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto res;" in result
+    assert "while (true) {" in result
+    assert ".collect<Vec<_>>()" in result
+    assert "res = Err(e.into());" in result
+    assert "res = Ok(());" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_unresolved_associated_static_calls_reparse():
     # Reduced from Rust-GPU rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d compiletests:
