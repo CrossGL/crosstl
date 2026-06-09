@@ -1645,6 +1645,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert "non-empty scan-scope list entries" in backend_support["notes"]
+        assert "expected/actual project-config count mismatch context" in (
+            backend_support["notes"]
+        )
         assert "unit extension/path consistency" in backend_support["notes"]
         assert "artifactMatrix metadata" in backend_support["notes"]
         assert "scan-only artifactMatrix plans" in backend_support["notes"]

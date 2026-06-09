@@ -9811,15 +9811,15 @@ def test_validate_project_report_rejects_project_config_count_mismatches(tmp_pat
                     "excludePatternCount": 1,
                     "targets": ["opengl"],
                     "outputDir": "out",
-                    "sourceOverrides": {},
+                    "sourceOverrides": {"*.metal": "metal"},
                     "sourceOverrideCount": 0,
                     "includeDirs": ["includes", "generated/includes"],
                     "includeDirCount": 1,
-                    "defines": {},
+                    "defines": {"ENABLE_TEST": "1"},
                     "defineCount": 0,
-                    "variants": {},
+                    "variants": {"debug": {"DEBUG": "1"}},
                     "variantCount": 0,
-                    "variantDefineCounts": {},
+                    "variantDefineCounts": {"debug": 1},
                 },
                 "artifacts": [],
             }
@@ -9836,15 +9836,24 @@ def test_validate_project_report_rejects_project_config_count_mismatches(tmp_pat
     assert "project.sourceRootCount must match project.sourceRoots" in (
         diagnostic["message"]
     )
+    assert "(expected 2, actual 1)" in diagnostic["message"]
     assert "project.includePatternCount must match project.includePatterns" in (
         diagnostic["message"]
     )
+    assert "(expected 1, actual 0)" in diagnostic["message"]
     assert "project.excludePatternCount must match project.excludePatterns" in (
         diagnostic["message"]
     )
     assert "project.includeDirCount must match project.includeDirs" in (
         diagnostic["message"]
     )
+    assert "(expected 1, actual 2)" in diagnostic["message"]
+    assert "project.defineCount must match project.defines" in diagnostic["message"]
+    assert "project.sourceOverrideCount must match project.sourceOverrides" in (
+        diagnostic["message"]
+    )
+    assert "project.variantCount must match project.variants" in diagnostic["message"]
+    assert "(expected 0, actual 1)" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_malformed_include_dir_status_records(

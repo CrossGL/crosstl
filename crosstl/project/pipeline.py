@@ -10512,7 +10512,10 @@ def _project_metadata_contract_reasons(
             if not _is_non_negative_int(count):
                 reasons.append(f"project.{field_name} must be a non-negative integer")
             elif list_is_valid and count != len(list_value):
-                reasons.append(f"project.{field_name} must match project.{list_name}")
+                reasons.append(
+                    f"project.{field_name} must match project.{list_name} "
+                    f"({_value_mismatch_context(count, len(list_value))})"
+                )
 
     source_roots = project.get("sourceRoots")
     if _optional_project_field(
@@ -10542,7 +10545,10 @@ def _project_metadata_contract_reasons(
         if not _is_non_negative_int(include_dir_count):
             reasons.append("project.includeDirCount must be a non-negative integer")
         elif include_dirs_is_list and include_dir_count != len(include_dirs):
-            reasons.append("project.includeDirCount must match project.includeDirs")
+            reasons.append(
+                "project.includeDirCount must match project.includeDirs "
+                f"({_value_mismatch_context(include_dir_count, len(include_dirs))})"
+            )
 
     if _optional_project_field(
         project, "includeDirStatus", required=require_full_metadata
@@ -10570,7 +10576,10 @@ def _project_metadata_contract_reasons(
         if not _is_non_negative_int(define_count):
             reasons.append("project.defineCount must be a non-negative integer")
         elif defines_is_mapping and define_count != len(defines):
-            reasons.append("project.defineCount must match project.defines")
+            reasons.append(
+                "project.defineCount must match project.defines "
+                f"({_value_mismatch_context(define_count, len(defines))})"
+            )
 
     source_overrides = project.get("sourceOverrides")
     source_overrides_is_mapping = isinstance(source_overrides, Mapping)
@@ -10593,7 +10602,8 @@ def _project_metadata_contract_reasons(
             source_overrides
         ):
             reasons.append(
-                "project.sourceOverrideCount must match project.sourceOverrides"
+                "project.sourceOverrideCount must match project.sourceOverrides "
+                f"({_value_mismatch_context(source_override_count, len(source_overrides))})"
             )
 
     variants = project.get("variants")
@@ -10606,7 +10616,10 @@ def _project_metadata_contract_reasons(
         if not _is_non_negative_int(variant_count):
             reasons.append("project.variantCount must be a non-negative integer")
         elif variants_is_mapping and variant_count != len(variants):
-            reasons.append("project.variantCount must match project.variants")
+            reasons.append(
+                "project.variantCount must match project.variants "
+                f"({_value_mismatch_context(variant_count, len(variants))})"
+            )
 
     if _optional_project_field(
         project, "variantDefineCounts", required=require_full_metadata
