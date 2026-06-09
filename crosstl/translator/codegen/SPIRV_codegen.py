@@ -11593,6 +11593,8 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name = self.type_name_from_value(param_type)
+        if self.pointer_pointee_type_name_from_string(type_name) is not None:
+            return type_name
         if self.is_structured_buffer_declared_type_name(type_name):
             return type_name
         if self.has_attribute(param, "glsl_buffer_block"):

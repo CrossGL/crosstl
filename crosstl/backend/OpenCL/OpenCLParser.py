@@ -90,6 +90,7 @@ class OpenCLParser(HipParser):
     }
     POSTFIX_TYPE_QUALIFIER_TOKENS = {
         *HipParser.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        "VOLATILE",
         "__DEVICE__",
         "__SHARED__",
         "__CONSTANT__",
@@ -370,6 +371,73 @@ class OpenCLParser(HipParser):
             if self.pos == previous_pos:
                 return
 
+    def parse_function_with_qualifier(self):
+        qualifiers = []
+        attributes = []
+
+        while True:
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            parsed_attributes = self.parse_type_attribute_prefixes()
+            if parsed_attributes:
+                attributes.extend(parsed_attributes)
+                continue
+            if self.match("__LAUNCH_BOUNDS__"):
+                attributes.append(self.parse_launch_bounds_attribute())
+                continue
+            if not (
+                self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
+                or self.is_identifier_function_specifier_token()
+            ):
+                break
+            qualifiers.append(self.current_token.value)
+            self.advance()
+
+        return_type = self.parse_type()
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        attributes.extend(self.parse_type_attribute_prefixes())
+        self.skip_newlines()
+
+        while True:
+            if self.match("__LAUNCH_BOUNDS__"):
+                attributes.append(self.parse_launch_bounds_attribute())
+                self.skip_newlines()
+                continue
+            if not (
+                self.match(*self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS)
+                or self.is_identifier_function_specifier_token()
+            ):
+                break
+            qualifiers.append(self.current_token.value)
+            self.advance()
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            attributes.extend(self.parse_type_attribute_prefixes())
+            self.skip_newlines()
+
+        name = self.consume_function_name()
+        self.user_function_names.add(name)
+
+        self.consume("LPAREN")
+        params = self.parse_parameter_list()
+        self.consume("RPAREN")
+        self.skip_newlines()
+        return_type = self.parse_trailing_return_type(return_type)
+        self.skip_post_function_qualifiers(attributes)
+        return_type = self.parse_trailing_return_type(return_type)
+
+        body = None
+        if self.match("LBRACE"):
+            body = self.parse_block()
+        elif self.match("SEMICOLON"):
+            self.advance()
+
+        if any(item in self.KERNEL_FUNCTION_SPECIFIER_VALUES for item in qualifiers):
+            return KernelNode(return_type, name, params, body, attributes)
+
+        return FunctionNode(return_type, name, params, body, qualifiers, attributes)
+
     def parse_type(self):
         self.parse_type_attribute_prefixes()
         type_name = super().parse_type()
@@ -546,6 +614,7 @@ class OpenCLParser(HipParser):
             }:
                 saw_opencl_qualifier = True
             index += 1
+            index = self.skip_newlines_at_pos(index)
 
         index = self.skip_cpp_attributes_at_pos(index)
         index = self.skip_type_attribute_prefixes_at_pos(index)
@@ -573,6 +642,16 @@ class OpenCLParser(HipParser):
             }
 
         index = self.skip_newlines_at_pos(type_end)
+        while index < len(self.tokens) and self.tokens[index].type in {
+            "ASTERISK",
+            "STAR",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+            index = self.skip_postfix_type_qualifiers_at_pos(index)
+            index = self.skip_newlines_at_pos(index)
+
         declarator_name_end = self.skip_variable_declarator_name_at_pos(index)
         if declarator_name_end is None:
             return False
@@ -597,6 +676,7 @@ class OpenCLParser(HipParser):
             *self.TYPE_QUALIFIER_TOKENS,
         }:
             index += 1
+            index = self.skip_newlines_at_pos(index)
         return index
 
     def parse_type_alias_declarator(self, base_type, allow_prefix):
@@ -957,6 +1037,12 @@ class OpenCLParser(HipParser):
     def parse_statement(self):
         if self.is_opencl_macro_block_statement():
             return self.parse_opencl_macro_block_statement()
+        if self.match(*self.ELABORATED_TYPE_TOKENS):
+            if self.is_function_declaration():
+                return self.parse_simple_function()
+            if self.is_variable_declaration():
+                declarations = self.parse_variable_declaration_list()
+                return declarations if len(declarations) > 1 else declarations[0]
         return super().parse_statement()
 
     def is_opencl_macro_block_statement(self):
@@ -981,7 +1067,7 @@ class OpenCLParser(HipParser):
                 depth -= 1
                 if depth == 0:
                     return saw_block_argument
-            elif token_type == "LBRACE" and depth == 1:
+            elif token_type == "LBRACE" and depth in {1, 2}:
                 saw_block_argument = True
                 index = self.skip_balanced_group_at_pos(index, "LBRACE", "RBRACE")
                 if index is None:
@@ -993,6 +1079,7 @@ class OpenCLParser(HipParser):
 
     def parse_opencl_macro_block_statement(self):
         name = self.consume("IDENTIFIER").value
+        self.skip_newlines()
         args = self.consume_raw_opencl_macro_arguments()
         if self.match("SEMICOLON"):
             self.advance()

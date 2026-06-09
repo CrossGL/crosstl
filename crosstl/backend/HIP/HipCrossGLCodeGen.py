@@ -7315,9 +7315,14 @@ class HipToCrossGLConverter:
             "void": "void",
             "bool": "bool",
             "char": "i8",
+            "signed char": "i8",
             "unsigned char": "u8",
             "short": "i16",
+            "signed short": "i16",
+            "short int": "i16",
+            "signed short int": "i16",
             "unsigned short": "u16",
+            "unsigned short int": "u16",
             "int": "i32",
             "signed": "i32",
             "unsigned": "u32",
@@ -7326,10 +7331,17 @@ class HipToCrossGLConverter:
             "unsigned int": "u32",
             "long": "i64",
             "signed long": "i64",
+            "long int": "i64",
+            "signed long int": "i64",
             "unsigned long": "u64",
+            "unsigned long int": "u64",
+            "long unsigned int": "u64",
             "long long": "i64",
             "signed long long": "i64",
+            "long long int": "i64",
+            "signed long long int": "i64",
             "unsigned long long": "u64",
+            "unsigned long long int": "u64",
             "long long unsigned int": "u64",
             "__int64": "i64",
             "signed __int64": "i64",
@@ -7432,6 +7444,10 @@ class HipToCrossGLConverter:
             element_type = self.convert_hip_type_to_crossgl(template_args[0])
             size = self.format_crossgl_array_extent(template_args[1])
             return f"array<{element_type}, {size}>"
+        if self.is_std_pair_base_name(base_name) and len(template_args) >= 2:
+            first_type = self.convert_hip_type_to_crossgl(template_args[0])
+            second_type = self.convert_hip_type_to_crossgl(template_args[1])
+            return f"pair<{first_type}, {second_type}>"
         if self.is_std_tuple_base_name(base_name) and template_args:
             element_types = [
                 self.convert_hip_type_to_crossgl(arg) for arg in template_args
@@ -7462,6 +7478,9 @@ class HipToCrossGLConverter:
 
     def is_std_array_base_name(self, base_name):
         return base_name in {"array", "std::array"}
+
+    def is_std_pair_base_name(self, base_name):
+        return base_name in {"pair", "std::pair"}
 
     def is_std_tuple_base_name(self, base_name):
         return base_name in {"tuple", "std::tuple"}

@@ -452,6 +452,31 @@ def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     assert body[2].left.array_sizes == ["8"]
 
 
+def test_parse_template_struct_default_bool_relational_from_tinygrad_metal():
+    # Reduced from:
+    # Repo: https://github.com/tinygrad/tinygrad
+    # Commit: f9d88d3c3a6536ae28b054fe8881d1c3064e25fd
+    # Path: extra/thunder/metal/include/common/common.metal
+    code = """
+    template<int Start, int End, int Stride, bool=(Start<End)>
+    struct unroll_i_in_range {
+        template<class F, typename... Args>
+        static METAL_FUNC void run(F f, Args... args) {
+            return;
+        }
+    };
+    """
+    ast = parse_ok(code)
+    struct = ast.structs[0]
+
+    assert struct.name == "unroll_i_in_range"
+    assert struct.template_parameters == [
+        ("value", "Start"),
+        ("value", "End"),
+        ("value", "Stride"),
+    ]
+
+
 def test_parse_comma_separated_pointer_declarators_keep_own_suffixes():
     code = """
     void main() {

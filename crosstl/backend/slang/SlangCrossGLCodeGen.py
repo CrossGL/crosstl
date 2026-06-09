@@ -1885,6 +1885,11 @@ class SlangToCrossGLConverter:
             if generic_vector_or_matrix:
                 return f"{generic_vector_or_matrix}{pointer_suffix}"
             base_type = slang_type.split("<", 1)[0].strip()
+            pointer_buffer_type = self.map_pointer_element_buffer_type(
+                slang_type, base_type
+            )
+            if pointer_buffer_type:
+                return f"{pointer_buffer_type}{pointer_suffix}"
             mapped_type = self.type_map.get(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
@@ -1896,6 +1901,14 @@ class SlangToCrossGLConverter:
         if "<" not in str(type_name):
             return type_name
         return re.sub(r"!(?=[A-Za-z_])", "not_", str(type_name))
+
+    def map_pointer_element_buffer_type(self, slang_type, base_type):
+        if base_type not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            return None
+        args = self.generic_type_arguments(slang_type)
+        if len(args) != 1 or "*" not in args[0]:
+            return None
+        return f"buffer<{self.map_type(args[0])}>"
 
     def map_associated_differential_type(self, slang_type):
         match = self.ASSOCIATED_DIFFERENTIAL_TYPE.fullmatch(str(slang_type))

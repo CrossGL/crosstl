@@ -217,6 +217,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "5d9dec127a943c688c816e345c64a4ee2f99c7e6",
         "path": "opencl/test/unit_test/test_files/simple_spill_fill_kernel.cl",
     },
+    "clspv_atomic_builtin_post_return_attribute": {
+        "url": "https://github.com/google/clspv",
+        "commit": "2b3c2ede6ac9a05642ced265ec0d3653e113e455",
+        "path": "test/AtomicBuiltins/atom_add_int.cl",
+    },
 }
 
 
@@ -1443,3 +1448,24 @@ def test_external_compute_runtime_simple_spill_long_sum_codegen_reparse():
     assert "out[(gl_GlobalInvocationID.x * 2)] =" in crossgl
     assert crossgl.count("_data127") >= 2
     assert "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((" not in crossgl
+
+
+def test_external_clspv_post_return_reqd_work_group_size_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["clspv_atomic_builtin_post_return_attribute"]
+    assert source_info["commit"] == "2b3c2ede6ac9a05642ced265ec0d3653e113e455"
+    assert source_info["path"] == "test/AtomicBuiltins/atom_add_int.cl"
+
+    source = """
+    kernel void __attribute__((reqd_work_group_size(1, 1, 1)))
+    foo(global int* a, global int* b)
+    {
+        *a = atom_add(b, 42);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    kernel = ast.statements[0]
+    assert kernel.name == "foo"
+    assert kernel.attributes == ["__attribute__((reqd_work_group_size(1,1,1)))"]
+    assert "@workgroup_size(1, 1, 1)" in crossgl

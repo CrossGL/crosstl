@@ -26468,6 +26468,48 @@ class TestSpirvShaderValidation:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_storage_buffer_pointer_helper_parameters_inline(self, tmp_path):
+        source_code = """
+        shader StorageBufferPointerHelperParamShader {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* values;
+                layout(set = 0, binding = 1) buffer vec4* vectors;
+
+                void writeScalar(float* dst, float value) {
+                    dst[0] = value;
+                    return;
+                }
+
+                void writeVector(vec4* dst, vec4 value) {
+                    dst[1] = value;
+                    return;
+                }
+
+                void main() {
+                    float scalar = values[1] + 2.0;
+                    vec4 vector = vectors[0] + vec4(0.25, 0.5, 0.75, 1.0);
+                    writeScalar(values, scalar);
+                    writeVector(vectors, vector);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" not in spv_code
+        assert "PointerType(" not in spv_code
+        assert "PrimitiveType(" not in spv_code
+        assert "VectorType(" not in spv_code
+        assert "runtime-array aggregate values cannot be loaded" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_atomic_pointer_buffer_lowers_to_runtime_array_atomics(self, tmp_path):
         warning_source = """
         shader VulkanAtomicPointerWarning {

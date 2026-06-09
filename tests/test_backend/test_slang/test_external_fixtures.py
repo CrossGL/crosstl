@@ -32,6 +32,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "142e00d9342eccf0613ed1b18d81cb003c5d6f09",
     },
+    "shader-slang/slang-current-2026-06-10": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "0658ed79219d6e4ee526182104ce71d476f787be",
+    },
     "shader-slang/slang-main-2026-06-09-dyn-interface": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "1fc15d23f67005325103a888a175a96ba1782ac2",
@@ -2351,6 +2355,60 @@ EXTERNAL_FIXTURES = [
             "__generic_value_param",
             "Expected semantic name",
         ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+        # Path: tests/spirv/storage-image-multi-sample-read-write.slang
+        "id": "slang_spirv_multisample_storage_image_scalar_literal_swizzle",
+        "repo": "shader-slang/slang-current-2026-06-10",
+        "path": "tests/spirv/storage-image-multi-sample-read-write.slang",
+        "source": (
+            """
+            RWTexture2DMS<float> tex;
+
+            [shader("fragment")]
+            float main()
+            {
+                return tex.Load(0.xx, 0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "image2DMS tex;",
+            "return imageLoad(tex, 0.xx, 0);",
+        ],
+        "not_contains": ["Expected COMMA or RPAREN"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 0658ed79219d6e4ee526182104ce71d476f787be
+        # Path: tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang
+        "id": "slang_gfx_structured_buffer_pointer_element_reparse",
+        "repo": "shader-slang/slang-current-2026-06-10",
+        "path": "tools/gfx-unit-test/pointer-in-buffer-double-ptr-roundtrip.slang",
+        "source": (
+            """
+            StructuredBuffer<int**> ptrs;
+            RWStructuredBuffer<int> output;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                int** pp = ptrs[0];
+                output[0] = **pp;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "buffer<int**> ptrs;",
+            "int** pp = ptrs[0];",
+            "output[0] = **pp;",
+        ],
+        "not_contains": ["StructuredBuffer<int**> ptrs;"],
     },
 ]
 

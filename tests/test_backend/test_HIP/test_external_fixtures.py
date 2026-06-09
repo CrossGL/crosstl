@@ -1429,6 +1429,23 @@ def test_external_hip_tests_tuple_of_vectors_return_type_codegen_reparse():
     assert "std::tuple" not in crossgl
 
 
+def test_external_hip_tests_pair_of_vectors_return_type_codegen_reparse():
+    # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381:
+    # catch/unit/deviceLib/hadd.cc.
+    source = """
+    static auto get_hadd_inputs() -> std::pair<std::vector<int>, std::vector<int>> {
+        std::vector<int> a, b;
+        return std::make_pair(a, b);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "pair<array<i32>, array<i32>> get_hadd_inputs()" in crossgl
+    assert "std::pair" not in crossgl
+    assert "std::vector" not in crossgl
+
+
 def test_external_hipblas_template_template_parameter_codegen_reparse():
     # Upstream: https://github.com/ROCm/hipBLAS
     # Commit: 4a1f902127ba378e1e22600e17de5894327e28d5
@@ -1990,6 +2007,29 @@ def test_external_rocm_hip_tests_clz_intrinsics_codegen_reparse():
     assert "out[1] = countLeadingZeros(y);" in crossgl
     assert "__clz" not in crossgl
     assert "__clzll" not in crossgl
+
+
+def test_external_hip_tests_multiword_integer_spellings_codegen_reparse():
+    # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381:
+    # catch/unit/deviceLib/ldg.cc, plus long-long spellings used across HIP tests.
+    source = """
+    char2 make_vector2(signed char a) {
+        return make_char2(a, a);
+    }
+
+    __device__ unsigned long long int ticks(long long int x) {
+        unsigned long long int y = 1ull;
+        return y + (unsigned long long int)x;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0]["type"] == "signed char"
+    assert "vec2<i8> make_vector2(i8 a)" in crossgl
+    assert "u64 ticks(i64 x)" in crossgl
+    assert "var y: u64 = 1u;" in crossgl
+    assert "u64(x)" in crossgl
 
 
 def test_external_rocm_hip_tests_brev_intrinsics_codegen_reparse():

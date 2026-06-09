@@ -233,3 +233,33 @@ def test_opencl_generic_address_space_pointer_parameter_parses():
     helper = ast.statements[0]
     assert helper.params[0] == {"type": "__generic__ int *", "name": "p"}
     assert ast.statements[1].name == "generic_probe"
+
+
+def test_clspv_postfix_volatile_pointer_declarator_parses():
+    ast = parse_code("""
+        kernel void volatile_pointer_probe(global uint *results) {
+            __private float val;
+            val = 0.1f;
+            float *volatile ptr = &val;
+            results[0] = ptr != 0;
+        }
+        """)
+
+    ptr = ast.statements[0].body[2]
+    assert ptr.vtype == "float * volatile"
+    assert ptr.name == "ptr"
+
+
+def test_clspv_line_broken_private_qualifier_declaration_parses():
+    ast = parse_code("""
+        void kernel private_array_probe(global int *out) {
+        private
+          unsigned char tab[128];
+          out[0] = tab[0];
+        }
+        """)
+
+    tab = ast.statements[0].body[0]
+    assert tab.qualifiers == ["__private__"]
+    assert tab.vtype == "unsigned char[128]"
+    assert tab.name == "tab"

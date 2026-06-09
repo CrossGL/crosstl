@@ -1575,6 +1575,29 @@ def test_cupy_double_longlong_bit_reinterpret_intrinsics_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_current_cccl_multiword_integer_spellings_codegen_reparse():
+    # Reduced from NVIDIA/cccl@01499a8daf1bc8568aa86f90467fc70bf9a58989:
+    # cudax/examples/stf/1f1b.cu and
+    # cudax/examples/stf/graph_algorithms/tricount.cu.
+    source = """
+    __device__ unsigned long long int triangle_count(long long int clock_cnt,
+                                                     signed char lane) {
+        unsigned long long int count = 1ull;
+        long long int delta = (long long int)clock_cnt;
+        return count + (unsigned long long int)delta
+                     + (unsigned long long int)lane;
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "u64 triangle_count(i64 clock_cnt, i8 lane)" in crossgl
+    assert "var count: u64 = 1ull;" in crossgl
+    assert "var delta: i64 = i64(clock_cnt);" in crossgl
+    assert "u64(delta)" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_monte_carlo_reserved_in_parameter_codegen_reparse():
     source = """
     namespace cg = cooperative_groups;

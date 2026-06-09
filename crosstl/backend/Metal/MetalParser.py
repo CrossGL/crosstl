@@ -734,22 +734,31 @@ class MetalParser:
         parameters = []
         parameter_tokens = []
         depth = 1
+        grouped_depth = 0
         self.eat("LESS_THAN")
 
         while depth > 0 and self.current_token[0] != "EOF":
             token = self.current_token
-            if token[0] == "LESS_THAN":
+            if token[0] in {"LPAREN", "LBRACKET", "LBRACE"}:
+                grouped_depth += 1
+                parameter_tokens.append(token)
+                self.eat(token[0])
+            elif token[0] in {"RPAREN", "RBRACKET", "RBRACE"} and grouped_depth > 0:
+                grouped_depth -= 1
+                parameter_tokens.append(token)
+                self.eat(token[0])
+            elif grouped_depth == 0 and token[0] == "LESS_THAN":
                 depth += 1
                 parameter_tokens.append(token)
                 self.eat("LESS_THAN")
-            elif token[0] == "GREATER_THAN":
+            elif grouped_depth == 0 and token[0] == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     self.eat("GREATER_THAN")
                     break
                 parameter_tokens.append(token)
                 self.eat("GREATER_THAN")
-            elif token[0] == "SHIFT_RIGHT" and depth >= 2:
+            elif grouped_depth == 0 and token[0] == "SHIFT_RIGHT" and depth >= 2:
                 closers_to_keep = min(2, depth - 1)
                 parameter_tokens.extend(
                     ("GREATER_THAN", ">") for _ in range(closers_to_keep)
@@ -758,7 +767,7 @@ class MetalParser:
                 self.eat("SHIFT_RIGHT")
                 if depth == 0:
                     break
-            elif token[0] == "COMMA" and depth == 1:
+            elif grouped_depth == 0 and token[0] == "COMMA" and depth == 1:
                 parsed = self.parse_template_parameter_tokens(parameter_tokens)
                 if parsed is not None:
                     parameters.append(parsed)

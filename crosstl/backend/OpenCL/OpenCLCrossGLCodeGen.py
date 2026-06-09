@@ -334,13 +334,14 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         self.push_identifier_name_scope()
         try:
             resource_binding = 0
-            for param in getattr(kernel, "params", []) or []:
+            for index, param in enumerate(getattr(kernel, "params", []) or []):
                 if isinstance(param, dict):
                     raw_type = param.get("type", "int")
                     param_name = param.get("name", "param")
                 else:
                     raw_type = getattr(param, "vtype", "int")
                     param_name = getattr(param, "name", "param")
+                param_name = param_name or f"_param{index}"
 
                 if "*" in raw_type:
                     element_type = self.convert_hip_pointer_element_type(raw_type)

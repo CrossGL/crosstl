@@ -227,6 +227,27 @@ def test_numeric_literal_tokenization():
     ]
 
 
+def test_scalar_integer_literal_swizzle_tokenization_from_storage_image_sample():
+    # Source: shader-slang/slang tests/spirv/
+    # storage-image-multi-sample-read-write.slang at
+    # 0658ed79219d6e4ee526182104ce71d476f787be.
+    tokens = tokenize_code("tex.Load(0.xx, 0)")
+
+    assert tokens == [
+        ("IDENTIFIER", "tex"),
+        ("DOT", "."),
+        ("IDENTIFIER", "Load"),
+        ("LPAREN", "("),
+        ("NUMBER", "0"),
+        ("DOT", "."),
+        ("IDENTIFIER", "xx"),
+        ("COMMA", ","),
+        ("NUMBER", "0"),
+        ("RPAREN", ")"),
+        ("EOF", ""),
+    ]
+
+
 def test_hlsl_special_float_literal_tokenization_from_inf_bug_fixture():
     # Source: shader-slang/slang tests/bugs/inf-float-literal.slang at
     # 142e00d9342eccf0613ed1b18d81cb003c5d6f09.

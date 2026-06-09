@@ -204,3 +204,51 @@ def test_darktable_float_pointer_to_array_kernel_param_codegen_reparse():
 
     assert "levels: array<array<f32, 3>>" in crossgl
     assert "float ()" not in crossgl
+
+
+def test_clspv_unnamed_local_pointer_kernel_param_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void k0(int v, local int *, global int *b) {
+        }
+        """)
+
+    assert "i32 v" in crossgl
+    assert "var<workgroup> _param1: array<i32>" in crossgl
+    assert "@group(0) @binding(0) var<storage, read_write> b: array<i32>" in crossgl
+
+
+def test_clspv_struct_return_and_local_elaborated_type_codegen_reparse():
+    crossgl = generate_crossgl("""
+        struct T {
+            global int *ptr;
+        };
+
+        struct T bar(global int *out) {
+            struct T t;
+            t.ptr = out;
+            return t;
+        }
+
+        kernel void foo(global int *out) {
+            struct T t = bar(out);
+            *(t.ptr) = 42;
+        }
+        """)
+
+    assert "T bar(ptr<i32> out)" in crossgl
+    assert "var t: T;" in crossgl
+    assert "var t: T = bar(out);" in crossgl
+
+
+def test_pocl_statement_expression_macro_block_codegen_reparse():
+    crossgl = generate_crossgl("""
+        DEFINE_BODY_G
+        (test_rotate,
+         ({
+           int patterns[] = {0x01, 0x80};
+         })
+        )
+        """)
+
+    assert "// OpenCL macro block: DEFINE_BODY_G(" in crossgl
+    assert "test_rotate" in crossgl
