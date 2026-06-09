@@ -91,6 +91,5 @@ def test_hip_generated_compute_kernel_preserves_long_expression_arrays_and_metad
     assert "sinf(float((blockIdx.x * blockDim.x + threadIdx.x)))" in generated
     assert "cosf(float(threadIdx.y))" in generated
     assert (
-        "outValues[(blockIdx.x * blockDim.x + threadIdx.x)] = localB[0];"
-        in generated
+        "outValues[(blockIdx.x * blockDim.x + threadIdx.x)] = localB[0];" in generated
     )
