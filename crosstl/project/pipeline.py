@@ -8079,6 +8079,227 @@ def _unit_skipped_path_contract_reasons(
     return reasons
 
 
+def _is_string_sequence(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _project_config_for_scan_validation(
+    project: Mapping[str, Any] | None,
+    root_path: Path | None,
+) -> ProjectConfig | None:
+    if project is None or root_path is None:
+        return None
+
+    source_roots = project.get("sourceRoots")
+    include_patterns = project.get("includePatterns")
+    exclude_patterns = project.get("excludePatterns")
+    targets = project.get("targets")
+    include_dirs = project.get("includeDirs")
+    selected_variants = project.get("selectedVariants")
+    if not all(
+        _is_string_sequence(value)
+        for value in (
+            source_roots,
+            include_patterns,
+            exclude_patterns,
+            targets,
+            include_dirs,
+            selected_variants,
+        )
+    ):
+        return None
+
+    source_overrides = project.get("sourceOverrides")
+    defines = project.get("defines")
+    if not _valid_string_mapping(source_overrides) or not _valid_string_mapping(
+        defines
+    ):
+        return None
+
+    raw_variants = project.get("variants")
+    if not isinstance(raw_variants, Mapping):
+        return None
+    variants: dict[str, dict[str, str]] = {}
+    for name, variant_defines in raw_variants.items():
+        if not _is_non_empty_string(name) or not _valid_string_mapping(variant_defines):
+            return None
+        variants[name] = dict(variant_defines)
+
+    output_dir = project.get("outputDir")
+    if not isinstance(output_dir, str):
+        return None
+
+    config_path_value = project.get("config")
+    if config_path_value is None:
+        config_path = None
+    elif isinstance(config_path_value, str) and config_path_value.strip():
+        config_path = Path(config_path_value)
+    else:
+        return None
+
+    external_corpus_manifest = project.get("externalCorpusManifest")
+    if external_corpus_manifest is not None and not isinstance(
+        external_corpus_manifest, str
+    ):
+        return None
+
+    return ProjectConfig(
+        root=root_path,
+        config_path=config_path,
+        source_roots=tuple(_normalize_project_relative_paths(source_roots)),
+        include_patterns=tuple(_normalize_project_relative_paths(include_patterns)),
+        exclude_patterns=tuple(_normalize_project_relative_paths(exclude_patterns)),
+        targets=tuple(targets),
+        output_dir=_normalize_project_relative_path(output_dir),
+        source_overrides=_normalize_project_relative_path_mapping(source_overrides),
+        include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
+        defines=dict(defines),
+        variants=variants,
+        selected_variants=tuple(selected_variants),
+        external_corpus_manifest=external_corpus_manifest,
+    )
+
+
+ProjectScanUnitIdentity = Tuple[str, str]
+ProjectScanSkippedIdentity = Tuple[str, str, Optional[str]]
+
+
+def _report_unit_scan_identity(unit: Any) -> ProjectScanUnitIdentity | None:
+    if not isinstance(unit, Mapping):
+        return None
+    path = unit.get("path")
+    source_backend = unit.get("sourceBackend")
+    if not (
+        _is_non_empty_string(path)
+        and _is_report_identity_path(path)
+        and _is_non_empty_string(source_backend)
+    ):
+        return None
+    return (path, source_backend)
+
+
+def _current_unit_scan_identity(
+    unit: ProjectTranslationUnit,
+) -> ProjectScanUnitIdentity:
+    return (unit.relative_path, unit.source_backend)
+
+
+def _report_skipped_scan_identity(
+    skipped_record: Any,
+) -> ProjectScanSkippedIdentity | None:
+    if not isinstance(skipped_record, Mapping):
+        return None
+    path = skipped_record.get("path")
+    reason = skipped_record.get("reason")
+    if not (
+        _is_non_empty_string(path)
+        and _is_report_identity_path(path)
+        and _is_non_empty_string(reason)
+    ):
+        return None
+    source_override = skipped_record.get("sourceOverride")
+    if source_override is not None and not _is_non_empty_string(source_override):
+        return None
+    return (path, reason, source_override)
+
+
+def _current_skipped_scan_identity(
+    skipped_record: Mapping[str, Any],
+) -> ProjectScanSkippedIdentity | None:
+    path = skipped_record.get("path")
+    reason = skipped_record.get("reason")
+    if not (_is_non_empty_string(path) and _is_non_empty_string(reason)):
+        return None
+    source_override = skipped_record.get("sourceOverride")
+    if source_override is not None and not _is_non_empty_string(source_override):
+        return None
+    return (path, reason, source_override)
+
+
+def _scan_unit_label(identity: ProjectScanUnitIdentity) -> str:
+    path, source_backend = identity
+    return f"{path} ({source_backend})"
+
+
+def _scan_skipped_label(identity: ProjectScanSkippedIdentity) -> str:
+    path, reason, source_override = identity
+    label = f"{path} ({reason})"
+    if source_override:
+        label = f"{label} via {source_override}"
+    return label
+
+
+def _current_project_scan_contract_reasons(
+    project: Mapping[str, Any] | None,
+    units: Sequence[Any],
+    skipped: Sequence[Any],
+    *,
+    root_path: Path | None,
+    report_path: Path,
+) -> list[str]:
+    config = _project_config_for_scan_validation(project, root_path)
+    if config is None:
+        return []
+
+    try:
+        current_scan = scan_project(config)
+    except (OSError, ValueError):
+        return []
+
+    ignored_report_path = None
+    if root_path is not None:
+        try:
+            ignored_report_path = _relpath(report_path.resolve(), root_path)
+        except ValueError:
+            ignored_report_path = None
+
+    current_unit_identities = Counter(
+        _current_unit_scan_identity(unit)
+        for unit in current_scan.units
+        if unit.relative_path != ignored_report_path
+    )
+    reported_unit_identities: list[ProjectScanUnitIdentity] = []
+    for unit in units:
+        identity = _report_unit_scan_identity(unit)
+        if identity is None:
+            return []
+        reported_unit_identities.append(identity)
+
+    current_skipped_identities = Counter(
+        identity
+        for skipped_record in current_scan.skipped
+        if skipped_record.get("path") != ignored_report_path
+        for identity in (_current_skipped_scan_identity(skipped_record),)
+        if identity is not None
+    )
+    reported_skipped_identities: list[ProjectScanSkippedIdentity] = []
+    for skipped_record in skipped:
+        identity = _report_skipped_scan_identity(skipped_record)
+        if identity is None:
+            return []
+        reported_skipped_identities.append(identity)
+
+    reported_unit_counts = Counter(reported_unit_identities)
+    reported_skipped_counts = Counter(reported_skipped_identities)
+    missing_units = current_unit_identities - reported_unit_counts
+    missing_skipped = current_skipped_identities - reported_skipped_counts
+
+    reasons = []
+    for identity, count in sorted(missing_units.items()):
+        suffix = f" ({count} records)" if count > 1 else ""
+        reasons.append(
+            f"units must include current project scan source "
+            f"{_scan_unit_label(identity)}{suffix}"
+        )
+    for identity, count in sorted(missing_skipped.items()):
+        suffix = f" ({count} records)" if count > 1 else ""
+        reasons.append(
+            f"skipped must include current project scan source "
+            f"{_scan_skipped_label(identity)}{suffix}"
+        )
+    return reasons
+
+
 def _declared_units_by_path(
     units: Any, *, require_full_metadata: bool
 ) -> dict[str, UnitDeclaration] | None:
@@ -12003,6 +12224,17 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             reasons.extend(_duplicate_path_contract_reasons("skipped", skipped))
             if isinstance(units, list):
                 reasons.extend(_unit_skipped_path_contract_reasons(units, skipped))
+
+    if has_summary and isinstance(units, list) and isinstance(skipped, list):
+        reasons.extend(
+            _current_project_scan_contract_reasons(
+                project if isinstance(project, Mapping) else None,
+                units,
+                skipped,
+                root_path=root_path,
+                report_path=path,
+            )
+        )
 
     project_targets = project.get("targets", []) if isinstance(project, Mapping) else []
     project_targets_valid = isinstance(project_targets, list) and all(

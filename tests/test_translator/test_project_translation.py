@@ -9831,6 +9831,103 @@ def test_validate_project_report_detects_modified_unit_sources(tmp_path):
     )
 
 
+def test_validate_project_report_rejects_missing_current_scan_units(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = repo / "scan-report.json"
+    scan_project(repo).to_report(targets=["cgl"]).write_json(report_path)
+    (repo / "extra.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units must include current project scan source extra.cgl (cgl)" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_missing_current_scan_skipped_sources(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report_path = repo / "crosstl-out" / "scan-report.json"
+    scan_project(repo).to_report(targets=["cgl"]).write_json(report_path)
+    (repo / "notes.txt").write_text("migration notes\n", encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "skipped must include current project scan source "
+        "notes.txt (unsupported-extension)"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_ignores_report_file_in_current_scan(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report_path = repo / "project-report.json"
+    scan_project(repo).to_report(targets=["cgl"]).write_json(report_path)
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+
+
+def test_validate_project_report_ignores_new_output_dir_artifacts_in_current_scan(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["**/*"]
+            exclude = []
+            output_dir = "out"
+            targets = ["cgl"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "project-report.json"
+    report.write_json(report_path)
+    generated_extra = repo / "out" / "cgl" / "extra.cgl"
+    generated_extra.parent.mkdir(parents=True, exist_ok=True)
+    generated_extra.write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is True
+
+
 def test_validate_project_report_rejects_unit_extension_mismatches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

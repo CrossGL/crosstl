@@ -286,6 +286,9 @@ def test_project_repo_scan_documents_source_root_status():
         )
         assert "scan/report CLI source-root overrides" in (backend_support["notes"])
         assert "source override rollups" in (backend_support["notes"])
+        assert "omit currently scanned units or skipped sources" in (
+            backend_support["notes"]
+        )
         assert (
             "repository-relative explicit include and source override patterns "
             "from the repository root before source-root visibility filtering"
