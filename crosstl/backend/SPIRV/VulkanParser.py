@@ -284,7 +284,85 @@ class VulkanParser:
     }
     SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS = {
         "OpRayQueryInitializeKHR": "rayQueryInitializeEXT",
+        "OpRayQueryInitializeNV": "rayQueryInitializeEXT",
         "OpRayQueryTerminateKHR": "rayQueryTerminateEXT",
+        "OpRayQueryTerminateNV": "rayQueryTerminateEXT",
+    }
+    SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS = {
+        "OpRayQueryProceedKHR": "rayQueryProceedEXT",
+        "OpRayQueryProceedNV": "rayQueryProceedEXT",
+        "OpRayQueryGetIntersectionTypeKHR": "rayQueryGetIntersectionTypeEXT",
+        "OpRayQueryGetIntersectionTypeNV": "rayQueryGetIntersectionTypeEXT",
+        "OpRayQueryGetIntersectionTKHR": "rayQueryGetIntersectionTEXT",
+        "OpRayQueryGetIntersectionTNV": "rayQueryGetIntersectionTEXT",
+        "OpRayQueryGetIntersectionInstanceCustomIndexKHR": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceCustomIndexNV": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceIdKHR": (
+            "rayQueryGetIntersectionInstanceIdEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceIdNV": "rayQueryGetIntersectionInstanceIdEXT",
+        "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetNV": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT"
+        ),
+        "OpRayQueryGetIntersectionGeometryIndexKHR": (
+            "rayQueryGetIntersectionGeometryIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionGeometryIndexNV": (
+            "rayQueryGetIntersectionGeometryIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionPrimitiveIndexKHR": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionPrimitiveIndexNV": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionBarycentricsKHR": (
+            "rayQueryGetIntersectionBarycentricsEXT"
+        ),
+        "OpRayQueryGetIntersectionBarycentricsNV": (
+            "rayQueryGetIntersectionBarycentricsEXT"
+        ),
+        "OpRayQueryGetIntersectionFrontFaceKHR": "rayQueryGetIntersectionFrontFaceEXT",
+        "OpRayQueryGetIntersectionFrontFaceNV": "rayQueryGetIntersectionFrontFaceEXT",
+        "OpRayQueryGetIntersectionObjectRayDirectionKHR": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectRayDirectionNV": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectRayOriginKHR": (
+            "rayQueryGetIntersectionObjectRayOriginEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectRayOriginNV": (
+            "rayQueryGetIntersectionObjectRayOriginEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectToWorldKHR": (
+            "rayQueryGetIntersectionObjectToWorldEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectToWorldNV": (
+            "rayQueryGetIntersectionObjectToWorldEXT"
+        ),
+        "OpRayQueryGetIntersectionWorldToObjectKHR": (
+            "rayQueryGetIntersectionWorldToObjectEXT"
+        ),
+        "OpRayQueryGetIntersectionWorldToObjectNV": (
+            "rayQueryGetIntersectionWorldToObjectEXT"
+        ),
+        "OpRayQueryGetRayFlagsKHR": "rayQueryGetRayFlagsEXT",
+        "OpRayQueryGetRayFlagsNV": "rayQueryGetRayFlagsEXT",
+        "OpRayQueryGetRayTMinKHR": "rayQueryGetRayTMinEXT",
+        "OpRayQueryGetRayTMinNV": "rayQueryGetRayTMinEXT",
+        "OpRayQueryGetWorldRayDirectionKHR": "rayQueryGetWorldRayDirectionEXT",
+        "OpRayQueryGetWorldRayDirectionNV": "rayQueryGetWorldRayDirectionEXT",
+        "OpRayQueryGetWorldRayOriginKHR": "rayQueryGetWorldRayOriginEXT",
+        "OpRayQueryGetWorldRayOriginNV": "rayQueryGetWorldRayOriginEXT",
     }
     SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS = {
         "OpGroupNonUniformBitwiseAnd": "And",
@@ -2203,6 +2281,25 @@ class VulkanParser:
                     ],
                 )
                 expression_type_ids[result_id] = operands[0]
+                continue
+
+            if (
+                result_id
+                and opcode in self.SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS
+                and len(operands) >= 2
+            ):
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_ray_query_expression(
+                        opcode,
+                        operands,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
                 continue
 
             if result_id and opcode == "OpSelect" and len(operands) >= 4:
@@ -5062,6 +5159,29 @@ class VulkanParser:
                     constants,
                 )
                 for operand in operands
+            ],
+        )
+
+    def spirv_assembly_ray_query_expression(
+        self,
+        opcode,
+        operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            self.SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS[opcode],
+            [
+                self.spirv_assembly_operand_expression(
+                    operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                for operand in operands[1:]
             ],
         )
 

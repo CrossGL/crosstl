@@ -2802,6 +2802,86 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_NAGA_RAY_QUERY_PROCEED_GETTERS_ASSEMBLY = """
+; Source repo: https://github.com/gfx-rs/naga
+; Source path: tests/out/spv/ray-query.spvasm
+; Reduced from OpRayQueryProceedKHR and OpRayQueryGetIntersection*KHR result use.
+OpCapability Shader
+OpCapability RayQueryKHR
+OpExtension "SPV_KHR_ray_query"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %top_level_as %results
+OpExecutionMode %main LocalSize 1 1 1
+OpName %top_level_as "topLevelAS"
+OpName %Results "Results"
+OpMemberName %Results 0 "proceeded"
+OpMemberName %Results 1 "intersectionType"
+OpMemberName %Results 2 "distance"
+OpMemberName %Results 3 "barycentrics"
+OpName %results "results"
+OpName %ray_query "rayQuery"
+OpDecorate %top_level_as DescriptorSet 0
+OpDecorate %top_level_as Binding 0
+OpDecorate %Results Block
+OpMemberDecorate %Results 0 Offset 0
+OpMemberDecorate %Results 1 Offset 4
+OpMemberDecorate %Results 2 Offset 8
+OpMemberDecorate %Results 3 Offset 16
+OpDecorate %results DescriptorSet 0
+OpDecorate %results Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v3float = OpTypeVector %float 3
+%accel = OpTypeAccelerationStructureKHR
+%rayquery = OpTypeRayQueryKHR
+%Results = OpTypeStruct %uint %uint %float %v2float
+%ptr_accel = OpTypePointer UniformConstant %accel
+%ptr_results = OpTypePointer StorageBuffer %Results
+%ptr_function_rayquery = OpTypePointer Function %rayquery
+%ptr_storage_uint = OpTypePointer StorageBuffer %uint
+%ptr_storage_float = OpTypePointer StorageBuffer %float
+%ptr_storage_v2float = OpTypePointer StorageBuffer %v2float
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%mask = OpConstant %uint 255
+%zero_i = OpConstant %int 0
+%one_i = OpConstant %int 1
+%two_i = OpConstant %int 2
+%three_i = OpConstant %int 3
+%zero_f = OpConstant %float 0.0
+%one_f = OpConstant %float 1.0
+%origin = OpConstantComposite %v3float %zero_f %zero_f %zero_f
+%direction = OpConstantComposite %v3float %zero_f %one_f %zero_f
+%top_level_as = OpVariable %ptr_accel UniformConstant
+%results = OpVariable %ptr_results StorageBuffer
+%main = OpFunction %void None %fn
+%label = OpLabel
+%ray_query = OpVariable %ptr_function_rayquery Function
+%accel_value = OpLoad %accel %top_level_as
+OpRayQueryInitializeKHR %ray_query %accel_value %zero %mask %origin %zero_f %direction %one_f
+%proceeded = OpRayQueryProceedKHR %bool %ray_query
+%proceeded_uint = OpSelect %uint %proceeded %one %zero
+%proceeded_ptr = OpAccessChain %ptr_storage_uint %results %zero_i
+OpStore %proceeded_ptr %proceeded_uint
+%intersection_type = OpRayQueryGetIntersectionTypeKHR %uint %ray_query %one
+%intersection_type_ptr = OpAccessChain %ptr_storage_uint %results %one_i
+OpStore %intersection_type_ptr %intersection_type
+%distance = OpRayQueryGetIntersectionTKHR %float %ray_query %one
+%distance_ptr = OpAccessChain %ptr_storage_float %results %two_i
+OpStore %distance_ptr %distance
+%barycentrics = OpRayQueryGetIntersectionBarycentricsKHR %v2float %ray_query %one
+%barycentrics_ptr = OpAccessChain %ptr_storage_v2float %results %three_i
+OpStore %barycentrics_ptr %barycentrics
+OpRayQueryTerminateKHR %ray_query
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY = """
 ; Reduced from Vulkan storage-image SPIR-V mapping examples.
 OpCapability Shader
@@ -6936,6 +7016,37 @@ def test_spirv_glslang_ray_query_convert_codegen_reparse():
     assert "rayQueryTerminateEXT(rayQuery);" in generated_code
     assert "OpRayQuery" not in generated_code
     assert "%ray_query" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_naga_ray_query_proceed_and_getters_codegen_reparse():
+    tokens = tokenize_code(SPIRV_NAGA_RAY_QUERY_PROCEED_GETTERS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "accelerationStructureEXT topLevelAS @set(0) @binding(0);" in generated_code
+    assert "RWStructuredBuffer<Results> results @set(0) @binding(1);" in generated_code
+    assert "rayQueryEXT rayQuery;" in generated_code
+    assert (
+        "results[0].proceeded = (rayQueryProceedEXT(rayQuery) ? 1 : 0);"
+        in generated_code
+    )
+    assert (
+        "results[0].intersectionType = "
+        "rayQueryGetIntersectionTypeEXT(rayQuery, 1);" in generated_code
+    )
+    assert (
+        "results[0].distance = rayQueryGetIntersectionTEXT(rayQuery, 1);"
+        in generated_code
+    )
+    assert (
+        "results[0].barycentrics = "
+        "rayQueryGetIntersectionBarycentricsEXT(rayQuery, 1);" in generated_code
+    )
+    assert "rayQueryTerminateEXT(rayQuery);" in generated_code
+    assert "OpRayQuery" not in generated_code
+    assert "intersection_type" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

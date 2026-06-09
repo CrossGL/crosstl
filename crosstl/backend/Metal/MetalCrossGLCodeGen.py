@@ -499,6 +499,7 @@ class MetalToCrossGLConverter:
             "color(3)": "gl_FragColor3",
             "color(4)": "gl_FragColor4",
             "depth(any)": "gl_FragDepth",
+            "stencil": "gl_FragStencilRefEXT",
             "sample_id": "gl_SampleID",
             "sample_mask": "gl_SampleMask",
             "primitive_id": "gl_PrimitiveID",

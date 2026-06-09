@@ -425,6 +425,11 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             self.register_type_alias(node.name, node.alias_type)
             self.emit(f"// unsupported OpenCL block typedef: {node.name}")
             return
+        if self.is_opencl_pipe_type(getattr(node, "alias_type", "")):
+            self.register_type_alias(node.name, node.alias_type)
+            mapped_type = self.convert_hip_type_to_crossgl(node.alias_type)
+            self.emit(f"// OpenCL pipe typedef: {mapped_type} {node.name}")
+            return
         return super().visit_TypeAliasNode(node)
 
     def is_opencl_block_declaration(self, node):
@@ -713,11 +718,30 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         normalized = self.resolve_opencl_type_alias_chain(normalized)
         if self.is_opencl_block_type(normalized):
             return "i32"
+        pipe_type = self.convert_opencl_pipe_type_to_crossgl(normalized)
+        if pipe_type is not None:
+            return pipe_type
         if normalized in self.OPENCL_VECTOR_TYPE_MAPPING:
             return self.OPENCL_VECTOR_TYPE_MAPPING[normalized]
         if normalized in self.OPENCL_SCALAR_TYPE_MAPPING:
             return self.OPENCL_SCALAR_TYPE_MAPPING[normalized]
         return super().convert_hip_type_to_crossgl(normalized)
+
+    def convert_opencl_pipe_type_to_crossgl(self, type_name):
+        parts = str(type_name).split()
+        if not self.is_opencl_pipe_type(type_name):
+            return None
+
+        pipe_index = parts.index("pipe")
+        element_type = " ".join(parts[pipe_index + 1 :]).strip()
+        if not element_type:
+            return "pipe"
+
+        mapped_element_type = self.convert_hip_type_to_crossgl(element_type)
+        return f"pipe_{self.sanitize_opencl_type_identifier(mapped_element_type)}"
+
+    def is_opencl_pipe_type(self, type_name):
+        return "pipe" in str(type_name).split()
 
     def convert_hip_pointer_element_type(self, hip_type):
         pointer_array_element = self.convert_opencl_pointer_to_array_element_type(

@@ -1105,6 +1105,36 @@ def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_exam
     )
 
 
+def test_adjacent_string_literal_statement_keeps_following_statement():
+    code = """
+    def main():
+        var label = "Hello, " "World"
+        var count = 1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert 'var label = "Hello, World";' in generated_code
+    assert "var count = 1;" in generated_code
+
+
+def test_indented_adjacent_string_literal_codegen_from_current_docs():
+    # Reduced from https://docs.modular.com/mojo/reference/mojo-literals/
+    # where adjacent string literals may continue on an indented next line.
+    code = """
+    def main():
+        var message = "line one "
+            "line two"
+        var done = True
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert 'var message = "line one line two";' in generated_code
+    assert "var done = true;" in generated_code
+    assert "Unhandled" not in generated_code
+
+
 def test_adjacent_string_with_embedded_quotes_codegen_from_modular_reflection():
     # Reduced from modular/modular commit 30d351c58441f196471c59211dad6e9ad91c1235,
     # mojo/stdlib/test/reflection/test_type_info.mojo.

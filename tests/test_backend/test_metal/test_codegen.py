@@ -2222,6 +2222,28 @@ def test_codegen_statement_expression_block_from_angle_generated_shader():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_fragment_stencil_output_from_angle_generated_shader():
+    # Reduced from:
+    # Repo: https://android.googlesource.com/platform/external/angle
+    # Path: src/libANGLE/renderer/metal/shaders/mtl_internal_shaders_autogen.metal
+    code = """
+    struct FragmentStencilOut {
+        uint32_t stencil [[stencil]];
+    };
+
+    fragment FragmentStencilOut blitStencilFS() {
+        FragmentStencilOut output;
+        output.stencil = 7u;
+        return output;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "uint stencil @gl_FragStencilRefEXT;" in crossgl
+    assert "@stencil" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_preserves_binding_attributes():
     code = """
     #include <metal_stdlib>

@@ -394,6 +394,49 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.attribute.expression.comp.
+    # Reduced from HLSL-style single-bracket attributes accepted by glslang
+    # before entry-point declarations and loop statements.
+    ExternalFixture(
+        name="glslang-hlsl-single-bracket-entry-and-loop-attributes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.attribute.expression.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            uniform int bound;
+
+            #define FOO 3
+            #define BAR 2
+
+            [numthreads(2+2, 2*3, (1+FOO)*BAR)]
+            void main()
+            {
+                [unroll(5*2 + 1)]
+                for (int x = 0; x < bound; ++x)
+                    ;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.loopattr.frag.
+    # Reduced from HLSL-style single-bracket loop attributes in a fragment
+    # shader body.
+    ExternalFixture(
+        name="glslang-hlsl-single-bracket-loop-attributes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.loopattr.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            float4 main() : SV_Target0
+            {
+                [unroll(5)] for (int x = 0; x < 5; ++x);
+                [loop] for (int y = 0; y < 5; ++y);
+
+                return 0;
+            }
+        """).strip(),
+    ),
     # Upstream source: https://github.com/KhronosGroup/glslang
     # Commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Path: Test/spv.maximalReconvergence.vert
@@ -1761,6 +1804,35 @@ def test_parse_glslang_control_flow_statement_attributes_fixture():
         IfNode,
         SwitchNode,
     ]
+
+
+def test_parse_glslang_hlsl_single_bracket_attributes_fixture():
+    entry_fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-single-bracket-entry-and-loop-attributes"
+    )
+    loop_fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-single-bracket-loop-attributes"
+    )
+
+    entry_ast = parse_glsl(entry_fixture.code, entry_fixture.shader_type)
+    entry_main = next(
+        function for function in entry_ast.functions if function.name == "main"
+    )
+    loop_ast = parse_glsl(loop_fixture.code, loop_fixture.shader_type)
+    loop_main = next(
+        function for function in loop_ast.functions if function.name == "main"
+    )
+
+    assert [type(statement) for statement in entry_main.body] == [ForNode]
+    assert [type(statement) for statement in loop_main.body[:-1]] == [
+        ForNode,
+        ForNode,
+    ]
+    assert loop_main.semantic == "SV_Target0"
 
 
 def test_parse_glslang_function_attributes_fixture():

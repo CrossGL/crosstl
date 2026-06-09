@@ -980,6 +980,10 @@ class GLSLParser:
 
         while True:
             consumed = False
+            while self.skip_attribute_list_if_present():
+                self.skip_newlines()
+                consumed = True
+
             while self.is_macro_declaration_prefix():
                 self.skip_macro_declaration_prefix()
                 self.skip_newlines()
@@ -2057,6 +2061,11 @@ class GLSLParser:
             return False
         return self.peek_non_newline()[0] == "LBRACKET"
 
+    def is_hlsl_attribute_list_start(self):
+        return self.current_token[0] == "LBRACKET" and not (
+            self.is_statement_attribute_list_start() or self.is_bracketed_stage_marker()
+        )
+
     def skip_statement_attribute_list(self):
         self.eat("LBRACKET")
         self.skip_newlines()
@@ -2073,9 +2082,29 @@ class GLSLParser:
             self.advance()
 
     def skip_statement_attributes(self):
-        while self.is_statement_attribute_list_start():
-            self.skip_statement_attribute_list()
+        while self.skip_attribute_list_if_present():
             self.skip_newlines()
+
+    def skip_attribute_list_if_present(self):
+        if self.is_statement_attribute_list_start():
+            self.skip_statement_attribute_list()
+            return True
+        if self.is_hlsl_attribute_list_start():
+            self.skip_hlsl_attribute_list()
+            return True
+        return False
+
+    def skip_hlsl_attribute_list(self):
+        self.eat("LBRACKET")
+        depth = 1
+        while depth:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated HLSL attribute list")
+            if self.current_token[0] == "LBRACKET":
+                depth += 1
+            elif self.current_token[0] == "RBRACKET":
+                depth -= 1
+            self.advance()
 
     def parse_condition(self):
         self.skip_newlines()

@@ -11238,6 +11238,37 @@ def test_callable_trait_parameter_type_codegen_reparse_from_wgpu_bench_iter():
     crosstl.translator.parse(result)
 
 
+def test_unsafe_extern_function_pointer_type_codegen_reparse_from_rusty_v8_callbacks():
+    # Reduced from denoland/rusty_v8 commit
+    # c2bac76486b5db090587e3f40988a8033ce81773 src/function.rs.
+    code = """
+    pub(crate) type NamedGetterCallbackForAccessor =
+        unsafe extern "C" fn(SealedLocal<Name>, *const PropertyCallbackInfo<Value>);
+
+    struct Hook {
+        callback: unsafe extern "C" fn(handle: &Hook, data: Option<NonNull<c_void>>),
+        fallback: extern "system" fn(u32) -> u32,
+    }
+
+    static CALLBACK: unsafe extern "C" fn() = handler;
+
+    fn install(callback: unsafe fn(u32) -> u32) -> unsafe fn(u32) -> u32 {
+        callback
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "typedef NamedGetterCallbackForAccessor = auto;" in result
+    assert "auto callback;" in result
+    assert "auto fallback;" in result
+    assert "static auto CALLBACK = handler;" in result
+    assert "auto install(auto callback)" in result
+    assert "unsafe extern" not in result
+    assert 'extern "system" fn' not in result
+    crosstl.translator.parse(result)
+
+
 def test_nested_array_generic_declarator_codegen_reparse_from_wgpu_print():
     # Reduced from gfx-rs/wgpu commit
     # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,

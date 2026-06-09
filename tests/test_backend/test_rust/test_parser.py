@@ -276,6 +276,43 @@ def test_primitive_named_member_access_parse_from_rust_gpu_codegen():
     assert insert_call.args[1].object.member == "types"
 
 
+def test_unsafe_extern_function_pointer_type_parsing_from_rusty_v8_callbacks():
+    # Reduced from denoland/rusty_v8 commit
+    # c2bac76486b5db090587e3f40988a8033ce81773 src/function.rs.
+    code = """
+    pub(crate) type NamedGetterCallbackForAccessor =
+        unsafe extern "C" fn(SealedLocal<Name>, *const PropertyCallbackInfo<Value>);
+
+    struct Handle {
+        callback: unsafe extern "C" fn(handle: &Handle, data: Option<NonNull<c_void>>),
+        fallback: extern "system" fn(u32) -> u32,
+    }
+
+    fn install(callback: unsafe fn(u32) -> u32) -> unsafe fn(u32) -> u32 {
+        callback
+    }
+    """
+
+    ast = parse_code(code)
+
+    alias = ast.type_aliases[0]
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "NamedGetterCallbackForAccessor"
+    assert alias.alias_type == (
+        'unsafe extern "C" fn(SealedLocal<Name>, ' "*const PropertyCallbackInfo<Value>)"
+    )
+
+    struct = ast.structs[0]
+    assert [member.vtype for member in struct.members] == [
+        'unsafe extern "C" fn(&Handle, Option<NonNull<c_void>>)',
+        'extern "system" fn(u32) -> u32',
+    ]
+
+    function = ast.functions[0]
+    assert function.params[0].vtype == "unsafe fn(u32) -> u32"
+    assert function.return_type == "unsafe fn(u32) -> u32"
+
+
 def test_enum_parsing():
     code = """
     #[repr(u32)]

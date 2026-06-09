@@ -1407,7 +1407,7 @@ class RustParser:
         if self.current_token[0] == "FOR":
             return self.parse_higher_ranked_type()
 
-        if self.current_token[0] == "FN":
+        if self.current_starts_function_pointer_type():
             return self.parse_function_pointer_type()
 
         if self.current_token[0] == "MULTIPLY":
@@ -1507,6 +1507,19 @@ class RustParser:
         self.eat("GREATER_THAN")
         return f"for<{binders}> {self.parse_type()}"
 
+    def current_starts_function_pointer_type(self):
+        index = self.current_index
+
+        if index < len(self.tokens) and self.tokens[index][0] == "UNSAFE":
+            index += 1
+
+        if index < len(self.tokens) and self.tokens[index][0] == "EXTERN":
+            index += 1
+            if index < len(self.tokens) and self.tokens[index][0] == "STRING":
+                index += 1
+
+        return index < len(self.tokens) and self.tokens[index][0] == "FN"
+
     def is_callable_trait_type(self, type_parts):
         return type_parts[-1] in {"Fn", "FnMut", "FnOnce"}
 
@@ -1531,6 +1544,19 @@ class RustParser:
         return suffix
 
     def parse_function_pointer_type(self):
+        is_unsafe = False
+        abi = None
+
+        if self.current_token[0] == "UNSAFE":
+            is_unsafe = True
+            self.eat("UNSAFE")
+
+        if self.current_token[0] == "EXTERN":
+            self.eat("EXTERN")
+            abi = "C"
+            if self.current_token[0] == "STRING":
+                abi = self.parse_abi_literal()
+
         self.eat("FN")
         self.eat("LPAREN")
 
@@ -1543,12 +1569,19 @@ class RustParser:
             break
 
         self.eat("RPAREN")
+        qualifier_parts = []
+        if is_unsafe:
+            qualifier_parts.append("unsafe")
+        if abi is not None:
+            qualifier_parts.append(f'extern "{abi}"')
+        qualifier_prefix = f"{' '.join(qualifier_parts)} " if qualifier_parts else ""
+
         if self.current_token[0] != "ARROW":
-            return f"fn({', '.join(parameters)})"
+            return f"{qualifier_prefix}fn({', '.join(parameters)})"
 
         self.eat("ARROW")
         return_type = self.parse_type()
-        return f"fn({', '.join(parameters)}) -> {return_type}"
+        return f"{qualifier_prefix}fn({', '.join(parameters)}) -> {return_type}"
 
     def parse_function_pointer_parameter_type(self):
         if self.current_token[0] in self.NAME_TOKENS | {"UNDERSCORE"}:

@@ -336,6 +336,27 @@ class OpenCLParser(HipParser):
         self.skip_newlines()
         return name
 
+    def parse_type(self):
+        self.parse_type_attribute_prefixes()
+        type_name = super().parse_type()
+
+        if "pipe" in str(type_name).split() and self.is_current_token_type_start():
+            element_type = super().parse_type()
+            type_name = f"{type_name} {element_type}".strip()
+
+        return type_name
+
+    def is_current_token_type_start(self):
+        if self.current_token is None:
+            return False
+        return (
+            self.is_builtin_type_token()
+            or self.match(*self.VECTOR_TYPE_TOKENS)
+            or self.match(*self.RESOURCE_TYPE_TOKENS)
+            or self.match(*self.ELABORATED_TYPE_TOKENS)
+            or self.match("IDENTIFIER")
+        )
+
     def skip_function_name_at(self, index):
         if index >= len(self.tokens) or not self.is_function_name_token(
             self.tokens[index]

@@ -142,6 +142,16 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "examples/EinsteinToolkit/ML_BSSN_CL_RHS2.cl",
     },
+    "llvm_clang_opencl_as_type_prefix_vector_typedef": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/test/CodeGenOpenCL/as_type.cl",
+    },
+    "llvm_clang_opencl_pipe_typedefs": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66",
+        "path": "clang/test/AST/ast-dump-pipe.cl",
+    },
     "intel_compute_runtime_simple_spill_fill_kernel": {
         "url": "https://github.com/intel/compute-runtime",
         "commit": "5d9dec127a943c688c816e345c64a4ee2f99c7e6",
@@ -937,6 +947,54 @@ def test_external_pocl_einstein_nested_mad_initializer_parses():
 
     assert ast.statements[0].name == "einstein_nested_mad_probe"
     assert ast.statements[0].body[0].name == "acc"
+
+
+def test_external_llvm_clang_prefix_vector_typedef_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "llvm_clang_opencl_as_type_prefix_vector_typedef"
+    ]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/test/CodeGenOpenCL/as_type.cl"
+
+    source = """
+    typedef __attribute__(( ext_vector_type(3) )) char char3;
+    typedef __attribute__(( ext_vector_type(4) )) char char4;
+
+    char3 f1(char4 x) {
+      return __builtin_astype(x, char3);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.name for stmt in ast.statements[:2]] == ["char3", "char4"]
+    assert ast.statements[2].return_type == "char3"
+    assert "__builtin_astype" in crossgl
+
+
+def test_external_llvm_clang_pipe_typedefs_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["llvm_clang_opencl_pipe_typedefs"]
+    assert source_info["commit"] == "cbfe4adc92bc0c9680285e9a47201f0ff68c9b66"
+    assert source_info["path"] == "clang/test/AST/ast-dump-pipe.cl"
+
+    source = """
+    typedef pipe int pipetype;
+    typedef read_only pipe int pipetype2;
+    typedef write_only pipe float4 pipetype3;
+
+    void takes_pipe(pipetype p, pipetype2 q, pipetype3 r);
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.alias_type for stmt in ast.statements[:3]] == [
+        "pipe int",
+        "read_only pipe int",
+        "write_only pipe float4",
+    ]
+    assert "// OpenCL pipe typedef: pipe_i32 pipetype" in crossgl
+    assert "// OpenCL pipe typedef: pipe_vec4_f32 pipetype3" in crossgl
+    assert "void takes_pipe(pipe_i32 p, pipe_i32 q, pipe_vec4_f32 r)" in crossgl
 
 
 def test_external_compute_runtime_simple_spill_long_sum_codegen_reparse():

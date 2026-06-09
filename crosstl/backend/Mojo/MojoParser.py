@@ -2778,11 +2778,53 @@ class MojoParser:
         if not self.is_string_literal_value(arg):
             return arg
 
-        while self.is_adjacent_string_literal_start():
+        while True:
+            self.consume_adjacent_string_continuation_layout()
+            if not self.is_adjacent_string_literal_start():
+                break
             next_literal = self.parse_adjacent_string_literal()
             arg = self.concat_string_literals(arg, next_literal)
-            self.skip_layout_tokens()
         return arg
+
+    def consume_adjacent_string_continuation_layout(self):
+        if self.expression_layout_depth and self.current_token[0] == "NEWLINE":
+            index = self.pos + 1
+            while index < len(self.tokens) and self.tokens[index][0] in {
+                "NEWLINE",
+                "INDENT",
+                "DEDENT",
+            }:
+                index += 1
+            if index < len(self.tokens) and self.is_adjacent_string_token_at(index):
+                self.skip_layout_tokens()
+            return
+
+        if self.current_token[0] != "NEWLINE" or self.peek_token()[0] != "INDENT":
+            return
+
+        index = self.pos + 2
+        while index < len(self.tokens) and self.tokens[index][0] == "NEWLINE":
+            index += 1
+        if index >= len(self.tokens):
+            return
+
+        if not self.is_adjacent_string_token_at(index):
+            return
+
+        self.eat("NEWLINE")
+        self.eat("INDENT")
+        self.pending_expression_layout_dedents += 1
+        while self.current_token[0] == "NEWLINE":
+            self.eat("NEWLINE")
+
+    def is_adjacent_string_token_at(self, index):
+        token_type, token_value = self.tokens[index]
+        return token_type == "STRING_LITERAL" or (
+            token_type in self.IDENTIFIER_NAME_TOKENS
+            and self.is_string_literal_prefix(token_value)
+            and index + 1 < len(self.tokens)
+            and self.tokens[index + 1][0] == "STRING_LITERAL"
+        )
 
     def is_adjacent_string_literal_start(self):
         if self.current_token[0] == "STRING_LITERAL":
