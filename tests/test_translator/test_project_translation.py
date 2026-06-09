@@ -4711,6 +4711,261 @@ def test_translate_project_named_variants_apply_native_metal_preprocessor(
     assert "#if" not in release_output
 
 
+def test_translate_project_named_variants_apply_native_slang_preprocessor(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    include_path = include_dir / "palette.slang"
+    include_path.write_text(
+        textwrap.dedent("""
+            #if USE_DEBUG_COLOR
+            float4 selected_color() { return float4(1.0, 0.0, 0.0, 1.0); }
+            #else
+            float4 selected_color() { return float4(0.0, 0.0, 1.0, 1.0); }
+            #endif
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.slang").write_text(
+        textwrap.dedent("""
+            #include "palette.slang"
+
+            float4 main() : SV_Target
+            {
+                return selected_color();
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+
+            [project.defines]
+            USE_DEBUG_COLOR = "0"
+
+            [project.variants.debug]
+            USE_DEBUG_COLOR = "1"
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    debug_output = (
+        repo / "translated" / "cgl" / "debug" / "shaders" / "main.cgl"
+    ).read_text(encoding="utf-8")
+    release_output = (
+        repo / "translated" / "cgl" / "release" / "shaders" / "main.cgl"
+    ).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["includeDependencyCount"] == 2
+    assert payload["summary"]["includeDependenciesByKind"] == {"local": 2}
+    assert payload["summary"]["includeDependenciesByStatus"] == {"resolved": 2}
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {"include-dir": 2}
+    assert payload["summary"]["includeDependenciesBySourceBackend"] == {"slang": 2}
+    assert payload["summary"]["includeDependenciesBySourceBackendStatus"] == {
+        "slang": {"resolved": 2}
+    }
+    assert payload["summary"]["includeDependenciesByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert payload["summary"]["defineProcessingBySourceBackend"] == {
+        "slang": {"forwarded": 2}
+    }
+    assert payload["summary"]["defineProcessingByVariant"] == {
+        "debug": {"forwarded": 1},
+        "release": {"forwarded": 1},
+    }
+    assert payload["summary"]["includePathProcessingBySourceBackend"] == {
+        "slang": {"forwarded": 2}
+    }
+    assert payload["summary"]["includePathProcessingByVariant"] == {
+        "debug": {"forwarded": 1},
+        "release": {"forwarded": 1},
+    }
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "palette.slang",
+            "kind": "local",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "variant": "debug",
+            "resolvedPath": "includes/palette.slang",
+            "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedFrom": "include-dir",
+        },
+        {
+            "include": "palette.slang",
+            "kind": "local",
+            "status": "resolved",
+            "line": 1,
+            "column": 1,
+            "variant": "release",
+            "resolvedPath": "includes/palette.slang",
+            "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedFrom": "include-dir",
+        },
+    ]
+    assert [artifact["defines"] for artifact in payload["artifacts"]] == [
+        {"USE_DEBUG_COLOR": "1"},
+        {"USE_DEBUG_COLOR": "0"},
+    ]
+    assert "vec4(1.0, 0.0, 0.0, 1.0)" in debug_output
+    assert "vec4(0.0, 0.0, 1.0, 1.0)" not in debug_output
+    assert "vec4(0.0, 0.0, 1.0, 1.0)" in release_output
+    assert "vec4(1.0, 0.0, 0.0, 1.0)" not in release_output
+    assert "#include" not in debug_output
+    assert "#include" not in release_output
+    assert "#if" not in debug_output
+    assert "#if" not in release_output
+
+
+def test_translate_project_named_variants_apply_native_vulkan_preprocessor(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    include_dir = repo / "includes"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir()
+    include_path = include_dir / "bindings.glsl"
+    include_path.write_text(
+        textwrap.dedent("""
+            #if USE_DEBUG_COLOR
+            layout(set = 0, binding = 0) uniform sampler2D debugTex;
+            #else
+            layout(set = 0, binding = 0) uniform sampler2D releaseTex;
+            #endif
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "main.spvasm").write_text(
+        textwrap.dedent("""
+            #version 450
+            #include <bindings.glsl>
+            void main() { }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            include_dirs = ["includes"]
+
+            [project.defines]
+            USE_DEBUG_COLOR = "0"
+
+            [project.variants.debug]
+            USE_DEBUG_COLOR = "1"
+
+            [project.variants.release]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    debug_output = (
+        repo / "translated" / "cgl" / "debug" / "shaders" / "main.cgl"
+    ).read_text(encoding="utf-8")
+    release_output = (
+        repo / "translated" / "cgl" / "release" / "shaders" / "main.cgl"
+    ).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["summary"]["includeDependencyCount"] == 2
+    assert payload["summary"]["includeDependenciesByKind"] == {"system": 2}
+    assert payload["summary"]["includeDependenciesByStatus"] == {"resolved": 2}
+    assert payload["summary"]["includeDependenciesByResolvedFrom"] == {"include-dir": 2}
+    assert payload["summary"]["includeDependenciesBySourceBackend"] == {"vulkan": 2}
+    assert payload["summary"]["includeDependenciesBySourceBackendStatus"] == {
+        "vulkan": {"resolved": 2}
+    }
+    assert payload["summary"]["includeDependenciesByVariant"] == {
+        "debug": 1,
+        "release": 1,
+    }
+    assert payload["summary"]["defineProcessingBySourceBackend"] == {
+        "vulkan": {"forwarded": 2}
+    }
+    assert payload["summary"]["defineProcessingByVariant"] == {
+        "debug": {"forwarded": 1},
+        "release": {"forwarded": 1},
+    }
+    assert payload["summary"]["includePathProcessingBySourceBackend"] == {
+        "vulkan": {"forwarded": 2}
+    }
+    assert payload["summary"]["includePathProcessingByVariant"] == {
+        "debug": {"forwarded": 1},
+        "release": {"forwarded": 1},
+    }
+    assert payload["units"][0]["includeDependencies"] == [
+        {
+            "include": "bindings.glsl",
+            "kind": "system",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "variant": "debug",
+            "resolvedPath": "includes/bindings.glsl",
+            "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedFrom": "include-dir",
+        },
+        {
+            "include": "bindings.glsl",
+            "kind": "system",
+            "status": "resolved",
+            "line": 2,
+            "column": 1,
+            "variant": "release",
+            "resolvedPath": "includes/bindings.glsl",
+            "resolvedHash": project_pipeline._source_hash(include_path),
+            "resolvedFrom": "include-dir",
+        },
+    ]
+    assert [artifact["defines"] for artifact in payload["artifacts"]] == [
+        {"USE_DEBUG_COLOR": "1"},
+        {"USE_DEBUG_COLOR": "0"},
+    ]
+    assert "debugTex" in debug_output
+    assert "releaseTex" not in debug_output
+    assert "releaseTex" in release_output
+    assert "debugTex" not in release_output
+    assert "#include" not in debug_output
+    assert "#include" not in release_output
+    assert "#if" not in debug_output
+    assert "#if" not in release_output
+
+
 @pytest.mark.parametrize(
     (
         "source_backend",

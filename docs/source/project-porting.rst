@@ -440,10 +440,11 @@ CrossGL source translation applies object-like define expansion and conditional
 branch selection for ``#if``/``#ifdef``/``#ifndef``/``#elif``/``#else``/``#endif``
 when defines are provided. Project translation also passes selected variant
 define maps into native source frontends that expose define options; current
-project coverage includes OpenGL/GLSL conditional branches, CUDA/HIP runtime
-system include preservation, CUDA/HIP local header expansion, and project
-include directories through that path. Other native preprocessor behavior
-remains backend-dependent.
+project coverage includes OpenGL/GLSL and Vulkan angle include expansion,
+DirectX/HLSL, Metal/MSL, Slang, and CUDA/HIP local header expansion, CUDA/HIP
+runtime system include preservation, conditional branches, and project include
+directories through those paths. Other native preprocessor behavior remains
+backend-dependent.
 
 Configuration scalar values and define/source-override maps are type checked
 when ``crosstl.toml`` is loaded. Define names, source override patterns, named

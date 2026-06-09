@@ -608,6 +608,14 @@ def test_project_include_resolution_documents_status_reporting():
             "and variant-specific conditional output"
         ) in backend_support["notes"]
         assert (
+            "Slang project translation with resolved local headers and "
+            "variant-specific conditional output"
+        ) in backend_support["notes"]
+        assert (
+            "Vulkan project translation with a resolved angle include and "
+            "variant-specific conditional output"
+        ) in backend_support["notes"]
+        assert (
             "CUDA/HIP project translation with unresolved runtime system includes, "
             "resolved local headers, and variant-specific conditional output"
         ) in backend_support["notes"]
@@ -764,6 +772,14 @@ def test_project_include_resolution_documents_status_reporting():
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_native_metal_preprocessor"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_slang_preprocessor"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_vulkan_preprocessor"
+        ) in backend_support["evidence"]
 
 
 def test_project_macro_variants_document_artifact_define_maps():
@@ -851,6 +867,14 @@ def test_project_macro_variants_document_artifact_define_maps():
             in backend_support["notes"]
         )
         assert (
+            "Slang native preprocessing during project translation"
+            in backend_support["notes"]
+        )
+        assert (
+            "Vulkan native preprocessing during project translation"
+            in backend_support["notes"]
+        )
+        assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_artifact_define_mismatches"
         ) in backend_support["evidence"]
@@ -925,6 +949,14 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_named_variants_apply_native_metal_preprocessor"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_slang_preprocessor"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_named_variants_apply_native_vulkan_preprocessor"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
