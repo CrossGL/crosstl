@@ -12,6 +12,9 @@ The matrix is intentionally data-driven:
   by `tools/support_matrix.py`.
 - `generated/graphics-backend-roadmap.json` is a focused generated view for the
   DirectX, OpenGL, and Metal roadmap.
+- `generated/project-porting-roadmap.json` is a focused generated view for
+  repository-scale scanning, translation, reports, diagnostics, validation, and
+  corpus coverage.
 - `tools/support_signals.py` generates transient extraction reports from backend
   docs, relevant same-site docs links, implementation files, and tests. CI uses
   those signals to find stale support claims, discover documented API candidates
@@ -45,6 +48,7 @@ python tools/support_matrix.py check
 python tools/support_matrix.py audit
 python tools/support_matrix.py audit --backend directx --backend opengl --backend metal
 python tools/support_matrix.py audit --backend directx --status partial --output /tmp/directx-partial.json
+python tools/support_matrix.py audit --category project --output /tmp/project-porting-roadmap.json
 python tools/support_signals.py docs --output support/generated/backend-docs-report.json
 python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
 python -m crosstl._crosstl scan /path/to/repo --target metal --output /tmp/crosstl-project-scan.json

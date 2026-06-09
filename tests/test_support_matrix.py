@@ -2197,7 +2197,7 @@ def test_support_matrix_check_writes_machine_readable_report(tmp_path):
     assert report["schema_version"] == 1
     assert report["ok"] is True
     assert report["summary"] == {
-        "artifact_count": 3,
+        "artifact_count": 4,
         "stale_count": 0,
         "stale_artifacts": [],
         "total_diff_line_count": 0,
@@ -2205,6 +2205,7 @@ def test_support_matrix_check_writes_machine_readable_report(tmp_path):
     assert {artifact["path"] for artifact in report["artifacts"]} == {
         "support/generated/support-matrix.json",
         "support/generated/graphics-backend-roadmap.json",
+        "support/generated/project-porting-roadmap.json",
         "docs/source/support-matrix.rst",
     }
     assert all(artifact["diff"] == [] for artifact in report["artifacts"])
@@ -2216,9 +2217,13 @@ def test_generated_check_report_includes_stale_artifact_diff(tmp_path, monkeypat
     matrix = module.build_matrix(backends, features)
     matrix_path = tmp_path / "support-matrix.json"
     roadmap_path = tmp_path / "graphics-backend-roadmap.json"
+    project_roadmap_path = tmp_path / "project-porting-roadmap.json"
     docs_path = tmp_path / "support-matrix.rst"
     monkeypatch.setattr(module, "MATRIX_JSON_PATH", matrix_path)
     monkeypatch.setattr(module, "GRAPHICS_ROADMAP_JSON_PATH", roadmap_path)
+    monkeypatch.setattr(
+        module, "PROJECT_PORTING_ROADMAP_JSON_PATH", project_roadmap_path
+    )
     monkeypatch.setattr(module, "DOCS_RST_PATH", docs_path)
     module.write_generated(matrix)
     matrix_path.write_text("{}\n", encoding="utf-8")
@@ -2230,7 +2235,7 @@ def test_generated_check_report_includes_stale_artifact_diff(tmp_path, monkeypat
 
     assert report["ok"] is False
     assert report["summary"] == {
-        "artifact_count": 3,
+        "artifact_count": 4,
         "stale_count": 1,
         "stale_artifacts": [stale_artifacts[0]["path"]],
         "total_diff_line_count": stale_artifacts[0]["diff_line_count"],
@@ -2253,9 +2258,13 @@ def test_print_generated_failures_reports_stale_artifact_summary(
     matrix = module.build_matrix(backends, features)
     matrix_path = tmp_path / "support-matrix.json"
     roadmap_path = tmp_path / "graphics-backend-roadmap.json"
+    project_roadmap_path = tmp_path / "project-porting-roadmap.json"
     docs_path = tmp_path / "support-matrix.rst"
     monkeypatch.setattr(module, "MATRIX_JSON_PATH", matrix_path)
     monkeypatch.setattr(module, "GRAPHICS_ROADMAP_JSON_PATH", roadmap_path)
+    monkeypatch.setattr(
+        module, "PROJECT_PORTING_ROADMAP_JSON_PATH", project_roadmap_path
+    )
     monkeypatch.setattr(module, "DOCS_RST_PATH", docs_path)
     module.write_generated(matrix)
     matrix_path.write_text("{}\n", encoding="utf-8")
@@ -2660,6 +2669,46 @@ def test_support_backend_catalog_matches_codegen_registry():
             assert (
                 SOURCE_REGISTRY.get(alias).name == backend_id
             ), f"{backend_id} support alias is not accepted by source registry: {alias}"
+
+
+def test_project_porting_roadmap_is_focused_on_project_category():
+    module = load_support_matrix_module()
+    roadmap_path = ROOT / "support" / "generated" / "project-porting-roadmap.json"
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    project_features = [
+        feature for feature in matrix["features"] if feature["category"] == "project"
+    ]
+    project_backlog = [
+        item for item in matrix["backlog"] if item["category"] == "project"
+    ]
+
+    assert roadmap["view"]["id"] == "project_porting"
+    assert roadmap["view"]["categories"] == ["project"]
+    assert roadmap["view"]["backend_ids"] == [
+        backend["id"] for backend in matrix["backends"]
+    ]
+    assert roadmap["summary"]["feature_count"] == len(roadmap["features"])
+    assert roadmap["summary"]["feature_count"] == len(project_features)
+    assert roadmap["summary"]["backend_count"] == len(matrix["backends"])
+    assert roadmap["summary"]["backlog"]["backlog_count"] == len(roadmap["backlog"])
+    assert roadmap["summary"]["backlog"]["backlog_count"] == len(project_backlog)
+    assert all(feature["category"] == "project" for feature in roadmap["features"])
+    assert all(item["category"] == "project" for item in roadmap["backlog"])
+
+    expected_counts = {
+        backend["id"]: {status: 0 for status in module.STATUS_ORDER}
+        for backend in matrix["backends"]
+    }
+    for feature in project_features:
+        for backend_id, support in feature["support"].items():
+            expected_counts[backend_id][support["status"]] += 1
+    assert roadmap["summary"]["status_counts"] == expected_counts
 
 
 def test_graphics_backend_roadmap_is_focused_on_primary_graphics_targets():

@@ -24,6 +24,7 @@ FEATURES_PATH = SUPPORT_DIR / "features.json"
 GENERATED_DIR = SUPPORT_DIR / "generated"
 MATRIX_JSON_PATH = GENERATED_DIR / "support-matrix.json"
 GRAPHICS_ROADMAP_JSON_PATH = GENERATED_DIR / "graphics-backend-roadmap.json"
+PROJECT_PORTING_ROADMAP_JSON_PATH = GENERATED_DIR / "project-porting-roadmap.json"
 DOCS_RST_PATH = ROOT / "docs" / "source" / "support-matrix.rst"
 DEFAULT_DOC_REPORT_PATH = GENERATED_DIR / "backend-docs-report.json"
 
@@ -65,6 +66,7 @@ BACKLOG_STATUSES = {
 }
 
 GRAPHICS_BACKEND_IDS = ("directx", "opengl", "metal")
+PROJECT_PORTING_CATEGORY = "project"
 GENERATED_DIFF_PREVIEW_LIMIT = 120
 
 TEST_PATTERN = re.compile(r"^\s*def\s+test_", re.MULTILINE)
@@ -836,6 +838,64 @@ def build_graphics_backend_roadmap(matrix):
     )
 
 
+def build_category_view(matrix, view_id, title, categories):
+    category_set = set(categories)
+    backend_ids = [backend["id"] for backend in matrix["backends"]]
+    backend_names = {backend["id"]: backend["name"] for backend in matrix["backends"]}
+    status_counts = {
+        backend_id: {status: 0 for status in STATUS_ORDER} for backend_id in backend_ids
+    }
+
+    features = []
+    for feature in matrix["features"]:
+        if feature["category"] not in category_set:
+            continue
+        support = {}
+        for backend_id in backend_ids:
+            entry = feature["support"][backend_id]
+            support[backend_id] = entry
+            status_counts[backend_id][entry["status"]] += 1
+        features.append(
+            {
+                "id": feature["id"],
+                "category": feature["category"],
+                "name": feature["name"],
+                "description": feature["description"],
+                "support": support,
+            }
+        )
+
+    rows = filtered_backlog(matrix, categories=categories)
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py",
+        "view": {
+            "id": view_id,
+            "title": title,
+            "categories": list(categories),
+            "backend_ids": backend_ids,
+            "backends": backend_names,
+        },
+        "summary": {
+            "feature_count": len(features),
+            "backend_count": len(backend_ids),
+            "status_counts": status_counts,
+            "backlog": backlog_summary(rows),
+        },
+        "features": features,
+        "backlog": rows,
+    }
+
+
+def build_project_porting_roadmap(matrix):
+    return build_category_view(
+        matrix,
+        "project_porting",
+        "Project-porting support roadmap",
+        (PROJECT_PORTING_CATEGORY,),
+    )
+
+
 def rst_escape(text):
     if text is None:
         return ""
@@ -881,6 +941,7 @@ def render_docs(matrix):
     backend_name = {backend["id"]: backend["name"] for backend in matrix["backends"]}
     graphics_roadmap = build_graphics_backend_roadmap(matrix)
     graphics_backend_names = graphics_roadmap["view"]["backends"]
+    project_roadmap = build_project_porting_roadmap(matrix)
     lines = [
         "Support Matrix",
         "==============",
@@ -998,6 +1059,48 @@ def render_docs(matrix):
 
     lines.extend(
         [
+            "Project Porting Focus",
+            "---------------------",
+            "",
+            "This view isolates repository-scale scanning, translation, reporting,",
+            "diagnostic, validation, and corpus-coverage rows.",
+            "",
+        ]
+    )
+    project_summary_rows = []
+    for backend_id in backend_ids:
+        counts = project_roadmap["summary"]["status_counts"][backend_id]
+        project_summary_rows.append(
+            [backend_name[backend_id]]
+            + [counts.get(status, 0) for status in STATUS_ORDER]
+        )
+    lines.extend(
+        render_csv_table(
+            "Project-porting status summary",
+            ["Backend"] + [status for status in STATUS_ORDER],
+            project_summary_rows,
+        )
+    )
+    project_backlog_rows = [
+        [
+            item["backend"],
+            item["feature"],
+            item["status"],
+            item.get("current_gap") or item.get("notes", ""),
+            item.get("next_scope", ""),
+        ]
+        for item in project_roadmap["backlog"]
+    ]
+    lines.extend(
+        render_csv_table(
+            "Project-porting actionable backlog",
+            ["Backend", "Feature", "Status", "Current gap", "Next scope"],
+            project_backlog_rows,
+        )
+    )
+
+    lines.extend(
+        [
             "Feature Matrix",
             "--------------",
             "",
@@ -1094,6 +1197,9 @@ def write_generated(matrix):
     GRAPHICS_ROADMAP_JSON_PATH.write_text(
         stable_json(build_graphics_backend_roadmap(matrix)), encoding="utf-8"
     )
+    PROJECT_PORTING_ROADMAP_JSON_PATH.write_text(
+        stable_json(build_project_porting_roadmap(matrix)), encoding="utf-8"
+    )
     DOCS_RST_PATH.write_text(render_docs(matrix), encoding="utf-8")
 
 
@@ -1103,6 +1209,10 @@ def generated_artifact_specs(matrix):
         (
             GRAPHICS_ROADMAP_JSON_PATH,
             stable_json(build_graphics_backend_roadmap(matrix)),
+        ),
+        (
+            PROJECT_PORTING_ROADMAP_JSON_PATH,
+            stable_json(build_project_porting_roadmap(matrix)),
         ),
         (DOCS_RST_PATH, render_docs(matrix)),
     )
@@ -1572,6 +1682,7 @@ def main(argv=None):
         write_generated(matrix)
         print(f"Updated {relpath(MATRIX_JSON_PATH)}")
         print(f"Updated {relpath(GRAPHICS_ROADMAP_JSON_PATH)}")
+        print(f"Updated {relpath(PROJECT_PORTING_ROADMAP_JSON_PATH)}")
         print(f"Updated {relpath(DOCS_RST_PATH)}")
         return 0
 
