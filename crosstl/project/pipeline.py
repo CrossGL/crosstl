@@ -59,6 +59,7 @@ REPORT_INSPECTION_FIELDS = frozenset(
         "sourceMaps",
         "artifactProvenance",
         "defineProcessing",
+        "skippedSources",
         "includeDependencies",
         "includePathProcessing",
         "artifactMatrix",
@@ -458,6 +459,7 @@ EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT = 20
+SKIPPED_SOURCE_INSPECTION_SAMPLE_LIMIT = 20
 SOURCE_MAP_INSPECTION_SAMPLE_LIMIT = 20
 VALIDATION_INSPECTION_SAMPLE_LIMIT = 20
 DEFAULT_CONFIG_NAME = "crosstl.toml"
@@ -5735,6 +5737,7 @@ def inspect_project_report(
         ARTIFACT_PROVENANCE_INSPECTION_SAMPLE_LIMIT
     ),
     max_define_processing_artifacts: int = DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
+    max_skipped_sources: int = SKIPPED_SOURCE_INSPECTION_SAMPLE_LIMIT,
     max_include_path_processing_artifacts: int = (
         INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT
     ),
@@ -5753,6 +5756,7 @@ def inspect_project_report(
     artifact_matrix_artifact_limit = max(0, max_artifact_matrix_artifacts)
     artifact_provenance_artifact_limit = max(0, max_artifact_provenance_artifacts)
     define_processing_artifact_limit = max(0, max_define_processing_artifacts)
+    skipped_source_limit = max(0, max_skipped_sources)
     include_path_processing_artifact_limit = max(
         0,
         max_include_path_processing_artifacts,
@@ -5819,6 +5823,7 @@ def inspect_project_report(
         "sourceMaps": {"available": False},
         "artifactProvenance": {"available": False},
         "defineProcessing": {"available": False},
+        "skippedSources": {"available": False},
         "includeDependencies": {"available": False},
         "includePathProcessing": {"available": False},
         "artifactMatrix": {"available": False},
@@ -5988,6 +5993,11 @@ def inspect_project_report(
         summary,
         report.get("artifacts"),
         sample_limit=define_processing_artifact_limit,
+    )
+    payload["skippedSources"] = _inspection_skipped_source_summary(
+        summary,
+        report.get("skipped"),
+        sample_limit=skipped_source_limit,
     )
     payload["includeDependencies"] = _inspection_include_dependency_summary(
         summary,
@@ -6486,6 +6496,60 @@ def _inspection_define_fingerprint(defines: Mapping[Any, Any]) -> dict[str, str]
     return {
         "algorithm": "sha256",
         "value": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _inspection_skipped_source_sample(
+    record: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    path = record.get("path")
+    reason = record.get("reason")
+    if not (_is_non_empty_string(path) and _is_non_empty_string(reason)):
+        return None
+    sample = {
+        "path": path,
+        "reason": reason,
+        "extension": _extension_rollup_key(Path(path).suffix.lower()),
+    }
+    source_override = record.get("sourceOverride")
+    if _is_non_empty_string(source_override):
+        sample["sourceOverride"] = source_override
+    return sample
+
+
+def _inspection_skipped_source_summary(
+    summary: Any,
+    skipped: Any = None,
+    *,
+    sample_limit: int = SKIPPED_SOURCE_INSPECTION_SAMPLE_LIMIT,
+) -> dict[str, Any]:
+    sample_limit = max(0, sample_limit)
+    if not isinstance(summary, Mapping):
+        return {"available": False}
+
+    by_reason = summary.get("skippedByReason")
+    by_extension = summary.get("skippedByExtension")
+    by_source_override = summary.get("skippedBySourceOverride")
+    if not isinstance(by_reason, Mapping) or not isinstance(by_extension, Mapping):
+        return {"available": False}
+
+    skipped_sources = [
+        sample
+        for record in _record_sequence(skipped)
+        if isinstance(record, Mapping)
+        for sample in (_inspection_skipped_source_sample(record),)
+        if sample is not None
+    ]
+    return {
+        "available": True,
+        "skippedCount": len(skipped_sources),
+        "truncatedSkippedCount": max(0, len(skipped_sources) - sample_limit),
+        "byReason": dict(by_reason),
+        "byExtension": dict(by_extension),
+        "bySourceOverride": (
+            dict(by_source_override) if isinstance(by_source_override, Mapping) else {}
+        ),
+        "sources": skipped_sources[:sample_limit],
     }
 
 

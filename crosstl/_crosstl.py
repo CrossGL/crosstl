@@ -2110,6 +2110,51 @@ def _format_include_path_processing_artifact_lines(include_path_processing):
     return lines
 
 
+def _format_skipped_source_line(source):
+    if not isinstance(source, Mapping):
+        return None
+    path = source.get("path")
+    reason = source.get("reason")
+    if not isinstance(path, str) or not path:
+        return None
+    if not isinstance(reason, str) or not reason:
+        return None
+
+    details = [reason]
+    extension = source.get("extension")
+    if isinstance(extension, str) and extension:
+        details.append(f"extension={extension}")
+    source_override = source.get("sourceOverride")
+    if isinstance(source_override, str) and source_override:
+        details.append(f"sourceOverride={source_override}")
+    return f"- {path} ({'; '.join(details)})"
+
+
+def _format_skipped_source_lines(skipped_sources):
+    if not isinstance(skipped_sources, Mapping):
+        return []
+    sources = skipped_sources.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return []
+
+    lines = ["Skipped sources:"]
+    for source in sources:
+        line = _format_skipped_source_line(source)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+
+    truncated_count = skipped_sources.get("truncatedSkippedCount")
+    if (
+        isinstance(truncated_count, int)
+        and not isinstance(truncated_count, bool)
+        and truncated_count > 0
+    ):
+        lines.append(f"- +{truncated_count} more")
+    return lines
+
+
 def _format_include_dependency_issue_line(dependency):
     if not isinstance(dependency, Mapping):
         return None
@@ -2856,6 +2901,7 @@ def _format_project_report_inspection(payload):
     )
     if skipped_by_source_override:
         lines.append(skipped_by_source_override)
+    lines.extend(_format_skipped_source_lines(payload.get("skippedSources")))
     artifacts_by_source_backend = _format_artifact_rollup(
         "Artifacts by source backend",
         summary.get("artifactsBySourceBackend"),
@@ -3249,6 +3295,7 @@ def _run_inspect_report(args):
         max_artifact_matrix_artifacts=args.max_artifact_matrix_artifacts,
         max_artifact_provenance_artifacts=args.max_artifact_provenance_artifacts,
         max_define_processing_artifacts=args.max_define_processing_artifacts,
+        max_skipped_sources=args.max_skipped_sources,
         max_include_path_processing_artifacts=(
             args.max_include_path_processing_artifacts
         ),
@@ -3441,6 +3488,12 @@ def _build_parser():
         type=_non_negative_int,
         default=20,
         help="Maximum define-processing artifact samples to include",
+    )
+    inspect_parser.add_argument(
+        "--max-skipped-sources",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum skipped source samples to include in the inspection summary",
     )
     inspect_parser.add_argument(
         "--max-include-path-processing-artifacts",

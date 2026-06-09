@@ -19459,6 +19459,7 @@ def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_pat
     report = translate_project(load_project_config(repo), output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
+    payload = inspect_project_report(report_path, max_skipped_sources=1)
 
     result = subprocess.run(
         [
@@ -19479,6 +19480,24 @@ def test_project_cli_inspect_report_text_includes_skipped_reason_rollups(tmp_pat
     assert result.returncode == 0
     assert "Skipped by reason: unsupported-extension=2" in result.stdout
     assert "Skipped by extension: .txt=1, extensionless=1" in result.stdout
+    assert "Skipped sources:" in result.stdout
+    assert "- kernel (unsupported-extension; extension=extensionless)" in result.stdout
+    assert "- notes.txt (unsupported-extension; extension=.txt)" in result.stdout
+    assert payload["skippedSources"] == {
+        "available": True,
+        "skippedCount": 2,
+        "truncatedSkippedCount": 1,
+        "byReason": {"unsupported-extension": 2},
+        "byExtension": {".txt": 1, "extensionless": 1},
+        "bySourceOverride": {},
+        "sources": [
+            {
+                "path": "kernel",
+                "reason": "unsupported-extension",
+                "extension": "extensionless",
+            }
+        ],
+    }
 
 
 def test_project_cli_inspect_report_text_includes_source_override_rollups(tmp_path):
@@ -19532,6 +19551,11 @@ def test_project_cli_inspect_report_text_includes_source_override_rollups(tmp_pa
     ) in result.stdout
     assert "Units by source override: cgl=1" in result.stdout
     assert "Skipped by source override: unknown-backend=1" in result.stdout
+    assert (
+        "- gpu/unsupported.shader "
+        "(unsupported-source-override; extension=.shader; "
+        "sourceOverride=unknown-backend)"
+    ) in result.stdout
 
 
 def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
@@ -20558,6 +20582,7 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
         "--max-artifact-matrix-artifacts",
         "--max-artifact-provenance-artifacts",
         "--max-define-processing-artifacts",
+        "--max-skipped-sources",
         "--max-include-path-processing-artifacts",
         "--max-include-dependencies",
         "--max-validation-artifacts",

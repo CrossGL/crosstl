@@ -238,6 +238,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "skipped-reason" in backend_support["notes"]
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]
+        assert "sampled skipped-source paths" in backend_support["notes"]
         assert "invalid-report markers" in backend_support["notes"]
         assert "diagnostic location, target, and missing-capability context" in (
             backend_support["notes"]
