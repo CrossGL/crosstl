@@ -7235,6 +7235,7 @@ def _inspection_include_dependency_sample(
     unit_path: Any,
     source_backend: Any,
     unit_source_hash: Any,
+    unit_source_size: Any,
     dependency: Mapping[str, Any],
     *,
     root_path: Path | None = None,
@@ -7274,6 +7275,8 @@ def _inspection_include_dependency_sample(
             sample["unitSourceHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["unitSourceHash"] = hash_value
+    if _is_non_negative_int(unit_source_size):
+        sample["unitSourceSizeBytes"] = unit_source_size
     resolved_hash = dependency.get("resolvedHash")
     if isinstance(resolved_hash, Mapping):
         hash_algorithm = resolved_hash.get("algorithm")
@@ -7356,6 +7359,7 @@ def _inspection_include_dependency_summary(
                     unit.get("path"),
                     unit.get("sourceBackend"),
                     unit.get("sourceHash"),
+                    unit.get("sourceSizeBytes"),
                     dependency,
                     root_path=root_path,
                 )
@@ -7367,6 +7371,7 @@ def _inspection_include_dependency_summary(
                     unit.get("path"),
                     unit.get("sourceBackend"),
                     unit.get("sourceHash"),
+                    unit.get("sourceSizeBytes"),
                     dependency,
                 )
                 if sample:
@@ -7382,6 +7387,7 @@ def _inspection_include_dependency_summary(
                 unit.get("path"),
                 unit.get("sourceBackend"),
                 unit.get("sourceHash"),
+                unit.get("sourceSizeBytes"),
                 dependency,
             )
             if sample:

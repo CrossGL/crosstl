@@ -261,7 +261,8 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "include-directory status rollups" in backend_support["notes"]
         assert (
             "include dependency status, kind, and resolution-source rollups plus "
-            "resolved include hash and byte-size metadata"
+            "unit source hash and byte-size metadata plus resolved include hash "
+            "and byte-size metadata"
         ) in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -635,7 +636,7 @@ def test_project_include_resolution_documents_status_reporting():
             "source-backend labels, project-define provenance, variant names"
             in backend_support["notes"]
         )
-        assert "unit source hash metadata" in backend_support["notes"]
+        assert "unit source hash and byte-size metadata" in backend_support["notes"]
         assert (
             "resolved include hash and byte-size metadata" in backend_support["notes"]
         )

@@ -448,10 +448,11 @@ from a project or selected variant define, diagnostics identify that define
 and the variant context when applicable.
 Report inspection samples resolved include dependencies, unresolved system
 include dependencies, and include issues, including the source location,
-source backend, include kind,
-resolved path, and resolution source where available. Define-backed include
-samples also retain the project define name that supplied the include target and
-the variant name when the dependency came from a named variant define map.
+source backend, include kind, unit source hash and byte size, resolved path,
+resolved include hash and byte size, and resolution source where available.
+Define-backed include samples also retain the project define name that supplied
+the include target and the variant name when the dependency came from a named
+variant define map.
 ``output_dir`` must resolve inside the repository root; paths that escape the
 repository are reported as configuration diagnostics and artifacts are not
 written. When named variants are configured, project translation emits one

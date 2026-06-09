@@ -2451,6 +2451,9 @@ def _format_include_dependency_provenance_label(dependency):
     )
     if unit_hash_preview:
         parts.append(f"unitHash={unit_hash_preview}")
+    unit_source_size = _format_byte_size(dependency.get("unitSourceSizeBytes"))
+    if unit_source_size:
+        parts.append(f"unitSize={unit_source_size}")
     hash_preview = _format_hash_preview(
         dependency.get("resolvedHashAlgorithm"),
         dependency.get("resolvedHash"),
@@ -2463,8 +2466,9 @@ def _format_include_dependency_provenance_label(dependency):
         and not isinstance(resolved_size, bool)
         and resolved_size >= 0
     ):
-        size_label = "byte" if resolved_size == 1 else "bytes"
-        parts.append(f"size={resolved_size} {size_label}")
+        resolved_size_label = _format_byte_size(resolved_size)
+        if resolved_size_label:
+            parts.append(f"size={resolved_size_label}")
     if not parts:
         return ""
     return f" ({', '.join(parts)})"
