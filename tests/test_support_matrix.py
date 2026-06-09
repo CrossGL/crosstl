@@ -650,6 +650,7 @@ def test_project_include_resolution_documents_status_reporting():
             "summary rollups including source-backend, source-backend status, "
             "resolution-source, and variant counts"
         ) in backend_support["notes"]
+        assert "missing current include-scan diagnostics" in (backend_support["notes"])
         assert "missing include dependency summary rollups" in (
             backend_support["notes"]
         )
@@ -703,6 +704,11 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_nested_include_read_failures"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_missing_current_include_scan_"
+            "diagnostics"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -827,7 +833,8 @@ def test_project_macro_variants_document_artifact_define_maps():
         )
         assert (
             "Project inspection exposes project-level define names and "
-            "deterministic define fingerprints without define values"
+            "deterministic define fingerprints, variant define names, and "
+            "deterministic per-variant define fingerprints without define values"
         ) in backend_support["notes"]
         assert "report CLI variant metadata" in backend_support["notes"]
         assert (

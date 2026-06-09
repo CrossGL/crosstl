@@ -9548,6 +9548,111 @@ def _current_include_dependency_scan_contract_reasons(
     return reasons
 
 
+def _diagnostic_identity_key(diagnostic: Any) -> str | None:
+    if isinstance(diagnostic, ProjectDiagnostic):
+        payload = diagnostic.to_json()
+    elif isinstance(diagnostic, Mapping):
+        payload = {
+            field_name: diagnostic[field_name]
+            for field_name in REPORT_DIAGNOSTIC_FIELDS
+            if field_name in diagnostic
+        }
+    else:
+        return None
+
+    try:
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _diagnostic_identity_label(diagnostic: ProjectDiagnostic) -> str:
+    payload = diagnostic.to_json()
+    location = payload.get("location", {})
+    if isinstance(location, Mapping):
+        location_label = "{}:{}:{}".format(
+            location.get("file", "unknown"),
+            location.get("line", "?"),
+            location.get("column", "?"),
+        )
+    else:
+        location_label = "unknown:?:?"
+    return "{} at {}: {}".format(
+        payload.get("code", "unknown"),
+        location_label,
+        payload.get("message", ""),
+    )
+
+
+def _current_include_scan_diagnostic_contract_reasons(
+    units: Sequence[Any],
+    diagnostics: Sequence[Any],
+    *,
+    root_path: Path | None,
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    include_config = _project_config_for_include_validation(project, root_path)
+    if root_path is None or include_config is None:
+        return []
+
+    reported_diagnostic_counts = Counter(
+        key
+        for diagnostic in diagnostics
+        for key in (_diagnostic_identity_key(diagnostic),)
+        if key is not None
+    )
+    if not reported_diagnostic_counts and diagnostics:
+        return []
+
+    expected_diagnostics: list[ProjectDiagnostic] = []
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            return []
+        unit_path_value = unit.get("path")
+        if not (
+            _is_non_empty_string(unit_path_value)
+            and _is_report_identity_path(unit_path_value)
+        ):
+            return []
+        unit_path = (root_path / unit_path_value).resolve()
+        if not _is_relative_to(unit_path, root_path) or not unit_path.is_file():
+            continue
+        try:
+            _, include_diagnostics = _scan_include_dependencies(
+                include_config,
+                unit_path,
+                unit_path_value,
+            )
+        except (OSError, ValueError):
+            continue
+        expected_diagnostics.extend(include_diagnostics)
+
+    expected_diagnostic_counts = Counter(
+        key
+        for diagnostic in expected_diagnostics
+        for key in (_diagnostic_identity_key(diagnostic),)
+        if key is not None
+    )
+    missing = expected_diagnostic_counts - reported_diagnostic_counts
+    if not missing:
+        return []
+
+    labels_by_key = {
+        key: _diagnostic_identity_label(diagnostic)
+        for diagnostic in expected_diagnostics
+        for key in (_diagnostic_identity_key(diagnostic),)
+        if key is not None
+    }
+    reasons = []
+    for key, count in sorted(missing.items(), key=lambda item: labels_by_key[item[0]]):
+        suffix = f" ({count} records)" if count > 1 else ""
+        reasons.append(
+            "diagnostics must include current include scan diagnostic "
+            f"{labels_by_key[key]}{suffix}"
+        )
+    return reasons
+
+
 def _unit_include_dependencies_contract_reasons(
     index: int,
     unit: Mapping[str, Any],
@@ -13008,6 +13113,15 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"diagnostics[{index}].missingCapabilities must be a list of strings"
                 )
+        if has_summary and isinstance(units, list) and isinstance(project, Mapping):
+            reasons.extend(
+                _current_include_scan_diagnostic_contract_reasons(
+                    units,
+                    diagnostics,
+                    root_path=root_path,
+                    project=project,
+                )
+            )
 
     reasons.extend(_validation_contract_reasons(report, require_validation=has_summary))
     require_external_corpus = (

@@ -480,8 +480,9 @@ Project reports include configured define and variant names and values, and
 artifact records include the applied define map used for that translation
 attempt. Review reports before sharing them outside the repository if those
 values include private build metadata. Compact inspection summaries list
-configured variant names and per-variant define counts without printing define
-names or values.
+configured define names, deterministic define fingerprints, variant names,
+per-variant define counts, variant define names, and deterministic per-variant
+define fingerprints without printing define values.
 
 Report Shape
 ------------
@@ -692,8 +693,8 @@ Project reports are JSON documents with:
   include dependency record shape and include dependency summary consistency,
   current include dependency status, resolved-path, resolved-hash,
   resolved-size, source-backend status rollup, resolution-source checks, and
-  project-define include provenance checks, resolved and unresolved include
-  inspection samples,
+  project-define include provenance checks, current include-scan diagnostic
+  presence checks, resolved and unresolved include inspection samples,
   artifact source, source-backend,
   target, variant, and source-relative output layout declaration checks,
   current project scan coverage for omitted unit and skipped-source records,

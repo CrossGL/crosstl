@@ -1982,6 +1982,63 @@ def test_scan_project_reports_preprocessor_diagnostics_from_resolved_includes(
     ] == [("material.inc", "resolved")]
 
 
+def test_validate_project_report_rejects_missing_current_include_scan_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "material.inc").write_text(
+        textwrap.dedent("""
+            #ifndef DISABLE_MATERIAL_WARNING
+            #warning material include requires review
+            #endif
+            """).strip(),
+        encoding="utf-8",
+    )
+    (shader_dir / "main.frag").write_text(
+        '#version 450\n#include "material.inc"\nvoid main() {}\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+    payload["diagnostics"] = []
+    payload["diagnosticCounts"] = {"note": 0, "warning": 0, "error": 0}
+    payload["diagnosticsByCode"] = {}
+    payload["diagnosticsByTarget"] = {}
+    payload["diagnosticsBySourceBackend"] = {}
+    payload["diagnosticsByVariant"] = {}
+    payload["missingCapabilityCounts"] = {}
+    payload["summary"]["diagnosticCounts"] = {"note": 0, "warning": 0, "error": 0}
+    payload["summary"]["diagnosticsByCode"] = {}
+    payload["summary"]["diagnosticsByTarget"] = {}
+    payload["summary"]["diagnosticsBySourceBackend"] = {}
+    payload["summary"]["diagnosticsByVariant"] = {}
+    payload["summary"]["missingCapabilityCounts"] = {}
+    report_path = repo / "missing-include-scan-diagnostic-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "diagnostics must include current include scan diagnostic "
+        "project.scan.preprocessor-warning at shaders/material.inc:2:1"
+    ) in diagnostic["message"]
+    assert "material include requires review" in diagnostic["message"]
+
+
 def test_scan_project_keeps_includes_for_unsupported_conditional_expressions(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
