@@ -250,6 +250,7 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --max-define-processing-artifacts 20 \
      --max-include-path-processing-artifacts 20 \
      --max-include-dependencies 20 \
+     --max-skipped-sources 20 \
      --max-validation-artifacts 20 \
      --max-toolchain-runs 20 \
      --max-migration-actions 20 \

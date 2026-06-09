@@ -14651,6 +14651,31 @@ def test_validate_project_report_rejects_stale_source_remap_sidecar(tmp_path):
     assert "$.mappings must be a list" in diagnostic["message"]
 
 
+def test_inspect_project_report_marks_source_map_samples_with_validation_status(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    payload = report.to_json()
+    source_remap_path = repo / payload["artifacts"][0]["sourceRemap"]["path"]
+    source_remap_path.write_text("{}\n", encoding="utf-8")
+
+    inspection = inspect_project_report(report_path)
+
+    assert inspection["success"] is False
+    assert inspection["validation"]["result"]["summary"]["failedCount"] == 1
+    source_map_sample = inspection["sourceMaps"]["sourceMapArtifacts"][0]
+    source_remap_sample = inspection["sourceMaps"]["sourceRemapArtifacts"][0]
+    for sample in (source_map_sample, source_remap_sample):
+        assert sample["validationStatus"] == "failed"
+        assert sample["sourceMapStatus"] == "ok"
+        assert sample["sourceRemapStatus"] == "invalid"
+
+
 def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

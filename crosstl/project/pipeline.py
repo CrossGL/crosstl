@@ -6161,6 +6161,7 @@ def inspect_project_report(
     payload["sourceMaps"] = _inspection_source_map_summary(
         summary,
         report.get("artifacts"),
+        validation_artifacts=validation_artifacts,
         sample_limit=source_map_artifact_limit,
     )
     payload["artifactProvenance"] = _inspection_artifact_provenance_summary(
@@ -7295,6 +7296,7 @@ def _inspection_source_map_summary(
     summary: Any,
     artifacts: Any = None,
     *,
+    validation_artifacts: Any = None,
     sample_limit: int = SOURCE_MAP_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     sample_limit = max(0, sample_limit)
@@ -7313,14 +7315,31 @@ def _inspection_source_map_summary(
 
     source_map_artifacts = []
     source_remap_artifacts = []
+    validation_artifacts_by_key = {
+        _inspection_failed_artifact_key(artifact): artifact
+        for artifact in _record_sequence(validation_artifacts)
+        if isinstance(artifact, Mapping)
+    }
     for artifact in _record_sequence(artifacts):
         if not isinstance(artifact, Mapping):
             continue
         source_map_artifact = _inspection_source_map_artifact(artifact)
         if source_map_artifact:
+            source_map_artifact.update(
+                _inspection_artifact_validation_metadata(
+                    artifact,
+                    validation_artifacts_by_key,
+                )
+            )
             source_map_artifacts.append(source_map_artifact)
         source_remap_artifact = _inspection_source_remap_artifact(artifact)
         if source_remap_artifact:
+            source_remap_artifact.update(
+                _inspection_artifact_validation_metadata(
+                    artifact,
+                    validation_artifacts_by_key,
+                )
+            )
             source_remap_artifacts.append(source_remap_artifact)
 
     file_level_count = source_map_count - fine_grained_count

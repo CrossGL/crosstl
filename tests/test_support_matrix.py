@@ -239,6 +239,7 @@ def test_project_report_inspection_is_first_class_support_feature():
         assert "source-extension" in backend_support["notes"]
         assert "skipped-extension" in backend_support["notes"]
         assert "sampled skipped-source paths" in backend_support["notes"]
+        assert "skipped-source samples with custom limits" in backend_support["notes"]
         assert "invalid-report markers" in backend_support["notes"]
         assert "diagnostic location, target, and missing-capability context" in (
             backend_support["notes"]
@@ -472,7 +473,7 @@ def test_project_report_inspection_documents_rollups():
         assert (
             "source-map, source-remap, provenance, define-processing, "
             "include-path-processing, include-dependency, validation artifact, "
-            "and validation toolchain-run samples with custom limits"
+            "validation toolchain-run, and skipped-source samples with custom limits"
         ) in backend_support["notes"]
         assert (
             "migration scope, non-goals, action count and kind, severity, and "
