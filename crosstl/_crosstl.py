@@ -1525,6 +1525,7 @@ def _format_source_map_artifact_line(artifact):
     )
     if source_hash_preview:
         details.append(f"sourceHash={source_hash_preview}")
+    _append_generated_artifact_metadata(details, artifact)
     _append_artifact_validation_details(details, artifact)
 
     suffix = f" ({', '.join(details)})" if details else ""
@@ -1562,6 +1563,23 @@ def _format_hash_preview(algorithm, value):
     prefix = f"{algorithm}:" if isinstance(algorithm, str) and algorithm else ""
     suffix = "..." if len(value) > 12 else ""
     return f"{prefix}{value[:12]}{suffix}"
+
+
+def _append_generated_artifact_metadata(details, artifact):
+    generated_hash_preview = _format_hash_preview(
+        artifact.get("generatedHashAlgorithm"),
+        artifact.get("generatedHash"),
+    )
+    if generated_hash_preview:
+        details.append(f"generatedHash={generated_hash_preview}")
+    generated_size = artifact.get("generatedSizeBytes")
+    if (
+        isinstance(generated_size, int)
+        and not isinstance(generated_size, bool)
+        and generated_size >= 0
+    ):
+        size_label = "byte" if generated_size == 1 else "bytes"
+        details.append(f"generatedSize={generated_size} {size_label}")
 
 
 def _format_source_remap_artifact_line(artifact):
@@ -1608,6 +1626,7 @@ def _format_source_remap_artifact_line(artifact):
     )
     if source_hash_preview:
         details.append(f"sourceHash={source_hash_preview}")
+    _append_generated_artifact_metadata(details, artifact)
     hash_preview = _format_hash_preview(
         artifact.get("sourceRemapHashAlgorithm"),
         artifact.get("sourceRemapHash"),
@@ -1678,20 +1697,7 @@ def _format_artifact_provenance_line(artifact):
     )
     if source_hash_preview:
         details.append(f"sourceHash={source_hash_preview}")
-    generated_hash_preview = _format_hash_preview(
-        artifact.get("generatedHashAlgorithm"),
-        artifact.get("generatedHash"),
-    )
-    if generated_hash_preview:
-        details.append(f"generatedHash={generated_hash_preview}")
-    generated_size = artifact.get("generatedSizeBytes")
-    if (
-        isinstance(generated_size, int)
-        and not isinstance(generated_size, bool)
-        and generated_size >= 0
-    ):
-        size_label = "byte" if generated_size == 1 else "bytes"
-        details.append(f"generatedSize={generated_size} {size_label}")
+    _append_generated_artifact_metadata(details, artifact)
     _append_artifact_validation_details(details, artifact)
 
     suffix = f" ({', '.join(details)})" if details else ""
