@@ -3501,8 +3501,9 @@ class GLSLToCrossGLConverter:
             return None
 
         normalized_args = re.sub(r"\s+", " ", generic_args.strip()).lower()
-        normalized_args = normalized_args.removeprefix("unorm ")
-        normalized_args = normalized_args.removeprefix("snorm ")
+        for prefix in ("unorm ", "snorm "):
+            if normalized_args.startswith(prefix):
+                normalized_args = normalized_args[len(prefix) :]
 
         if normalized_args.startswith(("uint", "uvec")):
             return f"u{mapped_base}"
