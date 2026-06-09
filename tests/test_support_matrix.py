@@ -419,7 +419,7 @@ def test_project_report_inspection_documents_rollups():
     for backend_support in feature["support"].values():
         assert (
             "inspection identity, SARIF invocation metadata, and source report "
-            "schema/kind metadata" in backend_support["notes"]
+            "schema/kind and hash metadata" in backend_support["notes"]
         )
         assert "source report generation metadata" in backend_support["notes"]
         assert "variant-name summaries" in backend_support["notes"]

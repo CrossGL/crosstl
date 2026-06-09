@@ -19336,6 +19336,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
 
     assert payload["kind"] == "crosstl-project-report-inspection"
     assert payload["sourceReport"] == str(report_path)
+    assert payload["sourceReportHash"] == project_pipeline._source_hash(report_path)
     assert payload["success"] is True
     assert payload["report"]["available"] is True
     assert payload["report"]["valid"] is True
@@ -19689,6 +19690,7 @@ def test_inspect_project_report_emits_closed_inspection_report_schema(tmp_path):
     assert payload["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     assert payload["kind"] == project_pipeline.REPORT_INSPECTION_KIND
     assert payload["sourceReport"] == str(report_path)
+    assert payload["sourceReportHash"] == project_pipeline._source_hash(report_path)
     assert isinstance(payload["generatedAt"], int)
     assert payload["report"]["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     assert payload["externalCorpus"] == {"available": False}
@@ -20239,6 +20241,11 @@ def test_project_cli_inspect_report_text_writes_stdout_for_dash_output(tmp_path)
     report = translate_project(repo, targets=["cgl"], output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
+    source_report_hash = project_pipeline._source_hash(report_path)
+    source_report_hash_preview = crosstl_cli._format_hash_preview(
+        source_report_hash["algorithm"],
+        source_report_hash["value"],
+    )
 
     result = subprocess.run(
         [
@@ -20260,6 +20267,7 @@ def test_project_cli_inspect_report_text_writes_stdout_for_dash_output(tmp_path)
 
     assert "Wrote" not in result.stdout
     assert f"Project report: {report_path}" in result.stdout
+    assert f"Source report hash: {source_report_hash_preview}" in result.stdout
     assert "Status: ok" in result.stdout
     assert "Targets: cgl" in result.stdout
     assert "Report generator: CrossTL" in result.stdout
@@ -21968,7 +21976,9 @@ def test_project_cli_inspect_report_sarif_reports_diagnostics(tmp_path):
     assert run["tool"]["driver"]["name"] == "CrossTL project report inspection"
     assert run["invocations"][0]["executionSuccessful"] is False
     invocation_properties = run["invocations"][0]["properties"]
+    source_report_hash = project_pipeline._source_hash(report_path)
     assert invocation_properties["sourceReport"] == str(report_path)
+    assert invocation_properties["sourceReportHash"] == source_report_hash
     assert (
         invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     )

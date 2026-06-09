@@ -2690,6 +2690,7 @@ def _format_project_report_inspection(payload):
         _format_inspection_schema_version(payload),
         _format_inspection_kind(payload),
         _format_inspection_generated_at(payload),
+        _format_payload_hash(payload, "sourceReportHash", "Source report hash"),
         _format_source_report_schema_version(report),
         _format_source_report_kind(report),
         _format_project_config_path(project),

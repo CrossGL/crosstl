@@ -262,7 +262,8 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --max-external-corpus-entries 20
 
 Report inspection includes inspection identity, SARIF invocation metadata, and
-source report schema/kind metadata, source report generation metadata,
+source report schema/kind metadata, source report hash metadata,
+source report generation metadata,
 validation status,
 invalid/unavailable report status, project counts, project configuration path,
 project root, output directory, configuration counts, normalized source-root,
@@ -294,10 +295,11 @@ Migration action inspection is bounded and records truncation counts for large
 reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for
 code-scanning workflows. SARIF invocation properties include the source report
-path, report identity metadata, project root, output directory, configured
-targets, source roots, include/exclude patterns, include directories, and
-selected variants. SARIF locations include line and column metadata and
-positive-length character spans when diagnostics carry source offsets.
+path, source report hash, report identity metadata, project root, output
+directory, configured targets, source roots, include/exclude patterns, include
+directories, and selected variants. SARIF locations include line and column
+metadata and positive-length character spans when diagnostics carry source
+offsets.
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location.
