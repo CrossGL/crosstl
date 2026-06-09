@@ -8682,6 +8682,14 @@ def test_validate_project_report_emits_closed_validation_report_schema(tmp_path)
     assert payload["kind"] == project_pipeline.VALIDATION_REPORT_KIND
     assert payload["sourceReport"] == str(report_path)
     assert isinstance(payload["generatedAt"], int)
+    assert payload["project"]["root"] == str(repo)
+    assert payload["project"]["targets"] == ["cgl"]
+    assert payload["project"]["outputDir"] == str((repo / "out").resolve())
+    assert payload["project"]["sourceRoots"] == ["."]
+    assert payload["project"]["includeDirs"] == []
+    assert payload["project"]["defineNames"] == []
+    assert "defines" not in payload["project"]
+    assert "variants" not in payload["project"]
     assert payload["validation"]["summary"] == {
         "artifactCount": 1,
         "okCount": 1,
@@ -18944,6 +18952,9 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     ]
     assert len(validation_generated_lines) == 1
     assert int(validation_generated_lines[0].split(": ", 1)[1]) >= 0
+    assert f"Project root: {report_path.parent}" in text_result.stdout
+    assert "Output directory: out" in text_result.stdout
+    assert "Project targets: not-a-backend" in text_result.stdout
     assert "Status: failed" in text_result.stdout
     assert "Diagnostics: 1 errors, 0 warnings, 0 notes" in text_result.stdout
     assert "Diagnostic codes: project.validate.failed-artifact=1" in (
@@ -18991,6 +19002,9 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     )
     assert invocation_properties["kind"] == project_pipeline.VALIDATION_REPORT_KIND
     assert isinstance(invocation_properties["generatedAt"], int)
+    assert invocation_properties["projectRoot"] == str(report_path.parent)
+    assert invocation_properties["projectOutputDir"] == "out"
+    assert invocation_properties["projectTargets"] == ["not-a-backend"]
     assert run["tool"]["driver"]["name"] == "CrossTL project validation"
     assert run["tool"]["driver"]["rules"] == [
         {
@@ -19129,6 +19143,11 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     )
     assert invocation_properties["kind"] == project_pipeline.VALIDATION_REPORT_KIND
     assert isinstance(invocation_properties["generatedAt"], int)
+    assert invocation_properties["projectRoot"] == str(repo.resolve())
+    assert invocation_properties["projectOutputDir"] == str((repo / "out").resolve())
+    assert invocation_properties["projectTargets"] == ["opengl"]
+    assert invocation_properties["projectSourceRoots"] == ["."]
+    assert invocation_properties["projectIncludeDirs"] == []
     rules_by_id = {rule["id"]: rule for rule in run["tool"]["driver"]["rules"]}
     assert rules_by_id["project.validate.generated-hash-mismatch"] == {
         "id": "project.validate.generated-hash-mismatch",

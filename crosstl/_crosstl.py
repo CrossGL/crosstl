@@ -665,6 +665,16 @@ def _format_project_validation_report(payload):
     ):
         if header_line:
             lines.append(header_line)
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+        _format_project_source_roots(project),
+        _format_project_include_dirs(project),
+    ):
+        if project_line:
+            lines.append(project_line)
     lines.extend(
         [
             f"Status: {'ok' if payload.get('success') else 'failed'}",
@@ -958,6 +968,8 @@ def _sarif_invocation_properties(payload):
     generated_at = payload.get("generatedAt")
     if _sarif_non_negative_int(generated_at):
         properties["generatedAt"] = generated_at
+
+    _add_sarif_project_properties(properties, payload.get("project"))
 
     report = payload.get("report")
     if isinstance(report, Mapping):

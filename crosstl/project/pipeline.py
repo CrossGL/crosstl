@@ -344,6 +344,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "sourceReport",
         "generatedAt",
         "success",
+        "project",
         "diagnosticCounts",
         "diagnosticsByCode",
         "diagnosticsByTarget",
@@ -5820,6 +5821,7 @@ def validate_project_report(
             path,
             diagnostics,
             {"toolchains": [], "artifacts": []},
+            project=report.get("project") if isinstance(report, Mapping) else None,
         )
 
     root = Path(report["project"]["root"])
@@ -5842,7 +5844,9 @@ def validate_project_report(
         source_diagnostics,
         [diagnostic.to_json() for diagnostic in diagnostic_objects],
     )
-    return _validation_report_payload(path, diagnostics, validation)
+    return _validation_report_payload(
+        path, diagnostics, validation, project=report.get("project")
+    )
 
 
 def _diagnostic_identity_value(value: Any) -> Any:
@@ -7769,6 +7773,8 @@ def _validation_report_payload(
     path: Path,
     diagnostics: Sequence[Mapping[str, Any]],
     validation: Mapping[str, Any],
+    *,
+    project: Any = None,
 ) -> dict[str, Any]:
     validation_artifacts = _record_sequence(validation.get("artifacts"))
     validation_toolchains = _record_sequence(validation.get("toolchains"))
@@ -7791,6 +7797,7 @@ def _validation_report_payload(
         "success": not any(
             diagnostic.get("severity") == "error" for diagnostic in diagnostics
         ),
+        "project": _inspection_project_summary(project),
         "diagnosticCounts": _diagnostic_payload_counts(diagnostics),
         "diagnosticsByCode": _payload_diagnostic_counts_by_code(diagnostics) or {},
         "diagnosticsByTarget": (
