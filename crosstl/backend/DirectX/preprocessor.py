@@ -33,6 +33,7 @@ class HLSLPreprocessor:
         self.macros: Dict[str, Macro] = {}
         self.strict = strict
         self.max_expansion_depth = max_expansion_depth
+        self.pragma_once_files: Set[str] = set()
 
         if defines:
             for name, value in defines.items():
@@ -165,6 +166,11 @@ class HLSLPreprocessor:
                         current_line = line_number - 1
                         if line_file is not None:
                             current_file = line_file
+                elif directive == "pragma":
+                    if active and self._is_pragma_once(rest) and current_file:
+                        self.pragma_once_files.add(self._canonical_path(current_file))
+                    elif active:
+                        output.append(line)
                 elif directive in ("error", "warning"):
                     if directive == "error" or self.strict:
                         raise SyntaxError(f"#{directive}: {rest.strip()}")
@@ -336,11 +342,20 @@ class HLSLPreprocessor:
         for base in search_paths:
             candidate = os.path.join(base, target)
             if os.path.isfile(candidate):
+                if self._canonical_path(candidate) in self.pragma_once_files:
+                    return "", candidate
                 return self._read_source_file(candidate), candidate
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         return None
+
+    def _is_pragma_once(self, rest: str) -> bool:
+        parts = self._strip_macro_comments(rest).strip().split()
+        return bool(parts) and parts[0] == "once"
+
+    def _canonical_path(self, filepath: str) -> str:
+        return os.path.realpath(os.path.abspath(filepath))
 
     def _read_source_file(self, filepath: str) -> str:
         with open(filepath, "rb") as handle:

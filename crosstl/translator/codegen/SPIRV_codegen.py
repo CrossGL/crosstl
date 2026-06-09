@@ -11552,7 +11552,7 @@ class VulkanSPIRVCodeGen:
 
     def map_crossgl_type(self, type_name) -> SpirvId:
         """Map a CrossGL type name to a SPIR-V type ID."""
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+        if self.is_type_node_like(type_name):
             type_str = self.convert_type_node_to_string(type_name)
         else:
             type_str = str(type_name)
@@ -11685,6 +11685,21 @@ class VulkanSPIRVCodeGen:
             return (
                 f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
             )
+        if hasattr(type_node, "pointee_type"):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
+        if hasattr(type_node, "referenced_type"):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            return f"&{referenced_type}"
+        if hasattr(type_node, "return_type") and hasattr(type_node, "param_types"):
+            return_type = self.convert_type_node_to_string(type_node.return_type)
+            param_types = ", ".join(
+                self.convert_type_node_to_string(param_type)
+                for param_type in getattr(type_node, "param_types", []) or []
+            )
+            return f"fn({param_types}) -> {return_type}"
         if hasattr(type_node, "name") and type_node.name is not None:
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
@@ -14839,12 +14854,24 @@ class VulkanSPIRVCodeGen:
     def type_name_from_value(self, type_value) -> str:
         if type_value is None:
             return None
-        if hasattr(type_value, "name") or hasattr(type_value, "element_type"):
+        if self.is_type_node_like(type_value):
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
     def type_name_string(self, type_value) -> str:
         return self.type_name_from_value(type_value)
+
+    def is_type_node_like(self, value) -> bool:
+        return any(
+            hasattr(value, attribute)
+            for attribute in (
+                "name",
+                "element_type",
+                "pointee_type",
+                "referenced_type",
+                "return_type",
+            )
+        )
 
     def process_expression_with_expected_type(self, expr, expected_type):
         previous_expected_type = self.current_expression_expected_type

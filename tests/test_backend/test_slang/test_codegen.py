@@ -218,6 +218,29 @@ def test_struct_array_member_codegen():
     assert "vec4 colors[2][3]" in generated_code
 
 
+def test_struct_trailing_variable_initializer_codegen_reparse_from_slang_docs():
+    # Source: Slang declarations docs, Structure Types section, documents a
+    # C-style struct declaration used as a variable declaration.
+    code = """
+    struct Association
+    {
+        int from;
+        int to;
+    } associations[] =
+    {
+        { 1, 1 },
+        { 2, 4 },
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct Association" in generated_code
+    assert "Association associations[] = {{1, 1}, {2, 4}};" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_forward_struct_declaration_codegen_from_generated_conformance_sample():
     # Source: shader-slang/slang@52339028a2aa703271533454c6b9528a534bac31
     # docs/generated/tests/conformance/types-struct/struct-no-body-decl.slang

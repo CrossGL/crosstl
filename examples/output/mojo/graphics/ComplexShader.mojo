@@ -2,12 +2,9 @@
 from math import *
 from gpu import *
 
-# CrossGL builtin placeholders
-var global_invocation_id: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](0, 0, 0, 0)
-
 # CrossGL resource placeholders
 @value
-struct Image2D:
+struct Image2DFloat4:
     var width: Int32
     var height: Int32
     var depth_or_layers: Int32
@@ -37,7 +34,7 @@ struct Texture2D:
 fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 4]:
     return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)
 
-fn image_store(image: Image2D, coord: SIMD[DType.int32, 2], value: SIMD[DType.float32, 4]):
+fn image_store(image: Image2DFloat4, coord: SIMD[DType.int32, 2], value: SIMD[DType.float32, 4]):
     pass
 
 
@@ -48,8 +45,14 @@ fn clamp(value: Float32, min_value: Float32, max_value: Float32) -> Float32:
 fn clamp(value: SIMD[DType.float32, 2], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 2]:
     return SIMD[DType.float32, 2](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value))
 
+fn clamp(value: SIMD[DType.float32, 2], min_value: SIMD[DType.float32, 2], max_value: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]))
+
 fn clamp(value: SIMD[DType.float32, 4], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 4]:
     return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))
+
+fn clamp(value: SIMD[DType.float32, 4], min_value: SIMD[DType.float32, 4], max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]), clamp(value[2], min_value[2], max_value[2]), clamp(value[3], min_value[3], max_value[3]))
 
 fn dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:
     return a[0] * b[0] + a[1] * b[1]
@@ -75,8 +78,44 @@ fn magnitude(v: SIMD[DType.float32, 4]) -> Float32:
 fn max(a: Float32, b: Float32) -> Float32:
     return a if a >= b else b
 
+fn max(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](a[0] if a[0] >= b[0] else b[0], a[1] if a[1] >= b[1] else b[1])
+
+fn max(a: SIMD[DType.float32, 2], b: Float32) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](a[0] if a[0] >= b else b, a[1] if a[1] >= b else b)
+
+fn max(a: Float32, b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](a if a >= b[0] else b[0], a if a >= b[1] else b[1])
+
+fn max(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a[0] if a[0] >= b[0] else b[0], a[1] if a[1] >= b[1] else b[1], a[2] if a[2] >= b[2] else b[2], a[3] if a[3] >= b[3] else b[3])
+
+fn max(a: SIMD[DType.float32, 4], b: Float32) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a[0] if a[0] >= b else b, a[1] if a[1] >= b else b, a[2] if a[2] >= b else b, a[3] if a[3] >= b else b)
+
+fn max(a: Float32, b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a if a >= b[0] else b[0], a if a >= b[1] else b[1], a if a >= b[2] else b[2], a if a >= b[3] else b[3])
+
 fn min(a: Float32, b: Float32) -> Float32:
     return a if a <= b else b
+
+fn min(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](a[0] if a[0] <= b[0] else b[0], a[1] if a[1] <= b[1] else b[1])
+
+fn min(a: SIMD[DType.float32, 2], b: Float32) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](a[0] if a[0] <= b else b, a[1] if a[1] <= b else b)
+
+fn min(a: Float32, b: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](a if a <= b[0] else b[0], a if a <= b[1] else b[1])
+
+fn min(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a[0] if a[0] <= b[0] else b[0], a[1] if a[1] <= b[1] else b[1], a[2] if a[2] <= b[2] else b[2], a[3] if a[3] <= b[3] else b[3])
+
+fn min(a: SIMD[DType.float32, 4], b: Float32) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a[0] if a[0] <= b else b, a[1] if a[1] <= b else b, a[2] if a[2] <= b else b, a[3] if a[3] <= b else b)
+
+fn min(a: Float32, b: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](a if a <= b[0] else b[0], a if a <= b[1] else b[1], a if a <= b[2] else b[2], a if a <= b[3] else b[3])
 
 fn normalize(v: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
     var len = magnitude(v)
@@ -102,6 +141,24 @@ fn power(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) -> SIMD[DType.flo
 fn smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:
     var t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)
     return t * t * (3.0 - 2.0 * t)
+
+fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]))
+
+fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: Float32) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x))
+
+fn smoothstep(edge0: SIMD[DType.float32, 2], edge1: SIMD[DType.float32, 2], x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:
+    return SIMD[DType.float32, 2](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]))
+
+fn smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]), smoothstep(edge0, edge1, x[2]), smoothstep(edge0, edge1, x[3]))
+
+fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: Float32) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x), smoothstep(edge0[1], edge1[1], x), smoothstep(edge0[2], edge1[2], x), smoothstep(edge0[3], edge1[3], x))
+
+fn smoothstep(edge0: SIMD[DType.float32, 4], edge1: SIMD[DType.float32, 4], x: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:
+    return SIMD[DType.float32, 4](smoothstep(edge0[0], edge1[0], x[0]), smoothstep(edge0[1], edge1[1], x[1]), smoothstep(edge0[2], edge1[2], x[2]), smoothstep(edge0[3], edge1[3], x[3]))
 
 fn _crossgl_fract_f32(x: Float32) -> Float32:
     return x - floor(x)
@@ -661,10 +718,10 @@ fn fragment_main(input: VertexOutput) -> FragmentOutput:
 
 # Compute Shader
 # CrossGL resource metadata: name=outputImage kind=image set=0 binding=0 binding_source=automatic
-var outputImage: Image2D = Image2D()
+var outputImage: Image2DFloat4 = Image2DFloat4()
 # CrossGL shader stage: compute
 fn compute_main() -> None:
-    var texCoord: SIMD[DType.int32, 2] = SIMD[DType.int32, 2](global_invocation_id[0].cast[DType.int32](), global_invocation_id[1].cast[DType.int32]())
+    var texCoord: SIMD[DType.int32, 2] = SIMD[DType.int32, 2](SIMD[DType.uint32, 4](global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)[0].cast[DType.int32](), SIMD[DType.uint32, 4](global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)[1].cast[DType.int32]())
     var screenSize: SIMD[DType.float32, 2] = globals.screenSize
     if ((texCoord[0] >= Int32(screenSize[0])) or (texCoord[1] >= Int32(screenSize[1]))):
         return None

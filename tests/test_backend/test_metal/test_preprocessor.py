@@ -71,6 +71,26 @@ def test_preprocessor_include_with_search_path(tmp_path):
     assert '"constants.metal"' not in values
 
 
+def test_preprocessor_include_honors_pragma_once(tmp_path):
+    include_file = tmp_path / "constants.metal"
+    include_file.write_text(
+        "#pragma once\nconstant int guarded = 7;\n", encoding="utf-8"
+    )
+    code = """
+    #include "constants.metal"
+    #include "constants.metal"
+    int value = guarded;
+    """
+
+    output = MetalPreprocessor(include_paths=[str(tmp_path)]).preprocess(
+        code,
+        file_path=str(tmp_path / "main.metal"),
+    )
+
+    assert output.count("guarded") == 2
+    assert "#pragma once" not in output
+
+
 def test_unresolved_system_include_is_preserved():
     code = """
     #include <metal_stdlib>

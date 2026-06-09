@@ -1,6 +1,6 @@
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-
 __device__ inline float4 cgl_float4_mul(float4 lhs, float4 rhs) {
   return make_float4((lhs.x * rhs.x), (lhs.y * rhs.y), (lhs.z * rhs.z),
                      (lhs.w * rhs.w));
@@ -14,6 +14,18 @@ __device__ inline float4 cgl_float4_add(float4 lhs, float4 rhs) {
 __device__ inline float4 cgl_scalar_mul_float4(float lhs, float4 rhs) {
   return make_float4((lhs * rhs.x), (lhs * rhs.y), (lhs * rhs.z),
                      (lhs * rhs.w));
+}
+
+__device__ inline float cgl_cuda_shfl_down_sync_float(unsigned int mask,
+                                                      float value,
+                                                      unsigned int delta) {
+#if defined(__CUDA_ARCH__)
+  return __shfl_down_sync(mask, value, delta);
+#else
+  (void)mask;
+  (void)delta;
+  return value;
+#endif
 }
 
 // CrossGL matrix value helpers
@@ -3640,7 +3652,8 @@ extern "C" __global__ void matmul_warp_optimized() {
                          : 0.0);
       float partial_sum = (a_val * b_val);
       for (int offset = 16; (offset > 0); offset /= 2) {
-        partial_sum += __shfl_down_sync(4294967295, partial_sum, offset);
+        partial_sum +=
+            cgl_cuda_shfl_down_sync_float(4294967295, partial_sum, offset);
       }
       if ((warp_id == 0)) {
         result += partial_sum;

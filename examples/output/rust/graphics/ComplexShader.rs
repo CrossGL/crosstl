@@ -541,7 +541,10 @@ return output;
 }
 
 // CrossGL resource metadata: name=shadowMap kind=texture set=0 binding=0
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource shadowMap is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static SHADOW_MAP : std::sync::LazyLock<Texture2D<f32>> =
                         std::sync::LazyLock::new (|| Default::default());
 // Fragment Shader
@@ -751,7 +754,10 @@ return shadow;
 }
 
 // CrossGL resource metadata: name=outputImage kind=image set=0 binding=0
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource outputImage is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static OUTPUT_IMAGE : std::sync::LazyLock<Image2D<Vec4<f32>>> =
                           std::sync::LazyLock::new (|| Default::default());
 // Compute Shader

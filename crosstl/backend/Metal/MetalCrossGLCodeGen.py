@@ -56,6 +56,7 @@ class MetalToCrossGLConverter:
         "fragment",
         "if",
         "in",
+        "layout",
         "out",
         "return",
         "sampler",
@@ -2406,22 +2407,54 @@ class MetalToCrossGLConverter:
 
         # Normalize Metal resource access qualifiers without dropping dimensions or
         # other non-resource generic arguments, e.g. matrix<bfloat, 4, 4>.
-        if "<" in base and ">" in base:
+        if "<" in base and base.endswith(">"):
             base_name, inner = base.split("<", 1)
             inner = inner.rstrip(">")
             generic_args = self.split_generic_arguments(inner)
             if self.should_elide_resource_access_qualifier(base_name, generic_args):
                 base = f"{base_name}<{generic_args[0].strip()}>"
+            elif (
+                not self.is_metal_resource_type_name(base_name)
+                and "::" not in base_name
+            ):
+                mapped_base_name = self.sanitize_identifier(base_name.strip())
+                mapped_args = ",".join(
+                    self.map_generic_type_argument(arg) for arg in generic_args
+                )
+                return f"{mapped_base_name}<{mapped_args}>{suffix}"
 
         sampled_resource_type = self.map_sampled_texture_type(base)
         if sampled_resource_type:
             return f"{sampled_resource_type}{suffix}"
 
-        mapped = self.type_map.get(base, base)
-        mapped = self.struct_name_map.get(mapped, mapped)
-        if mapped == base:
-            mapped = self.map_scoped_type_name(mapped)
+        mapped = self.type_map.get(base)
+        if mapped is not None:
+            return f"{mapped}{suffix}"
+        mapped = self.struct_name_map.get(base)
+        if mapped is not None:
+            return f"{mapped}{suffix}"
+        mapped = self.map_scoped_type_name(base)
         return f"{mapped}{suffix}"
+
+    def map_generic_type_argument(self, argument):
+        argument = str(argument).strip()
+        if not argument:
+            return argument
+        if self.crossgl_identifier_pattern.fullmatch(argument):
+            return self.sanitize_identifier(argument)
+        base_name, generic_args = self.generic_type_parts(argument)
+        if (
+            base_name
+            and generic_args
+            and "::" not in base_name
+            and argument.endswith(">")
+        ):
+            mapped_base_name = self.sanitize_identifier(base_name.strip())
+            mapped_args = ",".join(
+                self.map_generic_type_argument(arg) for arg in generic_args
+            )
+            return f"{mapped_base_name}<{mapped_args}>"
+        return argument
 
     def format_type_alias_declaration(self, alias):
         if getattr(alias, "is_function_type", False) or self.is_resource_type_alias(
@@ -2540,7 +2573,10 @@ class MetalToCrossGLConverter:
 
     def map_scoped_type_name(self, type_name):
         if "::" not in str(type_name):
-            return type_name
+            text = str(type_name)
+            if self.crossgl_identifier_pattern.match(text):
+                return self.sanitize_identifier(text)
+            return text
 
         base_name, _generic_args = self.generic_type_parts(type_name)
         if base_name and "::" in base_name:

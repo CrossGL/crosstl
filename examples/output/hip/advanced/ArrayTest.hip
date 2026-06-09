@@ -1,8 +1,8 @@
 #include <hip/device_functions.h>
+#include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
 #include <hip/math_functions.h>
-
 __device__ inline float3 cgl_float3_mul_scalar(float3 lhs, float rhs) {
   return make_float3((lhs.x * rhs), (lhs.y * rhs), (lhs.z * rhs));
 }

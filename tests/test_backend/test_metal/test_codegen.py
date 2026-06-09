@@ -3132,6 +3132,19 @@ def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
     assert ast is not None
 
 
+def test_codegen_sanitizes_crossgl_keyword_generic_type_argument_from_tinygrad():
+    code = """
+    template<typename T, typename layout>
+    void consume(thread rt_base<T, layout>& src) {
+        return;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "rt_base<T,layout_>& src" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_omits_global_constexpr_sampler_argument_for_roundtrip():
     code = """
     #include <metal_stdlib>
@@ -3484,6 +3497,21 @@ def test_codegen_sizeof_and_cast():
     assert "sizeof(int)" in result
     assert "alignof(float4)" in result
     assert "(vec3)" in result or "(float3)" in result
+
+
+def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
+    code = """
+    template<typename ST>
+    METAL_FUNC void load(threadgroup ST &dst) {
+        constexpr const int elem_per_memcpy =
+            sizeof(read_vector) / sizeof(typename ST::dtype);
+        return;
+    }
+    """
+    result = convert(code)
+
+    assert "sizeof(ST::dtype)" in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_alignas_and_static_assert():

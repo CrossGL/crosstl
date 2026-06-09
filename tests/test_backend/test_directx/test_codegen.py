@@ -6852,6 +6852,29 @@ def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_cbuffer_member_initializers_from_dxc_issue_reparse():
+    # Source: microsoft/DirectXShaderCompiler#2380 documents default values on
+    # cbuffer members such as array initializers.
+    code = textwrap.dedent("""
+        cbuffer XX
+        {
+            float x = 1.0;
+            float2 param[2] = {float2(0, 1), float2(2, 3)};
+        };
+
+        float4 main() : SV_Target
+        {
+            return float4(param[0], x, 1.0);
+        }
+        """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "float x = 1.0;" in output
+    assert "vec2 param[2] = {vec2(0, 1), vec2(2, 3)};" in output
+    parse_crossgl(output)
+
+
 def test_codegen_invalid_hlsl_raises():
     code = "float4 main() : SV_Target0 { float x = 1.0 return float4(x, 0, 0, 1); }"
     with pytest.raises(SyntaxError):

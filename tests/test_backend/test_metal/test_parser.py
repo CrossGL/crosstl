@@ -1475,6 +1475,25 @@ def test_parse_sizeof_and_cast():
     parse_ok(code)
 
 
+def test_parse_sizeof_dependent_typename_from_tinygrad_tile_copy():
+    code = """
+    template<typename ST>
+    METAL_FUNC void load(threadgroup ST &dst) {
+        constexpr const int elem_per_memcpy =
+            sizeof(read_vector) / sizeof(typename ST::dtype);
+        return;
+    }
+    """
+    ast = parse_ok(code)
+
+    sizeof_calls = [
+        node
+        for node in iter_ast_nodes(ast)
+        if isinstance(node, FunctionCallNode) and node.name == "sizeof"
+    ]
+    assert any(call.args == ["ST::dtype"] for call in sizeof_calls)
+
+
 def test_parse_pointer_member_access():
     code = """
     struct Uniforms {

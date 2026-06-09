@@ -1104,6 +1104,27 @@ class MetalParser:
             idx += 1
         return idx
 
+    def skip_type_reference_suffix_at(self, idx):
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+        while idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
+            idx += 1
+            if (
+                idx < len(self.tokens)
+                and self.tokens[idx] == ("IDENTIFIER", "template")
+                and idx + 1 < len(self.tokens)
+                and self.tokens[idx + 1][0] in SCOPED_IDENTIFIER_PART_TOKENS
+            ):
+                idx += 1
+            if idx >= len(self.tokens):
+                return idx
+            if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
+                return idx
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_template_argument_list_at(idx)
+        return idx
+
     def parenthesized_list_ends_with_semicolon(self, idx):
         depth = 0
         while idx < len(self.tokens):
@@ -3425,6 +3446,12 @@ class MetalParser:
         if idx >= len(self.tokens):
             return False
         tok_type = self.tokens[idx][0]
+        typename_prefix = tok_type == "IDENTIFIER" and self.tokens[idx][1] == "typename"
+        if typename_prefix:
+            idx += 1
+            if idx >= len(self.tokens):
+                return False
+            tok_type = self.tokens[idx][0]
         if tok_type not in TYPE_TOKENS:
             return False
         if tok_type == "IDENTIFIER":
@@ -3434,7 +3461,8 @@ class MetalParser:
                 idx += 2
             else:
                 if (
-                    name not in self.known_types
+                    not typename_prefix
+                    and name not in self.known_types
                     and next_type not in {"SCOPE", "LESS_THAN"}
                     and not (
                         saw_qualifier
@@ -3448,17 +3476,7 @@ class MetalParser:
                 idx += 1
         else:
             idx += 1
-        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            depth = 0
-            while idx < len(self.tokens):
-                if self.tokens[idx][0] == "LESS_THAN":
-                    depth += 1
-                elif self.tokens[idx][0] == "GREATER_THAN":
-                    depth -= 1
-                    if depth == 0:
-                        idx += 1
-                        break
-                idx += 1
+        idx = self.skip_type_reference_suffix_at(idx)
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
             "BITWISE_AND",

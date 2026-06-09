@@ -309,6 +309,33 @@ def test_struct_comma_member_declarators_from_ray_tracing_example():
     ]
 
 
+def test_struct_trailing_variable_initializer_from_slang_docs():
+    # Source: Slang declarations docs, Structure Types section, documents a
+    # C-style struct declaration used as a variable declaration.
+    code = """
+    struct Association
+    {
+        int from;
+        int to;
+    } associations[] =
+    {
+        { 1, 1 },
+        { 2, 4 },
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    declaration = ast.global_vars[0]
+
+    assert ast.structs[0].name == "Association"
+    assert isinstance(declaration, AssignmentNode)
+    assert declaration.left.vtype == "Association"
+    assert declaration.left.name == "associations"
+    assert declaration.left.array_sizes == [None]
+    assert isinstance(declaration.right, InitializerListNode)
+    assert len(declaration.right.elements) == 2
+
+
 def test_pervertex_struct_member_qualifier_from_barycentric_tests():
     code = """
     struct Input

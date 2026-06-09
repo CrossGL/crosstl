@@ -520,32 +520,53 @@ impl FragmentInput {
 }
 
 // CrossGL resource metadata: name=albedo_map kind=texture set=0 binding=0
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource albedo_map is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static ALBEDO_MAP : std::sync::LazyLock<Texture2D<f32>> =
                         std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=normal_map kind=texture set=0 binding=1
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource normal_map is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static NORMAL_MAP : std::sync::LazyLock<Texture2D<f32>> =
                         std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=metallic_roughness_map kind=texture set=0
-// binding=2 binding_source=automatic
+// binding=2 binding_source=automatic CrossGL Rust limitation: resource
+// metallic_roughness_map is emitted as a compile-only placeholder static, not a
+// rust-gpu resource binding; pass real spirv_std resources as #[spirv(...)]
+// entry parameters when targeting rust-gpu.
 static METALLIC_ROUGHNESS_MAP
     : std::sync::LazyLock<Texture2D<f32>> =
           std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=ao_map kind=texture set=0 binding=3
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource ao_map is emitted
+// as a compile-only placeholder static, not a rust-gpu resource binding; pass
+// real spirv_std resources as #[spirv(...)] entry parameters when targeting
+// rust-gpu.
 static AO_MAP : std::sync::LazyLock<Texture2D<f32>> =
                     std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=emission_map kind=texture set=0 binding=4
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource emission_map is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static EMISSION_MAP : std::sync::LazyLock<Texture2D<f32>> =
                           std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=height_map kind=texture set=0 binding=5
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource height_map is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static HEIGHT_MAP : std::sync::LazyLock<Texture2D<f32>> =
                         std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=shadow_maps kind=texture set=0 binding=6
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource shadow_maps is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static SHADOW_MAPS : Vec<Texture2D<f32>> = Vec::new ();
 static MATERIAL : std::sync::LazyLock<MaterialProperties> =
                       std::sync::LazyLock::new (|| Default::default());
@@ -659,11 +680,17 @@ return Vec4::<f32>::new (color.x, color.y, color.z, input.color.w);
 }
 
 // CrossGL resource metadata: name=environment_map kind=texture set=0 binding=7
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource environment_map is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static ENVIRONMENT_MAP : std::sync::LazyLock<TextureCube<f32>> =
                              std::sync::LazyLock::new (|| Default::default());
 // CrossGL resource metadata: name=irradiance_map kind=image set=0 binding=0
-// binding_source=automatic
+// binding_source=automatic CrossGL Rust limitation: resource irradiance_map is
+// emitted as a compile-only placeholder static, not a rust-gpu resource
+// binding; pass real spirv_std resources as #[spirv(...)] entry parameters when
+// targeting rust-gpu.
 static IRRADIANCE_MAP : std::sync::LazyLock<ImageCube<Vec4<f32>>> =
                             std::sync::LazyLock::new (|| Default::default());
 static FACE_INDEX : i32 = 0;

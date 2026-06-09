@@ -98,6 +98,20 @@ def test_include_with_search_path(tmp_path):
     assert "includedValue" in output
 
 
+def test_include_honors_pragma_once(tmp_path):
+    header = tmp_path / "guarded.hlsl"
+    header.write_text("#pragma once\nint guardedValue;\n", encoding="utf-8")
+    code = '#include "guarded.hlsl"\n#include "guarded.hlsl"\n'
+
+    output = HLSLPreprocessor(include_paths=[str(tmp_path)]).preprocess(
+        code,
+        file_path=str(tmp_path / "main.hlsl"),
+    )
+
+    assert output.count("guardedValue") == 1
+    assert "#pragma once" not in output
+
+
 def test_include_decodes_non_utf8_bytes_with_replacement(tmp_path):
     header = tmp_path / "legacy_comment.hlsl"
     header.write_bytes(b"#define VALUE 7 // legacy dash: \x96\n")

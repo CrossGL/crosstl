@@ -102,6 +102,16 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/test_as_type.cl",
     },
+    "pocl_get_linear_id_post_return_function_specifier_macros": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/get_linear_id.cl",
+    },
+    "pocl_as_type_prefix_function_specifier_macros": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "lib/kernel/as_type.cl",
+    },
     "pocl_ocml_irif_asm_label": {
         "url": "https://github.com/pocl/pocl",
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
@@ -719,6 +729,72 @@ def test_external_pocl_noinline_function_specifier_codegen_reparse():
     assert helper.name == "clear_bytes"
     assert helper.qualifiers == ["_CL_NOINLINE"]
     assert "void clear_bytes(ptr<u8> p, u8 c, u32 n)" in crossgl
+
+
+def test_external_pocl_post_return_function_specifier_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_get_linear_id_post_return_function_specifier_macros"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/get_linear_id.cl"
+
+    source = """
+    constant extern const size_t _local_size_x;
+    constant extern const size_t _group_id_x;
+
+    size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
+    get_local_id (unsigned int dimindx);
+
+    size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE get_global_linear_id (void);
+
+    size_t _CL_OVERLOADABLE _CL_READNONE _CL_OPTNONE
+    get_global_linear_id ()
+    {
+      return (_local_size_x * _group_id_x + get_local_id (0));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    helper = ast.statements[2]
+    assert helper.name == "get_local_id"
+    assert helper.qualifiers == ["_CL_OVERLOADABLE", "_CL_READNONE", "_CL_OPTNONE"]
+    assert "u32 get_local_id(u32 dimindx)" in crossgl
+    assert "u32 get_global_linear_id()" in crossgl
+    assert "_CL_OVERLOADABLE" not in crossgl
+    assert "_CL_READNONE" not in crossgl
+    assert "_CL_OPTNONE" not in crossgl
+
+
+def test_external_pocl_prefix_function_specifier_macros_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "pocl_as_type_prefix_function_specifier_macros"
+    ]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "lib/kernel/as_type.cl"
+
+    source = """
+    _CL_ALWAYSINLINE _CL_OVERLOADABLE _CL_READNONE
+    uint as_uint(float a)
+    {
+      return 0u;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    helper = ast.statements[0]
+    assert helper.name == "as_uint"
+    assert helper.return_type == "uint"
+    assert helper.qualifiers == [
+        "_CL_ALWAYSINLINE",
+        "_CL_OVERLOADABLE",
+        "_CL_READNONE",
+    ]
+    assert "u32 as_uint(f32 a)" in crossgl
+    assert "_CL_ALWAYSINLINE" not in crossgl
+    assert "_CL_OVERLOADABLE" not in crossgl
+    assert "_CL_READNONE" not in crossgl
 
 
 def test_external_pocl_ocml_asm_label_declaration_codegen_reparse():

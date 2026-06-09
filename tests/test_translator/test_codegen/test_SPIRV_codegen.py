@@ -26433,3 +26433,64 @@ class TestSpirvShaderValidation:
 
         with pytest.raises(ValueError, match="Duplicate SPIR-V output location 2"):
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_unknown_struct_pointer_type_warning_does_not_leak_named_type_repr(self):
+        source_code = """
+        shader VulkanStructPointerWarning {
+            const int COUNT = 2;
+
+            struct Particle {
+                float weights[COUNT];
+            }
+
+            compute {
+                layout(set = 0, binding = 0) buffer Particle* particles;
+
+                void main() {
+                    float value = particles[0].weights[1];
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "NamedType(" not in spv_code
+        assert "PointerType(" not in spv_code
+        assert "; WARNING: Unknown type Particle*, using float as default" in spv_code
+
+    def test_unknown_atomic_pointer_type_warning_does_not_leak_named_type_repr(self):
+        warning_source = """
+        shader VulkanAtomicPointerWarning {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer atomic<int>* counters;
+                layout(set = 0, binding = 1) buffer atomic<uint>* unsignedCounters;
+
+                void main() {
+                    int index = 0;
+                    uint localDelta = uint(1.0);
+                    atomicAdd(counters[index], 1);
+                    atomicAdd(unsignedCounters[index], localDelta);
+                    return;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(warning_source).tokens).parse()
+        )
+
+        assert "NamedType(" not in spv_code
+        assert "PointerType(" not in spv_code
+        assert "PrimitiveType(" not in spv_code
+        assert (
+            "; WARNING: Unknown type atomic<int>*, using float as default" in spv_code
+        )
+        assert (
+            "; WARNING: Unknown type atomic<uint>*, using float as default" in spv_code
+        )

@@ -3363,9 +3363,13 @@ class HLSLToCrossGLConverter:
                     code += self.format_binding_attributes(member, 2)
                     array_suffix = self.format_array_suffixes(member)
                     qualifier_prefix = self.format_precise_qualifier_prefix(member)
+                    initializer = ""
+                    if getattr(member, "value", None) is not None:
+                        initializer = f" = {self.generate_expression(member.value)}"
                     code += (
                         f"        {qualifier_prefix}{self.map_variable_type(member)} "
-                        f"{self.render_identifier(member.name)}{array_suffix};\n"
+                        f"{self.render_identifier(member.name)}{array_suffix}"
+                        f"{initializer};\n"
                     )
                 code += "    }\n"
         return code

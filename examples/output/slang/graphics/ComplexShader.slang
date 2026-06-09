@@ -40,6 +40,11 @@ float4x4 _crossgl_inverse_float4x4(float4x4 m)
     return inv;
 }
 
+static const float PI = 3.14159265359;
+static const float EPSILON = 0.0001;
+static const int MAX_ITERATIONS = 64;
+static const float3 UP_VECTOR = float3(0.0, 1.0, 0.0);
+
 struct Material
 {
     float3 albedo;
@@ -117,11 +122,6 @@ struct GlobalUniforms
     int frameCount;
     float noiseValues[1024];
 };
-
-static const float PI = 3.14159265359;
-static const float EPSILON = 0.0001;
-static const int MAX_ITERATIONS = 64;
-static const float3 UP_VECTOR = float3(0.0, 1.0, 0.0);
 
 [[vk::binding(0, 0)]] Sampler2D<float4> albedoMap : register(t0);
 [[vk::binding(1, 0)]] Sampler2D<float4> normalMap : register(t1);

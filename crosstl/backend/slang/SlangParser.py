@@ -235,7 +235,11 @@ class SlangParser:
                 or self.is_class_declaration_start()
                 or self.is_generic_prefixed_struct_declaration_start()
             ):
-                structs.append(self.parse_struct())
+                struct = self.parse_struct()
+                structs.append(struct)
+                global_variables.extend(
+                    getattr(struct, "variable_declarations", []) or []
+                )
             elif declaration_token == "EXTENSION":
                 extensions.append(self.parse_extension())
             elif declaration_token in {"CBUFFER", "TBUFFER"}:
@@ -1719,7 +1723,70 @@ class SlangParser:
         node.qualifiers = qualifiers
         node.is_class = is_class
         node.is_forward_declaration = False
+        node.variable_declarations = []
+
+        if self.is_struct_trailing_variable_declaration_start():
+            node.variable_declarations = (
+                self.parse_struct_trailing_variable_declarations(
+                    name,
+                    qualifiers=qualifiers,
+                )
+            )
+        elif self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
         return node
+
+    def is_struct_trailing_variable_declaration_start(self):
+        if self.current_token[0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS:
+            return False
+        if self.pos + 1 >= len(self.tokens):
+            return False
+        return self.tokens[self.pos + 1][0] in self.DECLARATION_FOLLOW_TOKENS
+
+    def parse_struct_trailing_variable_declarations(
+        self,
+        struct_type,
+        qualifiers=None,
+        attributes=None,
+    ):
+        declarations = []
+        qualifiers = qualifiers or []
+        attributes = attributes or []
+
+        while True:
+            name = self.parse_contextual_identifier()
+            variable = VariableNode(
+                struct_type,
+                name,
+                qualifiers=qualifiers,
+                attributes=attributes,
+                array_sizes=self.parse_array_suffixes(),
+            )
+
+            register_names = self.parse_register_annotations()
+            if register_names:
+                variable.register = register_names[0]
+                variable.registers = register_names
+
+            if self.current_token[0] == "COLON":
+                variable.semantic = self.parse_semantic_annotations()
+
+            if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                declarations.append(
+                    AssignmentNode(variable, self.parse_expression(), op)
+                )
+            else:
+                declarations.append(variable)
+
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        self.eat("SEMICOLON")
+        return declarations
 
     def parse_struct_field_members(self, attributes=None):
         attributes = attributes or []
