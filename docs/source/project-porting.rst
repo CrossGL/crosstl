@@ -208,7 +208,8 @@ not declared by the report, artifact sources are not declared translation units,
 embedded validation records reference artifacts not declared by the report,
 embedded toolchain runs reference failed report artifacts,
 validation records contain duplicate identities or inconsistent status fields,
-summarized embedded validation omits declared artifacts, external corpus entry
+summarized embedded validation omits declared artifacts, embedded toolchain-run
+coverage omits OK validation artifacts for available toolchains, external corpus entry
 presence, discovery, or source-backend fields do not match the project root and
 declared units, full reports omit units or skipped files that the current
 project scan discovers, translated outputs are missing, artifact paths resolve
@@ -727,6 +728,7 @@ Project reports are JSON documents with:
   count consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact coverage,
+  embedded toolchain-run coverage for available toolchains,
   toolchain-run target, source-backend, check-kind, tool, and variant rollups,
   toolchain target coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,

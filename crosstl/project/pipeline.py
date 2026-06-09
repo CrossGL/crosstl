@@ -9229,6 +9229,50 @@ def _validation_artifact_coverage_contract_reasons(
     return reasons
 
 
+def _validation_toolchain_run_coverage_contract_reasons(
+    toolchain_runs: Sequence[Any],
+    artifact_checks: Sequence[Any],
+    toolchains: Sequence[Any],
+) -> list[str]:
+    available_targets = set()
+    for toolchain in toolchains:
+        if not isinstance(toolchain, Mapping):
+            continue
+        if toolchain.get("status") != "available":
+            continue
+        target = toolchain.get("target")
+        if _is_non_empty_string(target):
+            available_targets.add(_normalized_targets([target])[0])
+    if not available_targets:
+        return []
+
+    run_identities: set[ArtifactIdentity] = set()
+    for run in toolchain_runs:
+        if not isinstance(run, Mapping):
+            continue
+        identity = _artifact_identity(run)
+        if identity is not None:
+            run_identities.add(identity)
+
+    reasons = []
+    for artifact_index, artifact_check in enumerate(artifact_checks):
+        if not isinstance(artifact_check, Mapping):
+            continue
+        if artifact_check.get("status") != "ok":
+            continue
+        identity = _artifact_identity(artifact_check)
+        if identity is None:
+            continue
+        target = identity[1]
+        if target in available_targets and identity not in run_identities:
+            reasons.append(
+                "validation.toolchainRuns must include "
+                f"validation.artifacts[{artifact_index}] when validation.toolchains "
+                f"reports target {target} available"
+            )
+    return reasons
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -11689,6 +11733,7 @@ def _validation_contract_reasons(
         reasons.extend(_duplicate_toolchain_target_contract_reasons(toolchains))
 
     artifact_checks = validation.get("artifacts")
+    toolchain_runs = validation.get("toolchainRuns")
     summarized_validation = "summary" in validation
     if not isinstance(artifact_checks, list):
         reasons.append("validation.artifacts must be a list")
@@ -11727,6 +11772,19 @@ def _validation_contract_reasons(
                     declared_artifacts_by_identity,
                 )
             )
+        if (
+            "toolchainRuns" in validation
+            and isinstance(toolchain_runs, list)
+            and isinstance(artifact_checks, list)
+            and isinstance(toolchains, list)
+        ):
+            reasons.extend(
+                _validation_toolchain_run_coverage_contract_reasons(
+                    toolchain_runs,
+                    artifact_checks,
+                    toolchains,
+                )
+            )
         reasons.extend(
             _validation_summary_contract_reasons(
                 validation.get("summary"),
@@ -11736,7 +11794,6 @@ def _validation_contract_reasons(
         )
 
     if "toolchainRuns" in validation:
-        toolchain_runs = validation.get("toolchainRuns")
         if not isinstance(toolchain_runs, list):
             reasons.append("validation.toolchainRuns must be a list")
         else:

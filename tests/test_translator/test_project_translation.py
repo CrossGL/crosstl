@@ -12619,6 +12619,45 @@ def test_validate_project_report_rejects_toolchain_runs_without_check_kind_in_fu
     )
 
 
+def test_validate_project_report_rejects_available_toolchains_without_run_coverage(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(
+        repo, targets=["opengl"], output_dir="out", validate=True
+    )
+    payload = report.to_json()
+    payload["validation"]["toolchains"] = [
+        {
+            "target": "opengl",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "glslangValidator",
+                    "path": "/usr/bin/glslangValidator",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    payload["validation"]["toolchainRuns"] = []
+    report_path = repo / "out" / "missing-toolchain-run-coverage-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns must include validation.artifacts[0] "
+        "when validation.toolchains reports target opengl available"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_validation_summary_missing_artifact_checks(
     tmp_path,
 ):
