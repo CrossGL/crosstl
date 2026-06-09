@@ -1920,6 +1920,9 @@ def _format_validation_artifact_sample_line(artifact):
         return None
 
     details = []
+    source_backend = artifact.get("sourceBackend")
+    if isinstance(source_backend, str) and source_backend:
+        details.append(f"sourceBackend={source_backend}")
     status = artifact.get("status")
     if isinstance(status, str) and status:
         details.append(f"status={status}")

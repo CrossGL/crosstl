@@ -7920,12 +7920,16 @@ def _toolchain_run_diagnostics(
         target = str(run.get("target", "unknown"))
         artifact_path = str(run.get("path", ""))
         reason = _toolchain_run_failure_reason(run)
-        message = f"Validation toolchain for target {target} rejected {artifact_path}."
-        if reason:
-            message = (
-                f"Validation toolchain for target {target} rejected "
-                f"{artifact_path}: {reason}"
+        if run.get("checkKind") == "tool-availability":
+            message_base = (
+                f"Validation toolchain availability check for target {target} "
+                f"failed for {artifact_path}"
             )
+        else:
+            message_base = (
+                f"Validation toolchain for target {target} rejected {artifact_path}"
+            )
+        message = f"{message_base}: {reason}" if reason else f"{message_base}."
         context: dict[str, Any] = {"target": target}
         source_backend = run.get("sourceBackend")
         if _is_non_empty_string(source_backend):

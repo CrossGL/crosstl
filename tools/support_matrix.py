@@ -1062,8 +1062,8 @@ def render_docs(matrix):
             "Project Porting Focus",
             "---------------------",
             "",
-            "This view isolates repository-scale scanning, translation, reporting,",
-            "diagnostic, validation, and corpus-coverage rows.",
+            "This view isolates repository-scale scanning, translation, report",
+            "inspection, diagnostics, validation, and corpus-coverage rows.",
             "",
         ]
     )

@@ -16953,7 +16953,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert "Validation artifact samples:" in stdout
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
-        "(status=ok, exists=true, sourceHash=not-recorded, "
+        "(sourceBackend=cgl, status=ok, exists=true, sourceHash=not-recorded, "
         "sourceSize=not-recorded, "
         "generatedHash=not-recorded, generatedSize=not-recorded, "
         "sourceMap=not-recorded, sourceRemap=not-recorded)"
@@ -17079,6 +17079,49 @@ def test_validate_project_report_marks_availability_only_toolchain_runs(
     }
     assert inspection["validation"]["toolchainRunStatusByTool"] == {
         tool: {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+
+
+def test_validate_project_report_describes_failed_availability_toolchain_runs(
+    tmp_path, monkeypatch
+):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target="cuda", extension="cu"
+    )
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda requested_tool: ("/usr/bin/nvcc" if requested_tool == "nvcc" else None),
+    )
+
+    def run_toolchain(*args, **kwargs):
+        assert args[0] == ["nvcc", "--version"]
+        assert kwargs["input"] is None
+        return SimpleNamespace(returncode=1, stdout="", stderr="nvcc license missing")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 1}
+    assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
+    assert payload["diagnostics"][0]["message"] == (
+        "Validation toolchain availability check for target cuda failed for "
+        "out/cuda/simple.cu: nvcc license missing"
+    )
+    assert payload["diagnostics"][0]["target"] == "cuda"
+    assert payload["diagnostics"][0]["sourceBackend"] == "cgl"
+    assert payload["diagnostics"][0]["location"]["file"] == "out/cuda/simple.cu"
+    run = payload["validation"]["toolchainRuns"][0]
+    assert run["checkKind"] == "tool-availability"
+    assert run["status"] == "failed"
+    assert run["returncode"] == 1
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "tool-availability": {"runCount": 1, "okCount": 0, "failedCount": 1}
+    }
+    assert payload["toolchainRunStatusByTool"] == {
+        "nvcc": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
 
 
@@ -21519,8 +21562,9 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert "Validation artifact samples:" in result.stdout
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl "
-        "(status=ok, exists=true, sourceHash=ok, sourceSize=ok, generatedHash=ok, "
-        "generatedSize=ok, sourceMap=ok, sourceRemap=ok)"
+        "(sourceBackend=cgl, status=ok, exists=true, sourceHash=ok, "
+        "sourceSize=ok, generatedHash=ok, generatedSize=ok, "
+        "sourceMap=ok, sourceRemap=ok)"
     ) in result.stdout
 
 

@@ -74,8 +74,8 @@ scope for graphics backend completion work.
 Project Porting Focus
 ---------------------
 
-This view isolates repository-scale scanning, translation, reporting,
-diagnostic, validation, and corpus-coverage rows.
+This view isolates repository-scale scanning, translation, report
+inspection, diagnostics, validation, and corpus-coverage rows.
 
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
