@@ -16201,6 +16201,7 @@ def test_validate_project_report_records_toolchain_failures(
             "checkKind": "artifact",
             "status": "failed",
             "returncode": 2,
+            "failureReason": "shader validation failed",
             "command": ["glslangValidator", "--stdin", "-S", "comp"],
             "stdoutLength": 0,
             "stderrLength": len("shader validation failed"),
@@ -16264,8 +16265,8 @@ def test_validate_project_report_records_toolchain_failures(
     assert (
         "- simple.cgl -> opengl at out/opengl/simple.glsl "
         "(sourceBackend=cgl, status=failed, checkKind=artifact, returncode=2, "
-        "command=glslangValidator --stdin -S comp, stdout=0 chars, "
-        "stderr=24 chars)"
+        "failureReason=shader validation failed, "
+        "command=glslangValidator --stdin -S comp, stdout=0 chars, stderr=24 chars)"
     ) in stdout
 
 
@@ -16675,6 +16676,12 @@ def test_inspect_project_report_summarizes_toolchain_run_failures(
     )
     assert (
         "Validation toolchain runs by tool: glslangValidator=1 run (0 ok, 1 failed)"
+    ) in stdout
+    assert (
+        "- simple.cgl -> opengl at out/opengl/simple.glsl "
+        "(sourceBackend=cgl, status=failed, checkKind=artifact, returncode=2, "
+        "failureReason=shader validation failed, "
+        "command=glslangValidator --stdin -S comp, stdout=0 chars, stderr=24 chars)"
     ) in stdout
 
 

@@ -479,6 +479,9 @@ def test_project_report_inspection_documents_rollups():
         assert "negative sample-limit rejection" in backend_support["notes"]
         assert "closed inspection-report field set" in backend_support["notes"]
         assert "invalid toolchain-run command omission" in backend_support["notes"]
+        assert "failure-reason samples for failed toolchain runs" in (
+            backend_support["notes"]
+        )
         assert (
             "source-map, source-remap, provenance, define-processing, "
             "include-path-processing, include-dependency, validation artifact, "

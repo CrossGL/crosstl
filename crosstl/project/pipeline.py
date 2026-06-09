@@ -6513,6 +6513,13 @@ def _inspection_validation_toolchain_run(run: Any) -> dict[str, Any] | None:
         "status": run.get("status"),
         "returncode": run.get("returncode"),
     }
+    returncode = run.get("returncode")
+    if run.get("status") == "failed" or (
+        isinstance(returncode, int) and not isinstance(returncode, bool) and returncode
+    ):
+        failure_reason = _toolchain_run_failure_reason(run)
+        if failure_reason:
+            sample["failureReason"] = failure_reason
     command = run.get("command")
     if isinstance(command, list) and all(
         _is_non_empty_string(part) for part in command

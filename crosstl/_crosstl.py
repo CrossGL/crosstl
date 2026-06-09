@@ -1842,6 +1842,9 @@ def _format_validation_toolchain_run_sample_line(run):
     returncode = run.get("returncode")
     if isinstance(returncode, int) and not isinstance(returncode, bool):
         details.append(f"returncode={returncode}")
+    failure_reason = run.get("failureReason")
+    if isinstance(failure_reason, str) and failure_reason:
+        details.append(f"failureReason={failure_reason}")
     command = run.get("command")
     if isinstance(command, list):
         command_parts = [part for part in command if isinstance(part, str) and part]
