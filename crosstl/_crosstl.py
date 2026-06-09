@@ -725,6 +725,11 @@ def _format_project_validation_report(payload):
             include_zero=False,
         ),
         _format_count_rollup(
+            "Diagnostics by check kind",
+            payload.get("diagnosticsByCheckKind"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
             "Missing capabilities",
             payload.get("missingCapabilityCounts"),
             include_zero=False,
@@ -1094,6 +1099,9 @@ def _format_project_diagnostics_sarif(
         variant = diagnostic.get("variant")
         if isinstance(variant, str) and variant:
             properties["variant"] = variant
+        check_kind = diagnostic.get("checkKind")
+        if isinstance(check_kind, str) and check_kind:
+            properties["checkKind"] = check_kind
         missing_capabilities = diagnostic.get("missingCapabilities")
         if isinstance(missing_capabilities, list) and missing_capabilities:
             properties["missingCapabilities"] = list(missing_capabilities)
@@ -3253,6 +3261,13 @@ def _format_project_report_inspection(payload):
     )
     if diagnostics_by_variant:
         lines.append(diagnostics_by_variant)
+    diagnostics_by_check_kind = _format_count_rollup(
+        "Diagnostics by check kind",
+        summary.get("diagnosticsByCheckKind"),
+        include_zero=False,
+    )
+    if diagnostics_by_check_kind:
+        lines.append(diagnostics_by_check_kind)
     missing_capabilities = _format_count_rollup(
         "Missing capabilities", summary.get("missingCapabilityCounts")
     )
@@ -3292,6 +3307,13 @@ def _format_project_report_inspection(payload):
     )
     if validation_diagnostics_by_variant:
         lines.append(validation_diagnostics_by_variant)
+    validation_diagnostics_by_check_kind = _format_count_rollup(
+        "Validation diagnostics by check kind",
+        payload.get("validation", {}).get("diagnosticsByCheckKind"),
+        include_zero=False,
+    )
+    if validation_diagnostics_by_check_kind:
+        lines.append(validation_diagnostics_by_check_kind)
     validation_missing = _format_count_rollup(
         "Validation missing capabilities",
         validation_missing_capabilities,

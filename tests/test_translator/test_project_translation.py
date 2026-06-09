@@ -16560,6 +16560,7 @@ def test_project_diagnostics_preserve_original_locations(tmp_path):
         },
         "target": "opengl",
         "sourceBackend": "cgl",
+        "checkKind": "artifact",
         "missingCapabilities": ["source.provenance"],
     }
     payload["diagnostics"].append(diagnostic)
@@ -16570,6 +16571,7 @@ def test_project_diagnostics_preserve_original_locations(tmp_path):
     payload["summary"]["diagnosticsByTarget"] = {"opengl": 1}
     payload["summary"]["diagnosticsBySourceBackend"] = {"cgl": 1}
     payload["summary"]["diagnosticsByVariant"] = {}
+    payload["summary"]["diagnosticsByCheckKind"] = {"artifact": 1}
     payload["summary"]["missingCapabilityCounts"] = {"source.provenance": 1}
     report_path = repo / "remapped-diagnostic-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -16577,12 +16579,14 @@ def test_project_diagnostics_preserve_original_locations(tmp_path):
     validation = validate_project_report(report_path)
 
     assert validation["success"] is True
+    assert validation["diagnosticsByCheckKind"] == {"artifact": 1}
     assert validation["diagnostics"][0]["originalLocation"] == (
         diagnostic["originalLocation"]
     )
     text = crosstl_cli._format_project_validation_report(validation)
     assert "location=out/opengl/simple.glsl:8:5" in text
     assert "originalLocation=simple.cgl:2:3" in text
+    assert "Diagnostics by check kind: artifact=1" in text
     sarif_payload = crosstl_cli._format_project_diagnostics_sarif(validation)
     result = sarif_payload["runs"][0]["results"][0]
     assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == (
@@ -16603,10 +16607,48 @@ def test_project_diagnostics_preserve_original_locations(tmp_path):
     assert result["properties"] == {
         "target": "opengl",
         "sourceBackend": "cgl",
+        "checkKind": "artifact",
         "missingCapabilities": ["source.provenance"],
         "diagnosticLocation": diagnostic["location"],
         "originalLocation": diagnostic["originalLocation"],
     }
+
+
+def test_validate_project_report_rejects_diagnostic_check_kind_rollup_mismatches(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+    payload["diagnostics"].append(
+        {
+            "severity": "warning",
+            "code": "project.test.toolchain-diagnostic",
+            "message": "Toolchain diagnostic forwarded to the report.",
+            "checkKind": "artifact",
+        }
+    )
+    diagnostic_counts = {"note": 0, "warning": 1, "error": 0}
+    payload["diagnosticCounts"] = diagnostic_counts
+    payload["summary"]["diagnosticCounts"] = diagnostic_counts
+    payload["summary"]["diagnosticsByCode"] = {"project.test.toolchain-diagnostic": 1}
+    payload["summary"]["diagnosticsByTarget"] = {}
+    payload["summary"]["diagnosticsBySourceBackend"] = {}
+    payload["summary"]["diagnosticsByVariant"] = {}
+    payload["summary"]["diagnosticsByCheckKind"] = {"tool-availability": 1}
+    payload["summary"]["missingCapabilityCounts"] = {}
+    report_path = repo / "stale-diagnostic-check-kind-rollup-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "summary.diagnosticsByCheckKind must match diagnostics" in (
+        diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_unexpected_generated_diagnostic_fields(
@@ -16905,6 +16947,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["diagnosticsByTarget"] == {"opengl": 1}
     assert payload["diagnosticsBySourceBackend"] == {"cgl": 1}
     assert payload["diagnosticsByVariant"] == {}
+    assert payload["diagnosticsByCheckKind"] == {"artifact": 1}
     assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
     assert payload["diagnostics"][0]["target"] == "opengl"
     assert payload["diagnostics"][0]["sourceBackend"] == "cgl"
@@ -16959,6 +17002,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert inspection["validation"]["toolchainRunStatusByCheckKind"] == {
         "artifact": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
+    assert inspection["validation"]["diagnosticsByCheckKind"] == {"artifact": 1}
     assert inspection["validation"]["toolchainRunStatusByTool"] == {
         "glslangValidator": {"runCount": 1, "okCount": 0, "failedCount": 1}
     }
@@ -17002,6 +17046,7 @@ def test_validate_project_report_records_toolchain_failures(
         "Validation toolchain runs by check kind: artifact=1 run (0 ok, 1 failed)"
         in stdout
     )
+    assert "Diagnostics by check kind: artifact=1" in stdout
     assert (
         "Validation toolchain runs by tool: glslangValidator=1 run (0 ok, 1 failed)"
     ) in stdout
@@ -17029,6 +17074,7 @@ def test_validate_project_report_records_toolchain_failures(
         "Validation toolchain runs by check kind: artifact=1 run (0 ok, 1 failed)"
         in stdout
     )
+    assert "Validation diagnostics by check kind: artifact=1" in stdout
     assert (
         "Validation toolchain runs by tool: glslangValidator=1 run (0 ok, 1 failed)"
     ) in stdout

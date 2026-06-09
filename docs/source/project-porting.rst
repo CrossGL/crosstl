@@ -73,10 +73,10 @@ Use these report fields to decide the next action:
      - Triage use
    * - ``diagnosticCounts``, ``diagnosticsByCode``,
        ``diagnosticsByTarget``, ``diagnosticsBySourceBackend``, and
-       ``diagnosticsByVariant``
+       ``diagnosticsByVariant``/``diagnosticsByCheckKind``
      - Separate configuration errors from source/backend translation failures,
-       then group actionable diagnostics by target backend, source backend, and
-       named variant before reviewing artifacts.
+       then group actionable diagnostics by target backend, source backend,
+       named variant, and validation check kind before reviewing artifacts.
    * - ``missingCapabilityCounts``
      - Group unsupported source features, include resolution gaps, define
        forwarding gaps, artifact manifest issues, provenance issues, and
@@ -230,8 +230,9 @@ severity, diagnostic-code, and missing-capability rollups for generated and
 preserved diagnostics, plus artifact target, artifact source-backend,
 artifact variant, hash-status, source-size status, generated-size status,
 source-map status, source-remap status, toolchain status, toolchain-run status,
-toolchain-run target, toolchain-run source backend, toolchain-run check kind,
-toolchain-run tool, and toolchain-run variant rollups for validation results.
+toolchain-run target, toolchain-run source backend, diagnostic check kind,
+toolchain-run check kind, toolchain-run tool, and toolchain-run variant rollups
+for validation results.
 The JSON validation report uses schema version 1 with a fixed top-level field
 set so automation can detect contract drift. It includes compact project
 context with the project root, output directory, configured targets, source
@@ -550,7 +551,8 @@ Project reports are JSON documents with:
   (``diagnosticsByCode``), diagnostic target backend
   (``diagnosticsByTarget``), diagnostic source backend
   (``diagnosticsBySourceBackend``), diagnostic variant
-  (``diagnosticsByVariant``), and missing capability
+  (``diagnosticsByVariant``), diagnostic check kind
+  (``diagnosticsByCheckKind``), and missing capability
   (``missingCapabilityCounts``).
 - ``units``: discovered translation units with stable repository-relative POSIX
   paths,
@@ -727,7 +729,7 @@ Project reports are JSON documents with:
   preserved diagnostic shape, repository-relative file path, location and
   ``originalLocation`` span consistency, target declaration checks, diagnostic
   severity rollup checks, scan-scope
-  count consistency, validation
+  count consistency, diagnostic check-kind rollup consistency, validation
   toolchain status consistency checks, validation artifact and toolchain run
   record shape and duplicate identity checks, validation artifact coverage,
   required validation summary records for embedded validation artifacts,

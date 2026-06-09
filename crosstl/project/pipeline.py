@@ -125,6 +125,7 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "diagnosticsByTarget",
         "diagnosticsBySourceBackend",
         "diagnosticsByVariant",
+        "diagnosticsByCheckKind",
         "missingCapabilityCounts",
         "unitsBySourceBackend",
         "unitsByExtension",
@@ -353,6 +354,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "diagnosticsByTarget",
         "diagnosticsBySourceBackend",
         "diagnosticsByVariant",
+        "diagnosticsByCheckKind",
         "missingCapabilityCounts",
         "artifactStatusByTarget",
         "artifactStatusBySourceBackend",
@@ -1118,6 +1120,12 @@ def _diagnostic_counts_by_variant(
     diagnostics: Sequence[ProjectDiagnostic],
 ) -> dict[str, int]:
     return _diagnostic_counts_by_optional_value(diagnostics, "variant")
+
+
+def _diagnostic_counts_by_check_kind(
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, int]:
+    return _diagnostic_counts_by_optional_value(diagnostics, "check_kind")
 
 
 def _missing_capability_counts(
@@ -3881,6 +3889,9 @@ class ProjectPortabilityReport:
                     self.diagnostics
                 ),
                 "diagnosticsByVariant": _diagnostic_counts_by_variant(self.diagnostics),
+                "diagnosticsByCheckKind": _diagnostic_counts_by_check_kind(
+                    self.diagnostics
+                ),
                 "missingCapabilityCounts": _missing_capability_counts(self.diagnostics),
                 "unitsBySourceBackend": _unit_counts_by_source_backend(self.units),
                 "unitsByExtension": _unit_counts_by_extension(self.units),
@@ -6151,6 +6162,9 @@ def inspect_project_report(
             "diagnosticsByVariant": dict(
                 validation_report.get("diagnosticsByVariant", {})
             ),
+            "diagnosticsByCheckKind": dict(
+                validation_report.get("diagnosticsByCheckKind", {})
+            ),
             "missingCapabilityCounts": dict(
                 validation_report.get("missingCapabilityCounts", {})
             ),
@@ -8030,6 +8044,9 @@ def _validation_report_payload(
         ),
         "diagnosticsByVariant": (
             _payload_diagnostic_counts_by_field(diagnostics, "variant") or {}
+        ),
+        "diagnosticsByCheckKind": (
+            _payload_diagnostic_counts_by_field(diagnostics, "checkKind") or {}
         ),
         "missingCapabilityCounts": (
             _payload_missing_capability_counts(diagnostics) or {}
@@ -12739,6 +12756,14 @@ def _summary_contract_reasons(
                 summary.get("diagnosticsByVariant"),
                 diagnostics,
                 "variant",
+            )
+        )
+        reasons.extend(
+            _diagnostic_field_counts_contract_reasons(
+                "summary.diagnosticsByCheckKind",
+                summary.get("diagnosticsByCheckKind"),
+                diagnostics,
+                "checkKind",
             )
         )
         reasons.extend(
