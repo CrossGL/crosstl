@@ -350,8 +350,16 @@ def test_scan_project_discovers_supported_sources_and_ignores_default_unsupporte
     assert payload["units"][0]["sourceHash"] == project_pipeline._source_hash(
         shader_dir / "main.cgl"
     )
+    assert (
+        payload["units"][0]["sourceSizeBytes"]
+        == (shader_dir / "main.cgl").stat().st_size
+    )
     assert payload["units"][1]["sourceHash"] == project_pipeline._source_hash(
         shader_dir / "post.frag"
+    )
+    assert (
+        payload["units"][1]["sourceSizeBytes"]
+        == (shader_dir / "post.frag").stat().st_size
     )
 
 
@@ -6631,6 +6639,10 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
     assert payload["units"][0]["sourceHash"] == project_pipeline._source_hash(
         shader_dir / "simple.cgl"
     )
+    assert (
+        payload["units"][0]["sourceSizeBytes"]
+        == (shader_dir / "simple.cgl").stat().st_size
+    )
     assert payload["artifacts"][0]["source"] == "shaders/graphics/simple.cgl"
     assert payload["artifacts"][0]["target"] == "opengl"
     assert payload["artifacts"][0]["path"] == (
@@ -6641,6 +6653,10 @@ def test_translate_project_preserves_relative_paths_and_reports_artifacts(tmp_pa
         "intermediate": None,
     }
     assert payload["artifacts"][0]["sourceHash"]["algorithm"] == "sha256"
+    assert (
+        payload["artifacts"][0]["sourceSizeBytes"]
+        == payload["units"][0]["sourceSizeBytes"]
+    )
     assert payload["artifacts"][0]["generatedHash"] == project_pipeline._source_hash(
         output
     )
@@ -6683,6 +6699,8 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "includeDependencies",
     }
     assert set(unit["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
+    assert isinstance(unit["sourceSizeBytes"], int)
+    assert unit["sourceSizeBytes"] >= 0
 
     artifact = payload["artifacts"][0]
     assert set(artifact) == project_pipeline.REPORT_ARTIFACT_FIELDS - {
@@ -6691,6 +6709,8 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "sourceRemap",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
+    assert isinstance(artifact["sourceSizeBytes"], int)
+    assert artifact["sourceSizeBytes"] == unit["sourceSizeBytes"]
     assert set(artifact["generatedHash"]) == project_pipeline.REPORT_HASH_FIELDS
     assert isinstance(artifact["generatedSizeBytes"], int)
     assert artifact["generatedSizeBytes"] >= 0
@@ -6815,11 +6835,13 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     direct_artifact = provenance["directArtifacts"][0]
     bridged_artifact = provenance["bridgedArtifacts"][0]
     direct_source_hash = project_pipeline._source_hash(repo / "direct.cgl")
+    direct_source_size = (repo / "direct.cgl").stat().st_size
     direct_generated_hash = project_pipeline._source_hash(
         repo / "out" / "opengl" / "direct.glsl"
     )
     direct_generated_size = (repo / "out" / "opengl" / "direct.glsl").stat().st_size
     bridged_source_hash = project_pipeline._source_hash(repo / "shader.rs")
+    bridged_source_size = (repo / "shader.rs").stat().st_size
     bridged_generated_hash = project_pipeline._source_hash(
         repo / "out" / "opengl" / "shader.glsl"
     )
@@ -6836,6 +6858,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     assert direct_artifact["intermediate"] == "none"
     assert direct_artifact["sourceHashAlgorithm"] == direct_source_hash["algorithm"]
     assert direct_artifact["sourceHash"] == direct_source_hash["value"]
+    assert direct_artifact["sourceSizeBytes"] == direct_source_size
     assert (
         direct_artifact["generatedHashAlgorithm"] == direct_generated_hash["algorithm"]
     )
@@ -6845,6 +6868,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
     assert bridged_artifact["intermediate"] == "crossgl"
     assert bridged_artifact["sourceHashAlgorithm"] == bridged_source_hash["algorithm"]
     assert bridged_artifact["sourceHash"] == bridged_source_hash["value"]
+    assert bridged_artifact["sourceSizeBytes"] == bridged_source_size
     assert (
         bridged_artifact["generatedHashAlgorithm"]
         == bridged_generated_hash["algorithm"]
@@ -7236,6 +7260,7 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         artifact["sourceHashAlgorithm"] == "sha256"
         and isinstance(artifact["sourceHash"], str)
         and artifact["sourceHash"]
+        and artifact["sourceSizeBytes"] == (repo / "simple.cgl").stat().st_size
         for artifact in inspection["sourceMaps"]["sourceMapArtifacts"]
     )
     assert inspection["sourceMaps"]["sourceRemapArtifactCount"] == 2
@@ -7247,6 +7272,7 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         artifact["sourceHashAlgorithm"] == "sha256"
         and isinstance(artifact["sourceHash"], str)
         and artifact["sourceHash"]
+        and artifact["sourceSizeBytes"] == (repo / "simple.cgl").stat().st_size
         for artifact in inspection["sourceMaps"]["sourceRemapArtifacts"]
     )
     assert result.returncode == 0
@@ -9880,6 +9906,44 @@ def test_validate_project_report_rejects_missing_unit_source_hashes(tmp_path):
     assert "units[0].sourceHash must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_missing_unit_source_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["units"][0].pop("sourceSizeBytes")
+    report_path = repo / "out" / "missing-unit-source-size-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].sourceSizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_malformed_unit_source_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["units"][0]["sourceSizeBytes"] = -1
+    report_path = repo / "out" / "malformed-unit-source-size-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].sourceSizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_source_hash(
     tmp_path,
 ):
@@ -9902,13 +9966,55 @@ def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_so
     )
 
 
-def test_translate_project_preserves_discovered_unit_source_hash(tmp_path):
+def test_validate_project_report_rejects_missing_artifact_source_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifacts"][0].pop("sourceSizeBytes")
+    report_path = repo / "out" / "missing-artifact-source-size-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "artifacts[0].sourceSizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_source_size(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    payload["artifacts"][0]["sourceSizeBytes"] += 1
+    report_path = repo / "out" / "artifact-unit-source-size-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].sourceSizeBytes must match units[0].sourceSizeBytes"
+        in diagnostic["message"]
+    )
+
+
+def test_translate_project_preserves_discovered_unit_source_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     source = repo / "simple.cgl"
     source.write_text(SIMPLE_CROSSL, encoding="utf-8")
     report = translate_project(repo, targets=["cgl"], output_dir="out")
     captured_hash = report.to_json()["units"][0]["sourceHash"]
+    captured_size = report.to_json()["units"][0]["sourceSizeBytes"]
     source.write_text(
         SIMPLE_CROSSL + "\n// edited before serialization\n", encoding="utf-8"
     )
@@ -9916,8 +10022,11 @@ def test_translate_project_preserves_discovered_unit_source_hash(tmp_path):
     payload = report.to_json()
 
     assert payload["units"][0]["sourceHash"] == captured_hash
+    assert payload["units"][0]["sourceSizeBytes"] == captured_size
     assert payload["artifacts"][0]["sourceHash"] == captured_hash
+    assert payload["artifacts"][0]["sourceSizeBytes"] == captured_size
     assert project_pipeline._source_hash(source) != captured_hash
+    assert source.stat().st_size != captured_size
 
 
 def test_validate_project_report_detects_modified_unit_sources(tmp_path):
@@ -9936,6 +10045,27 @@ def test_validate_project_report_detects_modified_unit_sources(tmp_path):
     diagnostic = validation["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "units[0].sourceHash must match the current source file" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_detects_modified_unit_source_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = repo / "simple.cgl"
+    source.write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    source.write_text(SIMPLE_CROSSL + "\n// expanded source\n", encoding="utf-8")
+    payload["units"][0]["sourceHash"] = project_pipeline._source_hash(source)
+    report_path = repo / "scan-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "units[0].sourceSizeBytes must match the current source file" in (
         diagnostic["message"]
     )
 
@@ -13764,6 +13894,7 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
                             "algorithm": "md5",
                             "value": "A" * 64,
                         },
+                        "sourceSizeBytes": -1,
                         "generatedHash": {
                             "algorithm": "sha1",
                             "value": "not-a-hash",
@@ -13792,6 +13923,9 @@ def test_validate_project_report_rejects_malformed_artifact_metadata(tmp_path):
     assert (
         "artifacts[0].sourceHash.value must be a lowercase 64-character hex digest"
         in diagnostic["message"]
+    )
+    assert "artifacts[0].sourceSizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
     )
     assert "artifacts[0].generatedHash.algorithm must be sha256" in (
         diagnostic["message"]
@@ -18040,6 +18174,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
 
     payload = inspect_project_report(report_path)
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
+    source_size = (repo / "simple.cgl").stat().st_size
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
     generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     source_remap_hash = project_pipeline._source_hash(
@@ -18091,6 +18226,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 ),
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
             }
         ],
         "sourceRemapCount": 1,
@@ -18114,6 +18250,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 ),
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
                 "sourceRemapHash": source_remap_hash["value"],
                 "sourceRemapSizeBytes": source_remap_size,
@@ -18147,6 +18284,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "intermediate": "none",
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
                 "generatedSizeBytes": generated_size,
@@ -18164,6 +18302,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "intermediate": "none",
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
                 "generatedSizeBytes": generated_size,
@@ -18745,6 +18884,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
 
     payload = json.loads(output.read_text(encoding="utf-8"))
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
+    source_size = (repo / "simple.cgl").stat().st_size
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
     generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     source_remap_hash = project_pipeline._source_hash(
@@ -18797,6 +18937,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 ),
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
             }
         ],
         "sourceRemapCount": 1,
@@ -18820,6 +18961,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 ),
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
                 "sourceRemapHash": source_remap_hash["value"],
                 "sourceRemapSizeBytes": source_remap_size,
@@ -18853,6 +18995,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "intermediate": "none",
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
                 "generatedSizeBytes": generated_size,
@@ -18870,6 +19013,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "intermediate": "none",
                 "sourceHashAlgorithm": source_hash["algorithm"],
                 "sourceHash": source_hash["value"],
+                "sourceSizeBytes": source_size,
                 "generatedHashAlgorithm": generated_hash["algorithm"],
                 "generatedHash": generated_hash["value"],
                 "generatedSizeBytes": generated_size,

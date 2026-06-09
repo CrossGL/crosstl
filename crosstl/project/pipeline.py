@@ -265,6 +265,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "defineProcessing",
         "includePathProcessing",
         "sourceHash",
+        "sourceSizeBytes",
         "provenance",
         "variant",
         "error",
@@ -302,6 +303,7 @@ REPORT_UNIT_FIELDS = frozenset(
         "extension",
         "sourceOverride",
         "sourceHash",
+        "sourceSizeBytes",
         "includeDependencies",
     )
 )
@@ -3652,6 +3654,7 @@ class ProjectTranslationUnit:
     source_backend: str
     extension: str
     source_hash: Mapping[str, str]
+    source_size_bytes: int
     source_override: str | None = None
     include_dependencies: Sequence[Mapping[str, Any]] = ()
 
@@ -3662,6 +3665,7 @@ class ProjectTranslationUnit:
             "sourceBackend": self.source_backend,
             "extension": self.extension,
             "sourceHash": dict(self.source_hash),
+            "sourceSizeBytes": self.source_size_bytes,
         }
         if self.source_override:
             payload["sourceOverride"] = self.source_override
@@ -4073,6 +4077,7 @@ def scan_project(
                 source_backend=source_spec.name,
                 extension=path.suffix.lower(),
                 source_hash=_source_hash(path),
+                source_size_bytes=path.stat().st_size,
                 source_override=override,
                 include_dependencies=include_dependencies,
             )
@@ -4744,6 +4749,7 @@ def translate_project(
                         supports_include_paths=source_supports_include_paths,
                     ),
                     "sourceHash": dict(unit.source_hash),
+                    "sourceSizeBytes": unit.source_size_bytes,
                     "provenance": {
                         "pipeline": "single-file-translate",
                         "intermediate": (
@@ -7138,6 +7144,9 @@ def _inspection_source_map_artifact(
             sample["sourceHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["sourceHash"] = hash_value
+    source_size = artifact.get("sourceSizeBytes")
+    if _is_non_negative_int(source_size):
+        sample["sourceSizeBytes"] = source_size
 
     return {key: value for key, value in sample.items() if value is not None}
 
@@ -7169,6 +7178,9 @@ def _inspection_source_remap_artifact(
             sample["sourceHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["sourceHash"] = hash_value
+    source_size = artifact.get("sourceSizeBytes")
+    if _is_non_negative_int(source_size):
+        sample["sourceSizeBytes"] = source_size
     source_remap_hash = source_remap.get("hash")
     if isinstance(source_remap_hash, Mapping):
         hash_algorithm = source_remap_hash.get("algorithm")
@@ -7324,6 +7336,9 @@ def _inspection_artifact_provenance_artifact(
             sample["sourceHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["sourceHash"] = hash_value
+    source_size = artifact.get("sourceSizeBytes")
+    if _is_non_negative_int(source_size):
+        sample["sourceSizeBytes"] = source_size
     generated_hash = artifact.get("generatedHash")
     if isinstance(generated_hash, Mapping):
         hash_algorithm = generated_hash.get("algorithm")
@@ -7750,6 +7765,51 @@ def _artifact_unit_source_hash_contract_reasons(
         return [
             f"artifacts[{index}].sourceHash must match "
             f"units[{unit_index}].sourceHash"
+        ]
+    return []
+
+
+def _artifact_source_size_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    *,
+    required: bool = False,
+) -> list[str]:
+    if "sourceSizeBytes" not in artifact and not required:
+        return []
+    if not _is_non_negative_int(artifact.get("sourceSizeBytes")):
+        return [f"artifacts[{index}].sourceSizeBytes must be a non-negative integer"]
+    return []
+
+
+def _artifact_unit_source_size_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+    declared_units_by_path: Mapping[str, UnitDeclaration] | None,
+) -> list[str]:
+    if declared_units_by_path is None:
+        return []
+
+    source = artifact.get("source")
+    if not _is_non_empty_string(source):
+        return []
+
+    declaration = declared_units_by_path.get(source)
+    if declaration is None:
+        return []
+
+    unit_index, unit = declaration
+    artifact_size = artifact.get("sourceSizeBytes")
+    unit_size = unit.get("sourceSizeBytes")
+    if not _is_non_negative_int(artifact_size):
+        return []
+    if not _is_non_negative_int(unit_size):
+        return []
+
+    if artifact_size != unit_size:
+        return [
+            f"artifacts[{index}].sourceSizeBytes must match "
+            f"units[{unit_index}].sourceSizeBytes"
         ]
     return []
 
@@ -8931,6 +8991,45 @@ def _unit_source_hash_contract_reasons(
     return reasons
 
 
+def _unit_source_size_contract_reasons(
+    index: int,
+    unit: Mapping[str, Any],
+    *,
+    root_path: Path | None = None,
+    required: bool = False,
+    check_current_file: bool = False,
+) -> list[str]:
+    if "sourceSizeBytes" not in unit:
+        if required:
+            return [f"units[{index}].sourceSizeBytes must be a non-negative integer"]
+        return []
+
+    prefix = f"units[{index}].sourceSizeBytes"
+    size_bytes = unit.get("sourceSizeBytes")
+    reasons = []
+    if not _is_non_negative_int(size_bytes):
+        reasons.append(f"{prefix} must be a non-negative integer")
+        return reasons
+
+    source_path = unit.get("path")
+    if (
+        not check_current_file
+        or root_path is None
+        or not _is_non_empty_string(source_path)
+        or not _is_report_identity_path(source_path)
+    ):
+        return reasons
+
+    absolute_source = root_path / source_path
+    if not absolute_source.exists() or not absolute_source.is_file():
+        reasons.append(
+            f"{prefix} cannot be checked because units[{index}].path is missing"
+        )
+    elif size_bytes != absolute_source.stat().st_size:
+        reasons.append(f"{prefix} must match the current source file")
+    return reasons
+
+
 def _unit_source_override_contract_reasons(
     index: int,
     unit: Mapping[str, Any],
@@ -9447,6 +9546,15 @@ def _unit_contract_reasons(
             required=require_source_hash,
             check_current_file=check_current_source_hash,
             require_closed_fields=require_source_hash,
+        )
+    )
+    reasons.extend(
+        _unit_source_size_contract_reasons(
+            index,
+            unit,
+            root_path=root_path,
+            required=require_source_hash,
+            check_current_file=check_current_source_hash,
         )
     )
     reasons.extend(
@@ -12555,6 +12663,20 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
             )
             reasons.extend(
                 _artifact_unit_source_hash_contract_reasons(
+                    index,
+                    artifact,
+                    declared_units_by_path,
+                )
+            )
+            reasons.extend(
+                _artifact_source_size_contract_reasons(
+                    index,
+                    artifact,
+                    required=has_summary,
+                )
+            )
+            reasons.extend(
+                _artifact_unit_source_size_contract_reasons(
                     index,
                     artifact,
                     declared_units_by_path,

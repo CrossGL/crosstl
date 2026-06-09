@@ -1171,9 +1171,10 @@ def test_project_artifact_manifest_documents_source_map_requirement():
         assert "current translated artifacts without source-map records" in (
             backend_support["notes"]
         )
-        assert "full report units or artifacts without source hashes" in (
+        assert "full reports with units or artifacts missing source hashes" in (
             backend_support["notes"]
         )
+        assert "artifacts missing source byte sizes" in backend_support["notes"]
         assert "failed artifacts missing error metadata or generated metadata" in (
             backend_support["notes"]
         )
@@ -1188,7 +1189,7 @@ def test_project_artifact_manifest_documents_source_map_requirement():
             backend_support["notes"]
         )
         assert "discovered units with source hashes" in backend_support["notes"]
-        assert "full report units or artifacts without source hashes" in (
+        assert "full reports with units or artifacts missing source hashes" in (
             backend_support["notes"]
         )
         assert "artifactMatrix metadata" in backend_support["notes"]
@@ -1350,8 +1351,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert (
             "bounded source-map and source-remap artifact inspection samples "
-            "with source/generated span, mapping-count, source hash, and sidecar "
-            "hash plus byte-size metadata and custom limits"
+            "with source/generated span, mapping-count, source hash and byte-size "
+            "metadata, and sidecar hash plus byte-size metadata and custom limits"
         ) in backend_support["notes"]
         assert (
             "text inspection derives file-level source-map counts from total "
@@ -1365,8 +1366,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         ) in backend_support["notes"]
         assert (
             "bounded direct, bridged, and combined artifact provenance "
-            "inspection samples with source and generated hash plus generated "
-            "byte-size metadata, failed validation status metadata"
+            "inspection samples with source hash and byte-size metadata plus "
+            "generated hash and byte-size metadata, failed validation status metadata"
         ) in backend_support["notes"]
         assert "compiler-compatible source-remap sidecar semantics" in (
             backend_support["notes"]

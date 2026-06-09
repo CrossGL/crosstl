@@ -85,9 +85,9 @@ Use these report fields to decide the next action:
      - Confirm the expected unit, target, and named-variant artifact plan before
        translation, then identify missing or extra artifacts after translation.
    * - ``validation``
-     - Check current source hashes, generated artifact hashes, source maps,
-       source remaps, optional toolchain availability, and opt-in artifact or
-       availability smoke test results after translation.
+     - Check current source hashes and byte sizes, generated artifact hashes,
+       source maps, source remaps, optional toolchain availability, and opt-in
+       artifact or availability smoke test results after translation.
    * - ``externalCorpus``
      - Compare pinned reduced corpus entries with discovered units and emitted
        artifacts without treating the manifest as whole-repository semantic
@@ -516,9 +516,9 @@ Project reports are JSON documents with:
   (``missingCapabilityCounts``).
 - ``units``: discovered translation units with stable repository-relative POSIX
   paths,
-  source backend names, path-derived extensions, source hashes, and source
-  overrides. Units that contain ``#include`` directives also include
-  ``includeDependencies`` records for project-level include triage. Include scans
+  source backend names, path-derived extensions, source hashes, source byte
+  sizes, and source overrides. Units that contain ``#include`` directives also
+  include ``includeDependencies`` records for project-level include triage. Include scans
   ignore directives inside C-style block comments while still recognizing active
   directives after same-line block comments. Resolved include dependencies
   record repository-relative include paths, resolution source, and SHA-256
@@ -539,11 +539,13 @@ Project reports are JSON documents with:
 - ``artifacts``: attempted outputs with stable repository-relative POSIX source
   and output paths, source backend, target, applied define map, optional variant
   name, target/variant-scoped output path with the target backend suffix,
-  status, source hash, generated artifact hash,
+  status, source hash, source byte size, generated artifact hash,
   pipeline provenance, and file-span source-map anchors for successful
-  translations. Full reports require every artifact to carry a source hash,
+  translations. Full reports require every artifact to carry a source hash and
+  source byte size,
   artifact source hashes to match their declared translation-unit source
-  hashes,
+  hashes, artifact source byte sizes to match their declared translation-unit
+  source byte sizes,
   artifact output paths to match the target/variant directory plus the
   source-relative path with the target backend suffix, artifact source paths
   to match declared translation units, unit source backend names to be
@@ -647,9 +649,9 @@ Project reports are JSON documents with:
   non-OK hash, source-map, and source-remap statuses, bounded validation artifact
   and validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, config hash
-  shape and current-file checks, unit source hash shape and current-file
-  checks, full-report artifact matrix coverage and artifact define map checks,
-  artifact define-processing metadata and status/target/source-backend/variant
+  shape and current-file checks, unit source hash and byte-size shape and
+  current-file checks, full-report artifact matrix coverage and artifact define
+  map checks, artifact define-processing metadata and status/target/source-backend/variant
   rollup checks,
   artifact include-path processing metadata and
   status/target/source-backend/variant rollup checks,
@@ -658,9 +660,10 @@ Project reports are JSON documents with:
   full-report source-map granularity, target, source-backend, and variant
   rollup checks,
   source-remap granularity, target, source-backend, and variant rollup checks,
-  source hash checks, failed artifact error metadata checks, translated artifact
-  error metadata rejection, required artifact provenance and provenance value
-  checks, artifact provenance source-backend, target, and variant rollup checks,
+  source hash and source byte-size checks, failed artifact error metadata
+  checks, translated artifact error metadata rejection, required artifact
+  provenance and provenance value checks, artifact provenance source-backend,
+  target, and variant rollup checks,
   failed artifact generated metadata rejection, required translated artifact
   source maps, required CrossGL artifact source remaps, source-map
   record shape, non-empty mapping list, file-level mapping cardinality,
