@@ -10618,9 +10618,11 @@ def test_validate_project_report_detects_modified_unit_sources(tmp_path):
     source = repo / "simple.cgl"
     source.write_text(SIMPLE_CROSSL, encoding="utf-8")
     report = scan_project(repo).to_report(targets=["cgl"])
+    expected_hash = report.to_json()["units"][0]["sourceHash"]
     report_path = repo / "scan-report.json"
     report.write_json(report_path)
     source.write_text(SIMPLE_CROSSL + "\n// edited\n", encoding="utf-8")
+    actual_hash = project_pipeline._source_hash(source)
 
     validation = validate_project_report(report_path)
 
@@ -10630,6 +10632,11 @@ def test_validate_project_report_detects_modified_unit_sources(tmp_path):
     assert "units[0].sourceHash must match the current source file" in (
         diagnostic["message"]
     )
+    assert (
+        f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_detects_modified_unit_source_sizes(tmp_path):
@@ -10638,7 +10645,9 @@ def test_validate_project_report_detects_modified_unit_source_sizes(tmp_path):
     source = repo / "simple.cgl"
     source.write_text(SIMPLE_CROSSL, encoding="utf-8")
     payload = scan_project(repo).to_report(targets=["cgl"]).to_json()
+    expected_size = payload["units"][0]["sourceSizeBytes"]
     source.write_text(SIMPLE_CROSSL + "\n// expanded source\n", encoding="utf-8")
+    actual_size = source.stat().st_size
     payload["units"][0]["sourceHash"] = project_pipeline._source_hash(source)
     report_path = repo / "scan-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -10650,6 +10659,10 @@ def test_validate_project_report_detects_modified_unit_source_sizes(tmp_path):
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert "units[0].sourceSizeBytes must match the current source file" in (
         diagnostic["message"]
+    )
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
+        in diagnostic["message"]
     )
 
 

@@ -9164,8 +9164,13 @@ def _unit_source_hash_contract_reasons(
         reasons.append(
             f"{prefix} cannot be checked because units[{index}].path is missing"
         )
-    elif not _hash_matches_report(_source_hash(absolute_source), unit["sourceHash"]):
-        reasons.append(f"{prefix} must match the current source file")
+    else:
+        actual_hash = _source_hash(absolute_source)
+        if not _hash_matches_report(actual_hash, unit["sourceHash"]):
+            reasons.append(
+                f"{prefix} must match the current source file "
+                f"({_hash_mismatch_context(actual_hash, unit['sourceHash'])})"
+            )
     return reasons
 
 
@@ -9203,8 +9208,13 @@ def _unit_source_size_contract_reasons(
         reasons.append(
             f"{prefix} cannot be checked because units[{index}].path is missing"
         )
-    elif size_bytes != absolute_source.stat().st_size:
-        reasons.append(f"{prefix} must match the current source file")
+    else:
+        actual_size = absolute_source.stat().st_size
+        if size_bytes != actual_size:
+            reasons.append(
+                f"{prefix} must match the current source file "
+                f"({_size_mismatch_context(size_bytes, actual_size)})"
+            )
     return reasons
 
 

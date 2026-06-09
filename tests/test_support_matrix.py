@@ -1389,6 +1389,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
     for backend_support in feature["support"].values():
         assert "unit source hashes" in backend_support["notes"]
         assert "unit source hash records that are missing" in backend_support["notes"]
+        assert "expected/actual unit source hash and byte-size mismatch context" in (
+            backend_support["notes"]
+        )
         assert "unregistered or non-canonical unit source backend names" in (
             backend_support["notes"]
         )
