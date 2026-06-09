@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = [
     "tools/ci_coverage.py",
@@ -13,6 +15,100 @@ TOOLS = [
     "tools/sync_pr_issue_links.py",
     "tools/sync_support_issues.py",
 ]
+
+
+@pytest.mark.parametrize(
+    ("args", "expected_stdout"),
+    [
+        (
+            (),
+            (
+                "usage:",
+                "translate",
+                "scan",
+                "translate-project",
+                "validate-project",
+                "inspect-report",
+                "report",
+            ),
+        ),
+        (
+            ("translate",),
+            (
+                "usage:",
+                "--backend",
+                "--output",
+                "--source-backend",
+                "--include-dir",
+                "--define",
+            ),
+        ),
+        (
+            ("scan",),
+            (
+                "usage:",
+                "--target",
+                "--output",
+                "--source-root",
+                "--include-dir",
+                "--source-override",
+                "--variant",
+            ),
+        ),
+        (
+            ("report",),
+            (
+                "usage:",
+                "--target",
+                "--output",
+                "--source-root",
+                "--include-dir",
+                "--source-override",
+                "--variant",
+            ),
+        ),
+        (
+            ("translate-project",),
+            (
+                "usage:",
+                "--target",
+                "--output-dir",
+                "--report",
+                "--validate",
+                "--run-toolchains",
+                "--variant",
+            ),
+        ),
+        (
+            ("validate-project",),
+            ("usage:", "--format", "--output", "--run-toolchains"),
+        ),
+        (
+            ("inspect-report",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+                "--max-diagnostics",
+                "--max-artifact-matrix-artifacts",
+                "--run-toolchains",
+            ),
+        ),
+    ],
+)
+def test_crosstl_module_cli_help_surface(args, expected_stdout):
+    result = subprocess.run(
+        [sys.executable, "-m", "crosstl._crosstl", *args, "--help"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    for text in expected_stdout:
+        assert text in result.stdout
 
 
 def test_support_tools_expose_cli_help():
@@ -69,3 +165,15 @@ def test_local_worker_worktrees_are_ignored_by_developer_tooling():
     assert "worktrees/" in gitignore
     assert "worktrees/" in pre_commit
     assert "worktrees" in config["tool:pytest"]["norecursedirs"].split()
+
+
+def test_public_docs_reference_project_porting_workflow():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    quickstart = (ROOT / "docs" / "source" / "quickstart.rst").read_text(
+        encoding="utf-8"
+    )
+
+    for text in (readme, quickstart):
+        assert "translate-project" in text
+        assert "validate-project" in text
+        assert "project-porting" in text
