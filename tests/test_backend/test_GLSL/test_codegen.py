@@ -239,6 +239,38 @@ def test_codegen_spirv_intrinsics_annotations_roundtrip_from_glslang():
     assert "spirv_type dummy;" in crossgl
 
 
+def test_codegen_function_call_array_sizes_roundtrip_from_glslang_constfold():
+    # Reduced from KhronosGroup/glslang Test/constFold.frag at
+    # 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515.
+    code = textwrap.dedent("""
+        #version 430
+
+        const mat3 m3 = mat3(1.0);
+        const vec2 v2 = vec2(1, 2);
+        const vec3 v3 = vec3(3, 4, 5);
+        float a3[int(m3[1][0])];
+        float a4[uint(mat3(v2, v3, v2, v2)[2][2])];
+
+        out vec4 FragColor;
+
+        void main()
+        {
+            vec4 array2[2];
+            vec4 array3[3];
+            vec4 arrayMax[int(max(float(array2.length()), float(array3.length())))];
+            FragColor = vec4(a3[0], a4[0], arrayMax.length(), 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float a3[(int(m3[1][0]))];" in crossgl
+    assert (
+        "vec4 arrayMax[(int(max(float(array2.length()), float(array3.length()))))];"
+        in crossgl
+    )
+
+
 def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang():
     # Reduced from KhronosGroup/glslang spv.float16.frag and bfloat struct
     # constructor coverage.

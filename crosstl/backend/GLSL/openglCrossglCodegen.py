@@ -2638,14 +2638,24 @@ class GLSLToCrossGLConverter:
         array_sizes = getattr(node, "array_sizes", None)
         if array_sizes:
             return "".join(
-                f"[{self.generate_expression(size)}]" if size is not None else "[]"
+                (
+                    f"[{self.generate_array_size_expression(size)}]"
+                    if size is not None
+                    else "[]"
+                )
                 for size in array_sizes
             )
         if getattr(node, "array_size", None) is not None:
-            return f"[{self.generate_expression(node.array_size)}]"
+            return f"[{self.generate_array_size_expression(node.array_size)}]"
         if getattr(node, "is_array", False):
             return "[]"
         return ""
+
+    def generate_array_size_expression(self, size):
+        expression = self.generate_expression(size)
+        if isinstance(size, FunctionCallNode) and isinstance(size.name, VariableNode):
+            return f"({expression})"
+        return expression
 
     def generate_function_parameter(self, param):
         if isinstance(param, tuple):  # (type, name)

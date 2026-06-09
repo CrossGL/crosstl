@@ -2684,6 +2684,10 @@ class RustParser:
         has_rest = False
 
         while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "POUND":
+                self.parse_attributes()
+                continue
+
             if self.current_token[0] == "RANGE":
                 self.eat("RANGE")
                 has_rest = True

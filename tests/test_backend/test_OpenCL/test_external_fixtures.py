@@ -71,6 +71,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
         "path": "src/backend/opencl/magma/magma_blas_clblast.h",
     },
+    "opencv_optical_flow_opencl_const_parameter": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/video/src/opencl/optical_flow_farneback.cl",
+    },
 }
 
 
@@ -439,3 +444,27 @@ def test_external_arrayfire_magma_dependent_typename_inline_codegen_reparse():
     assert helper.return_type == "CLBlastType<T>::Type"
     assert helper.qualifiers == ["inline"]
     assert "CLBlastType<T>::Type toCLBlastConstant(T val)" in crossgl
+
+
+def test_external_opencv_opencl_const_parameter_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["opencv_optical_flow_opencl_const_parameter"]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/video/src/opencl/optical_flow_farneback.cl"
+
+    source = """
+    __kernel void polynomialExpansion(__global __const float *src,
+                                      __global float *dst,
+                                      __local float *smem) {
+        __local float *row = smem + get_local_id(0);
+        dst[0] = src[0] + row[0];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].params[0] == {
+        "type": "__global__ const float *",
+        "name": "src",
+    }
+    assert "var<storage, read_write> src: array<f32>" in crossgl
+    assert "__const" not in crossgl

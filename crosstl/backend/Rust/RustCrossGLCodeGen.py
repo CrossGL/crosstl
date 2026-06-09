@@ -13,7 +13,7 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
     r"0[oO][0-7](?:_?[0-7])*|"
     r"\d(?:_?\d)*(?:(?:\.\d(?:_?\d)*)|\.(?![._A-Za-z0-9]))?"
     r"(?:[eE][+-]?\d(?:_?\d)*)?"
-    r")(?P<suffix>(?:[iu](?:8|16|32|64|128|size))|f(?:32|64))?$"
+    r")(?P<suffix>_?(?:(?:[iu](?:8|16|32|64|128|size))|f(?:32|64)))?$"
 )
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_BYTE_RAW_STRING_RE = re.compile(r'^br(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)

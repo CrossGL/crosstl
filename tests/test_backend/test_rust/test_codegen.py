@@ -315,6 +315,56 @@ def test_wgpu_mut_slice_reference_inside_generic_type_reparse():
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_wgpu_match_struct_pattern_field_attribute_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/command/mod.rs.
+    code = """
+    fn process(res: Result<(), EncoderErrorState>) {
+        let (data, error) = match res {
+            Err(EncoderErrorState {
+                error,
+                #[cfg(feature = "trace")]
+                trace_commands,
+            }) => {
+                error_sink(error);
+                (trace_commands, error)
+            }
+            Ok(()) => unreachable!(),
+        };
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "trace_commands" in result
+    assert "#[cfg" not in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_underscore_separated_integer_suffix_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/command/mod.rs.
+    code = """
+    const IMMEDIATES_CLEAR_ARRAY: [u32; 4] = [0_u32; 4];
+
+    fn count(size_words: u32) {
+        let mut count_words = 0_u32;
+        while count_words < size_words {
+            count_words += 1_u32;
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "0_u32" not in result
+    assert "1_u32" not in result
+    assert "{0, 0, 0, 0}" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_unresolved_associated_static_calls_reparse():
     # Reduced from Rust-GPU rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d compiletests:
