@@ -2317,6 +2317,27 @@ def test_parse_deleted_template_function_declaration_from_vllm_metal():
     ]
 
 
+def test_parse_restrict_parameter_qualifier_from_vllm_metal():
+    # Reduced from:
+    # Repo: https://github.com/vllm-project/vllm-metal
+    # Path: vllm_metal/metal/kernels_v2/reshape_and_cache.metal
+    code = """
+    kernel void reshape_and_cache(
+        const device float *__restrict__ key [[buffer(0)]],
+        device float* out [[buffer(1)]]
+    ) {
+        out[0] = key[0];
+    }
+    """
+    ast = parse_ok(code)
+
+    params = ast.functions[0].params
+    assert params[0].name == "key"
+    assert params[0].vtype == "float*"
+    assert params[0].qualifiers == ["const", "device", "__restrict__"]
+    assert params[1].name == "out"
+
+
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     code = """
     void reduce(uint j, uint limit, device float* dst_row) {

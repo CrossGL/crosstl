@@ -187,6 +187,7 @@ class VulkanToCrossGLConverter:
         self.storage_buffer_name_signatures = {}
         self.emitted_storage_buffer_type_names = set()
         self.used_global_declaration_names = set()
+        self.non_renamable_global_declaration_names = set()
         self.renamed_spirv_global_names = {}
 
     def get_indent(self):
@@ -200,6 +201,9 @@ class VulkanToCrossGLConverter:
             self.storage_buffer_name_signatures
         )
         self.used_global_declaration_names = set(self.storage_buffer_name_signatures)
+        self.non_renamable_global_declaration_names = (
+            self.collect_non_renamable_global_declaration_names(ast)
+        )
         self.renamed_spirv_global_names = {}
         code = "shader main {\n"
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
@@ -633,6 +637,31 @@ class VulkanToCrossGLConverter:
         )
         return f"{unique_base}{self.declaration_array_suffix(preferred_name)}"
 
+    def collect_non_renamable_global_declaration_names(self, ast):
+        names = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            if isinstance(node, LayoutNode):
+                if self.is_flattened_uniform_block_layout(node):
+                    continue
+                names.add(self.layout_declaration_base_name(node))
+            elif isinstance(node, UniformNode):
+                names.add(self.declaration_base_name(node.name))
+        return {name for name in names if name}
+
+    def layout_declaration_base_name(self, node):
+        if getattr(node, "variable_name", None):
+            return self.declaration_base_name(node.variable_name)
+        declaration = getattr(node, "declaration", None)
+        if isinstance(declaration, AssignmentNode):
+            declaration = self.assignment_left(declaration)
+        if isinstance(declaration, VariableNode):
+            return self.declaration_base_name(declaration.name)
+        return None
+
+    def is_flattened_uniform_block_layout(self, node):
+        layout_type = (getattr(node, "layout_type", None) or "").lower()
+        return layout_type == "uniform" and bool(getattr(node, "struct_fields", None))
+
     def generate_global_variable_declaration(self, node, extra_attributes=None):
         original_name = node.name
         generated_name = self.unique_global_variable_name(
@@ -672,12 +701,18 @@ class VulkanToCrossGLConverter:
                     node.block_name or node.variable_name or "UniformBuffer",
                     node.variable_name or node.spirv_id or "block",
                 )
-                self.record_flattened_uniform_block_instance(node)
+                field_aliases = self.flattened_uniform_block_field_aliases(node)
+                self.record_flattened_uniform_block_instance(node, field_aliases)
                 attributes = self.uniform_block_attribute_suffix(node)
                 code += f"    cbuffer {block_name}{attributes} {{\n"
                 for field_type, field_name in node.struct_fields:
-                    code += f"        {self.map_type(field_type)} {field_name};\n"
-                    self.reserve_global_declaration_name(field_name)
+                    generated_field_name = self.flattened_uniform_block_field_name(
+                        field_name, field_aliases
+                    )
+                    code += (
+                        f"        {self.map_type(field_type)} "
+                        f"{generated_field_name};\n"
+                    )
                 code += "    }\n\n"
             else:
                 code += (
@@ -1050,15 +1085,55 @@ class VulkanToCrossGLConverter:
             return f"@{mapped_name}"
         return f"@builtin({str(builtin_name).lower()})"
 
-    def record_flattened_uniform_block_instance(self, node):
+    def flattened_uniform_block_field_aliases(self, node):
+        aliases = {}
+        for _field_type, field_name in node.struct_fields:
+            field_base = self.declaration_base_name(field_name)
+            generated_base = self.unique_flattened_uniform_block_field_name(
+                node, field_base
+            )
+            aliases[field_base] = generated_base
+        return aliases
+
+    def unique_flattened_uniform_block_field_name(self, node, field_name):
+        if not field_name:
+            return field_name
+
+        reserved_names = (
+            self.used_global_declaration_names
+            | self.non_renamable_global_declaration_names
+        )
+        if not getattr(node, "variable_name", None) or field_name not in reserved_names:
+            self.reserve_global_declaration_name(field_name)
+            return field_name
+
+        instance_name = self.declaration_base_name(node.variable_name)
+        alias_base = self.storage_buffer_type_suffix(f"{instance_name}_{field_name}")
+        alias = alias_base
+        counter = 2
+        while alias in reserved_names:
+            alias = f"{alias_base}_{counter}"
+            counter += 1
+        self.reserve_global_declaration_name(alias)
+        return alias
+
+    def flattened_uniform_block_field_name(self, field_name, field_aliases):
+        field_base = self.declaration_base_name(field_name)
+        generated_base = field_aliases.get(field_base, field_base)
+        return f"{generated_base}{self.declaration_array_suffix(field_name)}"
+
+    def record_flattened_uniform_block_instance(self, node, field_aliases=None):
         if not node.variable_name:
             return
         instance_name = str(node.variable_name).split("[", 1)[0]
         if not instance_name:
             return
-        self.flattened_uniform_block_instances[instance_name] = {
-            str(field_name).split("[", 1)[0] for _, field_name in node.struct_fields
-        }
+        if field_aliases is None:
+            field_aliases = {
+                str(field_name).split("[", 1)[0]: str(field_name).split("[", 1)[0]
+                for _, field_name in node.struct_fields
+            }
+        self.flattened_uniform_block_instances[instance_name] = field_aliases
 
     def generate_uniform(self, node):
         self.reserve_global_declaration_name(node.name)
@@ -1338,7 +1413,11 @@ class VulkanToCrossGLConverter:
         if instance_name is None:
             return None
         fields = self.flattened_uniform_block_instances.get(instance_name)
-        if fields is None or expr.member not in fields:
+        if fields is None:
+            return None
+        if isinstance(fields, dict):
+            return fields.get(expr.member)
+        if expr.member not in fields:
             return None
         return expr.member
 

@@ -247,6 +247,37 @@ class TestHipParser:
         assert word.value.name == "va_arg"
         assert word.value.args == ["v", "int"]
 
+    def test_public_rocm_stb_sbpush_macro_comma_expression_parse(self):
+        # Reduced from ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
+        # HIP-Doc/Tutorials/Programming-Patterns/image_convolution/stb_image_write.h.
+        code = r"""
+        #define stbiw__sbraw(a) ((int *)(void *)(a)-2)
+        #define stbiw__sbm(a) stbiw__sbraw(a)[0]
+        #define stbiw__sbn(a) stbiw__sbraw(a)[1]
+        #define stbiw__sbneedgrow(a, n) \
+            ((a) == 0 || stbiw__sbn(a) + n >= stbiw__sbm(a))
+        #define stbiw__sbmaybegrow(a, n) \
+            (stbiw__sbneedgrow(a, (n)) ? stbiw__sbgrow(a, n) : 0)
+        #define stbiw__sbgrow(a, n) \
+            stbiw__sbgrowf((void **)&(a), (n), sizeof(*(a)))
+        #define stbiw__sbpush(a, v) \
+            (stbiw__sbmaybegrow(a, 1), (a)[stbiw__sbn(a)++] = (v))
+
+        void write_byte(unsigned char **out, unsigned char byte) {
+            stbiw__sbpush(*out, byte);
+        }
+        """
+        ast = self.parse_code(code)
+
+        comma_expr = ast.statements[0].body[0]
+
+        assert isinstance(comma_expr, BinaryOpNode)
+        assert comma_expr.op == ","
+        assert isinstance(comma_expr.left, TernaryOpNode)
+        assert isinstance(comma_expr.right, AssignmentNode)
+        assert isinstance(comma_expr.right.left, ArrayAccessNode)
+        assert comma_expr.right.operator == "="
+
     def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ auto load_callback_dev = load_callback;

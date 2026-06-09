@@ -121,7 +121,11 @@ MACRO_QUALIFIER_ALIASES = {
     "STEEL_CONST": ("constant",),
     "C10_METAL_CONSTEXPR": ("constant", "constexpr"),
 }
-IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {"object_data"}
+IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {
+    "__restrict",
+    "__restrict__",
+    "object_data",
+}
 RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}

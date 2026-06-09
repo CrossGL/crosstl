@@ -1535,7 +1535,7 @@ class RustParser:
 
         parameters = []
         while self.current_token[0] != "RPAREN":
-            parameters.append(self.parse_type())
+            parameters.append(self.parse_function_pointer_parameter_type())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
                 continue
@@ -1548,6 +1548,14 @@ class RustParser:
         self.eat("ARROW")
         return_type = self.parse_type()
         return f"fn({', '.join(parameters)}) -> {return_type}"
+
+    def parse_function_pointer_parameter_type(self):
+        if self.current_token[0] in self.NAME_TOKENS | {"UNDERSCORE"}:
+            if self.peek_token_type() == "COLON":
+                self.eat(self.current_token[0])
+                self.eat("COLON")
+
+        return self.parse_type()
 
     def parse_raw_pointer_type(self):
         self.eat("MULTIPLY")

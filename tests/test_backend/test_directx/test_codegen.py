@@ -1489,6 +1489,22 @@ def test_codegen_local_static_const_array_from_dxc_bc6hdecode():
     assert isinstance(local_weights.initial_value, ArrayLiteralNode)
 
 
+def test_codegen_local_anonymous_static_const_struct_from_dxc_const_init_list():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/types/boolean/const_init_list_no_crash.hlsl
+    output = generate_crossgl("""
+        bool main() : OUT {
+            static const struct { bool x; } sb = { false };
+            return sb.x;
+        }
+    """)
+
+    assert "struct AnonymousStruct_sb" in output
+    assert output.count("static const AnonymousStruct_sb sb = {false};") == 1
+    assert "return sb.x;" in output
+    parse_crossgl(output)
+
+
 def test_codegen_sizeof_type_operand_from_dxc_implicit_cast():
     # Source URL: https://github.com/microsoft/DirectXShaderCompiler
     # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092

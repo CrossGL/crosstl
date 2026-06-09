@@ -647,6 +647,7 @@ class OpenCLParser(HipParser):
     def is_identifier_type_name(self, type_name):
         return (
             type_name in self.OPENCL_IDENTIFIER_TYPE_NAMES
+            or self.is_opencl_vector_type_name(type_name)
             or super().is_identifier_type_name(type_name)
         )
 

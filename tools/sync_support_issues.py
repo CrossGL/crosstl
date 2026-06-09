@@ -1719,6 +1719,25 @@ def issue_operation_ledger_entry(
     return entry
 
 
+def existing_issue_inventory(
+    existing_issues: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    if existing_issues is None:
+        return {
+            "inspected": False,
+            "managed": 0,
+            "duplicates": 0,
+            "unmarked": 0,
+        }
+    existing_by_key, duplicates, unmarked = split_existing_issues(existing_issues)
+    return {
+        "inspected": True,
+        "managed": len(existing_by_key),
+        "duplicates": len(duplicates),
+        "unmarked": unmarked,
+    }
+
+
 def desired_issue_reference(key: str, desired: DesiredIssue) -> dict[str, Any]:
     reference = {
         "key": key,
@@ -2062,6 +2081,48 @@ def managed_issue_audit(
     return audit
 
 
+def remaining_issue_risk_report(
+    audit: dict[str, Any] | None,
+) -> dict[str, Any]:
+    report = {
+        "evaluated": audit is not None,
+        "ok": None,
+        "open_stale": 0,
+        "open_duplicates": 0,
+        "open_ignored_unknown": 0,
+        "open_preserved": 0,
+        "errors": [],
+    }
+    if audit is None:
+        return report
+
+    report["open_stale"] = audit.get("stale", {}).get("open", 0)
+    report["open_duplicates"] = audit.get("duplicates", {}).get("open", 0)
+    report["open_ignored_unknown"] = audit.get("ignored_unknown", {}).get("open", 0)
+    report["open_preserved"] = audit.get("preserved_extracted", {}).get("open", 0)
+    for bucket, open_field in (
+        ("stale", "open_stale"),
+        ("duplicates", "open_duplicates"),
+        ("ignored_unknown", "open_ignored_unknown"),
+    ):
+        open_count = report[open_field]
+        if open_count:
+            report["errors"].append({"bucket": bucket, "open": open_count})
+    report["ok"] = not report["errors"]
+    return report
+
+
+def remaining_issue_risk_errors(report: dict[str, Any]) -> list[str]:
+    if not report.get("evaluated") or report.get("ok") is not False:
+        return []
+    return [
+        "remaining managed support issue risk: {bucket} has {open} open issue(s)".format(
+            **error
+        )
+        for error in report.get("errors", [])
+    ]
+
+
 def planned_action_budget_report(
     planned_actions: dict[str, int] | None,
     limits: dict[str, int],
@@ -2349,6 +2410,8 @@ def issue_sync_report(
     sync_failure: dict[str, Any] | None = None,
     input_failures: list[dict[str, Any]] | None = None,
     operation_ledger: list[dict[str, Any]] | None = None,
+    remaining_existing_issues: list[dict[str, Any]] | None = None,
+    remaining_verification_failure: dict[str, Any] | None = None,
     workflow_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     planned_actions = None
@@ -2369,6 +2432,16 @@ def issue_sync_report(
             close_pytest_failure_issues=close_pytest_failure_issues,
         )
 
+    remaining_audit = (
+        managed_issue_audit(
+            desired,
+            remaining_existing_issues,
+            close_extracted_issues=close_extracted_issues,
+            close_pytest_failure_issues=close_pytest_failure_issues,
+        )
+        if remaining_existing_issues is not None
+        else None
+    )
     report: dict[str, Any] = {
         "schema_version": 1,
         "generator": "tools/sync_support_issues.py",
@@ -2391,12 +2464,8 @@ def issue_sync_report(
             planned_closure_budget_limits or {},
             mode=planned_action_budget_mode,
         ),
-        "existing": {
-            "inspected": existing_issues is not None,
-            "managed": 0,
-            "duplicates": 0,
-            "unmarked": 0,
-        },
+        "existing": existing_issue_inventory(existing_issues),
+        "remaining_existing": existing_issue_inventory(remaining_existing_issues),
         "input_failures": input_failures or [],
         "operation_ledger": operation_ledger,
         "planned_actions": planned_actions,
@@ -2428,24 +2497,20 @@ def issue_sync_report(
             if existing_issues is not None
             else None
         ),
+        "remaining_issue_audit": remaining_audit,
+        "remaining_issue_risk": remaining_issue_risk_report(remaining_audit),
     }
     normalized_workflow_source = normalize_workflow_source(workflow_source)
     if normalized_workflow_source is not None:
         report["workflow_source"] = normalized_workflow_source
-    if existing_issues is not None:
-        existing_by_key, duplicates, unmarked = split_existing_issues(existing_issues)
-        report["existing"] = {
-            "inspected": True,
-            "managed": len(existing_by_key),
-            "duplicates": len(duplicates),
-            "unmarked": unmarked,
-        }
     if sync_summary is not None:
         report["sync_summary"] = sync_summary
     if preflight_failure is not None:
         report["preflight_failure"] = preflight_failure
     if sync_failure is not None:
         report["sync_failure"] = sync_failure
+    if remaining_verification_failure is not None:
+        report["remaining_verification_failure"] = remaining_verification_failure
     return report
 
 
@@ -3389,33 +3454,63 @@ def main(argv: list[str] | None = None) -> int:
             **summary
         )
     )
+    remaining_existing_issues = None
+    remaining_verification_failure = None
+    if args.sync_summary_output is not None and not args.dry_run:
+        try:
+            remaining_existing_issues = client.list_managed_issues()
+        except Exception as exc:
+            remaining_verification_failure = preflight_failure_summary(
+                SupportIssueSyncPreflightError(
+                    "verify_remaining_managed_issues",
+                    {},
+                    exc,
+                )
+            )
+            print(
+                "support issue sync post-sync verification failed during "
+                "verify_remaining_managed_issues: {}".format(exc),
+                file=sys.stderr,
+            )
     if args.sync_summary_output is not None:
         output = (
             args.sync_summary_output
             if args.sync_summary_output.is_absolute()
             else ROOT / args.sync_summary_output
         )
+        sync_report = issue_sync_report(
+            desired,
+            mode="dry-run" if args.dry_run else "sync",
+            close_extracted_issues=close_extracted_issues,
+            close_pytest_failure_issues=close_pytest_failure_issues,
+            manage_sub_issues=manage_sub_issues,
+            matrix_check_report=matrix_check_report,
+            matrix_check_report_path=matrix_check_report_path,
+            planned_action_budget_limits=planned_action_budget_limits,
+            planned_action_budget_mode=args.planned_action_budget_mode,
+            planned_closure_budget_limits=planned_closure_budget_limits,
+            existing_issues=existing_issues,
+            existing_sub_issue_ids_by_parent=existing_sub_issue_ids_by_parent,
+            sync_summary=summary,
+            input_failures=input_failures,
+            operation_ledger=operation_ledger,
+            remaining_existing_issues=remaining_existing_issues,
+            remaining_verification_failure=remaining_verification_failure,
+            workflow_source=workflow_source,
+        )
         write_json_report(
             output,
-            issue_sync_report(
-                desired,
-                mode="dry-run" if args.dry_run else "sync",
-                close_extracted_issues=close_extracted_issues,
-                close_pytest_failure_issues=close_pytest_failure_issues,
-                manage_sub_issues=manage_sub_issues,
-                matrix_check_report=matrix_check_report,
-                matrix_check_report_path=matrix_check_report_path,
-                planned_action_budget_limits=planned_action_budget_limits,
-                planned_action_budget_mode=args.planned_action_budget_mode,
-                planned_closure_budget_limits=planned_closure_budget_limits,
-                existing_issues=existing_issues,
-                existing_sub_issue_ids_by_parent=existing_sub_issue_ids_by_parent,
-                sync_summary=summary,
-                input_failures=input_failures,
-                operation_ledger=operation_ledger,
-                workflow_source=workflow_source,
-            ),
+            sync_report,
         )
+        if remaining_verification_failure is not None:
+            return 1
+        remaining_errors = remaining_issue_risk_errors(
+            sync_report["remaining_issue_risk"]
+        )
+        if remaining_errors:
+            for message in remaining_errors:
+                print(message, file=sys.stderr)
+            return 1
     return 0
 
 

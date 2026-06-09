@@ -450,7 +450,9 @@ class HLSLParser:
             name = self.parse_function_declarator_name()
 
             if self.current_token[0] == "LPAREN":
+                synthetic_start = len(self.synthetic_structs)
                 func = self.parse_function(return_type, name, qualifiers, attributes)
+                structs.extend(self.synthetic_structs[synthetic_start:])
                 functions.append(func)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
@@ -2378,6 +2380,10 @@ class HLSLParser:
         if self.skip_unexpanded_statement_macro():
             return None
 
+        if self.looks_like_local_struct_declaration():
+            qualifiers = self.parse_qualifiers()
+            return self.parse_local_struct_declaration(qualifiers, attributes)
+
         if self.looks_like_function_prototype():
             self.parse_local_function_prototype(attributes)
             return None
@@ -2509,6 +2515,42 @@ class HLSLParser:
         if isinstance(stmt, list):
             return stmt
         return [stmt]
+
+    def looks_like_local_struct_declaration(self):
+        idx = self.current_index
+        saw_qualifier = False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            saw_qualifier = True
+            idx += 1
+
+        if (
+            not saw_qualifier
+            or idx >= len(self.tokens)
+            or self.tokens[idx][0] != "STRUCT"
+        ):
+            return False
+
+        idx += 1
+        if idx < len(self.tokens) and self.is_identifier_token_at(idx):
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_angle_list_at(idx)
+                if idx is None:
+                    return False
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+
+    def parse_local_struct_declaration(self, qualifiers, attributes):
+        struct = self.parse_struct(
+            declaration_qualifiers=qualifiers,
+            declaration_attributes=attributes,
+        )
+        declarations = list(getattr(struct, "variable_declarations", []) or [])
+        struct.variables = []
+        struct.variable_declarations = []
+        if getattr(struct, "name", None):
+            self.synthetic_structs.append(struct)
+        return declarations or None
 
     def looks_like_declaration(self):
         idx = self.current_index

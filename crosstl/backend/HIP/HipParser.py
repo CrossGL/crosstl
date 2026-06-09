@@ -3362,8 +3362,21 @@ class HipParser:
             return True
         return False
 
-    def parse_expression(self):
-        return self.parse_assignment_expression()
+    def parse_expression(self, allow_comma=False):
+        expr = self.parse_assignment_expression()
+        if not allow_comma:
+            return expr
+
+        self.skip_newlines()
+        while self.match("COMMA"):
+            op = self.current_token.value
+            self.advance()
+            self.skip_newlines()
+            right = self.parse_assignment_expression()
+            expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
+
+        return expr
 
     def parse_assignment_expression(self):
         left = self.parse_ternary_expression()
@@ -4047,7 +4060,7 @@ class HipParser:
 
             self.consume("LPAREN")
             self.skip_newlines()
-            expr = self.parse_expression()
+            expr = self.parse_expression(allow_comma=True)
             self.consume("RPAREN")
             return expr
         elif self.match("LBRACE"):

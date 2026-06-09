@@ -8280,6 +8280,46 @@ def test_vulkan_uniform_block_instance_member_access_flattens_to_cbuffer_member(
     assert "camera.viewProj" not in generated_code
 
 
+def test_vulkan_samples_grid_uniform_members_alias_interface_outputs():
+    code = """
+    // Reduced from KhronosGroup/Vulkan-Samples
+    // shaders/dynamic_line_rasterization/glsl/grid.vert.
+    layout(binding = 0) uniform Ubo {
+        mat4 projection;
+        mat4 view;
+        mat4 viewProjectionInverse;
+    } ubo;
+    layout(location = 0) out vec3 nearPoint;
+    layout(location = 2) out mat4 view;
+    layout(location = 6) out mat4 projection;
+    vec3 unprojectPoint(vec3 pos, mat4 viewProjectionInverse) {
+        return pos;
+    }
+    void main() {
+        vec3 pos = vec3(0.0, 0.0, 0.0);
+        nearPoint = unprojectPoint(pos, ubo.viewProjectionInverse);
+        view = ubo.view;
+        projection = ubo.projection;
+        gl_Position = vec4(pos, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer Ubo @binding(0) {" in generated_code
+    assert "float4x4 ubo_projection;" in generated_code
+    assert "float4x4 ubo_view;" in generated_code
+    assert "float4x4 view @output @location(2);" in generated_code
+    assert "float4x4 projection @output @location(6);" in generated_code
+    assert "view = ubo_view;" in generated_code
+    assert "projection = ubo_projection;" in generated_code
+    assert "view = view;" not in generated_code
+    assert "projection = projection;" not in generated_code
+
+
 def test_vulkan_push_constant_block_emits_marked_cbuffer():
     code = """
     layout(push_constant) uniform PushConstants {

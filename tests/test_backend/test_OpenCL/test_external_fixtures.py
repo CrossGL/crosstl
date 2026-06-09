@@ -81,6 +81,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/imgproc/src/opencl/filterSepCol.cl",
     },
+    "opencv_morph3x3_vector_scalar_cast": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/imgproc/src/opencl/morph3x3.cl",
+    },
 }
 
 
@@ -492,3 +497,24 @@ def test_external_opencv_filter_sep_col_macro_type_cast_codegen_reparse():
     cast = ast.statements[0].body[0].value
     assert cast.target_type == "srcT"
     assert "var sum: srcT = srcT(delta);" in crossgl
+
+
+def test_external_opencv_morph3x3_vector_scalar_cast_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["opencv_morph3x3_vector_scalar_cast"]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/imgproc/src/opencl/morph3x3.cl"
+
+    source = """
+    #define VAL 0
+    kernel void opencv_morph3x3_probe(global uchar16 *out,
+                                      int y,
+                                      uchar16 line) {
+        out[0] = (y == 0) ? (uchar16)VAL: as_uchar16(line);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    ternary = ast.statements[0].body[0].right
+    assert ternary.true_expr.target_type == "uchar16"
+    assert "array<u8, 16>(0)" in crossgl

@@ -2129,6 +2129,22 @@ def test_function_pointer_type_parsing():
     assert ast.functions[0].params[0].vtype == "fn(&Position) -> u32"
 
 
+def test_named_function_pointer_type_alias_parsing_from_rust_gpu():
+    # Reduced from Rust-GPU/rust-gpu crates/rustc_codegen_spirv/src/naga_transpile.rs.
+    code = """
+    pub type NagaTranspile = fn(
+        sess: &Session,
+        spv_binary: &[u32],
+    ) -> Result<(), ErrorGuaranteed>;
+    """
+
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == (
+        "fn(&Session, &u32[]) -> Result<(), ErrorGuaranteed>"
+    )
+
+
 def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handler():
     # Reduced from https://github.com/bevyengine/bevy commit
     # 67f441da62424f83a1bb6e3f5145034e0583d495,

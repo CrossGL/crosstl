@@ -247,6 +247,14 @@ class FakeClient:
         self.next_number = 100
         self.next_id = 1000
 
+    def _store_issue(self, issue):
+        for index, existing in enumerate(self.existing):
+            if existing.get("number") == issue.get("number"):
+                self.existing[index] = issue
+                break
+        else:
+            self.existing.append(issue)
+
     def list_managed_issues(self):
         return list(self.existing)
 
@@ -265,6 +273,7 @@ class FakeClient:
         self.next_id += 1
         self.next_number += 1
         self.created.append(issue)
+        self._store_issue(issue)
         return issue
 
     def update_issue(self, issue, desired):
@@ -278,6 +287,7 @@ class FakeClient:
             }
         )
         self.updated.append(updated)
+        self._store_issue(updated)
         return updated
 
     def close_issue(self, issue, body):
@@ -285,6 +295,7 @@ class FakeClient:
         closed["state"] = "closed"
         closed["body"] = body
         self.closed.append(closed)
+        self._store_issue(closed)
         return closed
 
     def add_sub_issue(self, parent, child):
@@ -1048,6 +1059,59 @@ def test_issue_sync_report_audits_stale_duplicate_and_unknown_managed_issues():
                 "reason": "unknown_managed_marker",
             }
         ],
+    }
+
+
+def test_issue_sync_report_includes_post_sync_remaining_issue_risk():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    stale_backlog = issue(2, "backlog:directx:old.feature")
+    closed_stale_backlog = dict(stale_backlog, state="closed")
+
+    report = module.issue_sync_report(
+        desired,
+        mode="sync",
+        close_extracted_issues=True,
+        manage_sub_issues=False,
+        existing_issues=[stale_backlog],
+        remaining_existing_issues=[closed_stale_backlog],
+    )
+
+    assert report["existing"] == {
+        "inspected": True,
+        "managed": 1,
+        "duplicates": 0,
+        "unmarked": 0,
+    }
+    assert report["remaining_existing"] == {
+        "inspected": True,
+        "managed": 1,
+        "duplicates": 0,
+        "unmarked": 0,
+    }
+    assert report["remaining_issue_audit"]["stale"] == {
+        "total": 1,
+        "open": 0,
+        "closed": 1,
+        "samples": [
+            {
+                "key": "backlog:directx:old.feature",
+                "number": 2,
+                "title": "stale",
+                "state": "closed",
+                "category": "stale_backlog",
+                "reason": "closed_stale_managed_marker",
+            }
+        ],
+    }
+    assert report["remaining_issue_risk"] == {
+        "evaluated": True,
+        "ok": True,
+        "open_stale": 0,
+        "open_duplicates": 0,
+        "open_ignored_unknown": 0,
+        "open_preserved": 0,
+        "errors": [],
     }
 
 
@@ -2188,6 +2252,119 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
         },
     }
     assert "support issue sync failed during create_issue" in capsys.readouterr().err
+
+
+def test_main_fails_sync_summary_when_stale_issue_remains_open(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    matrix_check_path = tmp_path / "missing-matrix-check.json"
+    summary_path = tmp_path / "support-issue-sync-summary.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class StaleRemainingClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[issue(9, "backlog:directx:old.feature")])
+
+        def close_issue(self, issue_to_close, body):
+            closed = dict(issue_to_close)
+            closed["state"] = "closed"
+            closed["body"] = body
+            self.closed.append(closed)
+            return closed
+
+    monkeypatch.setattr(module, "GitHubClient", StaleRemainingClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--throttle-seconds",
+            "0",
+            "--sync-summary-output",
+            str(summary_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert report["sync_summary"]["closed"] == 1
+    assert report["remaining_existing"]["inspected"] is True
+    assert report["remaining_issue_audit"]["stale"]["open"] == 1
+    assert report["remaining_issue_risk"] == {
+        "evaluated": True,
+        "ok": False,
+        "open_stale": 1,
+        "open_duplicates": 0,
+        "open_ignored_unknown": 0,
+        "open_preserved": 0,
+        "errors": [{"bucket": "stale", "open": 1}],
+    }
+    assert "remaining managed support issue risk: stale has 1 open issue(s)" in (
+        capsys.readouterr().err
+    )
+
+
+def test_main_sync_summary_reports_closed_stale_issues_as_remaining_safe(
+    tmp_path, monkeypatch
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    matrix_check_path = tmp_path / "missing-matrix-check.json"
+    summary_path = tmp_path / "support-issue-sync-summary.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class SyncClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(
+                existing=[
+                    issue(1, "parent:directx"),
+                    issue(9, "backlog:directx:old.feature"),
+                ]
+            )
+
+    monkeypatch.setattr(module, "GitHubClient", SyncClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--throttle-seconds",
+            "0",
+            "--sync-summary-output",
+            str(summary_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert report["sync_summary"] == {
+        "created": 1,
+        "updated": 1,
+        "closed": 1,
+        "attached": 1,
+        "unchanged": 0,
+    }
+    assert report["remaining_issue_audit"]["stale"]["open"] == 0
+    assert report["remaining_issue_audit"]["stale"]["closed"] == 1
+    assert report["remaining_issue_risk"]["ok"] is True
 
 
 def test_sync_issues_skips_existing_sub_issue_relationships():
