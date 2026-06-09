@@ -1346,7 +1346,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "fine-grained positive-length source-map mappings" in (
             backend_support["notes"]
         )
-        assert "fine-grained source-map span containment" in (backend_support["notes"])
+        assert (
+            "fine-grained source-map byte and line/column span containment"
+            in backend_support["notes"]
+        )
         assert "source-map summary rollups" in backend_support["notes"]
         assert "source-map summary rollups including variant rollups" in (
             backend_support["notes"]
@@ -1740,7 +1743,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
         assert "fine-grained positive-length source-map mappings" in (
             backend_support["notes"]
         )
-        assert "fine-grained source-map span containment" in (backend_support["notes"])
+        assert (
+            "fine-grained source-map byte and line/column span containment"
+            in backend_support["notes"]
+        )
         assert "repository-relative file paths" in backend_support["notes"]
         assert (
             "required summarized validation artifact hash, source-size, "

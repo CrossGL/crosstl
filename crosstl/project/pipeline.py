@@ -12383,7 +12383,34 @@ def _source_map_span_within_anchor_reasons(
         for candidate in (offset, end_offset, anchor_offset, anchor_end_offset)
     ):
         return []
-    if offset < anchor_offset or end_offset > anchor_end_offset:
+    out_of_bounds = offset < anchor_offset or end_offset > anchor_end_offset
+    line = value.get("line")
+    column = value.get("column")
+    end_line = value.get("endLine")
+    end_column = value.get("endColumn")
+    anchor_line = anchor.get("line")
+    anchor_column = anchor.get("column")
+    anchor_end_line = anchor.get("endLine")
+    anchor_end_column = anchor.get("endColumn")
+    if all(
+        _is_non_negative_int(candidate)
+        for candidate in (
+            line,
+            column,
+            end_line,
+            end_column,
+            anchor_line,
+            anchor_column,
+            anchor_end_line,
+            anchor_end_column,
+        )
+    ):
+        out_of_bounds = (
+            out_of_bounds
+            or (line, column) < (anchor_line, anchor_column)
+            or (end_line, end_column) > (anchor_end_line, anchor_end_column)
+        )
+    if out_of_bounds:
         return [f"{prefix} must be within {anchor_prefix}"]
     return []
 
