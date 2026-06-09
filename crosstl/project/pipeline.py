@@ -12239,6 +12239,8 @@ def _run_toolchain_smoke(
         if smoke_command is None:
             continue
         command, check_kind = smoke_command
+        if not command or not shutil.which(command[0]):
+            continue
         try:
             completed = subprocess.run(
                 command,
@@ -12290,6 +12292,8 @@ def _toolchain_smoke_command(
     if target == "opengl":
         return [tools[0], "--stdin", "-S", _glslang_stage(artifact_path)], "artifact"
     if target == "vulkan":
+        if artifact_path.suffix.lower() == ".spvasm" and len(tools) > 1:
+            return [tools[1], str(artifact_path), "-o", os.devnull], "artifact"
         return [tools[0], str(artifact_path)], "artifact"
     availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(target)
     if availability_command is None:

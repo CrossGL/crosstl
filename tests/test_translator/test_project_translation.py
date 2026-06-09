@@ -7776,6 +7776,23 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
 
 
+def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
+    assembly_shader = tmp_path / "shader.spvasm"
+    assembly_shader.write_text("; SPIR-V\n", encoding="utf-8")
+    binary_shader = tmp_path / "shader.spv"
+    binary_shader.write_bytes(b"\x03\x02\x23\x07")
+
+    assert project_pipeline._toolchain_smoke_command(
+        "vulkan", ["spirv-val", "spirv-as"], assembly_shader
+    ) == (
+        ["spirv-as", str(assembly_shader), "-o", project_pipeline.os.devnull],
+        "artifact",
+    )
+    assert project_pipeline._toolchain_smoke_command(
+        "vulkan", ["spirv-val", "spirv-as"], binary_shader
+    ) == (["spirv-val", str(binary_shader)], "artifact")
+
+
 def test_validate_project_report_emits_closed_validation_report_schema(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -14847,6 +14864,84 @@ def test_validate_project_report_marks_availability_only_toolchain_runs(
     assert inspection["validation"]["toolchainRunStatusByTool"] == {
         tool: {"runCount": 1, "okCount": 1, "failedCount": 0}
     }
+
+
+def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monkeypatch):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target="vulkan", extension="spvasm"
+    )
+    artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
+    calls = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: f"/usr/bin/{tool}" if tool in {"spirv-val", "spirv-as"} else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        calls.append((command, kwargs))
+        assert command == [
+            "spirv-as",
+            str(artifact_path),
+            "-o",
+            project_pipeline.os.devnull,
+        ]
+        assert kwargs["input"] is None
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is True
+    assert len(calls) == 1
+    run = payload["validation"]["toolchainRuns"][0]
+    assert run["source"] == "simple.cgl"
+    assert run["sourceBackend"] == "cgl"
+    assert run["target"] == "vulkan"
+    assert run["path"] == "out/vulkan/simple.spvasm"
+    assert run["command"] == [
+        "spirv-as",
+        str(artifact_path),
+        "-o",
+        project_pipeline.os.devnull,
+    ]
+    assert run["checkKind"] == "artifact"
+    assert run["status"] == "ok"
+    assert payload["toolchainRunStatusByCheckKind"] == {
+        "artifact": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+    assert payload["toolchainRunStatusByTool"] == {
+        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+
+
+def test_validate_project_report_skips_vulkan_assembly_when_assembler_missing(
+    tmp_path, monkeypatch
+):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target="vulkan", extension="spvasm"
+    )
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/spirv-val" if tool == "spirv-val" else None,
+    )
+    monkeypatch.setattr(
+        project_pipeline.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("missing spirv-as should skip smoke run"),
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is True
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["validation"]["toolchainRuns"] == []
+    assert payload["toolchainRunStatusByTool"] == {}
+    assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-unavailable"
+    assert payload["diagnostics"][0]["severity"] == "warning"
 
 
 def test_validate_project_report_records_toolchain_run_variant_rollups(

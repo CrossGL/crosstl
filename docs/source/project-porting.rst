@@ -165,6 +165,9 @@ artifact checks from target tool availability checks.
 OpenGL smoke checks invoke ``glslangValidator`` with ``--stdin`` and an
 explicit ``-S`` stage inferred from the artifact extension or common GLSL
 builtins, defaulting to compute for generic ``.glsl`` outputs.
+Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
+assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
+platform null device.
 
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``

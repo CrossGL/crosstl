@@ -1814,6 +1814,20 @@ def test_project_validation_hooks_document_migration_contract_checks():
         "test_opengl_toolchain_smoke_command_selects_glslang_stage"
     ) in opengl_support["evidence"]
 
+    vulkan_support = feature["support"]["vulkan"]
+    assert (
+        "Vulkan SPIR-V assembly smoke checks use spirv-as while binary "
+        "SPIR-V artifacts use spirv-val"
+    ) in vulkan_support["notes"]
+    assert (
+        "tests/test_translator/test_project_translation.py::def "
+        "test_vulkan_toolchain_smoke_command_selects_spirv_tool"
+    ) in vulkan_support["evidence"]
+    assert (
+        "tests/test_translator/test_project_translation.py::def "
+        "test_validate_project_report_assembles_vulkan_spirv_assembly"
+    ) in vulkan_support["evidence"]
+
 
 def test_project_external_corpus_coverage_documents_entry_consistency_checks():
     matrix = json.loads(
