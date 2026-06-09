@@ -395,6 +395,9 @@ inspection also includes sampled artifact
 define-processing metadata with status, frontend support, and define counts,
 but not define values, so artifact-level preprocessing state can be triaged
 without exposing configuration values.
+Define-processing inspection summaries also include redacted project define
+names, deterministic define fingerprints, selected variant names, and
+per-variant define records without exposing configured define values.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
 not be consumed by the selected source frontend. Include-path processing

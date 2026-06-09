@@ -899,6 +899,11 @@ def test_project_macro_variants_document_artifact_define_maps():
             "deterministic define fingerprints, variant define names, and "
             "deterministic per-variant define fingerprints without define values"
         ) in backend_support["notes"]
+        assert (
+            "Define-processing inspection summaries expose redacted project "
+            "define names, deterministic define fingerprints, selected variant "
+            "names, and per-variant define records without define values"
+        ) in backend_support["notes"]
         assert "report CLI variant metadata" in backend_support["notes"]
         assert (
             "define-processing status, target, source-backend, and variant rollups"

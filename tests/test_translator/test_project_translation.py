@@ -4409,6 +4409,36 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "debug": {"forwarded": 1},
         "release": {"forwarded": 1},
     }
+    assert inspection["defineProcessing"]["projectDefineCount"] == 2
+    assert inspection["defineProcessing"]["projectDefineNames"] == [
+        "MODE",
+        "USE_FAST_PATH",
+    ]
+    assert inspection["defineProcessing"]["projectDefineFingerprint"] == (
+        project_pipeline._inspection_define_fingerprint(
+            {"MODE": "base", "USE_FAST_PATH": "1"}
+        )
+    )
+    assert inspection["defineProcessing"]["variantCount"] == 2
+    assert inspection["defineProcessing"]["selectedVariantCount"] == 0
+    assert inspection["defineProcessing"]["selectedVariants"] == []
+    assert inspection["defineProcessing"]["variantDefineRecords"] == [
+        {
+            "name": "debug",
+            "defineCount": 1,
+            "defineNames": ["MODE"],
+            "selected": False,
+            "defineFingerprint": project_pipeline._inspection_define_fingerprint(
+                {"MODE": "debug"}
+            ),
+        },
+        {
+            "name": "release",
+            "defineCount": 0,
+            "defineNames": [],
+            "selected": False,
+        },
+    ]
     assert inspection["defineProcessing"]["artifactCount"] == 2
     assert inspection["defineProcessing"]["truncatedArtifactCount"] == 0
     assert inspection["defineProcessing"]["artifacts"] == [
@@ -4442,6 +4472,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         for artifact in inspection["defineProcessing"]["artifacts"]
     )
     assert '"base"' not in json.dumps(inspection["defineProcessing"]["artifacts"])
+    assert '"base"' not in json.dumps(inspection["defineProcessing"])
     assert inspection["includePathProcessing"]["byVariant"] == {
         "debug": {"not-requested": 1},
         "release": {"not-requested": 1},
@@ -4609,6 +4640,19 @@ def test_translate_project_limits_named_variants_to_selected(tmp_path, monkeypat
     assert payload["project"]["variantDefineCounts"] == {"debug": 1}
     assert payload["project"]["selectedVariants"] == ["debug"]
     assert inspection["report"]["project"]["selectedVariants"] == ["debug"]
+    assert inspection["defineProcessing"]["selectedVariantCount"] == 1
+    assert inspection["defineProcessing"]["selectedVariants"] == ["debug"]
+    assert inspection["defineProcessing"]["variantDefineRecords"] == [
+        {
+            "name": "debug",
+            "defineCount": 1,
+            "defineNames": ["MODE"],
+            "selected": True,
+            "defineFingerprint": project_pipeline._inspection_define_fingerprint(
+                {"MODE": "debug"}
+            ),
+        }
+    ]
     assert "Selected variants: debug" in inspection_text.stdout
     assert payload["summary"]["artifactCount"] == 1
     assert payload["summary"]["translatedCount"] == 1
@@ -5753,6 +5797,15 @@ def test_translate_project_records_define_processing_without_frontend_support(
         "bySourceBackend": {"rust": {"not-supported": 1}},
         "byTarget": {"cgl": {"not-supported": 1}},
         "byVariant": {},
+        "projectDefineCount": 1,
+        "projectDefineNames": ["ENABLE_PATH"],
+        "projectDefineFingerprint": project_pipeline._inspection_define_fingerprint(
+            {"ENABLE_PATH": "1"}
+        ),
+        "variantCount": 0,
+        "selectedVariantCount": 0,
+        "selectedVariants": [],
+        "variantDefineRecords": [],
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
         "artifacts": [
@@ -19486,6 +19539,12 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "bySourceBackend": {"cgl": {"not-requested": 1}},
         "byTarget": {"cgl": {"not-requested": 1}},
         "byVariant": {},
+        "projectDefineCount": 0,
+        "projectDefineNames": [],
+        "variantCount": 0,
+        "selectedVariantCount": 0,
+        "selectedVariants": [],
+        "variantDefineRecords": [],
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
         "artifacts": [
@@ -20219,6 +20278,12 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "bySourceBackend": {"cgl": {"not-requested": 1}},
         "byTarget": {"cgl": {"not-requested": 1}},
         "byVariant": {},
+        "projectDefineCount": 0,
+        "projectDefineNames": [],
+        "variantCount": 0,
+        "selectedVariantCount": 0,
+        "selectedVariants": [],
+        "variantDefineRecords": [],
         "artifactCount": 1,
         "truncatedArtifactCount": 0,
         "artifacts": [

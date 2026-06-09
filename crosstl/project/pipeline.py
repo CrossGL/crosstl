@@ -6298,6 +6298,7 @@ def inspect_project_report(
     payload["defineProcessing"] = _inspection_define_processing_summary(
         summary,
         report.get("artifacts"),
+        project=project,
         sample_limit=define_processing_artifact_limit,
     )
     payload["skippedSources"] = _inspection_skipped_source_summary(
@@ -6826,6 +6827,63 @@ def _inspection_define_fingerprint(defines: Mapping[Any, Any]) -> dict[str, str]
     }
 
 
+def _inspection_define_processing_config_context(project: Any) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "projectDefineCount": 0,
+        "projectDefineNames": [],
+        "variantCount": 0,
+        "selectedVariantCount": 0,
+        "selectedVariants": [],
+        "variantDefineRecords": [],
+    }
+    if not isinstance(project, Mapping):
+        return context
+
+    defines = project.get("defines")
+    if isinstance(defines, Mapping):
+        define_names = _inspection_define_names(defines)
+        context["projectDefineCount"] = len(define_names)
+        context["projectDefineNames"] = define_names
+        if define_names:
+            context["projectDefineFingerprint"] = _inspection_define_fingerprint(
+                defines
+            )
+
+    selected_variant_values = project.get("selectedVariants")
+    selected_variants = (
+        [name for name in selected_variant_values if _is_non_empty_string(name)]
+        if isinstance(selected_variant_values, list)
+        else []
+    )
+    context["selectedVariantCount"] = len(selected_variants)
+    context["selectedVariants"] = selected_variants
+    selected_variant_names = set(selected_variants)
+
+    variant_records = []
+    variants = project.get("variants")
+    if isinstance(variants, Mapping):
+        for name, variant_defines in sorted(variants.items()):
+            if not _is_non_empty_string(name) or not isinstance(
+                variant_defines, Mapping
+            ):
+                continue
+            define_names = _inspection_define_names(variant_defines)
+            record = {
+                "name": name,
+                "defineCount": len(define_names),
+                "defineNames": define_names,
+                "selected": name in selected_variant_names,
+            }
+            if define_names:
+                record["defineFingerprint"] = _inspection_define_fingerprint(
+                    variant_defines
+                )
+            variant_records.append(record)
+    context["variantCount"] = len(variant_records)
+    context["variantDefineRecords"] = variant_records
+    return context
+
+
 def _inspection_skipped_source_sample(
     record: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -6933,6 +6991,7 @@ def _inspection_define_processing_summary(
     summary: Any,
     artifacts: Any = None,
     *,
+    project: Any = None,
     sample_limit: int = DEFINE_PROCESSING_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     sample_limit = max(0, sample_limit)
@@ -6957,6 +7016,8 @@ def _inspection_define_processing_summary(
         sample = _inspection_unsupported_define_processing_artifact(artifact)
         if sample:
             not_supported_artifacts.append(sample)
+
+    config_context = _inspection_define_processing_config_context(project)
 
     return {
         "available": True,
@@ -6984,6 +7045,7 @@ def _inspection_define_processing_summary(
             if isinstance(by_variant, Mapping)
             else {}
         ),
+        **config_context,
         "artifactCount": len(define_processing_artifacts),
         "truncatedArtifactCount": max(
             0,
