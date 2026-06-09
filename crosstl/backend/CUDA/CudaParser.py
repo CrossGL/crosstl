@@ -2665,6 +2665,10 @@ class CudaParser:
 
     def skip_requires_clause(self):
         self.eat("IDENTIFIER")
+        if self.is_requires_expression_start():
+            self.parse_requires_expression()
+            return
+
         paren_depth = 0
         bracket_depth = 0
         template_depth = 0
@@ -4402,11 +4406,22 @@ class CudaParser:
         self.eat("TEMPLATE")
         if self.current_token[0] == "LESS_THAN":
             self.parse_template_suffix()
+            self.skip_leading_requires_clause()
             return
 
         self.collect_balanced_tokens_until("SEMICOLON")
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
+
+    def skip_leading_requires_clause(self):
+        if not self.is_identifier_value("requires"):
+            return
+
+        self.eat("IDENTIFIER")
+        if self.is_requires_expression_start():
+            self.parse_requires_expression()
+        elif self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
 
     def format_template_parts(self, parts):
         formatted = []

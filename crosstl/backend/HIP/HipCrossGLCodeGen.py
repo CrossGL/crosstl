@@ -1056,6 +1056,33 @@ class HipToCrossGLConverter:
             return f"{name}_"
         return name
 
+    def sanitize_crossgl_type_identifier(self, name):
+        parts = []
+        for char in str(name):
+            if char.isalnum() or char == "_":
+                parts.append(char)
+            elif char == ":":
+                if not parts or parts[-1] != "_":
+                    parts.append("_")
+            elif not parts or parts[-1] != "_":
+                parts.append("_")
+
+        sanitized = "".join(parts).strip("_") or "anonymous"
+        if sanitized[0].isdigit():
+            sanitized = f"type_{sanitized}"
+        return self.sanitize_identifier_name(sanitized)
+
+    def convert_hip_record_name_to_crossgl(self, name):
+        base_name, template_args = self.parse_cpp_template(name)
+        if not template_args:
+            return self.sanitize_crossgl_type_identifier(name)
+
+        parts = [self.sanitize_crossgl_type_identifier(base_name)]
+        for arg in template_args:
+            converted_arg = self.convert_hip_type_to_crossgl(arg)
+            parts.append(self.sanitize_crossgl_type_identifier(converted_arg))
+        return "_".join(part for part in parts if part)
+
     def format_crossgl_array_extent(self, size):
         size = str(size).strip()
         if not size:
@@ -4700,7 +4727,8 @@ class HipToCrossGLConverter:
             if not node.name:
                 return
 
-        self.emit(f"struct {node.name} {{")
+        struct_name = self.convert_hip_record_name_to_crossgl(node.name)
+        self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
         if hasattr(node, "members") and node.members:

@@ -9,13 +9,13 @@ def test_opencl_kernel_and_address_space_tokens_are_normalized():
     tokens = token_pairs(
         "__kernel void k(__global const float *in, local float *scratch, "
         "LOCAL_PTR float *macro_scratch) { "
-        "barrier(CLK_LOCAL_MEM_FENCE); }"
+        "barrier(CLK_LOCAL_MEM_FENCE); work_group_barrier(CLK_LOCAL_MEM_FENCE); }"
     )
 
     assert ("__GLOBAL__", "__kernel") in tokens
     assert ("__DEVICE__", "__global__") in tokens
     assert ("__SHARED__", "__shared__") in tokens
-    assert ("SYNCTHREADS", "barrier") in tokens
+    assert tokens.count(("SYNCTHREADS", "barrier")) == 2
 
 
 def test_opencl_access_qualifier_tokens():

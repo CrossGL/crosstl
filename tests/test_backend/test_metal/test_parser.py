@@ -1493,6 +1493,35 @@ def test_parse_pointer_member_access():
     assert any(node.member == "mvp" and node.is_pointer for node in member_accesses)
 
 
+def test_parse_stage_keyword_member_access_from_naga_ray_query_msl():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/naga
+    # Commit: d0f28c0b1a3c772e55e68db1c47eff5131cb6732
+    # Path: tests/out/msl/ray-query.msl
+    code = """
+    struct Result {
+        uint type;
+        float distance;
+    };
+    struct RayQuery {
+        Result intersection;
+    };
+    void main_() {
+        RayQuery rq;
+        uint kind = rq.intersection.type;
+        float t = rq.intersection.distance;
+    }
+    """
+    ast = parse_ok(code)
+    member_accesses = [
+        node for node in iter_ast_nodes(ast) if isinstance(node, MemberAccessNode)
+    ]
+
+    assert any(node.member == "intersection" for node in member_accesses)
+    assert any(node.member == "type" for node in member_accesses)
+    assert any(node.member == "distance" for node in member_accesses)
+
+
 def test_parse_single_statement_if_with_discard_fragment():
     code = """
     fragment half4 fragment_main(float4 color) {

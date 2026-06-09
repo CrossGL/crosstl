@@ -57,6 +57,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
         "path": "samples/extensions/khr/histogram/histogram.cl",
     },
+    "khronos_opencl_cts_generic_address_space_work_group_barrier": {
+        "url": "https://github.com/KhronosGroup/OpenCL-CTS",
+        "commit": "8d8f3d272dbd3f0a84156be7890835c4b6deff8e",
+        "path": "test_conformance/generic_address_space/base.h",
+    },
     "arrayfire_nearest_neighbour_bare_unsigned_parameter": {
         "url": "https://github.com/arrayfire/arrayfire",
         "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
@@ -470,6 +475,36 @@ def test_external_khronos_opencl_sdk_histogram_newline_for_codegen_reparse():
     assert "for (var channel: u32 =" in crossgl
     assert "channel < min" in crossgl
     assert "channel++" in crossgl
+
+
+def test_external_opencl_cts_work_group_barrier_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "khronos_opencl_cts_generic_address_space_work_group_barrier"
+    ]
+    assert source_info["commit"] == "8d8f3d272dbd3f0a84156be7890835c4b6deff8e"
+    assert source_info["path"] == "test_conformance/generic_address_space/base.h"
+
+    source = """
+    __kernel void testKernel(__global uint *results, __local uint *buf) {
+        uint tid = get_local_id(0);
+        if (get_local_id(0) == 0) {
+            for (uint i = 0; i < get_local_size(0); ++i) {
+                uint idx = get_local_size(0) * get_group_id(0) + i;
+                buf[idx] = idx;
+            }
+        }
+
+        work_group_barrier(CLK_LOCAL_MEM_FENCE);
+        results[tid] = buf[tid];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    sync = ast.statements[0].body[2]
+
+    assert sync.sync_type == "barrier"
+    assert "workgroupBarrier();" in crossgl
+    assert "work_group_barrier" not in crossgl
 
 
 def test_external_arrayfire_bare_unsigned_parameter_codegen_reparse():

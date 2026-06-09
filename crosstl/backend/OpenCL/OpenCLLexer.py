@@ -21,7 +21,7 @@ OPENCL_TOKENS = (
     ("READ_WRITE", r"\b(?:__read_write|read_write)\b"),
     ("READ_ONLY", r"\b(?:__read_only|read_only)\b"),
     ("WRITE_ONLY", r"\b(?:__write_only|write_only)\b"),
-    ("SYNCTHREADS", r"\bbarrier\b"),
+    ("SYNCTHREADS", r"\b(?:barrier|work_group_barrier)\b"),
     ("SYNCWARP", r"\bmem_fence\b"),
     (
         "ATOMICCAS",
@@ -66,6 +66,7 @@ NORMALIZED_VALUES = {
     "READ_ONLY": "read_only",
     "WRITE_ONLY": "write_only",
     "READ_WRITE": "read_write",
+    "SYNCTHREADS": "barrier",
 }
 
 
@@ -113,6 +114,7 @@ KEYWORDS = {
     "__read_write": "READ_WRITE",
     "read_write": "READ_WRITE",
     "barrier": "SYNCTHREADS",
+    "work_group_barrier": "SYNCTHREADS",
     "mem_fence": "SYNCWARP",
 }
 

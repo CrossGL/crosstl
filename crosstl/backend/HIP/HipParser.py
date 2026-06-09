@@ -1939,6 +1939,16 @@ class HipParser:
             return
         self.advance()
         self.skip_newlines()
+        if self.match("IDENTIFIER") and self.current_token.value == "requires":
+            self.advance()
+            self.skip_newlines()
+            if self.match("LPAREN"):
+                self.skip_balanced_parentheses()
+                self.skip_newlines()
+            if self.match("LBRACE"):
+                self.skip_balanced_brace_block()
+                self.skip_newlines()
+            return
         if self.match("LPAREN"):
             self.skip_balanced_parentheses()
 

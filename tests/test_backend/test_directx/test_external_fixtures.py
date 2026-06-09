@@ -48,6 +48,7 @@ DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
 DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+DIRECTX_SHADER_COMPILER_WORKGRAPH_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
@@ -333,6 +334,36 @@ EXTERNAL_FIXTURES = [
             "@ vk_ext_capability(4447)",
             "uint8_t val;",
             "@ vk_ext_capability(4428)",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_workgraph_node_output_record_templates",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_WORKGRAPH_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/node.sparse-nodes.hlsl",
+        code=textwrap.dedent("""
+            struct RECORD1
+            {
+                uint a;
+            };
+
+            [Shader("node")]
+            [NodeLaunch("broadcasting")]
+            [NodeDispatchGrid(1, 1, 1)]
+            [NumThreads(1, 1, 1)]
+            void node_1_0(
+                [AllowSparseNodes] [NodeArraySize(129)] [MaxRecords(31)]
+                NodeOutputArray<RECORD1> OutputArray_1_0)
+            {
+                ThreadNodeOutputRecords<RECORD1> outRec =
+                    OutputArray_1_0[1].GetThreadNodeOutputRecords(2);
+                outRec.OutputComplete();
+            }
+        """).strip(),
+        contains=(
+            "void node_1_0(NodeOutputArray<RECORD1> OutputArray_1_0) @ stage_entry",
+            "ThreadNodeOutputRecords<RECORD1> outRec = OutputArray_1_0[1].GetThreadNodeOutputRecords(2);",
+            "outRec.OutputComplete();",
         ),
     ),
     ExternalFixture(

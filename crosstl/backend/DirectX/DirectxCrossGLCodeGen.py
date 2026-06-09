@@ -34,6 +34,19 @@ class HLSLToCrossGLConverter:
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
         }
+        self.generic_passthrough_types = {
+            "DispatchNodeInputRecord",
+            "RWDispatchNodeInputRecord",
+            "GroupNodeInputRecords",
+            "RWGroupNodeInputRecords",
+            "ThreadNodeInputRecord",
+            "RWThreadNodeInputRecord",
+            "NodeOutput",
+            "NodeOutputArray",
+            "ThreadNodeOutputRecords",
+            "GroupNodeOutputRecords",
+            "NodeOutputRecords",
+        }
         self.type_map = {
             # Scalar Types
             "void": "void",
@@ -4321,6 +4334,12 @@ class HLSLToCrossGLConverter:
             storage_image_type = self.map_rw_texture_type(base, generic_type)
             if storage_image_type:
                 return storage_image_type
+            if base in self.generic_passthrough_types:
+                mapped_args = ", ".join(
+                    self.sanitize_type_name(self.canonical_composite_type(arg))
+                    for arg in self.split_generic_arguments(generic_type)
+                )
+                return f"{self.sanitize_type_name(base)}<{mapped_args}>"
             type_name = base
         default_template_type = {
             "vector": "vec4",

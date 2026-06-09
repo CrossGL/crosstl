@@ -20572,6 +20572,24 @@ class MetalCodeGen:
     def safe_expression_to_string_with_precedence(self, expr, parent_precedence=0):
         if hasattr(expr, "value"):
             return str(expr.value)
+        elif isinstance(expr, FunctionCallNode):
+            callee = self.safe_expression_to_string_with_precedence(expr.function)
+            generic_args = getattr(expr, "generic_args", []) or []
+            if generic_args:
+                args = ", ".join(
+                    self.convert_type_node_to_string(arg) for arg in generic_args
+                )
+                callee = f"{callee}<{args}>"
+            arguments = ", ".join(
+                self.safe_expression_to_string_with_precedence(argument)
+                for argument in getattr(expr, "arguments", [])
+            )
+            return f"{callee}({arguments})"
+        elif isinstance(expr, MemberAccessNode):
+            object_expr = self.safe_expression_to_string_with_precedence(
+                expr.object_expr
+            )
+            return f"{object_expr}.{expr.member}"
         elif getattr(expr, "name", None) is not None:
             return str(expr.name)
         elif isinstance(expr, int) or isinstance(expr, float):

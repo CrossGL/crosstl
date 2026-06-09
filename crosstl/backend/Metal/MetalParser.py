@@ -1947,6 +1947,22 @@ class MetalParser:
             or self.current_token[0] == "COMPUTE"
         )
 
+    def is_current_member_name_token(self):
+        return self.is_current_name_token() or self.current_token[0] in {
+            "READ",
+            "WRITE",
+            "READ_WRITE",
+        }
+
+    def parse_member_name(self, context):
+        if not self.is_current_member_name_token():
+            raise SyntaxError(
+                f"Expected identifier after {context}, got {self.current_token[0]}"
+            )
+        member = self.current_token[1]
+        self.eat(self.current_token[0])
+        return member
+
     def parse_declarator_array_sizes(self):
         array_sizes = []
         while self.current_token[0] == "LBRACKET":
@@ -3503,17 +3519,7 @@ class MetalParser:
                 if self.is_conversion_operator_call_start():
                     node = self.parse_conversion_operator_call(node)
                     continue
-                if self.current_token[0] not in [
-                    "IDENTIFIER",
-                    "READ",
-                    "WRITE",
-                    "READ_WRITE",
-                ]:
-                    raise SyntaxError(
-                        f"Expected identifier after dot, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_member_name("dot")
                 node = MemberAccessNode(node, member)
                 continue
             if self.current_token[0] == "ARROW":
@@ -3522,32 +3528,12 @@ class MetalParser:
                 if self.is_conversion_operator_call_start():
                     node = self.parse_conversion_operator_call(node)
                     continue
-                if self.current_token[0] not in [
-                    "IDENTIFIER",
-                    "READ",
-                    "WRITE",
-                    "READ_WRITE",
-                ]:
-                    raise SyntaxError(
-                        f"Expected identifier after arrow, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_member_name("arrow")
                 node = MemberAccessNode(node, member, True)
                 continue
             if self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                if self.current_token[0] not in [
-                    "IDENTIFIER",
-                    "READ",
-                    "WRITE",
-                    "READ_WRITE",
-                ]:
-                    raise SyntaxError(
-                        f"Expected identifier after scope, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_member_name("scope")
                 if isinstance(node, VariableNode):
                     node.name += f"::{member}"
                 elif isinstance(node, MemberAccessNode):

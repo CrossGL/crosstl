@@ -313,6 +313,39 @@ def test_current_cccl_three_way_operator_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_current_cccl_requires_requires_struct_specialization_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2, class _U1, class _U2>
+      requires requires {
+        typename pair<common_type_t<_T1, _U1>, common_type_t<_T2, _U2>>;
+      }
+    struct common_type<pair<_T1, _T2>, pair<_U1, _U2>>
+    {
+      using type = pair<common_type_t<_T1, _U1>,
+                        common_type_t<_T2, _U2>>;
+    };
+
+    __device__ int keep_after_requires(int value) {
+        return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "common_type<pair<_T1, _T2>, pair<_U1, _U2>>"
+    assert ast.functions[0].name == "keep_after_requires"
+    assert "struct common_type_pair__T1__T2_pair__U1__U2 {" in crossgl
+    assert "i32 keep_after_requires(i32 value)" in crossgl
+    assert "requires requires" not in crossgl
+    assert "typename pair" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_current_cccl_mutable_template_member_declaration_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cccl

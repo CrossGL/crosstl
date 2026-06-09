@@ -8,6 +8,7 @@ from crosstl.backend.HIP.HipAst import (
     IfNode,
     KernelLaunchNode,
     KernelNode,
+    StructNode,
     SwitchNode,
     TypeAliasNode,
     UnaryOpNode,
@@ -1612,6 +1613,41 @@ def test_external_cccl_three_way_operator_hip_codegen_reparse():
     ]
     assert "i32 operator_three_way(pair<_T1, _T2> __x, pair<_T1, _T2> __y)" in crossgl
     assert "i32 operator<=>" not in crossgl
+
+
+def test_external_cccl_requires_requires_struct_specialization_hip_codegen_reparse():
+    # Reduced from:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2, class _U1, class _U2>
+      requires requires {
+        typename pair<common_type_t<_T1, _U1>, common_type_t<_T2, _U2>>;
+      }
+    struct common_type<pair<_T1, _T2>, pair<_U1, _U2>>
+    {
+      using type = pair<common_type_t<_T1, _U1>,
+                        common_type_t<_T2, _U2>>;
+    };
+
+    __device__ int keep_after_requires(int value) {
+        return value;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    record = ast.statements[0]
+    function = ast.statements[1]
+    assert isinstance(record, StructNode)
+    assert record.name == "common_type<pair<_T1, _T2>, pair<_U1, _U2>>"
+    assert function.name == "keep_after_requires"
+    assert "struct common_type_pair__T1__T2_pair__U1__U2 {" in crossgl
+    assert "i32 keep_after_requires(i32 value)" in crossgl
+    assert "requires requires" not in crossgl
+    assert "typename pair" not in crossgl
+    assert "common_type<" not in crossgl
 
 
 def test_external_rocm_dynamic_shared_extern_crossgl_reparse():

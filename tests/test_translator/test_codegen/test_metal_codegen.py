@@ -104,6 +104,25 @@ def test_metal_codegen_skips_resource_array_hint_walk_without_resource_arrays():
     assert "return mix(backdrop, blendedColor, intensity);" in generated_code
 
 
+def test_metal_resource_array_size_expression_function_calls_do_not_leak_ast_nodes():
+    shader = """
+    shader MetalResourceArrayExpressionSize {
+        const int MAP_COUNT = 2;
+        compute {
+            layout(set = 0, binding = 1) uniform sampler2D maps[MAP_COUNT + runtimeCount()];
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "array<texture2d<float>, MAP_COUNT + runtimeCount()> maps" in generated_code
+    assert "IdentifierNode(" not in generated_code
+
+
 def test_metal_mod_builtin_lowers_to_glsl_semantics_expression():
     # Apple MSL exposes fmod(), not GLSL/CrossGL mod(); real tiled shaders with
     # negative coordinates need floor-based mod semantics instead of fmod().
