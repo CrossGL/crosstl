@@ -18912,8 +18912,43 @@ def test_project_cli_inspect_report_text_includes_project_config_counts(tmp_path
         "debug": 1,
         "release": 1,
     }
+    assert "defines" not in payload["report"]["project"]
+    assert payload["report"]["project"]["defineNames"] == ["MODE"]
+    assert payload["report"]["project"]["defineFingerprint"] == (
+        project_pipeline._inspection_define_fingerprint({"MODE": "base"})
+    )
+    assert payload["report"]["project"]["variantDefineNames"] == {
+        "debug": ["MODE"],
+        "release": ["MODE"],
+    }
+    assert payload["report"]["project"]["variantDefineFingerprints"] == {
+        "debug": project_pipeline._inspection_define_fingerprint({"MODE": "debug"}),
+        "release": project_pipeline._inspection_define_fingerprint({"MODE": "release"}),
+    }
+    define_fingerprint_preview = crosstl_cli._format_hash_preview(
+        payload["report"]["project"]["defineFingerprint"]["algorithm"],
+        payload["report"]["project"]["defineFingerprint"]["value"],
+    )
+    debug_fingerprint_preview = crosstl_cli._format_hash_preview(
+        payload["report"]["project"]["variantDefineFingerprints"]["debug"]["algorithm"],
+        payload["report"]["project"]["variantDefineFingerprints"]["debug"]["value"],
+    )
+    release_fingerprint_preview = crosstl_cli._format_hash_preview(
+        payload["report"]["project"]["variantDefineFingerprints"]["release"][
+            "algorithm"
+        ],
+        payload["report"]["project"]["variantDefineFingerprints"]["release"]["value"],
+    )
+    assert "Project define names: MODE" in result.stdout
+    assert f"Project define fingerprint: {define_fingerprint_preview}" in result.stdout
     assert "Project variants: debug, release" in result.stdout
     assert "Project variant define counts: debug=1, release=1" in result.stdout
+    assert "Project variant define names: debug=(MODE), release=(MODE)" in result.stdout
+    assert (
+        "Project variant define fingerprints: "
+        f"debug={debug_fingerprint_preview}, "
+        f"release={release_fingerprint_preview}"
+    ) in result.stdout
     assert (
         "Artifacts by variant: debug=1 artifact (1 translated, 0 failed), "
         "release=1 artifact (1 translated, 0 failed)"

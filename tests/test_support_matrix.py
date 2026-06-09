@@ -810,6 +810,10 @@ def test_project_macro_variants_document_artifact_define_maps():
             "selected-variant summaries for scoped runs, and per-variant "
             "define counts" in backend_support["notes"]
         )
+        assert (
+            "Project inspection exposes project-level define names and "
+            "deterministic define fingerprints without define values"
+        ) in backend_support["notes"]
         assert "report CLI variant metadata" in backend_support["notes"]
         assert (
             "define-processing status, target, source-backend, and variant rollups"

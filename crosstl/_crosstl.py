@@ -1044,6 +1044,37 @@ def _format_project_variant_names(project):
     return "Project variants: " + ", ".join(names)
 
 
+def _format_project_define_names(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    define_names = project.get("defineNames")
+    if not isinstance(define_names, list):
+        return None
+
+    names = [name for name in define_names if isinstance(name, str) and name]
+    if not names:
+        return None
+    return "Project define names: " + ", ".join(names)
+
+
+def _format_project_define_fingerprint(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    define_fingerprint = project.get("defineFingerprint")
+    if not isinstance(define_fingerprint, Mapping):
+        return None
+
+    hash_preview = _format_hash_preview(
+        define_fingerprint.get("algorithm"),
+        define_fingerprint.get("value"),
+    )
+    if not hash_preview:
+        return None
+    return f"Project define fingerprint: {hash_preview}"
+
+
 def _format_project_source_overrides(project):
     if not isinstance(project, Mapping):
         return None
@@ -1082,6 +1113,59 @@ def _format_project_variant_define_counts(project):
     return _format_count_rollup(
         "Project variant define counts",
         project.get("variantDefineCounts"),
+    )
+
+
+def _format_project_variant_define_names(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    variant_define_names = project.get("variantDefineNames")
+    if not isinstance(variant_define_names, Mapping):
+        return None
+
+    entries = []
+    for variant, define_names in variant_define_names.items():
+        if not isinstance(variant, str) or not variant:
+            continue
+        if not isinstance(define_names, list):
+            continue
+        names = [name for name in define_names if isinstance(name, str) and name]
+        if names:
+            entries.append((variant, ",".join(names)))
+    if not entries:
+        return None
+    entries.sort(key=lambda item: item[0])
+    return "Project variant define names: " + ", ".join(
+        f"{variant}=({names})" for variant, names in entries
+    )
+
+
+def _format_project_variant_define_fingerprints(project):
+    if not isinstance(project, Mapping):
+        return None
+
+    variant_fingerprints = project.get("variantDefineFingerprints")
+    if not isinstance(variant_fingerprints, Mapping):
+        return None
+
+    entries = []
+    for variant, fingerprint in variant_fingerprints.items():
+        if not isinstance(variant, str) or not variant:
+            continue
+        if not isinstance(fingerprint, Mapping):
+            continue
+        hash_preview = _format_hash_preview(
+            fingerprint.get("algorithm"),
+            fingerprint.get("value"),
+        )
+        if hash_preview:
+            entries.append((variant, hash_preview))
+    if not entries:
+        return None
+    entries.sort(key=lambda item: item[0])
+    return "Project variant define fingerprints: " + ", ".join(
+        f"{variant}={hash_preview}" for variant, hash_preview in entries
     )
 
 
@@ -2422,9 +2506,13 @@ def _format_project_report_inspection(payload):
     for project_line in (
         _format_project_config_counts(project),
         _format_project_source_overrides(project),
+        _format_project_define_names(project),
+        _format_project_define_fingerprint(project),
         _format_project_variant_names(project),
         _format_project_selected_variants(project),
         _format_project_variant_define_counts(project),
+        _format_project_variant_define_names(project),
+        _format_project_variant_define_fingerprints(project),
     ):
         if project_line:
             lines.append(project_line)

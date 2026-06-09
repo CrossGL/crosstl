@@ -6402,6 +6402,12 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     config_hash = project.get("configHash")
     if isinstance(config_hash, Mapping):
         summary["configHash"] = dict(config_hash)
+    defines = project.get("defines")
+    if isinstance(defines, Mapping):
+        define_names = _inspection_define_names(defines)
+        summary["defineNames"] = define_names
+        if define_names:
+            summary["defineFingerprint"] = _inspection_define_fingerprint(defines)
     for field_name in (
         "sourceRootCount",
         "sourceRootStatus",
@@ -6431,6 +6437,23 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         summary["variantNames"] = sorted(
             name for name in variants if isinstance(name, str) and name
         )
+        variant_define_names = {}
+        variant_define_fingerprints = {}
+        for name, defines in sorted(variants.items()):
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(defines, Mapping)
+            ):
+                continue
+            define_names = _inspection_define_names(defines)
+            variant_define_names[name] = define_names
+            if define_names:
+                variant_define_fingerprints[name] = _inspection_define_fingerprint(
+                    defines
+                )
+        summary["variantDefineNames"] = variant_define_names
+        summary["variantDefineFingerprints"] = variant_define_fingerprints
         if "variantDefineCounts" not in summary:
             summary["variantDefineCounts"] = _variant_define_counts(variants)
     selected_variants = project.get("selectedVariants")
@@ -6439,6 +6462,27 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
             name for name in selected_variants if isinstance(name, str) and name
         ]
     return summary
+
+
+def _inspection_define_names(defines: Mapping[Any, Any]) -> list[str]:
+    return sorted(name for name in defines if _is_non_empty_string(name))
+
+
+def _inspection_define_fingerprint(defines: Mapping[Any, Any]) -> dict[str, str]:
+    normalized = {
+        name: value
+        for name, value in sorted(defines.items())
+        if _is_non_empty_string(name) and isinstance(value, str)
+    }
+    encoded = json.dumps(
+        normalized,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(encoded).hexdigest(),
+    }
 
 
 def _inspection_define_processing_artifact(
