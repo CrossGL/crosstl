@@ -16283,6 +16283,13 @@ def test_project_diagnostics_preserve_original_locations(tmp_path):
         "charOffset": 10,
         "charLength": 4,
     }
+    assert result["properties"] == {
+        "target": "opengl",
+        "sourceBackend": "cgl",
+        "missingCapabilities": ["source.provenance"],
+        "diagnosticLocation": diagnostic["location"],
+        "originalLocation": diagnostic["originalLocation"],
+    }
 
 
 def test_validate_project_report_rejects_unexpected_generated_diagnostic_fields(

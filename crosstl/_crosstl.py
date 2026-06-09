@@ -926,6 +926,30 @@ def _sarif_location_from_mapping(location):
     return {"physicalLocation": physical_location}
 
 
+def _sarif_location_property(location):
+    if not isinstance(location, Mapping):
+        return None
+
+    file_name = location.get("file")
+    if not isinstance(file_name, str) or not file_name:
+        return None
+
+    payload = {"file": file_name}
+    for field_name in (
+        "line",
+        "column",
+        "offset",
+        "length",
+        "endLine",
+        "endColumn",
+        "endOffset",
+    ):
+        value = location.get(field_name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            payload[field_name] = value
+    return payload
+
+
 def _sarif_location(diagnostic):
     return _sarif_location_from_mapping(diagnostic.get("location"))
 
@@ -1073,6 +1097,15 @@ def _format_project_diagnostics_sarif(
         missing_capabilities = diagnostic.get("missingCapabilities")
         if isinstance(missing_capabilities, list) and missing_capabilities:
             properties["missingCapabilities"] = list(missing_capabilities)
+        if original_location:
+            diagnostic_location = _sarif_location_property(diagnostic.get("location"))
+            if diagnostic_location is not None:
+                properties["diagnosticLocation"] = diagnostic_location
+            original_location_property = _sarif_location_property(
+                diagnostic.get("originalLocation")
+            )
+            if original_location_property is not None:
+                properties["originalLocation"] = original_location_property
         if properties:
             result["properties"] = properties
         results.append(result)

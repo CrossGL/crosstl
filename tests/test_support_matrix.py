@@ -1524,6 +1524,10 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert (
+            "SARIF remapped diagnostics with sanitized diagnosticLocation "
+            "and originalLocation result properties"
+        ) in backend_support["notes"]
+        assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_detects_modified_unit_sources"
         ) in backend_support["evidence"]

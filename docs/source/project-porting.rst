@@ -302,7 +302,9 @@ metadata and positive-length character spans when diagnostics carry source
 offsets.
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
-related location.
+related location. Remapped diagnostics also expose sanitized
+``diagnosticLocation`` and ``originalLocation`` SARIF properties for tools that
+filter or group results without walking related locations.
 Inspection exits nonzero when validation finds report errors.
 
 Configuration
