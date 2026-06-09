@@ -16476,6 +16476,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
                         "target": "",
                         "sourceBackend": "",
                         "variant": 0,
+                        "checkKind": "maybe",
                         "missingCapabilities": "repo.scan",
                     }
                 ],
@@ -16522,6 +16523,7 @@ def test_validate_project_report_rejects_malformed_diagnostics(tmp_path):
     assert "diagnostics[0].target must be a string" in diagnostic["message"]
     assert "diagnostics[0].sourceBackend must be a string" in diagnostic["message"]
     assert "diagnostics[0].variant must be a string" in diagnostic["message"]
+    assert "diagnostics[0].checkKind must be one of" in diagnostic["message"]
     assert "diagnostics[0].missingCapabilities must be a list of strings" in (
         diagnostic["message"]
     )
@@ -16906,6 +16908,7 @@ def test_validate_project_report_records_toolchain_failures(
     assert payload["diagnostics"][0]["code"] == "project.validate.toolchain-failed"
     assert payload["diagnostics"][0]["target"] == "opengl"
     assert payload["diagnostics"][0]["sourceBackend"] == "cgl"
+    assert payload["diagnostics"][0]["checkKind"] == "artifact"
     assert payload["diagnostics"][0]["location"]["file"] == ("out/opengl/simple.glsl")
     assert payload["validation"]["toolchainRuns"][0]["status"] == "failed"
     assert payload["validation"]["toolchainRuns"][0]["sourceBackend"] == "cgl"
@@ -17175,6 +17178,7 @@ def test_validate_project_report_describes_failed_availability_toolchain_runs(
     )
     assert payload["diagnostics"][0]["target"] == "cuda"
     assert payload["diagnostics"][0]["sourceBackend"] == "cgl"
+    assert payload["diagnostics"][0]["checkKind"] == "tool-availability"
     assert payload["diagnostics"][0]["location"]["file"] == "out/cuda/simple.cu"
     run = payload["validation"]["toolchainRuns"][0]
     assert run["checkKind"] == "tool-availability"

@@ -252,6 +252,7 @@ REPORT_DIAGNOSTIC_FIELDS = frozenset(
         "target",
         "sourceBackend",
         "variant",
+        "checkKind",
         "missingCapabilities",
     )
 )
@@ -3374,6 +3375,7 @@ class ProjectDiagnostic:
     target: str | None = None
     source_backend: str | None = None
     variant: str | None = None
+    check_kind: str | None = None
     missing_capabilities: Sequence[str] = ()
     original_location: SourceLocation | None = None
 
@@ -3392,6 +3394,8 @@ class ProjectDiagnostic:
             payload["sourceBackend"] = self.source_backend
         if self.variant:
             payload["variant"] = self.variant
+        if self.check_kind:
+            payload["checkKind"] = self.check_kind
         if self.missing_capabilities:
             payload["missingCapabilities"] = list(self.missing_capabilities)
         return payload
@@ -7937,6 +7941,9 @@ def _toolchain_run_diagnostics(
         variant = run.get("variant")
         if _is_non_empty_string(variant):
             context["variant"] = variant
+        check_kind = run.get("checkKind")
+        if _is_non_empty_string(check_kind):
+            context["check_kind"] = check_kind
         diagnostics.append(
             ProjectDiagnostic(
                 severity="error",
@@ -13656,6 +13663,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     reasons.append(
                         f"diagnostics[{index}].variant must be listed in "
                         "project.variants"
+                    )
+            if "checkKind" in diagnostic:
+                check_kind = diagnostic.get("checkKind")
+                if check_kind not in VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS:
+                    allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
+                    reasons.append(
+                        f"diagnostics[{index}].checkKind must be one of {allowed}"
                     )
             missing_capabilities = diagnostic.get("missingCapabilities", [])
             if not isinstance(missing_capabilities, list) or any(

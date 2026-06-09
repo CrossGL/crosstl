@@ -161,8 +161,9 @@ Embedded toolchain availability records name the configured validation hook
 tools for each target; paths and availability remain environment-specific.
 ``--run-toolchains`` implies artifact validation and records any available
 bounded toolchain smoke-check results in the generated portability report.
-Smoke-check records include a check kind so report consumers can distinguish
-artifact checks from target tool availability checks.
+Smoke-check records and generated toolchain-failure diagnostics include a check
+kind so report consumers can distinguish artifact checks from target tool
+availability checks.
 OpenGL smoke checks invoke ``glslangValidator`` with ``--stdin`` and an
 explicit ``-S`` stage inferred from the artifact extension or common GLSL
 builtins, defaulting to compute for generic ``.glsl`` outputs.
