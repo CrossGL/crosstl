@@ -468,6 +468,10 @@ entries, discovered translation units, source-backend and target rollups, valid
 and invalid manifest-entry counts, and artifact outcomes for entries included
 in the project run. CrossTL does not clone upstream repositories, run native
 build systems, or claim whole corpus semantic parity from this manifest.
+The bundled support manifest is a reduced, fixture-backed coverage manifest
+with one pinned entry per registered source backend; those entries support
+provenance and accounting checks rather than corpus-wide semantic parity
+claims.
 Malformed manifest entries are reported as configuration diagnostics and
 skipped from retained corpus entries. Duplicate manifest paths or explicit
 entry ids are also reported and skipped so generated reports do not inflate

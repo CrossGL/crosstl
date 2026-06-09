@@ -11034,6 +11034,7 @@ def _toolchain_run_contract_reasons(
     index: int,
     run: Any,
     *,
+    root_path: Path | None = None,
     declared_targets: set[str] | None = None,
     declared_variants: set[str] | None = None,
     declared_artifact_identities: set[ArtifactIdentity] | None = None,
@@ -11150,8 +11151,11 @@ def _toolchain_run_contract_reasons(
             and _is_non_empty_string(path)
         ):
             configured_tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
+            artifact_path = Path(str(path))
+            if root_path is not None and not artifact_path.is_absolute():
+                artifact_path = (root_path / artifact_path).resolve()
             smoke_command = _toolchain_smoke_command(
-                normalized_target, configured_tools, Path(str(path))
+                normalized_target, configured_tools, artifact_path
             )
             if smoke_command is not None:
                 expected_command, expected_check_kind = smoke_command
@@ -11160,13 +11164,15 @@ def _toolchain_run_contract_reasons(
                         f"{prefix}.checkKind must be {expected_check_kind} "
                         f"for target {normalized_target}"
                     )
-                if (
-                    expected_check_kind == "tool-availability"
-                    and command != expected_command
-                ):
+                elif command != expected_command:
+                    check_label = (
+                        "tool availability"
+                        if expected_check_kind == "tool-availability"
+                        else "artifact"
+                    )
                     reasons.append(
-                        f"{prefix}.command must match the configured tool "
-                        f"availability check for target {normalized_target}"
+                        f"{prefix}.command must match the configured {check_label} "
+                        f"check for target {normalized_target}"
                     )
 
     returncode = run.get("returncode")
@@ -11188,7 +11194,10 @@ def _toolchain_run_contract_reasons(
 
 
 def _validation_contract_reasons(
-    report: Mapping[str, Any], *, require_validation: bool
+    report: Mapping[str, Any],
+    *,
+    root_path: Path | None = None,
+    require_validation: bool,
 ) -> list[str]:
     if "validation" not in report:
         return ["validation must be an object"] if require_validation else []
@@ -11311,6 +11320,7 @@ def _validation_contract_reasons(
                     _toolchain_run_contract_reasons(
                         index,
                         run,
+                        root_path=root_path,
                         declared_targets=declared_targets,
                         declared_variants=declared_variants,
                         declared_artifact_identities=declared_artifact_identities,
@@ -13123,7 +13133,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 )
             )
 
-    reasons.extend(_validation_contract_reasons(report, require_validation=has_summary))
+    reasons.extend(
+        _validation_contract_reasons(
+            report,
+            root_path=root_path,
+            require_validation=has_summary,
+        )
+    )
     require_external_corpus = (
         has_summary
         and isinstance(project, Mapping)
@@ -13172,7 +13188,7 @@ def _run_toolchain_smoke(
             continue
         target = str(artifact.get("target"))
         tools = TOOLCHAIN_BY_BACKEND.get(target, ())
-        if not tools or not shutil.which(tools[0]):
+        if not tools:
             continue
         artifact_path = Path(str(artifact["path"]))
         if not artifact_path.is_absolute():

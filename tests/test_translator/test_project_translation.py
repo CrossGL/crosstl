@@ -10993,6 +10993,74 @@ def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches(
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_artifact_toolchain_run_argv_mismatch(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    artifact = repo / "out" / "opengl" / "simple.frag"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("void main() {}\n", encoding="utf-8")
+    report_path = repo / "mismatched-artifact-toolchain-run-command-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "target": "opengl",
+                        "path": "out/opengl/simple.frag",
+                        "status": "translated",
+                    }
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "sourceBackend": "cgl",
+                            "target": "opengl",
+                            "path": "out/opengl/simple.frag",
+                            "command": [
+                                "glslangValidator",
+                                "--stdin",
+                                "-S",
+                                "comp",
+                            ],
+                            "checkKind": "artifact",
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns[0].command must match the configured "
+        "artifact check for target opengl"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch(
     tmp_path,
 ):
@@ -16178,6 +16246,61 @@ def test_validate_project_report_assembles_vulkan_spirv_assembly(tmp_path, monke
     assert payload["toolchainRunStatusByCheckKind"] == {
         "artifact": {"runCount": 1, "okCount": 1, "failedCount": 0}
     }
+    assert payload["toolchainRunStatusByTool"] == {
+        "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}
+    }
+
+
+def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_available(
+    tmp_path, monkeypatch
+):
+    report_path = _write_target_toolchain_report(
+        tmp_path / "repo", target="vulkan", extension="spvasm"
+    )
+    artifact_path = (report_path.parent / "out" / "vulkan" / "simple.spvasm").resolve()
+    calls = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/spirv-as" if tool == "spirv-as" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        calls.append((command, kwargs))
+        assert kwargs["input"] is None
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is True
+    assert calls == [
+        (
+            [
+                "spirv-as",
+                str(artifact_path),
+                "-o",
+                project_pipeline.os.devnull,
+            ],
+            {
+                "cwd": str(report_path.parent),
+                "input": None,
+                "capture_output": True,
+                "text": True,
+                "check": False,
+                "timeout": project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS,
+            },
+        )
+    ]
+    run = payload["validation"]["toolchainRuns"][0]
+    assert run["command"] == [
+        "spirv-as",
+        str(artifact_path),
+        "-o",
+        project_pipeline.os.devnull,
+    ]
     assert payload["toolchainRunStatusByTool"] == {
         "spirv-as": {"runCount": 1, "okCount": 1, "failedCount": 0}
     }

@@ -1748,6 +1748,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         )
         assert "target-tool command consistency" in backend_support["notes"]
         assert "target check-kind consistency" in backend_support["notes"]
+        assert "artifact command argv consistency" in backend_support["notes"]
         assert "availability command argv consistency" in backend_support["notes"]
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
@@ -1858,8 +1859,18 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_artifact_toolchain_run_"
+            "argv_mismatch"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_availability_toolchain_run_"
             "argv_mismatch"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_runs_vulkan_assembly_when_only_"
+            "assembler_available"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -2424,9 +2435,14 @@ def test_external_corpus_notes_match_manifest_source_backends():
     features_path = ROOT / "support" / "features.json"
     backends_path = ROOT / "support" / "backends.json"
     manifest_path = ROOT / "support" / "external-corpus.json"
+    docs_path = ROOT / "docs" / "source" / "project-porting.rst"
     features = json.loads(features_path.read_text(encoding="utf-8"))
     backends = json.loads(backends_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    docs = docs_path.read_text(encoding="utf-8")
+
+    assert "fixture-backed coverage manifest" in docs
+    assert "one pinned entry per registered source backend" in docs
 
     backend_names = {
         backend["id"]: backend["name"].partition("/")[0].strip()
