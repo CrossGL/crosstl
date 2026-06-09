@@ -676,6 +676,11 @@ def test_project_include_resolution_documents_status_reporting():
         assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
         )
+        assert (
+            "include-path processing inspection summaries include configured "
+            "include-directory status records plus frontend-visible and "
+            "inactive directory counts"
+        ) in backend_support["notes"]
         assert "includeDependencies records" in backend_support["notes"]
         assert "ignores block-commented preprocessor directives" in (
             backend_support["notes"]

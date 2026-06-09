@@ -6314,6 +6314,7 @@ def inspect_project_report(
     payload["includePathProcessing"] = _inspection_include_path_processing_summary(
         summary,
         report.get("artifacts"),
+        project=project,
         sample_limit=include_path_processing_artifact_limit,
     )
     payload["artifactMatrix"] = _inspection_artifact_matrix_summary(
@@ -7042,10 +7043,48 @@ def _inspection_unsupported_include_path_processing_artifact(
     return sample
 
 
+def _inspection_include_dir_status_record(record: Any) -> dict[str, Any] | None:
+    if not isinstance(record, Mapping):
+        return None
+
+    path = record.get("path")
+    status = record.get("status")
+    if not _is_non_empty_string(path) or not _is_non_empty_string(status):
+        return None
+
+    sample = {
+        "path": path,
+        "status": status,
+    }
+    resolved_path = record.get("resolvedPath")
+    if _is_non_empty_string(resolved_path):
+        sample["resolvedPath"] = resolved_path
+    frontend_visible = record.get("frontendVisible")
+    if isinstance(frontend_visible, bool):
+        sample["frontendVisible"] = frontend_visible
+    return sample
+
+
+def _inspection_include_dir_status_records(project: Any) -> list[dict[str, Any]]:
+    if not isinstance(project, Mapping):
+        return []
+    records = project.get("includeDirStatus")
+    if not isinstance(records, list):
+        return []
+
+    samples = []
+    for record in records:
+        sample = _inspection_include_dir_status_record(record)
+        if sample is not None:
+            samples.append(sample)
+    return samples
+
+
 def _inspection_include_path_processing_summary(
     summary: Any,
     artifacts: Any = None,
     *,
+    project: Any = None,
     sample_limit: int = INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     sample_limit = max(0, sample_limit)
@@ -7070,6 +7109,18 @@ def _inspection_include_path_processing_summary(
         sample = _inspection_unsupported_include_path_processing_artifact(artifact)
         if sample:
             not_supported_artifacts.append(sample)
+
+    include_dir_records = _inspection_include_dir_status_records(project)
+    frontend_visible_include_dirs = [
+        record
+        for record in include_dir_records
+        if record.get("frontendVisible") is True
+    ]
+    inactive_include_dirs = [
+        record
+        for record in include_dir_records
+        if record.get("frontendVisible") is not True
+    ]
 
     return {
         "available": True,
@@ -7109,6 +7160,12 @@ def _inspection_include_path_processing_summary(
             len(not_supported_artifacts) - sample_limit,
         ),
         "notSupportedArtifacts": not_supported_artifacts[:sample_limit],
+        "includeDirCount": len(include_dir_records),
+        "frontendVisibleIncludeDirCount": len(frontend_visible_include_dirs),
+        "inactiveIncludeDirCount": len(inactive_include_dirs),
+        "includeDirs": include_dir_records,
+        "frontendVisibleIncludeDirs": frontend_visible_include_dirs,
+        "inactiveIncludeDirs": inactive_include_dirs,
     }
 
 

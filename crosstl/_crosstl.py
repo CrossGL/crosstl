@@ -2284,6 +2284,74 @@ def _format_include_path_processing_artifact_lines(include_path_processing):
     return lines
 
 
+def _format_include_path_processing_dir_summary(include_path_processing):
+    if not isinstance(include_path_processing, Mapping):
+        return None
+
+    include_dir_count = include_path_processing.get("includeDirCount")
+    frontend_visible_count = include_path_processing.get(
+        "frontendVisibleIncludeDirCount"
+    )
+    inactive_count = include_path_processing.get("inactiveIncludeDirCount")
+    counts = (
+        include_dir_count,
+        frontend_visible_count,
+        inactive_count,
+    )
+    if not all(
+        isinstance(count, int) and not isinstance(count, bool) and count >= 0
+        for count in counts
+    ):
+        return None
+    if include_dir_count == 0:
+        return None
+    return (
+        "Include path processing dirs: "
+        f"{include_dir_count} configured, "
+        f"{frontend_visible_count} frontend-visible, "
+        f"{inactive_count} inactive"
+    )
+
+
+def _format_include_path_processing_dir_line(record):
+    if not isinstance(record, Mapping):
+        return None
+
+    path = record.get("path")
+    status = record.get("status")
+    if not isinstance(path, str) or not path:
+        return None
+    if not isinstance(status, str) or not status:
+        return None
+
+    details = [status]
+    resolved_path = record.get("resolvedPath")
+    if isinstance(resolved_path, str) and resolved_path:
+        details.append(f"resolved={resolved_path}")
+    frontend_visible = record.get("frontendVisible")
+    if isinstance(frontend_visible, bool):
+        details.append(f"frontendVisible={str(frontend_visible).lower()}")
+    return f"- {path} ({'; '.join(details)})"
+
+
+def _format_include_path_processing_dir_lines(include_path_processing):
+    if not isinstance(include_path_processing, Mapping):
+        return []
+
+    records = include_path_processing.get("includeDirs")
+    if not isinstance(records, list) or not records:
+        return []
+
+    lines = ["Include path processing dirs:"]
+    for record in records:
+        line = _format_include_path_processing_dir_line(record)
+        if line:
+            lines.append(line)
+    if len(lines) == 1:
+        return []
+    return lines
+
+
 def _format_skipped_source_line(source):
     if not isinstance(source, Mapping):
         return None
@@ -2865,6 +2933,14 @@ def _format_project_report_inspection(payload):
     )
     if include_path_processing_by_variant:
         lines.append(include_path_processing_by_variant)
+    include_path_processing_dir_summary = _format_include_path_processing_dir_summary(
+        payload.get("includePathProcessing")
+    )
+    if include_path_processing_dir_summary:
+        lines.append(include_path_processing_dir_summary)
+    lines.extend(
+        _format_include_path_processing_dir_lines(payload.get("includePathProcessing"))
+    )
     lines.extend(
         _format_include_path_processing_artifact_lines(
             payload.get("includePathProcessing")

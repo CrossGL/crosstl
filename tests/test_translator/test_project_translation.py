@@ -3891,6 +3891,32 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         check=False,
     )
     artifact_path = payload["artifacts"][0]["path"]
+    expected_include_dir_status = [
+        {
+            "path": "includes",
+            "resolvedPath": str(include_dir.resolve()),
+            "status": "active",
+            "frontendVisible": True,
+        },
+        {
+            "path": "missing-includes",
+            "resolvedPath": str((repo / "missing-includes").resolve()),
+            "status": "missing",
+            "frontendVisible": False,
+        },
+        {
+            "path": "include-file",
+            "resolvedPath": str(include_file.resolve()),
+            "status": "not-directory",
+            "frontendVisible": False,
+        },
+        {
+            "path": "../outside-includes",
+            "resolvedPath": str(outside_dir.resolve()),
+            "status": "outside-project",
+            "frontendVisible": False,
+        },
+    ]
 
     assert captured_include_paths == [[str(include_dir.resolve())]]
     assert validation["success"] is True
@@ -3931,6 +3957,12 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],
+        "includeDirCount": 4,
+        "frontendVisibleIncludeDirCount": 1,
+        "inactiveIncludeDirCount": 3,
+        "includeDirs": expected_include_dir_status,
+        "frontendVisibleIncludeDirs": expected_include_dir_status[:1],
+        "inactiveIncludeDirs": expected_include_dir_status[1:],
     }
     assert result.returncode == 0
     assert "Include path processing: forwarded=1" in result.stdout
@@ -3938,6 +3970,18 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "Include path processing by source backend: cgl=(forwarded=1)" in result.stdout
     )
     assert "Include path processing artifacts:" in result.stdout
+    assert (
+        "Include path processing dirs: 4 configured, 1 frontend-visible, 3 inactive"
+        in result.stdout
+    )
+    assert (
+        f"- includes (active; resolved={include_dir.resolve()}; "
+        "frontendVisible=true)"
+    ) in result.stdout
+    assert (
+        f"- include-file (not-directory; resolved={include_file.resolve()}; "
+        "frontendVisible=false)"
+    ) in result.stdout
     assert (
         f"- shaders/simple.cgl -> {artifact_path} "
         "(sourceBackend=cgl, target=opengl, status=forwarded, "
@@ -3950,32 +3994,7 @@ def test_translate_project_filters_invalid_include_dirs_before_frontend(
         "include-file",
         "../outside-includes",
     ]
-    assert payload["project"]["includeDirStatus"] == [
-        {
-            "path": "includes",
-            "resolvedPath": str(include_dir.resolve()),
-            "status": "active",
-            "frontendVisible": True,
-        },
-        {
-            "path": "missing-includes",
-            "resolvedPath": str((repo / "missing-includes").resolve()),
-            "status": "missing",
-            "frontendVisible": False,
-        },
-        {
-            "path": "include-file",
-            "resolvedPath": str(include_file.resolve()),
-            "status": "not-directory",
-            "frontendVisible": False,
-        },
-        {
-            "path": "../outside-includes",
-            "resolvedPath": str(outside_dir.resolve()),
-            "status": "outside-project",
-            "frontendVisible": False,
-        },
-    ]
+    assert payload["project"]["includeDirStatus"] == expected_include_dir_status
     assert payload["project"]["includeDirStatusCounts"] == {
         "active": 1,
         "missing": 1,
@@ -19527,6 +19546,12 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],
+        "includeDirCount": 0,
+        "frontendVisibleIncludeDirCount": 0,
+        "inactiveIncludeDirCount": 0,
+        "includeDirs": [],
+        "frontendVisibleIncludeDirs": [],
+        "inactiveIncludeDirs": [],
     }
     assert payload["artifactMatrix"] == {
         "available": True,
@@ -20235,6 +20260,12 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
         "notSupportedArtifactCount": 0,
         "truncatedNotSupportedArtifactCount": 0,
         "notSupportedArtifacts": [],
+        "includeDirCount": 0,
+        "frontendVisibleIncludeDirCount": 0,
+        "inactiveIncludeDirCount": 0,
+        "includeDirs": [],
+        "frontendVisibleIncludeDirs": [],
+        "inactiveIncludeDirs": [],
     }
     assert payload["artifactMatrix"]["expectedArtifactCount"] == 1
     assert payload["artifactMatrix"]["emittedArtifactCount"] == 1
