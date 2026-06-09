@@ -150,6 +150,12 @@ def _refresh_artifact_summary(payload):
     summary.update(project_pipeline._source_map_rollups(artifacts))
 
 
+def _refresh_source_remap_metadata(repo, artifact):
+    source_remap_path = repo / artifact["sourceRemap"]["path"]
+    artifact["sourceRemap"]["sizeBytes"] = source_remap_path.stat().st_size
+    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+
+
 def _diagnostic_location(file):
     return {
         "file": file,
@@ -6828,6 +6834,7 @@ def test_translate_project_records_line_preserving_source_maps(tmp_path):
         "generatedFile": "out/cgl/simple.cgl",
         "mappingGranularity": "line",
         "mappingCount": len(source_map["mappings"]),
+        "sizeBytes": source_remap_path.stat().st_size,
         "hash": project_pipeline._source_hash(source_remap_path),
     }
     assert source_remap_payload == {
@@ -7155,6 +7162,7 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
     source_remap_payload = json.loads(
         (repo / expected_remap_path).read_text(encoding="utf-8")
     )
+    source_remap_path = repo / expected_remap_path
 
     assert validation["success"] is True
     assert variant_segment != "qa/profile"
@@ -7165,6 +7173,7 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
     assert source_map["mappings"][0]["generated"]["file"] == expected_artifact_path
     assert source_remap["path"] == expected_remap_path
     assert source_remap["generatedFile"] == expected_artifact_path
+    assert source_remap["sizeBytes"] == source_remap_path.stat().st_size
     assert source_remap_payload["generatedFile"] == expected_artifact_path
     assert (
         source_remap_payload["mappings"][0]["generated"]["file"]
@@ -13149,7 +13158,7 @@ def test_validate_project_report_rejects_incomplete_file_level_source_map_spans(
     )
     artifact["sourceRemap"]["mappingGranularity"] = "file"
     artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
-    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    _refresh_source_remap_metadata(repo, artifact)
     _refresh_artifact_summary(payload)
     report_path = repo / "out" / "incomplete-source-map-span-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -13447,6 +13456,9 @@ def test_validate_project_report_rejects_malformed_source_remap_metadata(tmp_pat
     assert "artifacts[0].sourceRemap.mappingCount must be a non-negative integer" in (
         diagnostic["message"]
     )
+    assert "artifacts[0].sourceRemap.sizeBytes must be a non-negative integer" in (
+        diagnostic["message"]
+    )
     assert "artifacts[0].sourceRemap.hash.algorithm must be sha256" in (
         diagnostic["message"]
     )
@@ -13510,6 +13522,33 @@ def test_validate_project_report_rejects_source_remap_mapping_count_mismatches(
     ) in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_source_remap_size_mismatches(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    artifact = payload["artifacts"][0]
+    artifact["sourceRemap"]["sizeBytes"] += 1
+    report_path = repo / "out" / "source-remap-size-mismatch-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"]["summary"]["failedCount"] == 1
+    assert validation["validation"]["artifacts"][0]["sourceMapStatus"] == "ok"
+    assert validation["validation"]["artifacts"][0]["sourceRemapStatus"] == "mismatch"
+    assert validation["validation"]["summary"]["sourceRemapStatusCounts"] == (
+        _source_remap_status_counts(mismatch=1)
+    )
+    assert validation["diagnosticsByCode"] == {
+        "project.validate.source-remap-size-mismatch": 1,
+    }
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["missingCapabilities"] == ["source.provenance"]
+    assert "Source remap sidecar size does not match report" in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_backslash_source_remap_metadata(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -13564,6 +13603,7 @@ def test_validate_project_report_rejects_stale_source_remap_sidecar(tmp_path):
         "project.validate.source-remap-hash-mismatch": 1,
         "project.validate.source-remap-invalid": 1,
         "project.validate.source-remap-mismatch": 1,
+        "project.validate.source-remap-size-mismatch": 1,
     }
     diagnostic = next(
         diagnostic
@@ -13589,7 +13629,7 @@ def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_pat
         json.dumps(source_remap_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    _refresh_source_remap_metadata(repo, artifact)
     report_path = repo / "out" / "source-remap-content-mismatch-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -13623,7 +13663,7 @@ def test_validate_project_report_rejects_source_remap_sidecar_extra_fields(
         json.dumps(source_remap_payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    _refresh_source_remap_metadata(repo, artifact)
     report_path = repo / "out" / "source-remap-extra-field-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -13680,7 +13720,7 @@ def test_validate_project_report_rejects_compiler_incompatible_source_remap_side
     )
     artifact["sourceRemap"]["mappingGranularity"] = "file"
     artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
-    artifact["sourceRemap"]["hash"] = project_pipeline._source_hash(source_remap_path)
+    _refresh_source_remap_metadata(repo, artifact)
     _refresh_artifact_summary(payload)
     report_path = repo / "out" / "compiler-incompatible-source-remap-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -17499,6 +17539,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
+    source_remap_size = (
+        (repo / "out" / "cgl" / "simple.source-remap.json").stat().st_size
+    )
     source_span = _inspection_span_sample(
         project_pipeline._file_span(repo / "simple.cgl", "simple.cgl").to_json()
     )
@@ -17567,6 +17610,7 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "sourceHash": source_hash["value"],
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
                 "sourceRemapHash": source_remap_hash["value"],
+                "sourceRemapSizeBytes": source_remap_size,
             }
         ],
         "sourceMapsByGranularity": {"line": 1},
@@ -18197,6 +18241,9 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
     source_remap_hash = project_pipeline._source_hash(
         repo / "out" / "cgl" / "simple.source-remap.json"
     )
+    source_remap_size = (
+        (repo / "out" / "cgl" / "simple.source-remap.json").stat().st_size
+    )
     source_span = _inspection_span_sample(
         project_pipeline._file_span(repo / "simple.cgl", "simple.cgl").to_json()
     )
@@ -18266,6 +18313,7 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
                 "sourceHash": source_hash["value"],
                 "sourceRemapHashAlgorithm": source_remap_hash["algorithm"],
                 "sourceRemapHash": source_remap_hash["value"],
+                "sourceRemapSizeBytes": source_remap_size,
             }
         ],
         "sourceMapsByGranularity": {"line": 1},

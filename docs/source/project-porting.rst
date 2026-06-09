@@ -660,8 +660,8 @@ Project reports are JSON documents with:
   positive-length finer-grained mappings, finer-grained mapping containment
   within artifact-level anchors, span consistency, anchor consistency, current
   file-level source-map span coverage,
-  source-remap metadata shape, mapping-count consistency, sidecar hash, closed
-  compiler sidecar field sets, and sidecar content checks, external
+  source-remap metadata shape, mapping-count consistency, sidecar hash and byte
+  size, closed compiler sidecar field sets, and sidecar content checks, external
   corpus record, per-entry artifact count, required manifest-entry accounting,
   and summary checks, summary consistency checks, migration action shape,
   rollup, and target declaration checks,

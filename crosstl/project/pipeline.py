@@ -288,6 +288,7 @@ REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
         "generatedFile",
         "mappingGranularity",
         "mappingCount",
+        "sizeBytes",
         "hash",
     )
 )
@@ -4395,6 +4396,7 @@ def _artifact_source_remap(
         "generatedFile": artifact_path,
         "mappingGranularity": mapping_granularity,
         "mappingCount": mapping_count,
+        "sizeBytes": remap_path.stat().st_size,
         "hash": _source_hash(remap_path),
     }
 
@@ -5193,6 +5195,24 @@ def _source_remap_validation_diagnostics(
         ]
 
     diagnostics = []
+    expected_size = source_remap.get("sizeBytes")
+    if not isinstance(expected_size, int) or isinstance(expected_size, bool):
+        expected_size = None
+    if expected_size is not None and expected_size != remap_path.stat().st_size:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.source-remap-size-mismatch",
+                message=(
+                    "Source remap sidecar size does not match report: "
+                    f"{source_remap['path']}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                **_artifact_diagnostic_context(artifact),
+                missing_capabilities=["source.provenance"],
+            )
+        )
+
     source_remap_hash_matches = _hash_matches_report(
         _source_hash(remap_path), source_remap["hash"]
     )
@@ -5303,6 +5323,8 @@ def _source_remap_validation_status(
         return "missing"
     if "project.validate.source-remap-invalid" in codes:
         return "invalid"
+    if "project.validate.source-remap-size-mismatch" in codes:
+        return "mismatch"
     if "project.validate.source-remap-mismatch" in codes:
         return "mismatch"
     if "project.validate.source-remap-hash-mismatch" in codes:
@@ -6931,6 +6953,9 @@ def _inspection_source_remap_artifact(
     mapping_count = source_remap.get("mappingCount")
     if _is_non_negative_int(mapping_count):
         sample["mappingCount"] = mapping_count
+    size_bytes = source_remap.get("sizeBytes")
+    if _is_non_negative_int(size_bytes):
+        sample["sourceRemapSizeBytes"] = size_bytes
     return {key: value for key, value in sample.items() if value is not None}
 
 
@@ -11678,6 +11703,12 @@ def _source_remap_contract_reasons(
                 f"{prefix}.mappingCount must match "
                 f"artifacts[{index}].sourceMap.mappings"
             )
+    size_bytes = source_remap.get("sizeBytes")
+    if size_bytes is None:
+        if required:
+            reasons.append(f"{prefix}.sizeBytes must be a non-negative integer")
+    elif not _is_non_negative_int(size_bytes):
+        reasons.append(f"{prefix}.sizeBytes must be a non-negative integer")
     reasons.extend(
         _hash_contract_reasons(
             f"{prefix}.hash",
