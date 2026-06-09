@@ -10278,6 +10278,7 @@ def _toolchain_run_contract_reasons(
         )
 
     command = run.get("command")
+    normalized_target = None
     if (
         not isinstance(command, list)
         or not command
@@ -10293,11 +10294,36 @@ def _toolchain_run_contract_reasons(
                 f"for target {normalized_target}"
             )
 
-    if "checkKind" in run and run.get("checkKind") not in (
-        VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS
-    ):
-        allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
-        reasons.append(f"{prefix}.checkKind must be one of {allowed}")
+    check_kind = run.get("checkKind")
+    if "checkKind" in run:
+        if check_kind not in VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS:
+            allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
+            reasons.append(f"{prefix}.checkKind must be one of {allowed}")
+        elif (
+            normalized_target is not None
+            and isinstance(command, list)
+            and all(_is_non_empty_string(part) for part in command)
+            and _is_non_empty_string(path)
+        ):
+            configured_tools = TOOLCHAIN_BY_BACKEND.get(normalized_target, ())
+            smoke_command = _toolchain_smoke_command(
+                normalized_target, configured_tools, Path(str(path))
+            )
+            if smoke_command is not None:
+                expected_command, expected_check_kind = smoke_command
+                if check_kind != expected_check_kind:
+                    reasons.append(
+                        f"{prefix}.checkKind must be {expected_check_kind} "
+                        f"for target {normalized_target}"
+                    )
+                if (
+                    expected_check_kind == "tool-availability"
+                    and command != expected_command
+                ):
+                    reasons.append(
+                        f"{prefix}.command must match the configured tool "
+                        f"availability check for target {normalized_target}"
+                    )
 
     returncode = run.get("returncode")
     if not isinstance(returncode, int) or isinstance(returncode, bool):

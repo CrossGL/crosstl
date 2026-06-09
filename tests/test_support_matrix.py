@@ -1681,6 +1681,8 @@ def test_project_validation_hooks_document_migration_contract_checks():
             backend_support["notes"]
         )
         assert "target-tool command consistency" in backend_support["notes"]
+        assert "target check-kind consistency" in backend_support["notes"]
+        assert "availability command argv consistency" in backend_support["notes"]
         assert "required summarized validation toolchain target coverage" in (
             backend_support["notes"]
         )
@@ -1782,6 +1784,16 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "tests/test_translator/test_project_translation.py::def "
             "test_validate_project_report_rejects_toolchain_run_command_target_"
             "mismatch"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_toolchain_run_check_kind_"
+            "mismatches"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_availability_toolchain_run_"
+            "argv_mismatch"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

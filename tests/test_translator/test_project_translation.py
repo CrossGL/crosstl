@@ -10143,6 +10143,145 @@ def test_validate_project_report_rejects_toolchain_run_command_target_mismatch(
     ) in diagnostic["message"]
 
 
+@pytest.mark.parametrize(
+    ("target", "path", "command", "check_kind", "expected_check_kind"),
+    (
+        (
+            "opengl",
+            "out/opengl/simple.glsl",
+            ["glslangValidator", "--stdin", "-S", "compute"],
+            "tool-availability",
+            "artifact",
+        ),
+        (
+            "directx",
+            "out/directx/simple.hlsl",
+            ["dxc", "-help"],
+            "artifact",
+            "tool-availability",
+        ),
+    ),
+)
+def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches(
+    tmp_path, target, path, command, check_kind, expected_check_kind
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "mismatched-toolchain-run-check-kind-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": [target],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "target": target,
+                        "path": path,
+                        "status": "translated",
+                    }
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "sourceBackend": "cgl",
+                            "target": target,
+                            "path": path,
+                            "command": command,
+                            "checkKind": check_kind,
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        f"validation.toolchainRuns[0].checkKind must be {expected_check_kind} "
+        f"for target {target}"
+    ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "mismatched-availability-toolchain-run-command-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["directx"],
+                    "outputDir": "out",
+                },
+                "artifacts": [
+                    {
+                        "source": "simple.cgl",
+                        "sourceBackend": "cgl",
+                        "target": "directx",
+                        "path": "out/directx/simple.hlsl",
+                        "status": "translated",
+                    }
+                ],
+                "validation": {
+                    "toolchains": [],
+                    "artifacts": [],
+                    "toolchainRuns": [
+                        {
+                            "source": "simple.cgl",
+                            "sourceBackend": "cgl",
+                            "target": "directx",
+                            "path": "out/directx/simple.hlsl",
+                            "command": ["dxc", "-T", "cs_6_0"],
+                            "checkKind": "tool-availability",
+                            "returncode": 0,
+                            "status": "ok",
+                            "stdout": "",
+                            "stderr": "",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path, run_toolchains=True)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns[0].command must match the configured tool "
+        "availability check for target directx"
+    ) in diagnostic["message"]
+
+
 def test_validate_project_report_rejects_inconsistent_toolchain_status(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
