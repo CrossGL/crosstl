@@ -2895,15 +2895,18 @@ def _include_cycle_diagnostic(
     line_number: int,
     include_path: str,
     location: SourceLocation,
+    variant: str | None = None,
 ) -> ProjectDiagnostic:
+    context_suffix = _include_resolution_context_suffix(variant=variant)
     return ProjectDiagnostic(
         severity="warning",
         code="project.scan.include-cycle",
         message=(
             f"Include directive in {relative_path}:{line_number} creates a "
-            f"cycle and was not scanned recursively: {include_path}"
+            f"cycle and was not scanned recursively{context_suffix}: {include_path}"
         ),
         location=location,
+        variant=variant,
         missing_capabilities=["include.resolution"],
     )
 
@@ -2930,6 +2933,7 @@ def _scan_resolved_include_dependencies(
                 line_number=line_number,
                 include_path=include_path,
                 location=location,
+                variant=variant,
             )
         ]
     if resolved_path in scanned_sources:

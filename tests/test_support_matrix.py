@@ -648,7 +648,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert "structured variant fields and diagnostic variant rollups" in (
             backend_support["notes"]
         )
-        assert "missing and dynamic include diagnostics" in backend_support["notes"]
+        assert (
+            "missing, dynamic, and cyclic include diagnostics"
+            in backend_support["notes"]
+        )
         assert "sampled include-path processing artifact metadata" in (
             backend_support["notes"]
         )
@@ -700,6 +703,10 @@ def test_project_include_resolution_documents_status_reporting():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_variant_dynamic_include_diagnostics"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_variant_nested_include_cycle_diagnostics"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1109,6 +1116,10 @@ def test_project_diagnostics_document_location_path_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_project_reports_variant_dynamic_include_diagnostics"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_project_reports_variant_nested_include_cycle_diagnostics"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

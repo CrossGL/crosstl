@@ -2415,6 +2415,64 @@ def test_scan_project_reports_nested_include_cycles(tmp_path):
     assert validation["missingCapabilityCounts"] == {"include.resolution": 1}
 
 
+def test_scan_project_reports_variant_nested_include_cycle_diagnostics(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    nested_dir = shader_dir / "include"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "a.inc").write_text('#include "b.inc"\n', encoding="utf-8")
+    (nested_dir / "b.inc").write_text('#include "a.inc"\n', encoding="utf-8")
+    (shader_dir / "main.frag").write_text(
+        textwrap.dedent("""
+            #if defined(USE_CYCLE)
+            #include "include/a.inc"
+            #endif
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+
+            [project.variants.debug]
+            USE_CYCLE = "1"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = (
+        scan_project(load_project_config(repo)).to_report(targets=["cgl"]).to_json()
+    )
+
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 1, "error": 0}
+    assert payload["diagnostics"] == [
+        {
+            "severity": "warning",
+            "code": "project.scan.include-cycle",
+            "message": (
+                "Include directive in shaders/include/b.inc:1 creates a cycle "
+                "and was not scanned recursively (for variant debug): a.inc"
+            ),
+            "location": {
+                "file": "shaders/include/b.inc",
+                "line": 1,
+                "column": 1,
+                "offset": 0,
+                "length": 0,
+                "endLine": 1,
+                "endColumn": 1,
+                "endOffset": 0,
+            },
+            "variant": "debug",
+            "missingCapabilities": ["include.resolution"],
+        }
+    ]
+    assert payload["summary"]["diagnosticsByCode"] == {"project.scan.include-cycle": 1}
+    assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
+
+
 def test_scan_project_reports_define_backed_include_resolution_diagnostics(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
