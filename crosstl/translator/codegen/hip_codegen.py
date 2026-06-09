@@ -319,6 +319,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec3": "float3",
             "vec4": "float4",
             "vec2<f16>": "half2",
+            "vec2<i8>": "char2",
+            "vec3<i8>": "char3",
+            "vec4<i8>": "char4",
+            "vec2<u8>": "uchar2",
+            "vec3<u8>": "uchar3",
+            "vec4<u8>": "uchar4",
+            "vec2<i16>": "short2",
+            "vec3<i16>": "short3",
+            "vec4<i16>": "short4",
+            "vec2<u16>": "ushort2",
+            "vec3<u16>": "ushort3",
+            "vec4<u16>": "ushort4",
             "vec2<f32>": "float2",
             "vec3<f32>": "float3",
             "vec4<f32>": "float4",
@@ -486,6 +498,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "vec2<f32>": "make_float2",
             "vec3<f32>": "make_float3",
             "vec4<f32>": "make_float4",
+            "vec2<i8>": "make_char2",
+            "vec3<i8>": "make_char3",
+            "vec4<i8>": "make_char4",
+            "vec2<u8>": "make_uchar2",
+            "vec3<u8>": "make_uchar3",
+            "vec4<u8>": "make_uchar4",
+            "vec2<i16>": "make_short2",
+            "vec3<i16>": "make_short3",
+            "vec4<i16>": "make_short4",
+            "vec2<u16>": "make_ushort2",
+            "vec3<u16>": "make_ushort3",
+            "vec4<u16>": "make_ushort4",
             "ivec2": "make_int2",
             "ivec3": "make_int3",
             "ivec4": "make_int4",
@@ -5774,6 +5798,47 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     def map_vector_arithmetic_type(self, type_name):
         return self.map_type(type_name)
 
+    def vector_type_info(self, type_name):
+        narrow_info = self.hip_narrow_integer_vector_type_info(type_name)
+        if narrow_info is not None:
+            return narrow_info
+        return super().vector_type_info(type_name)
+
+    def hip_narrow_integer_vector_type_info(self, type_name):
+        type_text = self.type_name_string(type_name)
+        if type_text is None:
+            return None
+
+        compact_type = "".join(str(type_text).split())
+        if (
+            len(compact_type) < 8
+            or not compact_type.startswith("vec")
+            or compact_type[3] not in {"2", "3", "4"}
+            or compact_type[4] != "<"
+            or compact_type[-1] != ">"
+        ):
+            return None
+
+        scalar_type = compact_type[5:-1]
+        native_prefix, component_type = {
+            "i8": ("char", "int"),
+            "u8": ("uchar", "uint"),
+            "i16": ("short", "int"),
+            "u16": ("ushort", "uint"),
+        }.get(scalar_type, (None, None))
+        if native_prefix is None:
+            return None
+
+        size = int(compact_type[3])
+        components = ("x", "y", "z", "w")[:size]
+        vector_type = f"{native_prefix}{size}"
+        return {
+            "type": vector_type,
+            "constructor": f"make_{vector_type}",
+            "component_type": component_type,
+            "components": components,
+        }
+
     def hip_unsupported_fp16_vector_type(self, type_name):
         type_text = self.type_name_string(type_name)
         if type_text is None:
@@ -8684,6 +8749,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     return f"vec{size}<f16>"
                 elif element_type == "int":
                     return f"int{size}"
+                elif element_type in {"i8", "u8", "i16", "u16"}:
+                    return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
         else:
@@ -8909,6 +8976,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return ",".join(values)
         return None
 
+    def hip_explicit_resource_binding_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return attr_name
+        return None
+
     def hip_resource_base_type_and_count(self, type_name):
         type_name = self.type_name_string(type_name)
         if not type_name:
@@ -8966,6 +9053,15 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return "buffer"
         return kind
 
+    def hip_resource_binding_validation_count(self, node, resource_kind, count):
+        if (
+            resource_kind == "sampler"
+            and count != 1
+            and self.hip_explicit_resource_binding_attribute(node) == "binding"
+        ):
+            return 1
+        return count
+
     def hip_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.hip_used_resource_bindings.get(
@@ -9009,21 +9105,24 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return ""
 
         _base_type, count = self.hip_resource_base_type_and_count(type_name)
+        validation_count = self.hip_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.hip_resource_binding_namespace(resource_kind)
         set_index = self.explicit_hip_resource_set_index(node)
         binding = self.explicit_hip_resource_binding_index(node)
         if binding is None:
             binding = self.next_available_hip_resource_binding(
-                namespace, set_index, count
+                namespace, set_index, validation_count
             )
             binding_source = "automatic"
             self.reserve_hip_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
         else:
             binding_source = "explicit"
             self.reserve_hip_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
 
         parts = [
@@ -9059,9 +9158,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if not name or resource_kind is None or binding is None:
             return
         _base_type, count = self.hip_resource_base_type_and_count(type_name)
+        validation_count = self.hip_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.hip_resource_binding_namespace(resource_kind)
         set_index = self.explicit_hip_resource_set_index(node)
-        self.reserve_hip_resource_binding(namespace, set_index, binding, count, name)
+        self.reserve_hip_resource_binding(
+            namespace, set_index, binding, validation_count, name
+        )
 
     def reserve_explicit_hip_resource_bindings(self, ast):
         for node in getattr(ast, "global_variables", []) or []:

@@ -43,7 +43,7 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
             [
                 "compute {",
                 "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;",
-                "iimage2D color1 @set(0) @binding(2) @rgba32i @writeonly;",
+                "iimage2D color1 @set(0) @binding(2) @rgba32i @writeonly @highp;",
                 "imageStore(color1, offset, ivec4(1));",
             ],
             id="glslang-spv-qcom-es-tile-shading-compute",
@@ -122,6 +122,63 @@ def reverse_plain_glsl(source: str, file_path: str = "/tmp/upstream-sample.glsl"
                 "gl_FragDepth = 0.5;",
             ],
             id="glslang-fragment-layout-only",
+        ),
+        pytest.param(
+            """
+            #version 460 core
+            #extension GL_EXT_fragment_shader_barycentric : require
+
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = vec4(gl_BaryCoordEXT, 1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "#extension GL_EXT_fragment_shader_barycentric : require",
+                "outColor = vec4(gl_BaryCoordEXT, 1.0);",
+            ],
+            id="vulkan-fragment-barycoord-builtin-infers-fragment",
+        ),
+        pytest.param(
+            """
+            #version 460 core
+            #extension GL_EXT_fragment_shader_barycentric : require
+
+            layout(location = 0) out vec4 outColor;
+
+            void main() {
+                outColor = vec4(gl_BaryCoordNoPerspEXT, 1.0);
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "outColor = vec4(gl_BaryCoordNoPerspEXT, 1.0);",
+            ],
+            id="vulkan-fragment-barycoord-nopersp-builtin-infers-fragment",
+        ),
+        pytest.param(
+            """
+            #version 450 core
+            #extension GL_ARB_shader_stencil_export : require
+
+            void main() {
+                gl_FragStencilRefARB = 7;
+            }
+            """,
+            "fragment",
+            ShaderStage.FRAGMENT,
+            [
+                "fragment {",
+                "#extension GL_ARB_shader_stencil_export : require",
+                "gl_FragStencilRefARB = 7;",
+            ],
+            id="vulkan-fragment-stencil-export-builtin-infers-fragment",
         ),
         pytest.param(
             """

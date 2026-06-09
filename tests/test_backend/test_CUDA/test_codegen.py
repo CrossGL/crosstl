@@ -25,6 +25,25 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
         assert "// Kernel: simple_kernel" in result
 
+    def test_register_storage_class_local_variable_conversion(self):
+        code = """
+        __global__ void register_kernel(float* out) {
+            register int lane = threadIdx.x;
+            out[lane] = 0.0f;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// Kernel: register_kernel" in result
+        assert "var lane: i32 = gl_LocalInvocationID.x;" in result
+        assert "register int lane" not in result
+
     def test_launch_bounds_kernel_attribute_conversion(self):
         code = """
         __launch_bounds__(128) __global__ void bounded(float* data) {
@@ -258,8 +277,12 @@ class TestCudaCodeGen:
 
     def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
         code = """
+        #define KERNEL_RADIUS 8
+        #define KERNEL_LENGTH (2 * KERNEL_RADIUS + 1)
+
         __device__ __constant__ float stencil[4];
         __constant__ int offsets[4];
+        __constant__ float c_Kernel[KERNEL_LENGTH];
 
         __global__ void apply_constants(float* out, const float* input) {
             int idx = threadIdx.x;
@@ -277,13 +300,18 @@ class TestCudaCodeGen:
         assert "@group(0) @binding(0) var<uniform> stencil: array<f32, 4>;" in result
         assert "@group(0) @binding(1) var<uniform> offsets: array<i32, 4>;" in result
         assert (
-            "@group(0) @binding(2) var<storage, read_write> out: array<f32>" in result
+            "@group(0) @binding(2) var<uniform> c_Kernel: "
+            "array<f32, cuda_array_extent_2_mul_8_plus_1>;"
+        ) in result
+        assert (
+            "@group(0) @binding(3) var<storage, read_write> out: array<f32>" in result
         )
         assert (
-            "@group(0) @binding(3) var<storage, read_write> input: array<f32>" in result
+            "@group(0) @binding(4) var<storage, read_write> input: array<f32>" in result
         )
         assert result.count("@group(0) @binding(0)") == 1
         assert "__constant__" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_fixed_width_pointer_declaration_list_conversion(self):
         code = """
@@ -419,6 +447,7 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("void") == "void"
         assert codegen.convert_cuda_type_to_crossgl("long long") == "i64"
         assert codegen.convert_cuda_type_to_crossgl("unsigned long long") == "u64"
+        assert codegen.convert_cuda_type_to_crossgl("long long unsigned int") == "u64"
         assert codegen.convert_cuda_type_to_crossgl("half") == "f16"
         assert codegen.convert_cuda_type_to_crossgl("__half") == "f16"
         assert codegen.convert_cuda_type_to_crossgl("half2") == "vec2<f16>"
@@ -469,7 +498,9 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "u32 scan1Inclusive(u32 idata, ptr<u32> s_Data, u32 size)" in result
-        assert "var<workgroup> s_Data: array<u32, (2 * 256)>;" in result
+        assert (
+            "var<workgroup> s_Data: array<u32, cuda_array_extent_2_mul_256>;" in result
+        )
         expected_pos = (
             "var pos: u32 = "
             "((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);"
@@ -7957,6 +7988,30 @@ class TestCudaCodeGen:
         assert "var q: ptr<auto> = data;" in result
         assert "var r: ptr<auto> = data;" in result
 
+    def test_public_cuda_function_pointer_local_initializer_codegen_reparse(self):
+        # Reduced from CUDA callback-table patterns used by public sample headers.
+        code = """
+        __device__ float add(float x) {
+            return x;
+        }
+
+        __global__ void use_function_pointer(float* out) {
+            float (*fn)(float) = add;
+            out[0] = fn(1.0f);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "var fn: ptr<f32> = add;" in result
+        assert "ptr<float ()>" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_device_lambda_expression_conversion(self):
         code = """
         void host() {
@@ -7985,6 +8040,143 @@ class TestCudaCodeGen:
             "var mapped: auto = map(colors, "
             "lambda(vec3<f32> color, { prepare(color); return color; }));" in result
         )
+
+    def test_public_cccl_fold_expression_statement_conversion(self):
+        code = """
+        template <typename... InputIt>
+        __device__ void prefetch(InputIt... ins) {
+            (..., (void)(ins += 1));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "0 /* CUDA fold expression (...,(void)(ins += 1)) is not directly "
+            "supported in CrossGL */;" in result
+        )
+
+    def test_public_cutlass_parenthesized_fold_expression_return_conversion(self):
+        code = """
+        template <class Coord, class Shape, class Stride, int... Is>
+        __device__ auto crd2idx_ttt(Coord const& coord,
+                                    Shape const& shape,
+                                    Stride const& stride,
+                                    seq<Is...>) {
+            return (... + crd2idx(get<Is>(coord), get<Is>(shape), get<Is>(stride)));
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "return 0 /* CUDA fold expression" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_cccl_parameter_pack_types_are_crossgl_safe(self):
+        code = """
+        template <typename... InTs>
+        __device__ void transform(RandomAccessIteratorIn... ins,
+                                  kernel_arg<RandomAccessIteratorsIn>... args,
+                                  const InTs*... ptrs) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "RandomAccessIteratorIn_pack ins" in result
+        assert "kernel_arg_RandomAccessIteratorsIn_pack args" in result
+        assert "ptr<InTs>_pack ptrs" not in result
+        assert "ptr_InTs_pack ptrs" in result
+        assert "..." not in result
+
+    def test_public_cccl_std_namespace_scalar_parameter_types_are_crossgl_safe(self):
+        code = """
+        __device__ void bulk_copy(::cuda::std::uint32_t total_copied,
+                                  std::uint64_t total_size) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "u32 total_copied" in result
+        assert "std::uint64_t total_size" in result
+
+    def test_public_cccl_operator_overload_function_names_are_crossgl_safe(self):
+        code = """
+        template <class... Types>
+        __device__ bool operator==(variant<Types...> const& __lhs,
+                                   variant<Types...> const& __rhs) {
+            return true;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "bool operator_equal(" in result
+        assert "bool operator==(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_cutlass_unnamed_kernel_parameters_get_synthetic_names(self):
+        code = """
+        __global__ void gemm_device(CStride dC, CSmemLayout, CThreadLayout tC) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "CSmemLayout _unused_param_1" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_rapids_digit_separator_numeric_literals_are_crossgl_safe(self):
+        code = """
+        __device__ uint32_t rotate(uint32_t x) {
+            return ((x & 0xFFFF'0000u) << 16) | (x & 0xFFFFu);
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "0xFFFF0000u" in result
+        assert "'" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_restrict_pointer_qualifier_conversion(self):
         code = """
@@ -9354,8 +9546,8 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var table: std::vector<std::array<unsigned int, 4>>;" in result
-        assert "var rows: std::vector<std::vector<float>>;" in result
+        assert "var table: std_vector<std_array<u32, 4>>;" in result
+        assert "var rows: std_vector<std_vector<f32>>;" in result
         assert "var pointer: ptr<ptr<f32>> = new<ptr<f32>>(nullptr);" in result
         assert "var owned: ptr<f32> = new_array<f32>(n);" in result
         assert "std::unique_ptr" not in result
@@ -9385,7 +9577,7 @@ class TestCudaCodeGen:
         result = codegen.generate(ast)
 
         assert "typedef ptr<f32> HostBuffer;" in result
-        assert "typedef std::vector<std::array<unsigned int, 4>> Table;" in result
+        assert "typedef std_vector<std_array<u32, 4>> Table;" in result
         assert "typedef ptr<f32> LocalBuffer;" in result
         assert "var h: HostBuffer = new_array<f32>(n);" in result
         assert "var hp: ptr<HostBuffer> = (&h);" in result
@@ -9850,9 +10042,10 @@ class TestCudaCodeGen:
 
         assert "var c: i8 = 'x';" in result
         assert "var escaped: i8 = '\\n';" in result
-        assert "var hex: i8 = '\\x7f';" in result
-        assert "var oct: i8 = '\\377';" in result
+        assert "var hex: i8 = 127;" in result
+        assert "var oct: i8 = 255;" in result
         assert "return c;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_long_long_type_conversion(self):
         code = """
@@ -9961,3 +10154,49 @@ class TestCudaCodeGen:
         assert "default:" in result
         assert "case 1:" in result
         assert result.index("default:") < result.index("case 1:")
+
+    def test_cuda_samples_shared_memory_macro_header_codegen_without_preprocess(self):
+        # Upstream pattern:
+        # repo: https://github.com/NVIDIA/cuda-samples
+        # path: cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/inc/cudasharedmem.h
+        code = r"""
+        template <typename T> struct SharedMemory
+        {
+            virtual __device__ T &operator*() = 0;
+            virtual __device__ T &operator[](int i) = 0;
+        };
+
+        #define BUILD_SHAREDMEMORY_TYPE(t, n)   \
+            template <> struct SharedMemory<t>  \
+            {                                   \
+                __device__ t &operator*()       \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return *n;                  \
+                }                               \
+                __device__ t &operator[](int i) \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return n[i];                \
+                }                               \
+            }
+
+        BUILD_SHAREDMEMORY_TYPE(int, s_int);
+
+        __global__ void use_shared(int* out) {
+            out[0] = 1;
+        }
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "// define BUILD_SHAREDMEMORY_TYPE" in result
+        assert "template <> struct SharedMemory<t>" in result
+        assert "struct SharedMemory {" in result
+        assert "// Kernel: use_shared" in result
+        assert "fn use_shared(" in result

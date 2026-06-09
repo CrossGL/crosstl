@@ -21,7 +21,7 @@ from crosstl.backend.common_ast import (
     VectorConstructorNode,
     WhileNode,
 )
-from crosstl.backend.Metal.MetalAst import BlockNode, LambdaNode
+from crosstl.backend.Metal.MetalAst import BlockNode, EnumNode, LambdaNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -205,6 +205,81 @@ def test_parse_unbraced_do_while_body_from_msl_cxx14_statement_grammar():
     assert isinstance(body[1], DoWhileNode)
     assert len(body[1].body) == 1
     assert isinstance(body[1].body[0], AssignmentNode)
+
+
+def test_parse_templated_call_assignment_lhs_from_pytorch_mps_binary_kernel():
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Path: aten/src/ATen/native/mps/kernels/BinaryKernel.metal
+    code = """
+    template<typename T>
+    device T& ref_at_offs(device T* ptr, long off);
+
+    template<typename T>
+    T val_at_offs(device T* ptr, long off);
+
+    kernel void lerp_kernel(device float* out_ptr [[buffer(0)]],
+                            device float* self_ptr [[buffer(1)]],
+                            long out_off,
+                            long self_off) {
+        ref_at_offs<float>(out_ptr, long(out_off)) =
+            val_at_offs<float>(self_ptr, long(self_off));
+    }
+    """
+    ast = parse_ok(code)
+    assignment = ast.functions[0].body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, FunctionCallNode)
+    assert assignment.left.name == "ref_at_offs<float>"
+
+
+def test_parse_indexed_reinterpret_cast_assignment_from_pytorch_mps_quantized():
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Path: aten/src/ATen/native/mps/kernels/Quantized.metal
+    code = """
+    struct vecT { float value; };
+
+    kernel void int4pack_mm(device char* output_data [[buffer(0)]],
+                            uint m,
+                            uint n,
+                            uint N,
+                            float result) {
+        reinterpret_cast<device vecT*>(output_data + m * N)[n / 4] =
+            vecT(result);
+    }
+    """
+    ast = parse_ok(code)
+    assignment = ast.functions[0].body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, ArrayAccessNode)
+
+
+def test_parse_global_scoped_metal_array_declaration_from_pytorch_mps_scatter():
+    # Reduced from:
+    # Repo: https://github.com/pytorch/pytorch
+    # Path: aten/src/ATen/native/mps/kernels/ScatterGather.metal
+    code = """
+    constant uint max_ndim = 16;
+
+    template<typename T>
+    void pos_from_thread_index(long tid, thread T* pos, constant T* sizes);
+
+    kernel void scatter(long thread_index,
+                        long tid_offset,
+                        constant long* index_sizes [[buffer(0)]]) {
+        long tid = long(thread_index) + tid_offset;
+        ::metal::array<long, max_ndim> pos;
+        pos_from_thread_index<long>(tid, &pos[0], index_sizes);
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[1].vtype == "metal::array<long,max_ndim>"
+    assert body[1].name == "pos"
 
 
 def test_parse_resource_bindings_and_address_spaces():
@@ -538,6 +613,34 @@ def test_parse_typedef_struct_gnu_attribute_from_apple_deferred_sample():
         ("float", "y"),
         ("float", "z"),
     ]
+
+
+def test_parse_struct_named_packed_vector_token_from_apple_raytracing_sample():
+    # Reduced from:
+    # Repo: https://github.com/donaldwuid/apple_metal_sample_code
+    # Commit: 0bc50e5b3670b3169855ab260e8da5ff07b53749
+    # Path:
+    # MetalSampleCodeLibrary/RayTracing/AcceleratingRayTracingUsingMetal/
+    # Renderer/ShaderTypes.h
+    code = """
+    struct packed_float3 {
+        float x;
+        float y;
+        float z;
+    };
+
+    struct Sphere {
+        packed_float3 origin;
+        float radiusSquared;
+        packed_float3 color;
+        float radius;
+    };
+    """
+    ast = parse_ok(code)
+
+    assert [struct.name for struct in ast.structs] == ["packed_float3", "Sphere"]
+    assert ast.structs[1].members[0].vtype == "packed_float3"
+    assert ast.structs[1].members[2].vtype == "packed_float3"
 
 
 def test_parse_leading_global_scope_expression_from_apple_hdr_sample():
@@ -1081,6 +1184,28 @@ def test_parse_enum_and_typedef():
     }
     """
     parse_ok(code)
+
+
+def test_parse_local_enum_declaration_from_metal_function_body():
+    code = """
+    fragment float4 local_enum_frag(float4 color [[stage_in]]) {
+        enum Mode { ModeA = 0, ModeB = 1 };
+        Mode mode = ModeA;
+        return mode == ModeA ? color : float4(0.0);
+    }
+    """
+    ast = parse_ok(code)
+    function = ast.functions[0]
+    local_enum = function.body[0]
+    mode_declaration = function.body[1]
+
+    assert isinstance(local_enum, EnumNode)
+    assert local_enum.name == "Mode"
+    assert local_enum.members == [("ModeA", "0"), ("ModeB", "1")]
+    assert isinstance(mode_declaration, AssignmentNode)
+    assert mode_declaration.left.vtype == "Mode"
+    assert mode_declaration.left.name == "mode"
+    assert mode_declaration.right.name == "ModeA"
 
 
 def test_parse_scoped_enum_with_underlying_type_from_metal4_basics():
@@ -2165,6 +2290,52 @@ def test_parse_decltype_kernel_template_id_instantiation_from_mlx_jit_indexing()
     assert len(ast.functions) == 1
     assert ast.functions[0].name == "slice_update_op_impl"
     assert ast.global_variables == []
+
+
+def test_parse_deleted_template_function_declaration_from_vllm_metal():
+    # Reduced from:
+    # Repo: https://github.com/vllm-project/vllm-metal
+    # Path: vllm_metal/metal/kernels_v2/reshape_and_cache.metal
+    code = """
+    template <typename KV_T, typename CACHE_T>
+    inline CACHE_T to_cache(KV_T v) = delete;
+
+    template <>
+    inline float to_cache<float, float>(float v) {
+        return v;
+    }
+
+    kernel void real_kernel(device float* out [[buffer(0)]]) {
+        out[0] = to_cache<float, float>(1.0f);
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == [
+        "to_cache<float,float>",
+        "real_kernel",
+    ]
+
+
+def test_parse_restrict_parameter_qualifier_from_vllm_metal():
+    # Reduced from:
+    # Repo: https://github.com/vllm-project/vllm-metal
+    # Path: vllm_metal/metal/kernels_v2/reshape_and_cache.metal
+    code = """
+    kernel void reshape_and_cache(
+        const device float *__restrict__ key [[buffer(0)]],
+        device float* out [[buffer(1)]]
+    ) {
+        out[0] = key[0];
+    }
+    """
+    ast = parse_ok(code)
+
+    params = ast.functions[0].params
+    assert params[0].name == "key"
+    assert params[0].vtype == "float*"
+    assert params[0].qualifiers == ["const", "device", "__restrict__"]
+    assert params[1].name == "out"
 
 
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():

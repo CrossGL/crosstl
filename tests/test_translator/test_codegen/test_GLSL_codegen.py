@@ -115,6 +115,23 @@ def test_glsl_tile_image_ext_importer_attribute_roundtrips():
     assert "out_color = colorAttachmentReadEXT(in_color[0]);" in generated
 
 
+def test_glsl_stencil_ref_return_semantic_emits_export_extension():
+    shader = """
+    shader StencilOut {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "#extension GL_ARB_shader_stencil_export : require" in generated
+    assert "gl_FragStencilRefARB = 7;" in generated
+    assert "gl_FragStencilRefEXT" not in generated
+
+
 def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
     shader = """
     shader SynchronizationBuiltins {
@@ -1943,89 +1960,203 @@ def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
     assert "PointerType" not in generated
 
 
-@pytest.mark.parametrize(
-    ("code", "message"),
-    [
-        (
-            """
-            shader TextureUsesDescriptorSet {
-                sampler2D tex @set(1) @binding(2);
+def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
+    # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
+    code = """
+    shader DescriptorSetFlatteningGLSL {
+        struct Params {
+            vec4 color;
+        };
 
-                fragment {
-                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                        return texture(tex, uv);
-                    }
-                }
-            }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'tex': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader SamplerUsesDescriptorSet {
-                sampler samp @set(1) @sampler(2);
-                sampler2D tex;
+        layout(set = 0, binding = 0) uniform Params frameParams;
+        layout(set = 1, binding = 0) uniform Params materialParams;
+        layout(set = 0, binding = 1) buffer float* values;
+        layout(set = 2, binding = 1) buffer float* history;
+        layout(set = 0, binding = 4) uniform sampler2D baseMap;
+        layout(set = 1, binding = 4) uniform sampler2D detailMap;
 
-                fragment {
-                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                        return texture(tex, samp, uv);
-                    }
-                }
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                values[0] = history[0];
+                return texture(baseMap, uv) + texture(detailMap, uv)
+                    + frameParams.color + materialParams.color;
             }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'samp': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader ImageUsesRegisterSpace {
-                image2D img @space(2) @binding(3);
+        }
+    }
+    """
 
-                fragment {
-                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                        return imageLoad(img, ivec2(0, 0));
-                    }
-                }
-            }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'img': "
-            "space 2 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader StageResourceUsesDescriptorSet {
-                fragment {
-                    vec4 main(sampler2D tex @set(1) @binding(2)) @gl_FragColor {
-                        return texture(tex, vec2(0.0));
-                    }
-                }
-            }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'tex': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-        (
-            """
-            shader StageSamplerUsesDescriptorSet {
-                sampler2D tex;
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
-                fragment {
-                    vec4 main(sampler samp @set(1) @sampler(2), vec2 uv @TEXCOORD0)
-                        @gl_FragColor {
-                        return texture(tex, samp, uv);
-                    }
-                }
+    assert "layout(std140, binding = 0) uniform Params {" in generated
+    assert "} frameParams;" in generated
+    assert "layout(std140, binding = 1024) uniform Params {" in generated
+    assert "} materialParams;" in generated
+    assert (
+        "layout(std430, binding = 1) buffer valuesBuffer { float values[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 2049) buffer historyBuffer { float history[]; };"
+        in generated
+    )
+    assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
+    assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
+
+
+def test_glsl_descriptor_array_texture_bindings_remap_overlapping_target_slots():
+    code = """
+    shader MixedTextureCompareDescriptorArrayShader {
+        layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+        layout(set = 0, binding = 3) uniform sampler2DShadow shadowMaps[2];
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                float shadow = textureCompare(shadowMaps[1], uv, 0.5);
+                return texture(colorMaps[1], uv) + vec4(shadow);
             }
-            """,
-            "Unsupported OpenGL resource binding metadata for 'samp': "
-            "set 1 is not supported by OpenGL GLSL",
-        ),
-    ],
-)
-def test_glsl_resource_binding_rejects_descriptor_set_space_metadata(code, message):
-    with pytest.raises(ValueError, match=message):
-        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(binding = 2) uniform sampler2D colorMaps[2];" in generated
+    assert "layout(binding = 4) uniform sampler2DShadow shadowMaps[2];" in generated
+    assert "texture(colorMaps[1], uv)" in generated
+    assert "texture(shadowMaps[1], vec3(uv, 0.5))" in generated
+    assert "layout(binding = 3) uniform sampler2DShadow shadowMaps[2];" not in generated
+
+
+def test_glsl_descriptor_array_storage_image_atomic_bindings_remap_overlapping_target_slots():
+    code = """
+    shader StorageImageAtomicDescriptorArrayShader {
+        layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D signedCounters[2];
+        layout(set = 0, binding = 2, format = r32ui) readwrite uniform uimage2D unsignedCounters[2];
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                int signedValue = imageAtomicAdd(signedCounters[1], pixel, 1);
+                uint unsignedValue = imageAtomicAdd(unsignedCounters[1], pixel, 1u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "layout(r32i, binding = 1) uniform iimage2D signedCounters[2];" in generated
+    assert (
+        "layout(r32ui, binding = 3) uniform uimage2D unsignedCounters[2];" in generated
+    )
+    assert "imageAtomicAdd(signedCounters[1], pixel, 1)" in generated
+    assert "imageAtomicAdd(unsignedCounters[1], pixel, 1u)" in generated
+    assert (
+        "layout(r32ui, binding = 2) uniform uimage2D unsignedCounters[2];"
+        not in generated
+    )
+
+
+def test_glsl_descriptor_array_storage_image_format_bindings_remap_overlapping_target_slots():
+    code = """
+    shader StorageImageExplicitFormatDescriptorArrayShader {
+        layout(set = 0, binding = 0, format = rgba32f) readwrite uniform image2D colorImages[2];
+        layout(set = 0, binding = 1, format = r32ui) readwrite uniform uimage2D labelImages[2];
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(colorImages[1], pixel);
+                uint label = imageLoad(labelImages[1], pixel);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "layout(rgba32f, binding = 0) uniform image2D colorImages[2];" in generated
+    assert "layout(r32ui, binding = 2) uniform uimage2D labelImages[2];" in generated
+    assert "vec4 color = imageLoad(colorImages[1], pixel);" in generated
+    assert "uint label = imageLoad(labelImages[1], pixel).x;" in generated
+    assert (
+        "layout(r32ui, binding = 1) uniform uimage2D labelImages[2];" not in generated
+    )
+
+
+def test_glsl_descriptor_set_flattening_is_attribute_order_independent():
+    code = """
+    shader DescriptorSetOrderIndependentGLSL {
+        sampler2D tex @binding(2) @set(1);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(tex, uv);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
+
+
+def test_glsl_register_space_flattens_to_opengl_binding():
+    code = """
+    shader RegisterSpaceFlatteningGLSL {
+        image2D img @space(2) @binding(3);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return imageLoad(img, ivec2(0, 0));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(rgba32f, binding = 2051) uniform image2D img;" in generated
+
+
+def test_glsl_descriptor_set_register_alias_flattens_to_opengl_binding():
+    code = """
+    shader DescriptorSetRegisterAliasGLSL {
+        struct Params {
+            vec4 scale;
+        };
+
+        layout(set = 1, register = 2) uniform Params materialParams;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return materialParams.scale;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(std140, binding = 1026) uniform Params {" in generated
+    assert "} materialParams;" in generated
+
+
+def test_glsl_stage_resource_descriptor_set_flattens_to_opengl_binding():
+    code = """
+    shader StageResourceUsesDescriptorSet {
+        fragment {
+            vec4 main(sampler2D tex @set(1) @binding(2)) @gl_FragColor {
+                return texture(tex, vec2(0.0));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "layout(binding = 1026) uniform sampler2D tex;" in generated
 
 
 @pytest.mark.parametrize(
@@ -2262,6 +2393,21 @@ def test_glsl_resource_binding_aliases_reject_conflicting_metadata(code, message
             """,
             "Invalid OpenGL resource binding metadata for 'tex': "
             "texture slot must resolve to a concrete integer binding",
+        ),
+        (
+            """
+            shader InvalidDescriptorSetOperand {
+                sampler2D tex @set(space) @binding(2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "set space must resolve to a concrete integer binding",
         ),
     ],
 )
@@ -4830,6 +4976,31 @@ def test_glsl_direct_vertex_varying_links_to_fragment_input_by_location():
     assert "layout(location = 5) in vec2 uv;" in generated_code
     assert "vertexOutput = uv;" in generated_code
     assert "fragColor = texture(colorMap, uv);" in generated_code
+
+
+def test_glsl_multiple_direct_fragment_entries_reuse_color_output_location():
+    code = """
+    shader MultipleFragmentEntries {
+        fragment {
+            vec4 main() @gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        fragment overlay {
+            vec4 main() @gl_FragColor {
+                return vec4(0.0, 1.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert generated_code.count("layout(location = 0) out vec4 fragColor;") == 1
+    assert "out_fragColor" not in generated_code
+    assert "fragColor = vec4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert "fragColor = vec4(0.0, 1.0, 0.0, 1.0);" in generated_code
 
 
 def test_glsl_color_semantic_maps_to_explicit_stage_io_locations():
@@ -9041,6 +9212,49 @@ def test_glsl_ray_query_trace_ray_inline_raydesc_lowers_to_initialize_fields():
         not in (generated_code)
     )
     assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert ".TraceRayInline(" not in generated_code
+
+
+def test_glsl_ray_query_lowercase_importer_type_lowers_to_ext_functions():
+    # Reduced from FidelityFX SDK raytracing_common.hlsl after HLSL import.
+    shader = """
+    shader LowercaseRayQueryImporterType {
+        struct RayDesc {
+            vec3 Origin;
+            float TMin;
+            vec3 Direction;
+            float TMax;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayDesc ray = RayDesc(
+                    vec3(0.0),
+                    0.01,
+                    vec3(0.0, 0.0, 1.0),
+                    1024.0
+                );
+                rayQuery rayQuery;
+                rayQuery.TraceRayInline(topLevelAS, 0, 255, ray);
+                bool active = rayQuery.Proceed();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "rayQueryEXT rayQuery;" in generated_code
+    assert (
+        "rayQueryInitializeEXT(rayQuery, topLevelAS, 0, 255, "
+        "ray.Origin, ray.TMin, ray.Direction, ray.TMax);" in generated_code
+    )
+    assert "bool active_ = rayQueryProceedEXT(rayQuery);" in generated_code
     assert ".TraceRayInline(" not in generated_code
 
 

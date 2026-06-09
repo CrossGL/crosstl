@@ -17,6 +17,8 @@ from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def parse_and_generate(code: str) -> str:
@@ -153,6 +155,377 @@ def test_value_returning_function_uses_final_expression_as_return():
     assert "return fallback;" in result
 
 
+def test_impl_receiver_reference_generic_return_is_normalized_for_crossgl_reparse():
+    code = """
+    pub struct Adapter {
+        inner: Device,
+    }
+
+    impl Adapter {
+        pub fn features(&self) -> Features {
+            self.inner.features()
+        }
+
+        pub fn as_custom(&self) -> Option<&T> {
+            self.inner.as_custom()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Features Adapter_features(Adapter self)" in result
+    assert "return self.inner.features();" in result
+    assert "Option<T> Adapter_as_custom(Adapter self)" in result
+    assert "return self.inner.as_custom();" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_surface_wrapper_lifetime_reference_return_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # examples/features/src/framework.rs.
+    code = """
+    struct SurfaceWrapper {
+        surface: Option<Surface<'static>>,
+    }
+
+    impl SurfaceWrapper {
+        fn get(&self) -> Option<&'_ Surface<'static>> {
+            self.surface.as_ref()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<Surface> surface;" in result
+    assert "Option<Surface> SurfaceWrapper_get(SurfaceWrapper self)" in result
+    assert "'_ Surface" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_lifetime_transmute_generic_call_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/indirect_validation/utils.rs.
+    code = """
+    struct BufferBarrierScratch<'b>(Vec<BufferBarrier<'b>>);
+
+    struct BufferBarriers<'a, 'b> {
+        scratch: &'a mut BufferBarrierScratch<'b>,
+    }
+
+    impl<'a, 'b> BufferBarriers<'a, 'b> {
+        fn new(scratch: &'a mut BufferBarrierScratch<'_>) -> Self {
+            let scratch = unsafe {
+                core::mem::transmute::<
+                    &'a mut BufferBarrierScratch<'_>,
+                    &'a mut BufferBarrierScratch<'b>,
+                >(scratch)
+            };
+            Self { scratch }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "core::mem::transmute<BufferBarrierScratch, BufferBarrierScratch>" in result
+    assert "transmute<&" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_struct_initializer_lifetime_type_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/track/mod.rs.
+    code = """
+    struct UsageScope<'a> {
+        pool: &'a UsageScopePool,
+        buffers: BufferUsageScope,
+        textures: TextureUsageScope,
+    }
+
+    impl UsageScope<'static> {
+        fn new_pooled<'d>(
+            pool: &'d UsageScopePool,
+            pooled: (BufferUsageScope, TextureUsageScope),
+        ) -> UsageScope<'d> {
+            let mut scope = UsageScope::<'d> {
+                pool,
+                buffers: pooled.0,
+                textures: pooled.1,
+            };
+            scope
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "let mut scope = UsageScope { pool: pool, buffers: pooled.field0, textures: pooled.field1 };"
+        in result
+    )
+    assert "UsageScope::<'d>" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_global_tuple_field_access_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # tests/wgpu-gpu/shader/zero_init_workgroup_mem.rs.
+    code = """
+    const DISPATCH_SIZE: (u32, u32, u32) = (64, 64, 64);
+    const TOTAL_WORK_GROUPS: u32 =
+        DISPATCH_SIZE.0 * DISPATCH_SIZE.1 * DISPATCH_SIZE.2;
+    """
+
+    result = parse_and_generate(code)
+
+    assert "DISPATCH_SIZE.field0" in result
+    assert "DISPATCH_SIZE.0" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_mut_slice_reference_inside_generic_type_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/track/buffer.rs.
+    code = """
+    unsafe fn insert(
+        start_states: Option<&mut[BufferUses]>,
+        current_states: &mut BufferUses[],
+        index: usize,
+        start_state_provider: BufferStateProvider<'_>,
+    ) {
+        let new_start_state = unsafe { start_state_provider.get_state(index) };
+        if let Some(&mut ref mut start_state) = start_states {
+            *start_state.get_unchecked_mut(index) = new_start_state;
+        }
+        current_states.get_unchecked_mut(index) = new_start_state;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<BufferUses[]> start_states" in result
+    assert "Option<mut[BufferUses]>" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_wgpu_match_struct_pattern_field_attribute_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/command/mod.rs.
+    code = """
+    fn process(res: Result<(), EncoderErrorState>) {
+        let (data, error) = match res {
+            Err(EncoderErrorState {
+                error,
+                #[cfg(feature = "trace")]
+                trace_commands,
+            }) => {
+                error_sink(error);
+                (trace_commands, error)
+            }
+            Ok(()) => unreachable!(),
+        };
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "trace_commands" in result
+    assert "#[cfg" not in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_underscore_separated_integer_suffix_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/command/mod.rs.
+    code = """
+    const IMMEDIATES_CLEAR_ARRAY: [u32; 4] = [0_u32; 4];
+
+    fn count(size_words: u32) {
+        let mut count_words = 0_u32;
+        while count_words < size_words {
+            count_words += 1_u32;
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "0_u32" not in result
+    assert "1_u32" not in result
+    assert "{0, 0, 0, 0}" in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_labeled_block_expression_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/device/queue.rs.
+    code = """
+    fn submit(submission: Submission) {
+        let submit_index = submission.index;
+        let res = 'error: {
+            let mut used_surface_textures = TextureUsageScope::default();
+            if should_stop() {
+                break 'error Err(QueueError::DeviceLost);
+            }
+            Ok(submit_index)
+        };
+        finish(res);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto res;" in result
+    assert "while (true) {" in result
+    assert "res = Err(QueueError::DeviceLost);" in result
+    assert "res = Ok(submit_index);" in result
+    assert "'error" not in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_labeled_block_turbofish_shift_right_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/device/queue.rs.
+    code = """
+    fn submit() {
+        let res = 'error: {
+            let mut used_surface_textures = TextureUsageScope::default();
+            let texture_barriers = trackers
+                .textures
+                .set_from_usage_scope_and_drain_transitions(
+                    &used_surface_textures,
+                    &submission.snatch_guard,
+                )
+                .collect::<Vec<_>>();
+            unsafe { baked.encoder.raw.transition_textures(&texture_barriers); };
+            if let Err(e) = baked.encoder.close() {
+                break 'error Err(e.into());
+            }
+            Ok(())
+        };
+        finish(res);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto res;" in result
+    assert "while (true) {" in result
+    assert ".collect<Vec<_>>()" in result
+    assert "res = Err(e.into());" in result
+    assert "res = Ok(());" in result
+    crosstl.translator.parse(result)
+
+
+def test_wgpu_qualified_generic_alias_target_codegen_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/resource.rs QuerySetDescriptor.
+    code = """
+    type QuerySetDescriptor<'a> = wgt::QuerySetDescriptor<Label<'a>>;
+
+    struct QuerySet {
+        desc: wgt::QuerySetDescriptor<()>,
+        direct: QuerySetDescriptor<'static>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "wgt_QuerySetDescriptor<void> desc;" in result
+    assert "QuerySetDescriptor direct;" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_gpu_unresolved_associated_static_calls_reparse():
+    # Reduced from Rust-GPU rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d compiletests:
+    # lang/core/ptr/allocate_const_scalar.rs and
+    # lang/core/mem/create_unitialized_memory.rs.
+    code = """
+    use spirv_std::spirv;
+    use core::mem::MaybeUninit;
+    use core::ptr::Unique;
+
+    const POINTER: Unique<()> = Unique::<()>::dangling();
+    const MAYBEI32: MaybeUninit<i32> = MaybeUninit::<&i32>::uninit();
+
+    #[spirv(fragment)]
+    pub fn main(output: &mut Unique<()>) {
+        *output = POINTER;
+        let maybei32 = MAYBEI32;
+        let _value = maybei32.assume_init();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Unique::dangling" not in result
+    assert "MaybeUninit::uninit" not in result
+    assert "Unique_dangling()" in result
+    assert "MaybeUninit_uninit()" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_rust_gpu_function_pointer_parameter_reparse():
+    # Reduced from Rust-GPU rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d
+    # tests/compiletests/ui/lang/issue-452.rs.
+    code = """
+    use spirv_std::spirv;
+
+    struct Position(u32);
+
+    fn use_cmp(cmp: fn(&Position) -> u32) {
+        let a = Position(0);
+        let b = Position(1);
+        if cmp(&a) <= cmp(&b) {
+            cmp(&a);
+        }
+    }
+
+    #[spirv(compute(threads(1)))]
+    pub fn main() {
+        use_cmp(|p| p.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void use_cmp(auto cmp)" in result
+    assert "fn(&Position) -> u32 cmp" not in result
+    assert "use_cmp(lambda(p, p.0));" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_bevy_higher_ranked_function_pointer_tuple_struct_field_reparse():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # 67f441da62424f83a1bb6e3f5145034e0583d495,
+    # crates/bevy_render/src/error_handler.rs.
+    code = """
+    pub struct RenderErrorHandler(
+        pub for<'a> fn(&'a RenderError, &'a mut World, &'a mut World) -> RenderErrorPolicy,
+    );
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto field0;" in result
+    assert "for<'a> fn" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_value_returning_function_uses_final_literal_expression_as_return():
     code = r"""
     fn zero() -> u32 {
@@ -269,6 +642,98 @@ def test_rust_gpu_compute_shader_method_turbofish_codegen():
     assert "collect<Vec<_>>();" in result
 
 
+def test_rust_gpu_ash_builder_chain_codegen_reparse_without_timeout():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # a27c0363d391a54de1feb9ee6864ad9dff72d243,
+    # examples/runners/ash/src/graphics.rs.
+    code = r"""
+    struct Manager {
+        device: Device,
+        color_out_format: Format,
+        factor: u32,
+    }
+
+    impl Manager {
+        fn rebuild_pipeline(&mut self) -> anyhow::Result<()> {
+            unsafe {
+                let mut pipelines = self.device.create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[vk::GraphicsPipelineCreateInfo::default()
+                        .stages(&[
+                            vk::PipelineShaderStageCreateInfo {
+                                p_name: c"main_vs".as_ptr(),
+                                stage: vk::ShaderStageFlags::VERTEX,
+                                ..Default::default()
+                            },
+                            vk::PipelineShaderStageCreateInfo {
+                                p_name: c"main_fs".as_ptr(),
+                                stage: vk::ShaderStageFlags::FRAGMENT,
+                                p_specialization_info: &vk::SpecializationInfo::default()
+                                    .map_entries(&[vk::SpecializationMapEntry::default()
+                                        .constant_id(0x5007)
+                                        .offset(0)
+                                        .size(4)])
+                                    .data(&u32::to_le_bytes(self.factor)),
+                                ..Default::default()
+                            },
+                        ])
+                        .vertex_input_state(&vk::PipelineVertexInputStateCreateInfo::default())
+                        .input_assembly_state(&vk::PipelineInputAssemblyStateCreateInfo {
+                            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+                            ..Default::default()
+                        })
+                        .rasterization_state(&vk::PipelineRasterizationStateCreateInfo {
+                            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+                            line_width: 1.0,
+                            ..Default::default()
+                        })
+                        .multisample_state(&vk::PipelineMultisampleStateCreateInfo {
+                            rasterization_samples: vk::SampleCountFlags::TYPE_1,
+                            ..Default::default()
+                        })
+                        .color_blend_state(
+                            &vk::PipelineColorBlendStateCreateInfo::default()
+                                .attachments(&[
+                                    vk::PipelineColorBlendAttachmentState {
+                                        blend_enable: 0,
+                                        color_write_mask: vk::ColorComponentFlags::RGBA,
+                                        ..Default::default()
+                                    },
+                                ]),
+                        )
+                        .dynamic_state(
+                            &vk::PipelineDynamicStateCreateInfo::default()
+                                .dynamic_states(&[
+                                    vk::DynamicState::VIEWPORT,
+                                    vk::DynamicState::SCISSOR,
+                                ]),
+                        )
+                        .viewport_state(
+                            &vk::PipelineViewportStateCreateInfo::default()
+                                .scissor_count(1)
+                                .viewport_count(1),
+                        )
+                        .layout(pipeline_layout)
+                        .push_next(
+                            &mut vk::PipelineRenderingCreateInfo::default()
+                                .color_attachment_formats(&[self.color_out_format]),
+                        )],
+                    None,
+                )
+                .map_err(|(_, e)| e)
+                .context("Unable to create graphics pipeline")?;
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "create_graphics_pipelines" in result
+    assert "map_err(lambda" in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_compute_shader_is_multiple_of_method_codegen():
     code = """
     pub fn collatz(mut n: u32) -> Option<u32> {
@@ -327,8 +792,8 @@ def test_vulkan_shader_examples_compute_atomic_const_generics_codegen():
     assert "int lod_count[6];" in result
     assert (
         "atomic_i_add<i32, {spirv_std::memory::Scope::Device as u32}, "
-        "{spirv_std::memory::Semantics::NONE.bits()},>"
-        "(ubo_out.lod_count[(uint)lod_level], 1);"
+        "{spirv_std::memory::Semantics::NONE.bits()}>"
+        "(ubo_out.lod_count[uint(lod_level)], 1);"
     ) in result
 
 
@@ -370,7 +835,7 @@ def test_vulkan_shader_examples_emboss_2d_compute_image_macro_codegen():
     assert "image2D input_image @ set(0) @ binding(0)" in result
     assert "image2D result_image @ set(0) @ binding(1)" in result
     assert "@numthreads(16, 16, 1)" in result
-    assert "let coord = ivec2((int)global_id.x, (int)global_id.y);" in result
+    assert "let coord = ivec2(int(global_id.x), int(global_id.y));" in result
     assert "vec4 rgb = imageLoad(input_image, coord);" in result
     assert "let gray = (((rgb.x + rgb.y) + rgb.z) / 3.0);" in result
     assert "imageStore(result_image, coord, res);" in result
@@ -442,12 +907,33 @@ def test_rust_gpu_path_qualified_attribute_codegen():
             }
         }
     }
+
+    #[spirv_std_macros::gpu_only]
+    #[doc(alias = "OpEmitMeshTasksEXT")]
+    #[inline]
+    pub unsafe fn emit_mesh_tasks_ext(group_count_x: u32, group_count_y: u32, group_count_z: u32) -> ! {
+        unsafe {
+            asm! {
+                "OpEmitMeshTasksEXT {group_count_x} {group_count_y} {group_count_z}",
+                group_count_x = in(reg) group_count_x,
+                group_count_y = in(reg) group_count_y,
+                group_count_z = in(reg) group_count_z,
+                options(noreturn),
+            }
+        }
+    }
     """
 
     result = parse_and_generate(code)
 
     assert "void emit_vertex()" in result
     assert 'asm!("OpEmitVertex",);' in result
+    assert (
+        "void emit_mesh_tasks_ext("
+        "uint group_count_x, uint group_count_y, uint group_count_z)" in result
+    )
+    assert "! emit_mesh_tasks_ext" not in result
+    crosstl.translator.parse(result)
 
 
 def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
@@ -665,7 +1151,7 @@ def test_rust_gpu_image_macro_types_drive_resource_parameters():
     """
     result = parse_and_generate(code)
 
-    assert "typedef sampler2D Image2d;" in result
+    assert "typedef Image2d = sampler2D;" in result
     assert "fragment main_fs {" in result
     assert "Image2d sampled_tex @ set(2) @ binding(5)" in result
     assert "image2D storage_tex @ set(3) @ binding(1)" in result
@@ -1608,7 +2094,7 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     assert "let neg_one = ivec4(-1, -1, -1, -1);" in result
     assert (
         "return vec4((zero + one), (axes.x + down.y), axes.y, "
-        "((float)uv.x + (float)neg_one.w));"
+        "(float(uv.x) + float(neg_one.w)));"
     ) in result
     assert "::ZERO" not in result
     assert "::ONE" not in result
@@ -1616,6 +2102,30 @@ def test_rust_gpu_vector_associated_constants_codegen_from_upstream_compiletests
     assert "::NEG_Y" not in result
     assert "Vec4::X" not in result
     assert "Vec4::Y" not in result
+    crosstl.translator.parse(result)
+
+
+def test_bevy_inferred_array_repeat_length_codegen_from_gpu_preprocessing():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # 67f441da62424f83a1bb6e3f5145034e0583d495,
+    # crates/bevy_render/src/batching/gpu_preprocessing.rs
+    # GpuBinUnpackingMetadata::default.
+    code = """
+    pub struct GpuBinUnpackingMetadata {
+        pad: [u32; 1],
+    }
+
+    impl Default for GpuBinUnpackingMetadata {
+        fn default() -> GpuBinUnpackingMetadata {
+            GpuBinUnpackingMetadata { pad: [0; _] }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint pad[1];" in result
+    assert "return GpuBinUnpackingMetadata { pad: {0} };" in result
     crosstl.translator.parse(result)
 
 
@@ -1761,6 +2271,60 @@ def test_rust_gpu_reduce_shader_inferred_cast_target_codegen():
     crosstl.translator.parse(result)
 
 
+def test_rust_gpu_const_fold_macro_expression_codegen_reparse_from_upstream():
+    # Reduced from https://github.com/Rust-GPU/rust-gpu.git commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # tests/difftests/tests/lang/core/ops/const_fold_int/const-fold-cpu/src/lib.rs.
+    code = """
+    macro_rules! interesting_patterns {
+        ($op_name:ident) => {
+            [$op_name!(0u32), $op_name!(1u32)]
+        };
+    }
+
+    pub const INTERESTING_PATTERNS: [u32; 2] = interesting_patterns!(identity);
+
+    pub type EvalResult = [[u32; 2]; 2];
+
+    enum Variants {
+        ConstFold,
+        DynamicValues,
+    }
+
+    impl Variants {
+        pub fn eval(&self, input_patterns: &[u32; 2]) -> EvalResult {
+            match self {
+                Variants::ConstFold => [
+                    interesting_patterns!(op_u),
+                    interesting_patterns!(op_i),
+                ],
+                Variants::DynamicValues => [
+                    [
+                        op_u!(input_patterns[0]),
+                        op_u!(input_patterns[1]),
+                    ],
+                    [
+                        op_i!(input_patterns[0]),
+                        op_i!(input_patterns[1]),
+                    ],
+                ],
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "const uint INTERESTING_PATTERNS[2] = interesting_patterns(identity);" in (
+        result
+    )
+    assert "return {interesting_patterns(op_u), interesting_patterns(op_i)};" in result
+    assert "op_u(input_patterns[0])" in result
+    assert "interesting_patterns!(" not in result
+    assert "op_u!(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     # Reduced from Rust-GPU/rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
@@ -1808,7 +2372,7 @@ def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     assert "void main(uvec3 id @ gl_GlobalInvocationID" in result
     assert "uint prime_indices[] @ set(0) @ binding(0)" in result
     assert "@numthreads(64, 1, 1)" in result
-    assert "let index = (uint)id.x;" in result
+    assert "let index = uint(id.x);" in result
     assert (
         "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(4294967295);"
         in result
@@ -1933,9 +2497,9 @@ def test_type_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef float Real;" in result
-        assert "typedef vec3 Color;" in result
-        assert "typedef float Weights[4];" in result
+        assert "typedef Real = float;" in result
+        assert "typedef Color = vec3;" in result
+        assert "typedef Weights = float[4];" in result
         assert "typedef" in result
         assert "Buffer" not in result
         assert "Vector" not in result
@@ -1983,7 +2547,7 @@ def test_module_path_alias_conversion():
     """
     try:
         result = parse_and_generate(code)
-        assert "typedef float Real;" in result
+        assert "typedef Real = float;" in result
         assert "Real sample(Real x, vec3 normal)" in result
         assert "lifted = vec3(1.0, 2.0, 3.0);" in result
         assert "c = self::helper::CONST;" in result
@@ -4624,6 +5188,35 @@ def test_tuple_pattern_result_expression_elements_conversion():
         pytest.fail(f"Tuple pattern result expression conversion failed: {e}")
 
 
+def test_tuple_pattern_if_let_expression_initializer_conversion():
+    code = """
+    fn stub(def_location: Option<Location>, cx: Cx) {
+        let (file_metadata, line_number) = if let Some(def_location) = def_location {
+            (def_location.0, def_location.1)
+        } else {
+            (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER)
+        };
+        use_location(file_metadata, line_number);
+    }
+    """
+    try:
+        result = parse_and_generate(code)
+
+        assert "LetPatternConditionNode" not in result
+        assert "auto _rust_match_tuple_0;" in result
+        assert "if (is_Some(def_location))" in result
+        assert "_rust_match_tuple_0 = (def_location.0, def_location.1);" in result
+        assert (
+            "_rust_match_tuple_0 = (unknown_file_metadata(cx), UNKNOWN_LINE_NUMBER);"
+            in result
+        )
+        assert "file_metadata = _rust_tuple_0(_rust_match_tuple_0);" in result
+        assert "line_number = _rust_tuple_1(_rust_match_tuple_0);" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Tuple pattern if-let initializer conversion failed: {e}")
+
+
 def test_match_to_switch_conversion():
     code = """
     fn test_match() {
@@ -4660,6 +5253,7 @@ def test_let_binding_conversion():
         assert "let x = 42;" in lines
         assert "let mut y = 3.14;" in lines
         assert "float z = 2.0;" in lines
+        crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Let binding conversion failed: {e}")
 
@@ -4831,6 +5425,66 @@ def test_reference_dereference_assignment_return_conversion():
         assert "*next_pointer" not in result
     except Exception as e:
         pytest.fail(f"Reference/dereference assignment/return conversion failed: {e}")
+
+
+def test_rust_cuda_raw_pointer_parameter_codegen_reparse():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # examples/vecadd/kernels/src/lib.rs vecadd kernel.
+    code = """
+    use cuda_std::prelude::*;
+
+    #[kernel]
+    pub unsafe fn vecadd(a: &[f32], b: &[f32], c: *mut f32) {
+        let idx = thread::index_1d() as usize;
+        if idx < a.len() {
+            let elem = c.add(idx);
+            *elem = a[idx] + b[idx];
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void vecadd(float a[], float b[], ptr<float> c)" in result
+    assert "*mut" not in result
+    crosstl.translator.parse(result)
+
+
+def test_lifetime_generic_type_arguments_codegen_reparse_from_corpus():
+    code = """
+    struct FunctionIter<'a> {
+        module: PhantomData<&'a &'a Module>,
+        next: Option<&'a Value>,
+    }
+
+    struct DebugCtx<'a> {
+        created_files: RefCell<UnordMap<Option<(StableSourceFileId, SourceFileHash)>, &'a File>>,
+    }
+
+    fn matrix_motion_transform_from_handle(
+        handle: TraversableHandle,
+    ) -> Option<&'static MatrixMotionTransform> {
+        let transform_ptr: *const MatrixMotionTransform;
+        core::mem::transmute(transform_ptr)
+    }
+
+    fn compute(debug_context: FunctionDebugContext<'_, '_>) {
+        debug_context.finalize();
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "PhantomData<Module> module;" in result
+    assert "Option<Value> next;" in result
+    assert (
+        "RefCell<UnordMap<Option<Tuple<StableSourceFileId, SourceFileHash>>, "
+        "File>> created_files;" in result
+    )
+    assert "Option<MatrixMotionTransform> matrix_motion_transform_from_handle" in result
+    assert "void compute(FunctionDebugContext debug_context)" in result
+    crosstl.translator.parse(result)
 
 
 def test_function_call_conversion():
@@ -5441,7 +6095,7 @@ def test_gpu_multisample_image_sample_helpers_convert_to_crossgl_intrinsics():
     )
     assert (
         "swapped = imageAtomicCompSwap("
-        "ms_signed_layers, pixel_layer, sample_index, 0, (int)previous);" in result
+        "ms_signed_layers, pixel_layer, sample_index, 0, int(previous));" in result
     )
     assert "image_load_sample" not in result
     assert "image_store_sample" not in result
@@ -5495,7 +6149,7 @@ def test_aliased_reference_resource_helpers_convert_to_crossgl_intrinsics():
     assert "previous = imageAtomicAdd(image, pixel, amount);" in result
     assert "value = buffer_load(values, index);" in result
     assert "weight = buffer_load(weights, index);" in result
-    assert "buffer_store(values, index, (value + (int)previous));" in result
+    assert "buffer_store(values, index, (value + int(previous)));" in result
     assert "&ColorTexture" not in result
     assert "&mut StorageImage" not in result
     assert "&ReadBuffer" not in result
@@ -5552,7 +6206,7 @@ def test_gpu_resource_method_calls_convert_to_crossgl_intrinsics():
     assert "previous = imageAtomicAdd(counter_image, pixel, amount);" in result
     assert "value = buffer_load(values, index);" in result
     assert "weight = buffer_load(weights, index);" in result
-    assert "buffer_store(values, index, (value + (int)previous));" in result
+    assert "buffer_store(values, index, (value + int(previous)));" in result
     assert ".sample_sampler" not in result
     assert ".sample_bias" not in result
     assert ".texture_size_lod" not in result
@@ -5751,7 +6405,7 @@ def test_gpu_resource_method_calls_convert_on_resource_type_alias_receivers():
 
     result = parse_and_generate(code)
 
-    assert "typedef sampler2D ColorTexture;" in result
+    assert "typedef ColorTexture = sampler2D;" in result
     assert (
         "vec4 alias_resources(ColorTexture tex, sampler2D generic_tex, "
         "sampler2DShadow shadow, RWStructuredBuffer<int> values"
@@ -6601,6 +7255,151 @@ def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
         crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Escaped newline string literal conversion failed: {e}")
+
+
+def test_rust_cuda_tuple_return_match_codegen_reparse_from_atomic_ordering():
+    # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/atomic.rs.
+    code = """
+    use core::sync::atomic::Ordering;
+
+    fn double_ordering_from_one(ordering: Ordering) -> (Ordering, Ordering) {
+        match ordering {
+            Ordering::Relaxed => (Ordering::Relaxed, Ordering::Relaxed),
+            Ordering::Acquire => (Ordering::Acquire, Ordering::Acquire),
+            Ordering::Release => (Ordering::Release, Ordering::Relaxed),
+            Ordering::AcqRel => (Ordering::AcqRel, Ordering::Acquire),
+            Ordering::SeqCst => (Ordering::SeqCst, Ordering::SeqCst),
+            _ => unreachable!(),
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "Tuple<Ordering, Ordering> double_ordering_from_one(Ordering ordering)"
+        in result
+    )
+    assert "(Ordering, Ordering) double_ordering_from_one" not in result
+    assert "switch (ordering)" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_match_expression_return_arm_codegen_reparse():
+    # Reduced from Rust-CUDA error conversions that return early from a match arm.
+    code = """
+    fn to_result(status: Status) -> Result<(), Error> {
+        let err = match status {
+            Success => return Ok(()),
+            Other => Error::Other,
+        };
+        Err(err)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "case Success:" in result
+    assert "return Ok(());" in result
+    assert "err = ReturnNode" not in result
+    assert "args=['()']" not in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_nested_statement_match_with_expression_block_arms_codegen():
+    # Reduced from Rust-CUDA crates/optix/examples/path_tracer/src/viewer.rs.
+    code = """
+    fn process_event(ev: Event) {
+        match ev {
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::CloseRequested => {
+                    exit();
+                }
+                _ => {}
+            },
+            Event::RedrawRequested(_) => {
+                render();
+            }
+            _ => {}
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "is_Event_WindowEvent(ev)" in result
+    assert "switch (event)" in result
+    assert "case WindowEvent::CloseRequested:" in result
+    assert "exit();" in result
+    assert "render();" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_tuple_return_asm_codegen_reparse_from_warp_match_all():
+    # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/warp.rs.
+    code = """
+    unsafe fn match_all_32(mask: u32, value: u32, predicate: bool) -> (u32, bool) {
+        let out: u32;
+        unsafe {
+            asm!(
+                "{",
+                ".reg .pred %p1;",
+                "setp.eq.u32 %p1, {}, 1;",
+                "vote.sync.ballot.b32 {}, %p1, {};",
+                "}",
+                in(reg32) predicate as u32,
+                out(reg32) out,
+                in(reg32) mask,
+            );
+        }
+        (value, predicate)
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "Tuple<uint, bool> match_all_32(uint mask, uint value, bool predicate)"
+        in result
+    )
+    assert "(uint, bool) match_all_32" not in result
+    assert "asm!(" in result
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_global_include_str_macro_initializer_codegen_reparse():
+    # Reduced from Rust-GPU/Rust-CUDA examples/*/src/main.rs PTX statics.
+    code = """
+    static PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/kernels.ptx"));
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        'static str PTX = include_str(concat(env("OUT_DIR"), "/kernels.ptx"));'
+        in result
+    )
+    crosstl.translator.parse(result)
+
+
+def test_rust_cuda_global_array_declarators_codegen_reparse():
+    # Reduced from Rust-GPU/Rust-CUDA nvvm.rs and int_replace.rs globals.
+    code = """
+    static LIBDEVICE_BITCODE: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/libdevice.bc"));
+    const WIDTH_CANDIDATES: [u32; 5] = [64, 32, 16, 8, 1];
+    const OPTIX_ROOT_ENVS: [&str; 2] = ["OPTIX_ROOT", "OPTIX_ROOT_DIR"];
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "static uint8_t LIBDEVICE_BITCODE[] = "
+        'include_bytes(concat(env("OUT_DIR"), "/libdevice.bc"));'
+    ) in result
+    assert "const uint WIDTH_CANDIDATES[5] = {64, 32, 16, 8, 1};" in result
+    assert 'const str OPTIX_ROOT_ENVS[2] = {"OPTIX_ROOT", "OPTIX_ROOT_DIR"};' in result
+    crosstl.translator.parse(result)
 
 
 def test_byte_literal_conversion():
@@ -7543,6 +8342,7 @@ def test_assignment_operations_conversion():
     """
     try:
         result = parse_and_generate(code)
+        assert "let mut a = 5;" in result
         assert "a += 3;" in result
         assert "a -= 2;" in result
         assert "a *= 4;" in result
@@ -7815,7 +8615,7 @@ def test_wgpu_shader_loading_host_types_codegen_reparse():
     result = parse_and_generate(code)
 
     assert "void init(wgpu_Device device)" in result
-    assert "wgpu::ShaderModuleDescriptor {" in result
+    assert "wgpu_ShaderModuleDescriptor {" in result
     assert 'include_str!("shader.wgsl")' in result
     assert 'wgpu::include_wgsl!("shader.wgsl")' in result
     crosstl.translator.parse(result)
@@ -7931,12 +8731,12 @@ def test_type_casting_conversion():
     try:
         result = parse_and_generate(code)
         assert "x = 42;" in result
-        assert "(double)x" in result
-        assert "(int)y" in result
-        assert "chained = (int)(float)x;" in result
-        assert "from_deref = (float)ptr;" in result
-        assert "from_ref = (float)value;" in result
-        assert "from_swizzle = (vec3)color.xyz;" in result
+        assert "double(x)" in result
+        assert "int(y)" in result
+        assert "chained = int(float(x));" in result
+        assert "from_deref = float(ptr);" in result
+        assert "from_ref = float(value);" in result
+        assert "from_swizzle = vec3(color.xyz);" in result
         assert "42i32" not in result
         assert ".xyz()" not in result
         assert "*ptr" not in result
@@ -7977,7 +8777,7 @@ def test_numeric_literal_suffix_conversion():
         assert "sized = 7;" in result
         assert "float32 = 1.5;" in result
         assert "float64 = 2.0;" in result
-        assert "casted = (int)1;" in result
+        assert "casted = int(1);" in result
         assert "int repeated[3] = {4, 4, 4};" in result
         assert "grouped = 1000;" in result
         assert "hexed = 255;" in result
@@ -8535,7 +9335,7 @@ def test_closure_expression_conversion():
         result = parse_and_generate(code)
         assert "add = lambda(x, y, (x + y));" in result
         assert "typed = lambda(int x, (x + 1));" in result
-        assert "always = lambda(true);" in result
+        assert "always = lambda({ return true; });" in result
         assert "moved = lambda(v, (v * 2));" in result
     except Exception as e:
         pytest.fail(f"Closure expression conversion failed: {e}")
@@ -8552,7 +9352,7 @@ def test_async_closure_expression_conversion():
     try:
         result = parse_and_generate(code)
         assert "async_add = lambda(x, (x + 1));" in result
-        assert "async_moved = lambda(true);" in result
+        assert "async_moved = lambda({ return true; });" in result
         assert "mapped = map(values, lambda(x, (x + 1)));" in result
         assert "async |" not in result
         assert "async move" not in result
@@ -8841,8 +9641,8 @@ def test_tuple_typed_pattern_closure_stays_inline():
     """
     try:
         result = parse_and_generate(code)
-        assert "_rust_closure_map_0" not in result
-        assert "projected = map(values, lambda((i32, i32) _rust_closure_arg_0" in result
+        assert "int _rust_closure_map_0(Tuple<int, int> _rust_closure_arg_0)" in result
+        assert "projected = map(values, _rust_closure_map_0);" in result
         assert "auto x = _rust_tuple_0(_rust_closure_arg_0);" in result
         assert "auto y = _rust_tuple_1(_rust_closure_arg_0);" in result
         crosstl.translator.parse(result)
@@ -9034,6 +9834,24 @@ def test_closure_pattern_parameter_conversion():
         crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Closure pattern parameter conversion failed: {e}")
+
+
+def test_function_tuple_pattern_parameter_conversion_from_cuda_std():
+    code = """
+    fn from((x, y): (u32, u32)) -> u32 {
+        return x + y;
+    }
+    """
+
+    try:
+        result = parse_and_generate(code)
+        assert "Tuple<uint, uint> _rust_pattern_param_0" in result
+        assert "auto x = _rust_tuple_0(_rust_pattern_param_0);" in result
+        assert "auto y = _rust_tuple_1(_rust_pattern_param_0);" in result
+        assert "return (x + y);" in result
+        crosstl.translator.parse(result)
+    except Exception as e:
+        pytest.fail(f"Function tuple pattern parameter conversion failed: {e}")
 
 
 def test_closure_explicit_result_try_conversion():
@@ -9259,6 +10077,58 @@ def test_unsafe_extern_transparent_conversion():
         assert "extern" not in result
     except Exception as e:
         pytest.fail(f"Unsafe extern transparent conversion failed: {e}")
+
+
+def test_local_unsafe_extern_block_codegen_reparse_from_rust_cuda_thread_intrinsic():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/cuda_std/src/thread.rs __nvvm_warp_size declaration.
+    code = """
+    pub fn warp_size() -> u32 {
+        unsafe extern "C" {
+            fn __nvvm_warp_size() -> u32;
+        }
+
+        unsafe {
+            __nvvm_warp_size()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint warp_size()" in result
+    assert "return __nvvm_warp_size();" in result
+    assert "extern" not in result
+    crosstl.translator.parse(result)
+
+
+def test_associated_type_projection_alias_codegen_reparse_from_rust_cuda_gpu_rand():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/gpu_rand/src/default.rs DefaultRand SeedableRng impl.
+    code = """
+    struct Xoroshiro128StarStar;
+    struct DefaultRand;
+
+    trait SeedableRng {
+        type Seed;
+    }
+
+    impl SeedableRng for DefaultRand {
+        type Seed = <Xoroshiro128StarStar as SeedableRng>::Seed;
+
+        fn from_seed(seed: Self::Seed) -> Self {
+            DefaultRand
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "<Xoroshiro128StarStar as SeedableRng>::Seed" not in result
+    assert "DefaultRand DefaultRand_from_seed(Self_Seed seed)" in result
+    crosstl.translator.parse(result)
 
 
 def test_unsafe_block_assignment_conversion():
@@ -9747,7 +10617,7 @@ def test_spirv_std_fragment_example_codegen_from_docs():
     assert "fragment {" in result
     assert "vec4 in_frag_coord @ gl_FragCoord" in result
     assert "ShaderConstants constants @ push_constant" in result
-    assert "vec2((float)constants.width, (float)constants.height)" in result
+    assert "vec2(float(constants.width), float(constants.height))" in result
     assert "uv.y = (-uv.y);" in result
     assert "output = tonemap(color).extend(1.0);" in result
 
@@ -9772,7 +10642,7 @@ def test_spirv_specialization_and_workgroup_attribute_codegen_from_dev_guide():
 
     assert "uint x_u64_lo @ constant_id(100)" in result
     assert "uint x_u64_hi @ constant_id(101)" in result
-    assert "let x_u64 = (((uint64_t)x_u64_hi << 32) | (uint64_t)x_u64_lo);" in result
+    assert "let x_u64 = ((uint64_t(x_u64_hi) << 32) | uint64_t(x_u64_lo));" in result
     assert "compute shared_" in result
     assert "void main(vec4 tile[4] @ groupshared) @numthreads(32, 1, 1)" in result
     crosstl.translator.parse(result)
@@ -10058,7 +10928,7 @@ def test_rust_gpu_struct_literal_field_attributes_codegen():
     result = parse_and_generate(code)
 
     assert "#[cfg" not in result
-    assert "wgpu::InstanceDescriptor {" in result
+    assert "wgpu_InstanceDescriptor {" in result
     assert "backends: wgpu::Backends::VULKAN" in result
     assert "backends: wgpu::Backends::PRIMARY" in result
     crosstl.translator.parse(result)
@@ -10097,6 +10967,438 @@ def test_rust_gpu_ash_runner_nested_block_statement_codegen():
         "device.queue_submit2("
     )
     assert "return Ok(());" in result
+
+
+def test_type_alias_codegen_reparse_from_rust_gpu_entry_interface():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/linker/entry_interface.rs.
+    code = """
+    type Id = Word;
+
+    fn use_id(value: Id) -> Id {
+        value
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "typedef Id = Word;" in result
+    crosstl.translator.parse(result)
+
+
+def test_tuple_typed_global_array_codegen_reparse_from_rust_gpu_libm_table():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/builder/libm_intrinsics.rs.
+    code = """
+    const LIBM_TABLE: &[(&str, LibmIntrinsic)] = &[
+        ("acos", LibmIntrinsic::GLOp(GLOp::Acos)),
+    ];
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "const Tuple<str, LibmIntrinsic> LIBM_TABLE[] = "
+        '{("acos", LibmIntrinsic::GLOp(GLOp::Acos))};'
+    ) in result
+    crosstl.translator.parse(result)
+
+
+def test_inline_block_use_comment_codegen_reparse_from_rust_gpu_symbols_table():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/symbols.rs.
+    code = """
+    const BUILTINS: &[(&str, BuiltIn)] = {
+        use BuiltIn::*;
+        &[("position", Position)]
+    };
+    """
+
+    result = parse_and_generate(code)
+
+    assert "/* use BuiltIn::* */" in result
+    assert "const Tuple<str, BuiltIn> BUILTINS[]" in result
+    crosstl.translator.parse(result)
+
+
+def test_unit_generic_return_type_codegen_reparse_from_rust_gpu_linker():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/rustc_codegen_spirv/src/linker/import_export_link.rs.
+    code = """
+    fn run() -> Result<()> {
+        Ok(())
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Result<void> run()" in result
+    assert "Result<()>" not in result
+    crosstl.translator.parse(result)
+
+
+def test_tuple_generic_return_type_codegen_reparse_from_rust_gpu_toolchain():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/cargo-gpu-install/src/install_toolchain.rs run_cmd.
+    code = """
+    fn run_cmd() -> anyhow::Result<(String, String)> {
+        Ok((stdout, stderr))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "anyhow_Result<Tuple<String, String>> run_cmd()" in result
+    assert "Result<(String, String)>" not in result
+    crosstl.translator.parse(result)
+
+
+def test_callable_trait_parameter_type_codegen_reparse_from_wgpu_bench_iter():
+    # Reduced from gfx-rs/wgpu commit
+    # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
+    # benches/src/iter.rs.
+    code = """
+    fn iter(f: FnMut() -> Duration) -> Duration {
+        let mut duration = Duration::ZERO;
+        duration += f();
+        duration
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Duration iter(FnMut_to_Duration f)" in result
+    assert "FnMut() -> Duration" not in result
+    assert "let mut duration = Duration::ZERO;" in result
+    crosstl.translator.parse(result)
+
+
+def test_nested_array_generic_declarator_codegen_reparse_from_wgpu_print():
+    # Reduced from gfx-rs/wgpu commit
+    # 26e2525f8dea477ef356b80efb6eb1bc1dec120d,
+    # benches/src/print.rs previous_results parameter.
+    code = """
+    struct Previous<'a> {
+        previous_results: Option<&'a [SubBenchResult]>,
+        parts: SmallVec<[&'a str; 1]>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<SubBenchResult[]> previous_results;" in result
+    assert "SmallVec<str[1]> parts;" in result
+    assert "previous_results[" not in result
+    assert "parts[" not in result
+    crosstl.translator.parse(result)
+
+
+def test_nested_array_generic_reference_codegen_reparse_from_naga_criterion():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # benches/criterion.rs parse_glsl inputs parameter.
+    code = """
+    fn parse_glsl(inputs: &[Box<[u8]>]) {
+        consume(inputs);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void parse_glsl(Box<u8[]> inputs[])" in result
+    assert "Box<]" not in result
+    crosstl.translator.parse(result)
+
+
+def test_tuple_destructure_codegen_declares_untyped_bindings_for_reparse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # crates/cargo-gpu-install/src/install_toolchain.rs run_cmd.
+    code = """
+    fn split_pair(pair: Result<(String, String)>) -> Result<String> {
+        let (stdout, stderr) = pair?;
+        stdout
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto stdout = _rust_tuple_0(_rust_match_tuple_0);" in result
+    assert "auto stderr = _rust_tuple_1(_rust_match_tuple_0);" in result
+    crosstl.translator.parse(result)
+
+
+def test_lifetime_array_generic_codegen_reparse_from_naga_wgsl_ast():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/wgsl/parse/ast.rs.
+    code = """
+    struct EntryPoint<'a> {
+        workgroup_size: Option<[Option<Handle<Expression<'a>>>; 3]>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<Option<Handle<Expression>>[3]> workgroup_size;" in result
+    assert "'a" not in result
+    crosstl.translator.parse(result)
+
+
+def test_dyn_static_generic_argument_codegen_reparse_from_naga_span():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/span.rs and hlsl-snapshots/src/lib.rs Error::source impls.
+    code = """
+    fn source() -> Option<dyn Error + 'static> {
+        None
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<Error> source()" in result
+    assert "dyn Error + 'static" not in result
+    crosstl.translator.parse(result)
+
+
+def test_match_expression_continue_arm_codegen_reparse_from_naga_glsl_functions():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/glsl/functions.rs labeled-loop conversion.
+    code = """
+    fn scan(values: Values, maybe: Option<(u32, u32)>) {
+        for value in values {
+            let (left, right) = match maybe {
+                Some(pair) => pair,
+                _ => continue,
+            };
+            use_pair(left, right);
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "ContinueNode" not in result
+    assert "continue;" in result
+    assert "auto left = _rust_tuple_0" in result
+    assert "auto right = _rust_tuple_1" in result
+    crosstl.translator.parse(result)
+
+
+def test_unit_impl_method_prefix_codegen_reparse_from_naga_spv_selection():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/back/spv/selection.rs impl Merge for ().
+    code = """
+    impl () {
+        fn write_phis(self, block: Block) {
+            block.finish();
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void Unit_write_phis(Unit self, Block block)" in result
+    assert "()_write_phis" not in result
+    crosstl.translator.parse(result)
+
+
+def test_zero_arg_closure_expression_codegen_reparse_from_naga_block():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/block.rs extend/end_with_span helpers.
+    code = """
+    fn fill() {
+        let span_iter = std::iter::repeat_with(|| Span::UNDEFINED);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "lambda({ return Span::UNDEFINED; })" in result
+    assert "lambda(Span::UNDEFINED)" not in result
+    crosstl.translator.parse(result)
+
+
+def test_reference_impl_prefix_codegen_reparse_from_naga_block():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/block.rs IntoIterator for &Block.
+    code = """
+    impl<'a> IntoIterator for &'a Block {
+        fn into_iter(self) -> std::slice::Iter<'a, Statement> {
+            self.iter()
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "std_slice_Iter<Statement> Block_into_iter(Block self)" in result
+    assert "&Block_into_iter" not in result
+    crosstl.translator.parse(result)
+
+
+def test_struct_literal_in_condition_codegen_reparse_from_naga_interface():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/valid/interface.rs MissingVertexOutputPosition check.
+    code = """
+    fn validate(result_built_ins: BuiltIns, ep: EntryPoint) -> Result<()> {
+        if ep.stage == crate::ShaderStage::Vertex
+            && !result_built_ins.contains(
+                &crate::BuiltIn::Position { invariant: false }
+            )
+        {
+            return Err(EntryPointError::MissingVertexOutputPosition.with_span());
+        }
+        Ok(())
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "crate_BuiltIn_Position { invariant: false }" in result
+    crosstl.translator.parse(result)
+
+
+def test_match_subject_closure_struct_literal_codegen_reparse_from_naga_cli():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # xtask/src/cli.rs Args::parse.
+    code = """
+    impl Args {
+        fn parse(args: Arguments) -> Self {
+            match Subcommand::parse(args).map(|subcommand| Self { subcommand }) {
+                Ok(this) => this,
+                Err(e) => exit(1),
+            }
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "lambda(subcommand, Self { subcommand: subcommand })" in result
+    crosstl.translator.parse(result)
+
+
+def test_match_expression_try_codegen_reparse_from_naga_glsl_parser():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/glsl/parser.rs parse_uint_constant.
+    code = """
+    fn parse_uint(res: Result<u32>, meta: Span) -> Result<(u32, Span)> {
+        let int = match res {
+            Ok(value) => Ok(value),
+            Err(_) => Err(Error { meta }),
+        }?;
+        Ok((int, meta))
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "auto _rust_try_subject_" in result
+    assert "if (is_Err(_rust_try_subject_" in result
+    crosstl.translator.parse(result)
+
+
+def test_matches_macro_subject_codegen_reparse_from_naga_msl_and_wgsl():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/back/msl/writer.rs and src/front/wgsl/lower/mod.rs.
+    code = """
+    fn check(context: Context, right: Handle, ctx: LowerCtx, argument: Handle) -> bool {
+        let matrix = matches!(
+            context.resolve_type(right),
+            crate::TypeInner::Matrix { columns: _, rows: _ }
+        );
+        let scalar = matches!(
+            resolve_inner!(ctx, argument),
+            crate::TypeInner::Scalar { kind: crate::ScalarKind::Bool }
+        );
+        matrix && scalar
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "context.resolve_type(right)" in result
+    assert "resolve_inner!(ctx, argument)" in result
+    assert "FunctionCallNode" not in result
+    crosstl.translator.parse(result)
+
+
+def test_unicode_char_literal_range_codegen_reparse_from_naga_wgsl_lexer():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/wgsl/parse/lexer.rs is_comment_end.
+    code = r"""
+    const fn is_comment_end(c: char) -> bool {
+        match c {
+            '\u{000a}'..='\u{000d}' | '\u{2028}' => true,
+            _ => false,
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "(c >= 10) && (c <= 13)" in result
+    assert "(c == 8232)" in result
+    assert r"\u{" not in result
+    crosstl.translator.parse(result)
+
+
+def test_raw_pointer_generic_type_codegen_reparse_from_naga_msl_writer():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/back/msl/writer.rs Writer stack pointer sets.
+    code = """
+    struct Writer {
+        put_expression_stack_pointers: FastHashSet<*const ()>,
+        put_block_stack_pointers: FastHashSet<*mut ()>,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "FastHashSet<ptr<void>> put_expression_stack_pointers;" in result
+    assert "FastHashSet<ptr<void>> put_block_stack_pointers;" in result
+    assert "*const" not in result
+    assert "*mut" not in result
+    crosstl.translator.parse(result)
+
+
+def test_nested_block_doc_comment_codegen_reparse_from_wgpu_hub():
+    # Reduced from gfx-rs/wgpu wgpu-core/src/hub.rs crate docs, where a
+    # Rust block doc comment contains a nested block comment.
+    code = """
+    /*!
+    Device hub documentation.
+    /* nested note that should stay inside the comment */
+    More documentation after the nested block.
+    */
+    pub struct Hub {
+        value: u32,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "struct Hub {" in result
+    assert "uint value;" in result
+    assert "nested note" not in result
+    crosstl.translator.parse(result)
 
 
 def test_error_handling():

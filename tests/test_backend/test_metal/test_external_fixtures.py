@@ -29,6 +29,10 @@ SAMPLE_METAL_REPO = "https://github.com/dehesa/sample-metal"
 SAMPLE_METAL_COMMIT = "0003824a52516052f2d28503f576907e03425dd3"
 BOOK_OF_SHADERS_METAL_REPO = "https://github.com/metal-by-example/book-of-shaders-metal"
 BOOK_OF_SHADERS_METAL_COMMIT = "12bb2366697cba9c5f660d54fead7bdcd73b6b8a"
+WGPU_REPO = "https://github.com/gfx-rs/wgpu"
+WGPU_COMMIT = "26e2525f8dea477ef356b80efb6eb1bc1dec120d"
+DAWN_REPO = "https://github.com/google/dawn"
+DAWN_COMMIT = "78a171ad2ed7f7265cfc3dd52e4e7a637a099df0"
 MLX_REPO = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "e9e20fa69184bd38cc0ca12bd9a854c059e59588"
 MLX_CURRENT_COMMIT = "b155224b9963cd9476363b464a559232a0868000"
@@ -50,6 +54,8 @@ CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
+LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
+LLAMA_CPP_METAL_DEVICE_COMMIT = "f0152efe401acd5b329b5f62d87dc070a6d069f0"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
@@ -72,6 +78,35 @@ UNIXZII_GPU_PARTICLE_GIST = (
 UNIXZII_GPU_PARTICLE_VERSION = "GitHub Gist, last active 2024-03-30"
 
 
+def _dawn_deep_tint_array_initializer_source(depth=60):
+    def nested_type(level):
+        type_name = "int"
+        for _ in range(level):
+            type_name = f"tint_array<{type_name}, 1>"
+        return type_name
+
+    def nested_value(level):
+        value = "-6"
+        for index in range(level):
+            type_name = nested_type(index + 1)
+            value = f"{type_name}{{{value}}}"
+        return value
+
+    return f"""
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template<typename T, size_t N>
+        struct tint_array {{
+            T elements[N];
+        }};
+
+        kernel void f() {{
+            thread {nested_type(depth)} arr = {nested_value(depth)};
+        }}
+    """
+
+
 EXTERNAL_FIXTURES = [
     {
         "name": "apple_msl_spec_multiline_barycentric_attribute",
@@ -81,9 +116,7 @@ EXTERNAL_FIXTURES = [
             "Metal Shading Language Specification, section 2.19 Per-Vertex Values"
         ),
         "roundtrip": False,
-        "contains": [
-            "vec3 barycentric_coords @barycentric_coord @center_no_perspective;"
-        ],
+        "contains": ["vec3 barycentric_coords @gl_BaryCoordNoPerspEXT;"],
         "source": (
             """
             #include <metal_stdlib>
@@ -275,6 +308,32 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "metal_scoped_member_definition_with_trailing_const",
+        "repo_url": APPLE_MSL_SPEC_URL,
+        "commit": APPLE_MSL_SPEC_VERSION,
+        "source_path": "Metal Shading Language Specification, C++ function syntax",
+        "roundtrip": True,
+        "contains": [
+            "struct ToneMapper {",
+            "float ToneMapper_u3a_u3aapply(float value)",
+            "return value * exposure;",
+        ],
+        "source": (
+            """
+            using namespace metal;
+
+            struct ToneMapper {
+                float exposure;
+                float apply(float value) const;
+            };
+
+            float ToneMapper::apply(float value) const {
+                return value * exposure;
+            }
+        """
+        ),
+    },
+    {
         "name": "apple_imageblock_pixel_format_member_payload_type",
         "repo_url": APPLE_SAMPLE_REPO,
         "commit": APPLE_SAMPLE_COMMIT,
@@ -305,6 +364,46 @@ EXTERNAL_FIXTURES = [
                 TransparentFragmentValues fragmentValues [[imageblock_data]]) {
                 half4 layerColor = fragmentValues.colors[0];
                 return layerColor;
+            }
+        """
+        ),
+    },
+    {
+        "name": "apple_imageblock_symbolic_color_attachment_parameter",
+        "repo_url": APPLE_SAMPLE_REPO,
+        "commit": APPLE_SAMPLE_COMMIT,
+        "source_path": (
+            "MetalSampleCodeLibrary/RenderWorkflows/"
+            "ImplementingOrderIndependentTransparencyWithImageBlocks/"
+            "Renderer/Shaders/AAPLShaders.metal"
+        ),
+        "roundtrip": True,
+        "contains": ["f16vec4 forwardOpaqueColor @gl_FragColor @raster_order_group(0)"],
+        "not_contains": ["@color(AAPLRenderTargetColor)"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef struct {
+                float4 position [[position]];
+            } ColorInOut;
+
+            vertex ColorInOut quadPassVertex(uint vid [[vertex_id]]) {
+                ColorInOut out;
+                out.position = float4(0.0);
+                return out;
+            }
+
+            struct TransparentFragmentValues {
+                half4 colors [[raster_order_group(0)]] [4];
+            };
+
+            fragment half4 blendFragments(
+                TransparentFragmentValues fragmentValues [[imageblock_data]],
+                half4 forwardOpaqueColor [[color(AAPLRenderTargetColor),
+                                           raster_order_group(0)]]) {
+                return forwardOpaqueColor;
             }
         """
         ),
@@ -626,6 +725,118 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "wgpu_naga_bare_coherent_parameter_qualifier",
+        "repo_url": WGPU_REPO,
+        "commit": WGPU_COMMIT,
+        "source_path": "naga/tests/out/msl/wgsl-memory-decorations-coherent.metal",
+        "roundtrip": True,
+        "contains": [
+            "void main_(device Data& coherent_buf @user(fake0), "
+            "device Data& plain_buf @user(fake0))",
+            "coherent_buf.values[0] = value;",
+        ],
+        "not_contains": ["coherent device"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using metal::uint;
+
+            struct Data {
+                uint values[1];
+            };
+
+            [[max_total_threads_per_threadgroup(1)]]
+            kernel void main_(
+                coherent device Data& coherent_buf [[user(fake0)]],
+                device Data const& plain_buf [[user(fake0)]]) {
+                uint value = plain_buf.values[0];
+                coherent_buf.values[0] = value;
+            }
+        """
+        ),
+    },
+    {
+        "name": "wgpu_naga_int16_global_static_cast_literal_reparse",
+        "repo_url": WGPU_REPO,
+        "commit": WGPU_COMMIT,
+        "source_path": "naga/tests/out/msl/wgsl-int16.metal",
+        "roundtrip": True,
+        "contains": [
+            "constant uint16 constant_variable = (uint16)(20);",
+            "constant int16 f16_to_i16_clamped = (int16)(32767);",
+        ],
+        "not_contains": ["(uint16)20", "(int16)32767"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant ushort constant_variable = static_cast<ushort>(20);
+            constant short f16_to_i16_clamped = static_cast<short>(32767);
+        """
+        ),
+    },
+    {
+        "name": "wgpu_naga_int64_integer_literal_suffix_reparse",
+        "repo_url": WGPU_REPO,
+        "commit": WGPU_COMMIT,
+        "source_path": "naga/tests/out/msl/wgsl-int64.metal",
+        "roundtrip": True,
+        "contains": [
+            "constant uint64 constant_variable = 20u;",
+            "int64 val = 20;",
+            "return val + 5;",
+        ],
+        "not_contains": ["20uL", "20L", "5L"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant ulong constant_variable = 20uL;
+
+            long helper() {
+                long val = 20L;
+                return val + 5L;
+            }
+            """
+        ),
+    },
+    {
+        "name": "dawn_tint_subgroup_matrix_trailing_const_opaque_type",
+        "repo_url": DAWN_REPO,
+        "commit": DAWN_COMMIT,
+        "source_path": (
+            "test/tint/builtins/gen/var/subgroupMatrixStore/" "17ec3e.wgsl.expected.msl"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "simdgroup_half8x8 arg_2 = "
+            "make_filled_simdgroup_matrix_u3chalf_u2c8_u2c8_u3e(0.0);",
+            "const simdgroup_half8x8 v_1 = arg_2;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void subgroupMatrixStore_17ec3e() {
+                simdgroup_half8x8 arg_2 =
+                    make_filled_simdgroup_matrix<half, 8, 8>(0.0h);
+                simdgroup_half8x8 const v_1 = arg_2;
+            }
+        """
+        ),
+    },
+    {
+        "name": "dawn_tint_deep_braced_tint_array_initializer",
+        "repo_url": DAWN_REPO,
+        "commit": DAWN_COMMIT,
+        "source_path": "test/tint/bug/chromium/1449474.wgsl.expected.msl",
+        "roundtrip": True,
+        "source": _dawn_deep_tint_array_initializer_source(),
+    },
+    {
         "name": "mlx_axpby_template_static_cast_buffer_store",
         "repo_url": MLX_REPO,
         "commit": MLX_COMMIT,
@@ -651,6 +862,26 @@ EXTERNAL_FIXTURES = [
                 uint index [[thread_position_in_grid]]) {
                 out[index] = static_cast<T>(alpha) * x[index]
                     + static_cast<T>(beta) * y[index];
+            }
+        """
+        ),
+    },
+    {
+        "name": "mlx_allocator_class_visibility_attribute",
+        "repo_url": MLX_REPO,
+        "commit": MLX_CURRENT_COMMIT,
+        "source_path": "mlx/allocator.h",
+        "roundtrip": False,
+        "struct_names": ["Buffer"],
+        "source": (
+            """
+            #define MLX_API __attribute__((visibility("default")))
+
+            namespace mlx::core::allocator {
+            class MLX_API Buffer {
+             public:
+                void* raw_ptr();
+            };
             }
         """
         ),
@@ -964,6 +1195,31 @@ EXTERNAL_FIXTURES = [
         "contains": ["typedef f16 float16_t;"],
         "not_contains": ["typedef float16 float16_t;"],
         "source": "typedef half float16_t;",
+    },
+    {
+        "name": "mlx_bf16_scalar_typedef_reparse",
+        "repo_url": MLX_REPO,
+        "commit": MLX_CURRENT_COMMIT,
+        "source_path": "mlx/backend/metal/kernels/bf16.h",
+        "roundtrip": True,
+        "contains": ["typedef f16 bfloat16_t;"],
+        "not_contains": ["typedef bfloat bfloat16_t;"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            typedef bfloat bfloat16_t;
+
+            inline uint16_t bfloat16_to_uint16(const bfloat16_t x) {
+                return as_type<uint16_t>(x);
+            }
+
+            inline bfloat16_t uint16_to_bfloat16(const uint16_t x) {
+                return as_type<bfloat16_t>(x);
+            }
+        """
+        ),
     },
     {
         "name": "mlx_scan_template_specialized_struct_reparse",
@@ -1311,6 +1567,100 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "llama_cpp_ggml_metal_keyword_member_name",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_METAL_DEVICE_COMMIT,
+        "source_path": "ggml/src/ggml-metal/ggml-metal-device.h",
+        "roundtrip": True,
+        "contains": [
+            "struct ggml_metal_buffer_id",
+            "void* metal;",
+            "uint64 offs;",
+            "struct ggml_metal_pipeline_with_params",
+            "int nsg;",
+            "ggml_metal_device_id device_id;",
+        ],
+        "not_contains": ["enum ggml_metal_device_id device_id;"],
+        "source": (
+            """
+            // Reduced from the ggml Metal device header. The host-side C API
+            // uses `metal` as a struct member name for an id<MTLBuffer> handle
+            // and declares prototypes with `struct tag` return types and
+            // `enum tag` parameters.
+            enum ggml_metal_device_id {
+                GGML_METAL_DEVICE_ID_ANY = -1
+            };
+
+            struct ggml_metal_buffer_id {
+                void * metal;
+                size_t offs;
+            };
+
+            struct ggml_metal_device_props {
+                enum ggml_metal_device_id device_id;
+            };
+
+            typedef struct ggml_metal_library * ggml_metal_library_t;
+
+            struct ggml_metal_pipeline_with_params {
+                int nsg;
+            };
+
+            struct ggml_metal_pipeline_with_params
+            ggml_metal_library_get_pipeline(
+                ggml_metal_library_t lib,
+                const char * name);
+
+            struct ggml_metal_pipeline_with_params
+            ggml_metal_library_get_pipeline_base(
+                ggml_metal_library_t lib,
+                enum ggml_op op);
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_ggml_extension_anonymous_union_member",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_GGML_COMMON_COMMIT,
+        "source_path": "ggml/src/ggml-common.h included by ggml-metal.metal",
+        "roundtrip": True,
+        "contains": [
+            "// Metal union iq1m_scale_t represented as struct-like layout; "
+            "overlapping storage is not modeled",
+            "struct iq1m_scale_t {",
+            "struct block_q4_1 {",
+            "uint8[32 / 2] qs;",
+        ],
+        "not_contains": ["__extension__", "GGML_EXTENSION"],
+        "source": (
+            """
+            #define GGML_EXTENSION __extension__
+            #define GGML_COMMON_AGGR_S
+            #define GGML_COMMON_AGGR_U
+            #define QK4_1 32
+
+            typedef half ggml_half;
+            typedef half2 ggml_half2;
+
+            typedef struct {
+                GGML_EXTENSION union {
+                    struct {
+                        ggml_half d;
+                        ggml_half m;
+                    } GGML_COMMON_AGGR_S;
+                    ggml_half2 dm;
+                } GGML_COMMON_AGGR_U;
+                uint8_t qs[QK4_1 / 2];
+            } block_q4_1;
+
+            typedef union {
+                ggml_half f16;
+                uint16_t u16;
+            } iq1m_scale_t;
+        """
+        ),
+    },
+    {
         "name": "llama_cpp_range_designated_array_initializer",
         "repo_url": LLAMA_CPP_REPO,
         "commit": LLAMA_CPP_COMMIT,
@@ -1327,6 +1677,26 @@ EXTERNAL_FIXTURES = [
             template<short r1ptg>
             void init_sums() {
                 float sumf[r1ptg] = { [ 0 ... r1ptg - 1 ] = 0.0f };
+            }
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_block_scope_static_assert_noop_struct",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_COMMIT,
+        "source_path": (
+            "ggml/src/ggml-metal/ggml-metal.metal:6140 after "
+            "ggml-common.h static_assert fallback expansion"
+        ),
+        "roundtrip": False,
+        "source": (
+            """
+            void flash_attn_ext_inner(threadgroup s_t * ss, short sgitg) {
+                threadgroup s_t * ps = ss;
+                ps += sgitg*(8*1);
+                struct global_scope_noop_trick;
+                constexpr short NC = (C/8)/NSG;
             }
         """
         ),
@@ -1730,6 +2100,40 @@ EXTERNAL_FIXTURES = [
                     unvisited &= ~v;
                 }
                 return result;
+            }
+        """
+        ),
+    },
+    {
+        "name": "metalpetal_target_conditionals_import_default",
+        "repo_url": METALPETAL_REPO,
+        "commit": METALPETAL_COMMIT,
+        "source_path": "Frameworks/MetalPetal/Shaders/Shaders.metal",
+        "roundtrip": True,
+        "contains": [
+            "#include <TargetConditionals.h>",
+            "vec4 passthrough(vec4 currentColor @gl_FragColor)",
+        ],
+        "not_contains": ["mti_haveColorArguments"],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <TargetConditionals.h>
+
+            #ifndef TARGET_OS_SIMULATOR
+            #error TARGET_OS_SIMULATOR not defined. Check <TargetConditionals.h>
+            #endif
+
+            #if __HAVE_COLOR_ARGUMENTS__ && !TARGET_OS_SIMULATOR
+            kernel void mti_haveColorArguments() {}
+            #endif
+
+            using namespace metal;
+
+            namespace metalpetal {
+                fragment float4 passthrough(float4 currentColor [[color(0)]]) {
+                    return currentColor;
+                }
             }
         """
         ),

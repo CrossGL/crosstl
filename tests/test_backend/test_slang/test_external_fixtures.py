@@ -20,6 +20,34 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "5230a81f2fe68afe5cb8d04a1b09d56476f6b960",
     },
+    "shader-slang/slang-main-2026-06-08": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "71e78588f73609a1d8d472629b3f3542a74e9199",
+    },
+    "shader-slang/slang-main-2026-06-09": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "6b9f98ff90facc35306a0ba643dfecb59a870156",
+    },
+    "shader-slang/slang-main-2026-06-08-anonymous-struct": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
+    "shader-slang/slang-main-2026-06-08-generic-subscript": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
+    "shader-slang/slang-main-2026-06-08-type-param-pack": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
+    "shader-slang/slang-main-2026-06-08-constructor-swizzle": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
+    "shader-slang/slang-gh-4104-2026-06-08": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
+    },
     "shader-slang/slang-property-2026-06-04": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "564ac9f050d6569efd773e2f74e7d067a4e54baa",
@@ -146,6 +174,46 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        # Source: https://github.com/shader-slang/slang
+        # Path: tests/cooperative-matrix/
+        # mat-mul-add-spirv-matrix-operands.slang
+        "id": "slang_cooperative_matrix_generic_prefix_typealias",
+        "repo": "shader-slang/slang-current",
+        "path": "tests/cooperative-matrix/mat-mul-add-spirv-matrix-operands.slang",
+        "source": (
+            """
+            using namespace linalg;
+
+            __generic<T : __BuiltinArithmeticType>
+            typealias CoopMatAType =
+                CoopMat<T, MemoryScope.Subgroup, 16, 16,
+                        CoopMatMatrixUse::MatrixA>;
+
+            RWStructuredBuffer<uint32_t> outputBuffer;
+
+            [numthreads(32, 1, 1)]
+            void computeMain()
+            {
+                coopMatMulAdd<uint32_t, false>(
+                    CoopMatAType<uint16_t>(2),
+                    CoopMatAType<uint32_t>(3),
+                    CoopMatAType<uint16_t>(4)
+                ).Store<CoopMatMatrixLayout::RowMajor>(outputBuffer, 0, 16);
+            }
+        """
+        ),
+        "crossgl": False,
+        "contains": [
+            (
+                "typedef CoopMat<T, MemoryScope.Subgroup, 16, 16, "
+                "CoopMatMatrixUse::MatrixA> CoopMatAType<T>;"
+            ),
+            "coopMatMulAdd<uint32_t, false>",
+            ".Store<CoopMatMatrixLayout::RowMajor>",
+        ],
+        "not_contains": ["__generic", "__BuiltinArithmeticType"],
+    },
+    {
         "id": "slang_empty_switch_unlabeled_statement",
         "repo": "shader-slang/slang",
         "path": "tests/bugs/empty-switch.slang",
@@ -218,6 +286,48 @@ EXTERNAL_FIXTURES = [
     {
         # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/bugs/c-style-cast-overload.slang
+        "id": "slang_c_style_cast_overload_unnamed_parameters",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/bugs/c-style-cast-overload.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            struct S {};
+
+            int f(S)
+            {
+                return 1;
+            }
+
+            int f(float)
+            {
+                return 2;
+            }
+
+            [shader("compute")]
+            [numthreads(1,1,1)]
+            void computeMain()
+            {
+                outputBuffer[0] = f(float(0));
+                outputBuffer[1] = f((float)1);
+                outputBuffer[2] = f((float)0);
+                outputBuffer[3] = f((S)0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "int f(S _param0)",
+            "int f(float _param0)",
+            "outputBuffer[3] = f(S(0));",
+        ],
+        "not_contains": ["int f(S )", "int f(float )"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: tests/language-feature/multi-level-break.slang
         "id": "slang_labeled_break_from_multi_level_break_sample",
         "repo": "shader-slang/slang-current-2026-06-07",
@@ -251,6 +361,173 @@ EXTERNAL_FIXTURES = [
             "break;",
             "return result;",
         ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/autodiff/arithmetic-jvp.slang
+        "id": "slang_autodiff_scalar_differential_typedef_reparse",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/autodiff/arithmetic-jvp.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            typedef DifferentialPair<float> dpfloat;
+            typedef float.Differential dfloat;
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                dfloat x = 1.0;
+                outputBuffer[0] = x;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "typedef DifferentialPair<float> dpfloat;",
+            "typedef float dfloat;",
+            "dfloat x = 1.0;",
+            "outputBuffer[0] = x;",
+        ],
+        "not_contains": ["float.Differential"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
+        # Path: tests/autodiff/constref-param.slang
+        "id": "slang_autodiff_constref_parameter_qualifier_reparse",
+        "repo": "shader-slang/slang-current-2026-06-07",
+        "path": "tests/autodiff/constref-param.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            struct NonDiff
+            {
+                float a;
+            }
+
+            [Differentiable]
+            float myFunc(__constref NonDiff fIn, float x, __constref no_diff float y)
+            {
+                return x * fIn.a + y;
+            }
+
+            [Differentiable]
+            float myFunc2(__constref NonDiff fIn, float x, no_diff __constref float y)
+            {
+                return x * fIn.a + y;
+            }
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID: SV_DispatchThreadID)
+            {
+                float a = 10.0;
+                NonDiff fIn = { a };
+                DifferentialPair<float> dpx = DifferentialPair<float>(4.0, 1.0);
+                float rs = __fwd_diff(myFunc)(fIn, dpx, 1.0).d;
+                float rs2 = __fwd_diff(myFunc2)(fIn, dpx, 1.0).d;
+
+                outputBuffer[0] = rs;
+                outputBuffer[1] = rs2;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "float myFunc(NonDiff fIn, float x, float y)",
+            "float myFunc2(NonDiff fIn, float x, float y)",
+            "float rs = __fwd_diff(myFunc)(fIn, dpx, 1.0).d;",
+            "outputBuffer[1] = rs2;",
+        ],
+        "not_contains": [
+            "__constref fIn NonDiff",
+            "__constref no_diff",
+            "no_diff __constref",
+        ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 71e78588f73609a1d8d472629b3f3542a74e9199
+        # Path: tests/autodiff/func-extension/apply-basic.slang
+        "id": "slang_autodiff_func_extension_apply_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-08",
+        "path": "tests/autodiff/func-extension/apply-basic.slang",
+        "source": (
+            """
+            float cube(float x) { return x * x * x; }
+
+            struct CubeContext
+            {
+                float sqr;
+                void operator()(out float dx, float dOut)
+                {
+                    dx = dOut * 3.0 * sqr;
+                }
+            };
+
+            __func_extension __apply(cube)(float x) -> Tuple<float, CubeContext>
+            {
+                let sqr = x * x;
+                return makeTuple(sqr * x, CubeContext(sqr));
+            }
+
+            RWStructuredBuffer<float> outputBuffer;
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 tid: SV_DispatchThreadID)
+            {
+                var dpx = diffPair(2.0, 0.0);
+                bwd_diff(cube)(dpx, 1.0);
+                outputBuffer[0] = dpx.d;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "float cube(float x)",
+            "Tuple<float, CubeContext> __apply_cube_(float x)",
+            "let sqr = x * x;",
+            "bwd_diff(cube)(dpx, 1.0);",
+            "outputBuffer[0] = dpx.d;",
+        ],
+        "not_contains": ["__func_extension", "__apply(cube)"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: docs/generated/tests/conformance/types-struct/
+        # struct-anonymous.slang
+        "id": "slang_generated_function_local_anonymous_struct_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-08-anonymous-struct",
+        "path": "docs/generated/tests/conformance/types-struct/struct-anonymous.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            [numthreads(1,1,1)]
+            void computeMain()
+            {
+                struct { int a; int b; } obj;
+                obj.a = 42;
+                obj.b = 15;
+                outputBuffer[0] = obj.a;
+                outputBuffer[1] = obj.b;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct SLANG_anonymous_0 {",
+            "int a;",
+            "int b;",
+            "SLANG_anonymous_0 obj;",
+            "outputBuffer[0] = obj.a;",
+            "outputBuffer[1] = obj.b;",
+        ],
+        "not_contains": ["struct {", "Unexpected token in expression: STRUCT"],
     },
     {
         "id": "slang_generated_defer_scope_exit",
@@ -389,6 +666,8 @@ EXTERNAL_FIXTURES = [
         "path": "Source/RenderPasses/DebugPasses/ColorMapPass/ColorMapParams.slang",
         "source": (
             """
+            BEGIN_NAMESPACE_FALCOR
+
             enum class ColorMap : uint32_t
             {
                 Grey,
@@ -398,6 +677,27 @@ EXTERNAL_FIXTURES = [
                 Magma,
                 Inferno,
             };
+
+            FALCOR_ENUM_INFO(
+                ColorMap,
+                {
+                    { ColorMap::Grey, "Grey" },
+                    { ColorMap::Jet, "Jet" },
+                    { ColorMap::Viridis, "Viridis" },
+                    { ColorMap::Plasma, "Plasma" },
+                    { ColorMap::Magma, "Magma" },
+                    { ColorMap::Inferno, "Inferno" },
+                }
+            );
+            FALCOR_ENUM_REGISTER(ColorMap);
+
+            struct ColorMapParams
+            {
+                float minValue = 0.f;
+                float maxValue = 1.f;
+            };
+
+            END_NAMESPACE_FALCOR
         """
         ),
         "crossgl": True,
@@ -406,7 +706,10 @@ EXTERNAL_FIXTURES = [
             "enum ColorMap {",
             "Grey,",
             "Inferno,",
+            "struct ColorMapParams {",
+            "float minValue = 0.0;",
         ],
+        "not_contains": ["BEGIN_NAMESPACE_FALCOR", "FALCOR_ENUM_INFO"],
     },
     {
         "id": "slang_gfx_tool_public_enums",
@@ -778,8 +1081,9 @@ EXTERNAL_FIXTURES = [
             """
             struct MatrixData
             {
-                row_major float4x4 m1;
-                column_major float2x4 m2;
+                MATRIX_LAYOUT float4x4 m1;
+                MATRIX_LAYOUT float2x4 m2;
+                MATRIX_LAYOUT float3x2 m3;
             };
 
             RWStructuredBuffer<float> outputBuffer;
@@ -798,9 +1102,10 @@ EXTERNAL_FIXTURES = [
             "struct MatrixData {",
             "mat4 m1;",
             "float2x4 m2;",
+            "float3x2 m3;",
             "outputBuffer[0] = MatrixData().m1[0][0];",
         ],
-        "not_contains": ["row_major", "column_major"],
+        "not_contains": ["MATRIX_LAYOUT", "row_major", "column_major"],
     },
     {
         "id": "slang_generated_subscript_get_accessor",
@@ -839,6 +1144,177 @@ EXTERNAL_FIXTURES = [
             'printf("%g\\n%g\\n", v[0], v[1]);',
         ],
         "not_contains": ["__subscript", "operator[]", "FunctionNode("],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: docs/generated/tests/conformance/generics/
+        # generic-subscript-functional.slang
+        "id": "slang_generated_generic_subscript_accessor",
+        "repo": "shader-slang/slang-main-2026-06-08-generic-subscript",
+        "path": (
+            "docs/generated/tests/conformance/generics/"
+            "generic-subscript-functional.slang"
+        ),
+        "source": (
+            """
+            struct TestStruct
+            {
+                float arr[5];
+
+                __subscript<T>(T i) -> float
+                    where T : IInteger
+                {
+                    get { return arr[i.toInt()]; }
+                    set { arr[i.toInt()] = newValue; }
+                }
+            }
+
+            void main()
+            {
+                TestStruct ts;
+                ts.arr[2] = 20.0;
+                uint idx = 2;
+                float v0 = ts[int(2)];
+                float v1 = ts[idx];
+                printf("%g %g\\n", v0, v1);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct TestStruct {",
+            "float arr[5];",
+            "TestStruct ts;",
+            "ts.arr[2] = 20.0;",
+            "uint idx = 2;",
+            "float v0 = ts[int(2)];",
+            "float v1 = ts[idx];",
+            'printf("%g %g\\n", v0, v1);',
+        ],
+        "not_contains": ["__subscript", "operator[]", "where T"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: docs/generated/tests/conformance/generics/
+        # type-param-pack-expand-functional.slang
+        "id": "slang_generated_type_param_pack_expand_markers",
+        "repo": "shader-slang/slang-main-2026-06-08-type-param-pack",
+        "path": (
+            "docs/generated/tests/conformance/generics/"
+            "type-param-pack-expand-functional.slang"
+        ),
+        "source": (
+            """
+            void sumHelper(inout int acc, int term) { acc += term; }
+
+            int sumInts<each T>(expand each T terms)
+                where T == int
+            {
+                int acc = 0;
+                expand sumHelper(acc, each terms);
+                return acc;
+            }
+
+            RWStructuredBuffer<int> outputBuffer;
+
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 id : SV_DispatchThreadID)
+            {
+                outputBuffer[0] = sumInts(1, 2, 3);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "int sumInts(T terms)",
+            "sumHelper(acc, terms);",
+            "outputBuffer[0] = sumInts(1, 2, 3);",
+        ],
+        "not_contains": [
+            "where T == int",
+            "expand sumHelper",
+            "each terms",
+            "Expected SEMICOLON",
+        ],
+    },
+    {
+        "id": "slang_generated_interface_constructor_requirement_codegen",
+        "repo": "shader-slang/slang-types-interface-2026-06-05",
+        "path": (
+            "docs/generated/tests/conformance/types-interface/"
+            "interface-constructor-requirement.slang"
+        ),
+        "source": (
+            """
+            interface IInitializable
+            {
+                __init(int v);
+                int getValue();
+            }
+
+            struct InitStruct : IInitializable
+            {
+                int stored;
+
+                __init(int v)
+                {
+                    stored = v * 2;
+                }
+
+                int getValue() { return stored; }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct InitStruct {",
+            "int stored;",
+        ],
+        "not_contains": [
+            "interface IInitializable",
+            ": IInitializable",
+            "__init",
+        ],
+    },
+    {
+        "id": "slang_generated_interface_subscript_requirement_codegen",
+        "repo": "shader-slang/slang-types-interface-2026-06-05",
+        "path": (
+            "docs/generated/tests/conformance/types-interface/"
+            "interface-subscript-requirement.slang"
+        ),
+        "source": (
+            """
+            interface IIndexable
+            {
+                __subscript(uint i) -> int { get; set; }
+            }
+
+            struct FixedArray : IIndexable
+            {
+                int data[4];
+
+                __subscript(uint i) -> int
+                {
+                    get { return data[i]; }
+                    set { data[i] = newValue; }
+                }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "struct FixedArray {",
+            "int data[4];",
+        ],
+        "not_contains": [
+            "interface IIndexable",
+            ": IIndexable",
+            "__subscript",
+            "operator[]",
+        ],
     },
     {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",
@@ -1175,7 +1651,7 @@ EXTERNAL_FIXTURES = [
             "struct Vertex {",
             "vec3 position @ in_Position;",
             "vec4 svPosition @ Out_Position;",
-            "vec3 barycentrics @ SV_Barycentrics",
+            "vec3 barycentrics @ gl_BaryCoordEXT",
             "bool sierpinski = (xy.x & xy.y) == 0;",
         ],
     },
@@ -1225,6 +1701,36 @@ EXTERNAL_FIXTURES = [
     },
     {
         # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: tests/bugs/gh-3087.slang
+        "id": "slang_constructor_swizzle_postfix_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-08-constructor-swizzle",
+        "path": "tests/bugs/gh-3087.slang",
+        "source": (
+            """
+            struct PSInput
+            {
+                uint vInstance : SV_InstanceID;
+                float4 color : COLOR;
+            };
+
+            [shader("pixel")]
+            float4 main(PSInput input) : SV_TARGET
+            {
+                return input.color + float(input.vInstance).xxxx;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "uint vInstance @ gl_InstanceID;",
+            "vec4 color @ Color;",
+            "return input.color + float(input.vInstance).xxxx;",
+        ],
+        "not_contains": ["Expected SEMICOLON, got DOT"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
         # Commit: 5230a81f2fe68afe5cb8d04a1b09d56476f6b960
         # Path: tests/bugs/gh-3802.slang
         "id": "slang_cpp_style_namespace_path",
@@ -1247,6 +1753,107 @@ EXTERNAL_FIXTURES = [
             "void computeMain()",
         ],
         "not_contains": ["namespace foo", "foo::bar"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 6b9f98ff90facc35306a0ba643dfecb59a870156
+        # Path: tests/bugs/gh-4457.slang
+        "id": "slang_global_scope_qualified_type_from_gh_4457",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": "tests/bugs/gh-4457.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            [UnscopedEnum]
+            enum Number {
+              First = 1,
+              Second,
+            };
+
+            static ::Number foo = First;
+
+            [numthreads(4, 1, 1)]
+            void computeMain(int3 dispatchThreadID: SV_DispatchThreadID)
+            {
+              static ::Number bar = Second;
+              outputBuffer[0] = int(foo);
+              outputBuffer[1] = int(bar);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "enum Number {",
+            "static Number foo = First;",
+            "Number bar = Second;",
+            "outputBuffer[0] = int(foo);",
+            "outputBuffer[1] = int(bar);",
+        ],
+        "not_contains": ["::Number", "Expected IDENTIFIER, got COLON"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: tests/bugs/gh-4104-div.slang
+        "id": "slang_hex_ull_literal_suffix_codegen_reparse",
+        "repo": "shader-slang/slang-gh-4104-2026-06-08",
+        "path": "tests/bugs/gh-4104-div.slang",
+        "source": (
+            """
+            RWStructuredBuffer<uint64_t> outputBuffer;
+
+            static const uint64_t u64Const = 0xffffffffffffffffULL;
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                outputBuffer[0] = u64Const;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "static const uint64_t u64Const = 0xffffffffffffffffu;",
+            "outputBuffer[0] = u64Const;",
+        ],
+        "not_contains": ["ULL", "LL"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 6b9f98ff90facc35306a0ba643dfecb59a870156
+        # Path: tests/autodiff/callable-constraint-witness-rollback.slang
+        "id": "slang_contextual_module_identifier_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": "tests/autodiff/callable-constraint-witness-rollback.slang",
+        "source": (
+            """
+            RWStructuredBuffer<float> outputBuffer;
+
+            struct InferenceModule
+            {
+                float forward(float input)
+                {
+                    return input;
+                }
+            };
+
+            [shader("compute")]
+            [numthreads(1, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                InferenceModule module;
+                outputBuffer[dispatchThreadID.x] = module.forward(1.0);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "InferenceModule module_;",
+            "outputBuffer[dispatchThreadID.x] = module_.forward(1.0);",
+        ],
+        "not_contains": ["Expected SEMICOLON, got MODULE", " module;"],
     },
     {
         # Source: https://github.com/shader-slang/slang
@@ -1334,6 +1941,47 @@ EXTERNAL_FIXTURES = [
             "outputBuffer[idx] = groupInRange & threadInRange;",
         ],
     },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: e2bb86bad99385790cb7d24655fc9d090346a4ca
+        # Path: tests/compute/global-generic-value-param.slang
+        "id": "slang_global_generic_value_param",
+        "repo": "shader-slang/slang-main-2026-06-08",
+        "path": "tests/compute/global-generic-value-param.slang",
+        "source": (
+            """
+            __generic_value_param kOffset : uint = 0;
+
+            RWStructuredBuffer<uint> vals;
+
+            uint test(uint value)
+            {
+                return value * 16 + vals[(value + kOffset) & 0xF];
+            }
+
+            RWStructuredBuffer<uint> outputBuffer;
+
+            [numthreads(16, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                uint tid = dispatchThreadID.x;
+                outputBuffer[tid] = test(tid);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "uint kOffset = 0;",
+            "RWStructuredBuffer<uint> vals;",
+            "return value * 16 + vals[value + kOffset & 0xF];",
+            "layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;",
+            "outputBuffer[tid] = test(tid);",
+        ],
+        "not_contains": [
+            "__generic_value_param",
+            "Expected semantic name",
+        ],
+    },
 ]
 
 
@@ -1381,6 +2029,65 @@ def test_external_fixture_codegen_crossgl_reparse(fixture):
 
     if fixture.get("crossgl", False):
         cgl_translator.parse(generated)
+
+
+def test_gfx_public_namespace_static_constants_codegen_crossgl_reparse():
+    # Source: shader-slang/slang tools/gfx/gfx.slang at
+    # c6f104ca76a54ca1565dac54363ea763dd906de6.
+    source = """
+        import slang;
+
+        public namespace gfx
+        {
+        public static const uint64_t kTimeoutInfinite = 0xFFFFFFFFFFFFFFFF;
+        public static const uint kWholeSize = 0xFFFFFFFF;
+        }
+    """
+
+    ast = parse_slang(source)
+    generated = generate_crossgl(ast)
+
+    assert [
+        getattr(getattr(node, "left", node), "name", None) for node in ast.global_vars
+    ] == [
+        "gfx.kTimeoutInfinite",
+        "gfx.kWholeSize",
+    ]
+    assert (
+        "static const uint64_t gfx_kTimeoutInfinite = 0xFFFFFFFFFFFFFFFF;" in generated
+    )
+    assert "static const uint gfx_kWholeSize = 0xFFFFFFFF;" in generated
+    assert "public namespace" not in generated
+    cgl_translator.parse(generated)
+
+
+def test_wgsl_texture_load_shorthand_where_conformance_constraints_parse():
+    # Source: shader-slang/slang tests/wgsl/texture-load.slang at
+    # 726e0973b3f547c7729b86f122ff7aef8322bace.
+    source = """
+        bool TEST_textureLoad<T>(
+            Texture1D<T> t1D,
+            Texture2D<T> t2D,
+            Texture3D<T> t3D,
+            Texture2DMS<T> t2DMS,
+            Texture2DArray<T> t2DArray)
+            where T : ITexelElement, IArithmetic
+        {
+            typealias Tvn = T;
+            return true && all(Tvn(T.Element(0)) == t1D.Load(int2(0, 0)));
+        }
+    """
+
+    ast = parse_slang(source)
+    function = ast.functions[0]
+
+    assert [
+        (constraint.parameter, constraint.relation, constraint.constraint_type)
+        for constraint in function.generic_constraints
+    ] == [
+        ("T", ":", "ITexelElement"),
+        ("T", ":", "IArithmetic"),
+    ]
 
 
 def test_falcor_exported_import_and_default_interface_parameter_parse():

@@ -360,6 +360,48 @@ def test_parse_struct_base_lists_from_dxc_rewriter():
     assert structs["my_struct_5"].base_classes == ["my_class", "my_interface"]
 
 
+def test_parse_templated_struct_base_from_dxc_templates():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/CodeGenDXIL/templates/incomplete-target-in-CanConvert.hlsl
+    ast = parse_code(textwrap.dedent("""
+            template<typename T> struct Wrapper;
+            float get(float x) { return x; }
+            float get(Wrapper<float> o);
+
+            template<typename T> struct Wrapper2;
+            float get(Wrapper2<float> o);
+
+            template<typename T>
+            struct Wrapper {
+                T value;
+                void set(float x) {
+                    value = get(x);
+                }
+            };
+
+            float get(Wrapper<float> o) { return o.value; }
+
+            template<typename T>
+            struct Wrapper2 : Wrapper<T> {
+            };
+
+            float get(Wrapper2<float> o) { return o.value; }
+
+            float main(float x : IN) : OUT {
+                Wrapper2<float> w;
+                w.set(x);
+                return get(w);
+            }
+            """))
+
+    structs = {struct.name: struct for struct in ast.structs}
+    main = next(function for function in ast.functions if function.name == "main")
+    local = next(stmt for stmt in main.body if getattr(stmt, "name", "") == "w")
+
+    assert structs["Wrapper2"].base_classes == ["Wrapper<T>"]
+    assert local.vtype == "Wrapper2<float>"
+
+
 def test_parse_elaborated_struct_function_signature_and_local_from_vkd3d():
     ast = parse_code(textwrap.dedent("""
             struct input {
@@ -987,6 +1029,27 @@ def test_parse_using_alias_declarations_from_hlsl_spec():
     assert [function.name for function in ast.functions] == ["main"]
 
 
+def test_parse_struct_member_using_declarations_from_dxc_cpp_style():
+    ast = parse_code("""
+    struct Base {
+        float value;
+    };
+
+    struct Derived : Base {
+        using Base::value;
+        float other;
+    };
+
+    float main(Derived input) : SV_Target0 {
+        return input.other;
+    }
+    """)
+
+    derived = next(struct for struct in ast.structs if struct.name == "Derived")
+    assert [member.name for member in derived.members] == ["other"]
+    assert ast.functions[0].params[0].vtype == "Derived"
+
+
 def test_parse_block_scope_typedef_from_dxc_linalg_vectors():
     code = """
     ByteAddressBuffer BAB : register(t0);
@@ -1089,6 +1152,39 @@ def test_parse_anonymous_enum_constants_inside_namespace_from_directx_samples():
     assert [name for name, _ in ast.enums[1].members] == ["Histogram", "Key8b"]
 
 
+def test_parse_namespaces_inside_cbuffer_from_dxc_cbuffer_layout():
+    # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
+    # tools/clang/test/HLSLFileCheck/hlsl/objects/Cbuffer/namespace_in_cb.hlsl
+    ast = parse_code("""
+    namespace N {
+    float a;
+    }
+
+    cbuffer B {
+      namespace N {
+      float c;
+      }
+      namespace N2 {
+        float d;
+      }
+    }
+
+    namespace N2 {
+      float b;
+    }
+
+    float main() : SV_Target {
+      return N::a + N::c + N2::d + N2::b;
+    }
+    """)
+
+    assert [variable.name for variable in ast.global_variables] == ["a", "b"]
+    assert ast.cbuffers[0].name == "B"
+    assert [member.name for member in ast.cbuffers[0].members] == ["c", "d"]
+    assert [member.vtype for member in ast.cbuffers[0].members] == ["float", "float"]
+    assert ast.functions[0].name == "main"
+
+
 def test_parse_resource_arrays_and_register_space():
     code = """
     Texture2D textures[4] : register(t0, space1);
@@ -1132,6 +1228,22 @@ def test_parse_sampler_state_initializer_blocks_from_microsoft_docs():
         ("AddressU", "Clamp"),
         ("ComparisonFunc", "LESS"),
     ]
+
+
+def test_parse_legacy_d3d9_sampler_state_initializer_texture_binding():
+    code = """
+    texture g_MeshTexture;
+    sampler MeshTextureSampler = sampler_state {
+        Texture = <g_MeshTexture>;
+    };
+    """
+    ast = parse_code(code)
+    texture_decl, sampler_decl = ast.global_variables
+
+    assert texture_decl.vtype == "texture"
+    assert sampler_decl.vtype == "sampler"
+    assert sampler_decl.value is None
+    assert sampler_decl.sampler_state == [("Texture", "g_MeshTexture")]
 
 
 def test_skip_deprecated_effect_annotations_and_state_blocks_from_dxc_rewriter():
@@ -1571,6 +1683,36 @@ def test_parse_struct_forward_declarations_from_dxc_incomplete_type_tests():
     assert ast.functions[0].params[0].vtype == "Wrapper<float>"
 
 
+def test_parse_nested_template_arguments_closed_by_shift_right_token_from_dxc():
+    ast = parse_code("""
+    template<typename T> struct Wrapper;
+
+    float main(Wrapper<vector<float, 4>> input) : SV_Target0 {
+        return 1.0;
+    }
+    """)
+
+    assert ast.functions[0].params[0].vtype == "Wrapper<vector<float, 4>>"
+
+
+def test_parse_hitobject_array_byval_parameter_modifier_macro_from_dxc():
+    # microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenDXIL/hlsl/objects/HitObject/hitobject-array-byval.hlsl
+    ast = parse_code("""
+    void MakeNop(MOD dx::HitObject obj[2]) {
+      obj[0] = dx::HitObject::MakeNop();
+      obj[1] = dx::HitObject::MakeNop();
+    }
+    """)
+
+    param = ast.functions[0].params[0]
+
+    assert param.vtype == "dx::HitObject"
+    assert param.name == "obj"
+    assert param.array_sizes == [2]
+    assert param.qualifiers == []
+
+
 def test_parse_struct_template_methods_from_dxc_spirv_resource_array():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenSPIRV/use.rvalue.for.member-expr.of.array-subscript.hlsl
@@ -1651,6 +1793,85 @@ def test_parse_template_specialized_struct_declarations_from_dxc_sfinae():
     assert ast.structs[1].members[0].value is True
 
 
+def test_parse_elaborated_template_struct_variable_from_dxc_template_struct():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/templateStruct.hlsl
+    ast = parse_code("""
+    template<typename T>
+    struct TS {
+      T t;
+    };
+
+    struct TS<float4> ts;
+
+    float4 main() : SV_Target {
+      return ts.t;
+    }
+    """)
+
+    assert [struct.name for struct in ast.structs] == ["TS"]
+    assert ast.global_variables[0].vtype == "TS<float4>"
+    assert ast.global_variables[0].name == "ts"
+    assert ast.functions[0].name == "main"
+
+
+def test_parse_dependent_typename_scoped_template_return_from_dxc_sfinae():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/SemaHLSL/template-implicit-this-sfinae.hlsl
+    ast = parse_code("""
+    namespace hlsl {
+    template <bool B, typename T> struct enable_if {};
+    template <typename T> struct enable_if<true, T> {
+        using type = T;
+    };
+    template <typename T> struct is_arithmetic {
+        static const bool value = false;
+    };
+    }
+
+    template <typename T>
+    struct Wrapper {
+        static const bool IsArithmetic = hlsl::is_arithmetic<T>::value;
+
+        template <typename U = T>
+        typename hlsl::enable_if<IsArithmetic, U>::type Get() {
+            return val;
+        }
+
+        T val;
+    };
+    """)
+
+    wrapper = next(struct for struct in ast.structs if struct.name == "Wrapper")
+
+    assert wrapper.methods[0].return_type == "hlsl::enable_if<IsArithmetic, U>::type"
+    assert wrapper.methods[0].name == "Get"
+    assert wrapper.members[-1].name == "val"
+
+
+def test_parse_variable_template_id_expressions_from_dxc_var_template():
+    # Source: microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/CodeGenSPIRV/var.template.hlsl
+    ast = parse_code("""
+    template <class, class>
+    static const bool is_same_v = false;
+
+    template <class T>
+    static const bool is_same_v<T, T> = true;
+
+    RWStructuredBuffer<bool> outs;
+
+    void main() {
+      outs[0] = is_same_v<int, bool>;
+      outs[1] = is_same_v<int, int>;
+    }
+    """)
+
+    assert ast.global_variables[-1].name == "outs"
+    assert ast.functions[0].body[0].right == "is_same_v<int, bool>"
+    assert ast.functions[0].body[1].right == "is_same_v<int, int>"
+
+
 def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
     ast = parse_code("""
     Shader "Custom/ExtractedProgram"
@@ -1710,6 +1931,49 @@ def test_parse_unity_shaderlab_program_blocks_import_embedded_hlsl():
         "vert",
         "frag",
     ]
+
+
+def test_parse_unity_shaderlab_without_hlsl_program_blocks_skips_non_hlsl_content():
+    # Reduced from Unity-Built-in-Shaders:
+    # DefaultResourcesExtra/Mobile/Mobile-Particle-Add.shader
+    ast = parse_code("""
+    Shader "Mobile/Particles/Additive" {
+        Properties {
+            _MainTex ("Particle Texture", 2D) = "white" {}
+        }
+
+        SubShader {
+            Pass {
+                SetTexture [_MainTex] {
+                    combine texture * primary
+                }
+            }
+        }
+    }
+    """)
+
+    assert ast.structs == []
+    assert ast.functions == []
+    assert ast.global_variables == []
+
+
+def test_parse_unity_unexpanded_struct_member_macros_from_builtin_shaders():
+    ast = parse_code("""
+    struct SpeedTreeVB {
+        float4 vertex : POSITION;
+        UNITY_VERTEX_INPUT_INSTANCE_ID
+    };
+
+    struct TerrainInput {
+        float4 tc;
+        UNITY_FOG_COORDS(0)
+    };
+    """)
+
+    structs = {node.name: node for node in ast.structs if isinstance(node, StructNode)}
+
+    assert [member.name for member in structs["SpeedTreeVB"].members] == ["vertex"]
+    assert [member.name for member in structs["TerrainInput"].members] == ["tc"]
 
 
 def test_parse_compact_shaderlab_program_markers_import_embedded_hlsl():
@@ -3071,6 +3335,22 @@ def test_parse_legacy_special_float_literal_from_directx_graphics_samples():
     assert math.isinf(infinity.value)
 
 
+def test_parse_double_suffix_float_literals_from_dxc_intrinsics():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/intrinsics/basic/intrinsic-examples_Mod.hlsl
+    # tools/clang/test/HLSLFileCheck/hlsl/intrinsics/compound/pow-mulonly-lit-types.hlsl
+    ast = parse_code("""
+    double overload1(double d) { return 1.0l; }
+
+    float main(float4x4 b : B) : SV_Target
+    {
+        return pow(b, -131072.0L)[0][0];
+    }
+    """)
+
+    assert [function.name for function in ast.functions] == ["overload1", "main"]
+
+
 def test_parse_unsigned_int_namespace_constants_from_directx_graphics_samples():
     ast = parse_code("""
     namespace FilterKernel
@@ -3285,6 +3565,37 @@ def test_parse_struct_bitfield_members_from_dxc_swizzle_fixture():
     assert [member.semantic for member in struct.members] == [None, None, None]
 
 
+def test_parse_anonymous_and_packed_struct_bitfields_from_dxc_debug_fixture():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/HLSLFileCheck/hlsl/types/struct/bitfields.hlsl
+    ast = parse_code("""
+        struct foo {
+          int x : 8;
+          int : 8;
+          int y : 16;
+        };
+
+        struct P1 {
+          uint l_Packed;
+          uint k_Packed : 6,
+            i_Packed : 15,
+            j_Packed : 11;
+        };
+    """)
+
+    foo, packed = ast.structs
+
+    assert [member.name for member in foo.members] == ["x", "y"]
+    assert [member.bit_width for member in foo.members] == [8, 16]
+    assert [member.name for member in packed.members] == [
+        "l_Packed",
+        "k_Packed",
+        "i_Packed",
+        "j_Packed",
+    ]
+    assert [member.bit_width for member in packed.members] == [None, 6, 15, 11]
+
+
 def test_parse_min_precision_scalar_constructor_from_dxc_tests():
     ast = parse_code("""
         int main(min16int a : A) : SV_Target {
@@ -3440,6 +3751,39 @@ def test_parse_linalg_post_type_attributes_from_dxc():
     assert param.attributes[0].name == "__LinAlgMatrix_Attributes"
     assert local.name == "mat1"
     assert local.attributes[0].name == "__LinAlgMatrix_Attributes"
+
+
+def test_parse_linalg_using_alias_post_type_attributes_from_dxc():
+    # Source: microsoft/DirectXShaderCompiler
+    # tools/clang/test/CodeGenDXIL/hlsl/linalg/matrix-target-type-in-struct.hlsl
+    code = textwrap.dedent("""
+        using MyHandleT = __builtin_LinAlgMatrix [[__LinAlgMatrix_Attributes(9, 4, 4, 0, 1)]];
+
+        class MyMatrix {
+          MyHandleT handle;
+
+          static MyMatrix Splat(float Val) {
+            MyMatrix Result;
+            __builtin_LinAlg_FillMatrix(Result.handle, Val);
+            return Result;
+          }
+        };
+
+        [numthreads(4, 4, 4)]
+        void main() {
+          MyMatrix MatA = MyMatrix::Splat(1.0f);
+        }
+        """)
+
+    ast = parse_code(code)
+
+    alias = ast.typedefs[0]
+    local = ast.functions[0].body[0]
+    assert alias.name == "MyHandleT"
+    assert alias.alias_type == "__builtin_LinAlgMatrix"
+    assert alias.attributes[0].name == "__LinAlgMatrix_Attributes"
+    assert [arg for arg in alias.attributes[0].args] == [9, 4, 4, 0, 1]
+    assert local.name == "MatA"
 
 
 @pytest.mark.parametrize(

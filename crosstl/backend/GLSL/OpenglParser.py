@@ -185,9 +185,22 @@ VULKAN_MEMORY_MODEL_QUALIFIERS = {
 
 IDENTIFIER_QUALIFIERS = RAY_STORAGE_QUALIFIERS | MESH_STORAGE_QUALIFIERS
 IDENTIFIER_QUALIFIERS |= VULKAN_MEMORY_MODEL_QUALIFIERS
-IDENTIFIER_QUALIFIERS |= {"nonuniformEXT", "spirv_by_reference", "tileImageEXT"}
+IDENTIFIER_QUALIFIERS |= {
+    "nonuniformEXT",
+    "spirv_by_reference",
+    "spirv_literal",
+    "tileImageEXT",
+}
 CONTEXTUAL_QUALIFIERS = {"static"}
-DECLARATION_ANNOTATION_PREFIXES = {"spirv_instruction"}
+DECLARATION_ANNOTATION_PREFIXES = {
+    "spirv_decorate",
+    "spirv_decorate_id",
+    "spirv_decorate_string",
+    "spirv_instruction",
+    "spirv_storage_class",
+}
+STANDALONE_DECLARATION_ANNOTATIONS = {"spirv_execution_mode"}
+TYPE_ANNOTATION_NAMES = {"spirv_type"}
 TEMPLATE_TYPE_NAMES = {"vector"}
 TEMPLATE_DECLARATION_TYPE_NAMES = {
     "coopmat",
@@ -345,9 +358,13 @@ FRAGMENT_LAYOUT_QUALIFIERS = {
     "depth_unchanged",
 }
 FRAGMENT_BUILTINS = {
+    "gl_BaryCoordEXT",
+    "gl_BaryCoordNoPerspEXT",
     "gl_FragCoord",
     "gl_FragColor",
     "gl_FragDepth",
+    "gl_FragStencilRefARB",
+    "gl_FragStencilRefEXT",
     "gl_FrontFacing",
     "gl_HelperInvocation",
     "gl_PointCoord",
@@ -397,6 +414,7 @@ class GLSLParser:
         self.tokens = tokens or [("EOF", "")]
         self.shader_type = shader_type
         self.should_infer_shader_type = self.is_auto_shader_type(shader_type)
+        self.stage_marker_shader_type = None
         self.index = 0
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
@@ -462,7 +480,7 @@ class GLSLParser:
                 break
 
             if self.is_bracketed_stage_marker():
-                self.skip_bracketed_stage_marker()
+                self.handle_stage_marker(self.bracketed_stage_marker_name())
                 continue
 
             if self.is_godot_metadata_section_marker():
@@ -470,7 +488,7 @@ class GLSLParser:
                 continue
 
             if self.is_hash_bracketed_stage_marker():
-                self.skip_hash_bracketed_marker()
+                self.handle_stage_marker(self.hash_bracketed_marker_name())
                 continue
 
             if self.current_token[0] == "HASH":
@@ -481,6 +499,10 @@ class GLSLParser:
                 precision_stmt = self.parse_precision_statement()
                 if precision_stmt:
                     preprocessor.append(precision_stmt)
+                continue
+
+            if self.is_standalone_declaration_annotation():
+                self.skip_standalone_declaration_annotation()
                 continue
 
             if self.current_token[0] == "STRUCT":
@@ -506,6 +528,16 @@ class GLSLParser:
             if self.is_qualifier_only_declaration_start(qualifiers, layout):
                 global_variables.extend(
                     self.parse_qualifier_only_declarations(qualifiers, layout)
+                )
+                continue
+
+            if self.is_hlsl_cbuffer_block_start():
+                struct_node, block_vars = self.parse_hlsl_cbuffer_block(
+                    qualifiers, layout
+                )
+                self.append_struct_with_nested(structs, struct_node)
+                self.append_interface_block_vars(
+                    block_vars, uniforms, io_variables, global_variables
                 )
                 continue
 
@@ -603,7 +635,9 @@ class GLSLParser:
             layouts=layouts,
         )
         if self.should_infer_shader_type:
-            inferred_shader_type = self.infer_shader_type(shader)
+            inferred_shader_type = (
+                self.stage_marker_shader_type or self.infer_shader_type(shader)
+            )
             shader.shader_type = inferred_shader_type
             self.shader_type = inferred_shader_type
             self.apply_main_shader_type(shader, inferred_shader_type)
@@ -829,6 +863,11 @@ class GLSLParser:
             and self.peek_non_newline(2)[0] == "RBRACKET"
         )
 
+    def bracketed_stage_marker_name(self):
+        if self.is_bracketed_stage_marker():
+            return self.peek_non_newline()[1]
+        return None
+
     def skip_bracketed_stage_marker(self):
         self.eat("LBRACKET")
         self.eat("IDENTIFIER")
@@ -855,6 +894,37 @@ class GLSLParser:
         self.eat("LBRACKET")
         self.eat("IDENTIFIER")
         self.eat("RBRACKET")
+
+    def handle_stage_marker(self, shader_type):
+        if self.current_token[0] == "HASH":
+            self.skip_hash_bracketed_marker()
+        else:
+            self.skip_bracketed_stage_marker()
+
+        if not shader_type:
+            return
+
+        if self.should_infer_shader_type and self.stage_marker_shader_type is None:
+            self.stage_marker_shader_type = shader_type
+
+        selected_stage = (
+            self.stage_marker_shader_type
+            if self.should_infer_shader_type
+            else self.shader_type
+        )
+        if selected_stage and shader_type != selected_stage:
+            self.skip_inactive_stage_section()
+
+    def skip_inactive_stage_section(self):
+        while self.current_token[0] != "EOF":
+            self.skip_newlines()
+            if (
+                self.is_bracketed_stage_marker()
+                or self.is_hash_bracketed_stage_marker()
+                or self.is_godot_metadata_section_marker()
+            ):
+                return
+            self.advance()
 
     def skip_godot_metadata_section(self):
         self.skip_hash_bracketed_marker()
@@ -934,6 +1004,22 @@ class GLSLParser:
 
         return qualifiers, layout
 
+    def is_standalone_declaration_annotation(self):
+        if (
+            self.current_token[0] != "IDENTIFIER"
+            or self.current_token[1] not in STANDALONE_DECLARATION_ANNOTATIONS
+            or self.peek()[0] != "LPAREN"
+        ):
+            return False
+        end_index = self.skip_balanced_suffix(self.index + 1, "LPAREN", "RPAREN")
+        return self.token_at(self.skip_newline_index(end_index))[0] == "SEMICOLON"
+
+    def skip_standalone_declaration_annotation(self):
+        self.eat("IDENTIFIER")
+        self.skip_balanced_parentheses()
+        self.skip_newlines()
+        self.eat("SEMICOLON")
+
     def is_macro_declaration_prefix(self):
         if self.current_token[0] != "IDENTIFIER":
             return False
@@ -959,6 +1045,14 @@ class GLSLParser:
     def can_follow_macro_declaration_prefix(self, token):
         token_type, token_value = token
         if token_type in TYPE_TOKENS or token_type in QUALIFIER_TOKENS | {"LAYOUT"}:
+            return True
+        if token_type == "IDENTIFIER" and token_value in (
+            DECLARATION_ANNOTATION_PREFIXES | TYPE_ANNOTATION_NAMES
+        ):
+            return True
+        if token_type == "IDENTIFIER" and self.is_explicit_arithmetic_type_name(
+            token_value
+        ):
             return True
         if token_type == "IDENTIFIER" and self.is_uppercase_macro_identifier(
             token_value
@@ -1049,15 +1143,44 @@ class GLSLParser:
         return qualifiers
 
     def parse_type(self):
+        if self.is_unsigned_int_type_start_at(self.index):
+            self.eat("IDENTIFIER")
+            self.skip_newlines()
+            self.eat("INT")
+            return "uint"
         if self.current_token[0] in TYPE_TOKENS:
             type_name = self.current_token[1]
             self.advance()
+            return type_name + self.parse_type_template_suffix()
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in TYPE_ANNOTATION_NAMES
+            and self.peek()[0] == "LPAREN"
+        ):
+            type_name = self.current_token[1]
+            self.eat("IDENTIFIER")
+            self.skip_balanced_parentheses()
             return type_name + self.parse_type_template_suffix()
         if self.current_token[0] == "IDENTIFIER":
             type_name = self.current_token[1]
             self.eat("IDENTIFIER")
             return type_name + self.parse_type_template_suffix()
         raise SyntaxError(f"Expected type, got {self.current_token}")
+
+    def is_unsigned_int_type_start_at(self, index):
+        index = self.skip_newline_index(index)
+        token_type, token_value = self.token_at(index)
+        if token_type != "IDENTIFIER" or token_value != "unsigned":
+            return False
+        next_index = self.skip_newline_index(index + 1)
+        return self.token_at(next_index)[0] == "INT"
+
+    def skip_unsigned_int_type_index(self, index):
+        if not self.is_unsigned_int_type_start_at(index):
+            return index
+        index = self.skip_newline_index(index)
+        int_index = self.skip_newline_index(index + 1)
+        return self.skip_newline_index(int_index + 1)
 
     def parse_type_template_suffix(self):
         if self.current_token[0] != "LESS_THAN":
@@ -1166,9 +1289,22 @@ class GLSLParser:
         raise SyntaxError(f"Expected {context}, got {self.current_token}")
 
     def is_declaration_start(self):
-        if self.current_token[0] in TYPE_TOKENS:
-            index = self.skip_type_template_suffix_index(self.index + 1)
+        if self.current_token[0] in TYPE_TOKENS or self.is_unsigned_int_type_start_at(
+            self.index
+        ):
+            if self.is_unsigned_int_type_start_at(self.index):
+                index = self.skip_unsigned_int_type_index(self.index)
+            else:
+                index = self.skip_type_template_suffix_index(self.index + 1)
             index = self.skip_array_suffixes_index(index)
+            return self.is_name_token_at(index)
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in TYPE_ANNOTATION_NAMES
+            and self.peek()[0] == "LPAREN"
+        ):
+            index = self.skip_balanced_suffix(self.index + 1, "LPAREN", "RPAREN")
+            index = self.skip_array_suffixes_index(self.skip_newline_index(index))
             return self.is_name_token_at(index)
         if (
             self.current_token[0] == "IDENTIFIER"
@@ -1189,10 +1325,15 @@ class GLSLParser:
 
         if self.token_at(index)[0] == "STRUCT":
             return True
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
 
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
         return self.is_name_token_at(index)
 
@@ -1235,15 +1376,28 @@ class GLSLParser:
                 self.eat("EQUALS")
                 value = self.parse_assignment_expression()
 
+            semantic = None
+            variable_layout = layout
+            if self.current_token[0] == "COLON":
+                if self.is_hlsl_register_annotation_start():
+                    register_layout = self.parse_hlsl_register_annotation()
+                    if register_layout:
+                        variable_layout = self.merge_layout_qualifiers(
+                            layout, register_layout
+                        )
+                else:
+                    semantic = self.parse_hlsl_semantic()
+
             var = VariableNode(
                 type_name,
                 name,
                 value=value,
                 qualifiers=qualifiers or [],
                 array_size=array_size,
-                layout=layout,
+                layout=variable_layout,
                 is_array=is_array,
                 array_sizes=array_sizes,
+                semantic=semantic,
             )
 
             lowered = {q.lower() for q in qualifiers or []}
@@ -1338,10 +1492,28 @@ class GLSLParser:
         self.anonymous_struct_count += 1
         return name
 
-    def parse_interface_block(self, qualifiers, layout):
+    def is_hlsl_cbuffer_block_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and str(self.current_token[1]).lower() == "cbuffer"
+            and self.peek_non_newline()[0] == "IDENTIFIER"
+        )
+
+    def parse_hlsl_cbuffer_block(self, qualifiers, layout):
+        self.eat("IDENTIFIER")
+        cbuffer_qualifiers = list(qualifiers or [])
+        if "uniform" not in {qualifier.lower() for qualifier in cbuffer_qualifiers}:
+            cbuffer_qualifiers.append("uniform")
+        return self.parse_interface_block(cbuffer_qualifiers, layout, hlsl_cbuffer=True)
+
+    def parse_interface_block(self, qualifiers, layout, hlsl_cbuffer=False):
         block_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.known_type_names.add(block_name)
+        self.skip_newlines()
+        register_layout = self.parse_hlsl_register_annotation()
+        if register_layout:
+            layout = self.merge_layout_qualifiers(layout, register_layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1400,6 +1572,7 @@ class GLSLParser:
         struct_node.interface_array_size = array_size
         struct_node.interface_array_sizes = array_sizes
         struct_node.nested_structs = nested_structs
+        struct_node.hlsl_cbuffer = hlsl_cbuffer
         block_vars = []
 
         if instance_name:
@@ -1424,6 +1597,78 @@ class GLSLParser:
 
         return struct_node, block_vars
 
+    def is_hlsl_register_annotation_start(self):
+        if self.current_token[0] != "COLON":
+            return False
+        index = self.skip_newline_index(self.index + 1)
+        if not (
+            self.token_at(index)[0] == "IDENTIFIER"
+            and str(self.token_at(index)[1]).lower() == "register"
+        ):
+            return False
+        index = self.skip_newline_index(index + 1)
+        return self.token_at(index)[0] == "LPAREN"
+
+    def parse_hlsl_register_annotation(self):
+        if self.current_token[0] != "COLON":
+            return None
+
+        self.eat("COLON")
+        if not (
+            self.current_token[0] == "IDENTIFIER"
+            and str(self.current_token[1]).lower() == "register"
+        ):
+            raise SyntaxError(f"Expected register annotation, got {self.current_token}")
+        self.eat("IDENTIFIER")
+        self.skip_newlines()
+        self.eat("LPAREN")
+        self.skip_newlines()
+
+        layout = {}
+        register_name = self.current_token[1]
+        self.advance()
+        binding = self.binding_from_hlsl_register(register_name)
+        if binding is not None:
+            layout["binding"] = binding
+
+        self.skip_newlines()
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            self.skip_newlines()
+            token_value = self.current_token[1]
+            self.advance()
+            space = self.space_from_hlsl_register_space(token_value)
+            if space is not None:
+                layout["set"] = space
+            self.skip_newlines()
+
+        self.eat("RPAREN")
+        return layout or None
+
+    def binding_from_hlsl_register(self, register_name):
+        match = re.match(r"^[A-Za-z]+([0-9]+)$", str(register_name))
+        return match.group(1) if match else None
+
+    def space_from_hlsl_register_space(self, space_name):
+        match = re.match(r"^space([0-9]+)$", str(space_name), re.IGNORECASE)
+        return match.group(1) if match else None
+
+    def parse_hlsl_semantic(self):
+        self.eat("COLON")
+        self.skip_newlines()
+        parts = []
+        while self.current_token[0] not in (
+            "COMMA",
+            "SEMICOLON",
+            "RPAREN",
+            "LBRACE",
+            "NEWLINE",
+            "EOF",
+        ):
+            parts.append(str(self.current_token[1]))
+            self.advance()
+        return " ".join(parts).strip()
+
     def is_buffer_reference_block(self, qualifiers, layout):
         return bool(layout and "buffer_reference" in layout) and "buffer" in {
             str(qualifier).lower() for qualifier in qualifiers or []
@@ -1440,10 +1685,14 @@ class GLSLParser:
         self.skip_newlines()
         self.skip_statement_attributes()
         self.skip_newlines()
+        semantic = None
+        if self.current_token[0] == "COLON":
+            semantic = self.parse_hlsl_semantic()
+            self.skip_newlines()
 
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
-            return FunctionNode(
+            function = FunctionNode(
                 return_type,
                 name,
                 params,
@@ -1451,6 +1700,8 @@ class GLSLParser:
                 qualifiers=list(qualifiers or []),
                 layout=layout,
             )
+            function.semantic = semantic
+            return function
 
         self.eat("LBRACE")
         body = self.parse_block()
@@ -1459,7 +1710,7 @@ class GLSLParser:
         function_qualifiers = list(qualifiers or [])
         if qualifier:
             function_qualifiers.append(qualifier)
-        return FunctionNode(
+        function = FunctionNode(
             return_type,
             name,
             params,
@@ -1467,6 +1718,8 @@ class GLSLParser:
             qualifiers=function_qualifiers,
             layout=layout,
         )
+        function.semantic = semantic
+        return function
 
     def parse_parameters(self):
         self.eat("LPAREN")
@@ -1484,6 +1737,14 @@ class GLSLParser:
         if self.current_token[0] != "RPAREN":
             while True:
                 self.skip_newlines()
+                if self.current_token[0] == "ELLIPSIS":
+                    self.eat("ELLIPSIS")
+                    params.append(VariableNode("...", "...", is_variadic=True))
+                    self.skip_newlines()
+                    if self.current_token[0] != "RPAREN":
+                        raise SyntaxError("GLSL variadic parameter must be last")
+                    break
+
                 qualifiers = self.parse_qualifiers()
                 param_type = self.parse_type()
                 type_array_sizes = []
@@ -1502,6 +1763,10 @@ class GLSLParser:
                     self.eat("EQUALS")
                     default_value = self.parse_assignment_expression()
 
+                semantic = None
+                if self.current_token[0] == "COLON":
+                    semantic = self.parse_hlsl_semantic()
+
                 array_size = array_sizes[0] if array_sizes else None
 
                 params.append(
@@ -1513,6 +1778,7 @@ class GLSLParser:
                         array_sizes=array_sizes,
                         is_array=bool(array_sizes),
                         default_value=default_value,
+                        semantic=semantic,
                     )
                 )
                 if self.current_token[0] == "COMMA":
@@ -1623,9 +1889,14 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
         if not self.is_name_token_at(index):
@@ -1647,9 +1918,14 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
         if not self.is_name_token_at(index):
@@ -1671,9 +1947,14 @@ class GLSLParser:
                 continue
             break
 
-        if self.token_at(index)[0] not in TYPE_TOKENS | {"IDENTIFIER"}:
+        if self.token_at(index)[0] not in TYPE_TOKENS | {
+            "IDENTIFIER"
+        } and not self.is_unsigned_int_type_start_at(index):
             return False
-        index = self.skip_type_template_suffix_index(index + 1)
+        if self.is_unsigned_int_type_start_at(index):
+            index = self.skip_unsigned_int_type_index(index)
+        else:
+            index = self.skip_type_template_suffix_index(index + 1)
         index = self.skip_array_suffixes_index(index)
 
         if not self.is_name_token_at(index):
@@ -1923,6 +2204,7 @@ class GLSLParser:
     def parse_for_loop(self):
         self.eat("FOR")
         self.eat("LPAREN")
+        self.skip_newlines()
 
         init = None
         if self.current_token[0] != "SEMICOLON":
@@ -1948,11 +2230,13 @@ class GLSLParser:
                 init = self.parse_assignment_expression()
 
         self.eat("SEMICOLON")
+        self.skip_newlines()
 
         condition = None
         if self.current_token[0] != "SEMICOLON":
             condition = self.parse_condition()
         self.eat("SEMICOLON")
+        self.skip_newlines()
 
         update = None
         if self.current_token[0] != "RPAREN":
@@ -2225,6 +2509,7 @@ class GLSLParser:
         return expr
 
     def parse_unary(self):
+        self.skip_newlines()
         if self.is_c_style_cast_start():
             return self.parse_c_style_cast()
         if self.current_token[0] in ("PLUS", "MINUS", "LOGICAL_NOT", "BITWISE_NOT"):
@@ -2257,6 +2542,8 @@ class GLSLParser:
         return self.can_start_cast_operand(self.token_at(next_index))
 
     def is_cast_type_token_at(self, index):
+        if self.is_unsigned_int_type_start_at(index):
+            return True
         token_type, token_value = self.token_at(index)
         if token_type in TYPE_TOKENS:
             return True
@@ -2272,6 +2559,8 @@ class GLSLParser:
         return bool(EXPLICIT_ARITHMETIC_TYPE_RE.match(str(value)))
 
     def skip_cast_type_index(self, index):
+        if self.is_unsigned_int_type_start_at(index):
+            return self.skip_unsigned_int_type_index(index)
         index = self.skip_newline_index(index + 1)
         return self.skip_type_template_suffix_index(index)
 

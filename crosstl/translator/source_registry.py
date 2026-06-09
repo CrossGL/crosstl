@@ -362,6 +362,12 @@ def _load_hip():
     return HipLexer, HipParser
 
 
+def _load_opencl():
+    from crosstl.backend.OpenCL import OpenCLLexer, OpenCLParser
+
+    return OpenCLLexer, OpenCLParser
+
+
 def _reverse_directx():
     from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLToCrossGLConverter
 
@@ -391,13 +397,17 @@ _GLSL_EXTENSION_SHADER_TYPES = {
     ".frag": "fragment",
     ".fragment": "fragment",
     ".comp": "compute",
+    ".cs": "compute",
     ".csh": "compute",
     ".compute": "compute",
     ".geom": "geometry",
+    ".gs": "geometry",
     ".gsh": "geometry",
     ".geometry": "geometry",
     ".tesc": "tessellation_control",
+    ".tcs": "tessellation_control",
     ".tese": "tessellation_evaluation",
+    ".tes": "tessellation_evaluation",
     ".mesh": "mesh",
     ".task": "task",
     ".rgen": "ray_generation",
@@ -416,11 +426,15 @@ _GLSL_FILENAME_STAGE_SUFFIX_TYPES = {
     "_frag": "fragment",
     "_fragment": "fragment",
     "_comp": "compute",
+    "_cs": "compute",
     "_compute": "compute",
     "_geom": "geometry",
+    "_gs": "geometry",
     "_geometry": "geometry",
     "_tesc": "tessellation_control",
+    "_tcs": "tessellation_control",
     "_tese": "tessellation_evaluation",
+    "_tes": "tessellation_evaluation",
     "_mesh": "mesh",
     "_task": "task",
     "_rgen": "ray_generation",
@@ -492,6 +506,12 @@ def _reverse_hip():
     return HipToCrossGLConverter()
 
 
+def _reverse_opencl():
+    from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import OpenCLToCrossGLConverter
+
+    return OpenCLToCrossGLConverter()
+
+
 def register_default_sources() -> None:
     """Register the built-in CrossGL and native source frontends."""
 
@@ -547,13 +567,17 @@ def register_default_sources() -> None:
                 ".frag",
                 ".fragment",
                 ".comp",
+                ".cs",
                 ".csh",
                 ".compute",
                 ".geom",
+                ".gs",
                 ".gsh",
                 ".geometry",
                 ".tesc",
+                ".tcs",
                 ".tese",
+                ".tes",
                 ".mesh",
                 ".task",
                 ".rgen",
@@ -632,5 +656,14 @@ def register_default_sources() -> None:
             load_lexer_parser=_load_hip,
             reverse_codegen_factory=_reverse_hip,
             aliases=("hip",),
+        )
+    )
+    _register(
+        SourceSpec(
+            name="opencl",
+            extensions=(".cl", ".opencl"),
+            load_lexer_parser=_load_opencl,
+            reverse_codegen_factory=_reverse_opencl,
+            aliases=("opencl", "cl"),
         )
     )

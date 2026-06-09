@@ -3,6 +3,7 @@ from typing import List
 import pytest
 
 from crosstl.backend.slang.SlangLexer import SlangLexer
+from crosstl.backend.slang.SlangParser import SlangParser
 
 
 def tokenize_code(code: str) -> List:
@@ -192,6 +193,14 @@ def test_interface_extension_and_where_tokenization():
     assert ("WHERE", "where") in tokens
 
 
+def test_dunder_extension_tokenization_from_compute_fixture():
+    # Reduced from shader-slang/slang tests/compute/extension-multi-interface.slang.
+    tokens = tokenize_code("__extension Simple : ISub { int subf(); };")
+
+    assert ("EXTENSION", "__extension") in tokens
+    assert ("IDENTIFIER", "__extension") not in tokens
+
+
 def test_typealias_and_associatedtype_tokenization():
     tokens = tokenize_code(
         "typealias Color = float4; "
@@ -230,6 +239,25 @@ def test_numeric_literal_underscore_tokenization_from_generated_conformance_samp
         ("NUMBER", "12.34e+56f"),
         ("EOF", ""),
     ]
+
+
+def test_from_file_decodes_utf16_bom_crlf_preprocessor_fixtures(tmp_path):
+    # Source: shader-slang/slang tests/preprocessor/utf16_{le,be}_bom_crlf.slang
+    # at 6b9f98ff90facc35306a0ba643dfecb59a870156.
+    source = "void main()\r\n{\r\n}\r\n//TEST:SIMPLE\r\n"
+    encodings = [
+        ("le", b"\xff\xfe", "utf-16-le"),
+        ("be", b"\xfe\xff", "utf-16-be"),
+    ]
+
+    for suffix, bom, encoding in encodings:
+        source_path = tmp_path / f"utf16_{suffix}_bom_crlf.slang"
+        source_path.write_bytes(bom + source.encode(encoding))
+
+        tokens = SlangLexer.from_file(str(source_path)).tokenize()
+        ast = SlangParser(tokens).parse()
+
+        assert [function.name for function in ast.functions] == ["main"]
 
 
 if __name__ == "__main__":

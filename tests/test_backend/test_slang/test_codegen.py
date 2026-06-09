@@ -266,6 +266,59 @@ def test_typealias_codegen():
     assert "typedef vec4 Color;" in generated_code
 
 
+def test_generic_typealias_codegen_from_slang_neural_modules():
+    # Source: shader-slang/slang source/standard-modules/neural/hash-function.slang
+    # declares internal typealias uvec<int Dim> = Array<uint32_t, Dim>;
+    code = """
+    implementing neural;
+
+    internal typealias uvec<int Dim> = Array<uint32_t, Dim>;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "typedef Array<uint32_t, Dim> uvec<intDim>;" in generated_code
+
+
+def test_typealias_logical_not_generic_argument_codegen_reparse():
+    # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
+    # tests/compute/logical-operators-constant-fold.slang.
+    code = """
+    static const bool FALSE_VAL = false;
+    static const bool TRUE_VAL = true;
+
+    struct ValueHolder<bool condition>
+    {
+        static const int value = condition ? 1 : 0;
+    };
+
+    typealias TestNotFalse = ValueHolder<!FALSE_VAL>;
+    typealias TestAnd = ValueHolder<TRUE_VAL && !FALSE_VAL>;
+    typealias TestOr = ValueHolder<FALSE_VAL || !FALSE_VAL>;
+
+    [numthreads(1, 1, 1)]
+    void computeMain(int3 dispatchThreadID : SV_DispatchThreadID)
+    {
+        bool allCorrect =
+            TestNotFalse.value == 1 &&
+            TestAnd.value == 1 &&
+            TestOr.value == 1;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "typedef ValueHolder<not_FALSE_VAL> TestNotFalse;" in generated_code
+    assert "typedef ValueHolder<TRUE_VAL&&not_FALSE_VAL> TestAnd;" in generated_code
+    assert "typedef ValueHolder<FALSE_VAL||not_FALSE_VAL> TestOr;" in generated_code
+    assert "ValueHolder<!FALSE_VAL>" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     code = """
     public struct AdamState
@@ -581,7 +634,7 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     assert "uint instanceId @ gl_InstanceID" in generated_code
     assert "bool frontFace @ gl_FrontFacing" in generated_code
     assert "uint sampleIndex @ gl_SampleID" in generated_code
-    assert "uint coverage @ gl_SampleMask" in generated_code
+    assert "uint coverage @ gl_SampleMaskIn" in generated_code
     assert "uint primitiveId @ gl_PrimitiveID" in generated_code
     assert "uvec3 dispatchId @ gl_GlobalInvocationID" in generated_code
     assert "uvec3 groupThreadId @ gl_LocalInvocationID" in generated_code
@@ -597,6 +650,85 @@ def test_common_hlsl_system_semantics_codegen_maps_to_crossgl_builtins_case_inse
     assert "@ sv_groupthreadid" not in generated_code
     assert "@ Sv_GroupId" not in generated_code
     assert "@ SV_GROUPINDEX" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_fragment_sv_coverage_parameter_codegen_uses_sample_mask_in():
+    code = """
+    [shader("fragment")]
+    float4 fragmentMain(uint coverage : SV_Coverage) : SV_Target
+    {
+        return float4(float(coverage), 0.0, 0.0, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint coverage @ gl_SampleMaskIn" in generated_code
+    assert "uint coverage @ gl_SampleMask)" not in generated_code
+    assert "@ SV_Coverage" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_fragment_sv_coverage_outputs_codegen_remain_sample_mask():
+    code = """
+    struct FragmentOutput
+    {
+        float4 color : SV_Target0;
+        uint coverage : SV_Coverage;
+    };
+
+    [shader("fragment")]
+    uint coverageReturn() : SV_Coverage
+    {
+        return 1;
+    }
+
+    [shader("fragment")]
+    FragmentOutput structReturn()
+    {
+        FragmentOutput output;
+        output.color = float4(1.0);
+        output.coverage = 1;
+        return output;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint coverageReturn() @ gl_SampleMask" in generated_code
+    assert "uint coverage @ gl_SampleMask;" in generated_code
+    assert "gl_SampleMaskIn" not in generated_code
+    assert "@ SV_Coverage" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_barycentric_system_semantics_codegen_canonicalizes_fragment_parameters():
+    code = """
+    [shader("fragment")]
+    float4 perspectiveMain(float3 bary : SV_Barycentrics) : SV_Target0
+    {
+        return float4(bary, 1.0);
+    }
+
+    [shader("fragment")]
+    float4 noPerspectiveMain(noperspective float3 bary : SV_Barycentrics) : SV_Target1
+    {
+        return float4(bary, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec3 bary @ gl_BaryCoordEXT" in generated_code
+    assert "noperspective vec3 bary @ gl_BaryCoordNoPerspEXT" in generated_code
+    assert "@ SV_Barycentrics" not in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -678,6 +810,32 @@ def test_raster_system_semantics_codegen_canonicalizes_layer_viewport_and_distan
     assert "@ SV_VIEWPORTARRAYINDEX" not in generated_code
     assert "@ SV_ClipDistance3" not in generated_code
     assert "@ sv_culldistance2" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
+    code = """
+    [shader("fragment")]
+    float4 fragmentMain(float4 pos : SV_Position) : SV_Target
+    {
+        return float4(pos.xy, 0.0, 1.0);
+    }
+
+    [shader("vertex")]
+    float4 vertexMain(float3 position : POSITION) : SV_Position
+    {
+        return float4(position, 1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ Out_Color" in generated_code
+    assert (
+        "vec4 vertexMain(vec3 position @ in_Position) @ Out_Position" in generated_code
+    )
     cgl_translator.parse(generated_code)
 
 
@@ -1178,7 +1336,7 @@ def test_generic_enum_class_codegen_reparse_from_upstream_bug_test():
     cgl_translator.parse(generated_code)
 
 
-def test_reverse_codegen_rejects_interface_and_conformance_constructs():
+def test_reverse_codegen_rejects_extension_conformance_constructs():
     code = """
     interface IFoo {
         int foo();
@@ -1203,9 +1361,37 @@ def test_reverse_codegen_rejects_interface_and_conformance_constructs():
         generate_code(ast)
 
     message = str(exc.value)
-    assert "interface IFoo" in message
-    assert "struct MyType : IFoo" in message
     assert "extension MyType : IBar" in message
+
+
+def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matrix():
+    # Reduced from shader-slang/slang source/standard-modules/neural/WaveMatrix.slang
+    # at 5230a81f2fe68afe5cb8d04a1b09d56476f6b960.
+    code = """
+    struct WaveMatrix<T, int Rows>
+    {
+        T value;
+    };
+
+    void matMad<T, int R0>(
+        WaveMatrix<T, R0> a,
+        WaveMatrix<T, R0> b,
+        inout WaveMatrix<T, R0> c)
+        where T : __BuiltinFloatingPointType
+        where T.Differential == T
+    {
+        c = a;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void matMad(" in generated_code
+    assert "where" not in generated_code
+    assert "__BuiltinFloatingPointType" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_reverse_codegen_rejects_generic_where_conformance_constraint():
@@ -1221,6 +1407,22 @@ def test_reverse_codegen_rejects_generic_where_conformance_constraint():
     with pytest.raises(
         NotImplementedError,
         match="function useFoo where T : IFoo",
+    ):
+        generate_code(ast)
+
+
+def test_reverse_codegen_rejects_typealias_generic_conformance_constraint():
+    code = """
+    __generic<T : IFoo>
+    typealias FooAlias = Array<T, 4>;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(
+        NotImplementedError,
+        match="typealias FooAlias<T> where T : IFoo",
     ):
         generate_code(ast)
 
@@ -1651,6 +1853,40 @@ def test_nested_parameter_block_resource_wrapper_codegen():
     )
 
 
+def test_nested_parameter_block_generic_parameter_codegen_reparse():
+    # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
+    # tests/language-feature/generics/generic-shader-object.slang.
+    code = """
+    struct Elem
+    {
+        float x;
+    };
+
+    struct Impl<T1, T2>
+    {
+        RWStructuredBuffer<T1> buffer0;
+        RWStructuredBuffer<T2> buffer1;
+    };
+
+    [numthreads(1, 1, 1)]
+    void computeMain(
+        uniform ParameterBlock<Impl<Elem, Elem>> gFoo,
+        uniform float v,
+        uniform RWStructuredBuffer<float> outputBuffer)
+    {
+        outputBuffer[0] = v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void computeMain(Impl<Elem, Elem> gFoo" in generated_code
+    assert "Impl<Elem gFoo" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_line_texture_resource_global_codegen():
     code = """
     Texture1D<float4> line;
@@ -1744,6 +1980,28 @@ def test_resource_binding_metadata_round_trips_to_crossgl_attributes():
     assert "sampler2D sourceTexture @set(2) @binding(7);" in generated_code
     assert "sampler2D albedo @register(t3);" in generated_code
     assert "sampler linearSampler @register(s4);" in generated_code
+
+
+def test_glsl_storage_buffer_block_from_allow_glsl_codegen():
+    code = """
+    buffer MyBlockName {
+        vec4 result;
+    } outputBuffer;
+
+    void main() {
+        outputBuffer.result = vec4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct MyBlockName {" in generated_code
+    assert "vec4 result;" in generated_code
+    assert "MyBlockName outputBuffer @glsl_buffer_block(std430);" in generated_code
+    assert "outputBuffer.result = vec4(1.0);" in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_standalone_layout_declarations_from_first_slang_shader_docs_codegen():
@@ -3660,6 +3918,34 @@ def test_official_pointer_address_of_and_arrow_member_codegen():
 
     assert "MyType* pNext2 = &pNext[1];" in generated_code
     assert "return pNext.a + pNext.a + (*pNext2).a + pNext2[0].a;" in generated_code
+
+
+def test_generic_prefix_struct_and_bitfield_codegen_from_official_tests_reparse():
+    code = """
+    __generic<T>
+    struct GenStruct
+    {
+        T x;
+        T y;
+    };
+
+    struct S
+    {
+        int foo : 8;
+        uint bar : 24;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct GenStruct<T>" in generated_code
+    assert "int foo;" in generated_code
+    assert "uint bar;" in generated_code
+    assert "foo : 8" not in generated_code
+    assert "bar : 24" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 if __name__ == "__main__":

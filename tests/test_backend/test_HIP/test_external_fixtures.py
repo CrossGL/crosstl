@@ -1,12 +1,15 @@
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     BinaryOpNode,
+    CastNode,
     FunctionCallNode,
     FunctionNode,
     HipAsmNode,
     IfNode,
     KernelLaunchNode,
     KernelNode,
+    SwitchNode,
+    TypeAliasNode,
     UnaryOpNode,
     VariableNode,
 )
@@ -52,6 +55,14 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
         "paths": ["HIP-Basic/runtime_compilation/main.hip"],
     },
+    "rocm_examples_stb_image_write": {
+        "url": "https://github.com/ROCm/rocm-examples",
+        "commit": "d3ad835e46ff50412cf51086df7400fb3bbd1649",
+        "paths": [
+            "HIP-Doc/Tutorials/Programming-Patterns/image_convolution/"
+            "stb_image_write.h"
+        ],
+    },
     "hip_examples": {
         "url": "https://github.com/ROCm/HIP-Examples",
         "commit": "cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3",
@@ -83,6 +94,11 @@ EXTERNAL_FIXTURE_SOURCES = {
             "catch/unit/math/integer_intrinsics.cc",
             "catch/unit/deviceLib/popc.cc",
         ],
+    },
+    "hip_tests_nested_sections": {
+        "url": "https://github.com/ROCm/hip-tests",
+        "commit": "8889ba5c7a89a85d5262dadcfbde17589a53ccfb",
+        "paths": ["catch/multiproc/hipIpcEventHandle.cc"],
     },
     "hip_tests_cooperative_groups": {
         "url": "https://github.com/ROCm/hip-tests",
@@ -182,6 +198,30 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
         "// Kernel launch: test_globals_kernel<<<vec3<u32>(64, 1, 1), "
         "vec3<u32>(1, 1, 1), 0, hipStreamDefault>>>()"
     ) in crossgl
+
+
+def test_external_rocm_host_memory_size_multiword_integer_cast_codegen_reparse():
+    # CUDA-compatible HIP host code uses the same C++ decl-specifier grammar.
+    # This alternate scalar spelling appears in NVIDIA cuda-samples:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/0_Introduction/matrixMulDrv/matrixMulDrv.cpp
+    source = """
+    void host(size_t total_global_mem) {
+        double total_global_mem_in_gbytes =
+            (double)(long long unsigned int)total_global_mem
+            / (1024.0 * 1024.0 * 1024.0);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    outer_cast = ast.statements[0].body[0].value.left
+
+    assert isinstance(outer_cast, CastNode)
+    assert outer_cast.target_type == "double"
+    assert isinstance(outer_cast.expression, CastNode)
+    assert outer_cast.expression.target_type == "long long unsigned int"
+    assert "f64(u64(total_global_mem))" in crossgl
 
 
 def test_external_rocm_cooperative_groups_thread_group_parameter_codegen_reparse():
@@ -325,6 +365,33 @@ def test_external_hip_tests_thread_block_tile_shuffle_codegen_reparse():
     )
 
 
+def test_external_hip_tests_parenthesized_scoped_enum_case_codegen_reparse():
+    # Upstream: ROCm/hip-tests@8889ba5c7a89a85d5262dadcfbde17589a53ccfb,
+    # catch/unit/cooperativeGrps/hipCGThreadBlockTileTypeShfl_old.cc.
+    source = """
+    enum class TiledGroupShflTests { shflDown, shflXor };
+
+    __global__ void kernel(TiledGroupShflTests shfl_test, int* out) {
+        switch (shfl_test) {
+            case (TiledGroupShflTests::shflDown):
+                out[0] = 1;
+                break;
+            case (TiledGroupShflTests::shflXor):
+                out[0] = 2;
+                break;
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    switch = ast.statements[1].body[0]
+
+    assert isinstance(switch, SwitchNode)
+    assert switch.cases[0].value == "TiledGroupShflTests::shflDown"
+    assert "case TiledGroupShflTests::shflDown:" in crossgl
+    assert "case TiledGroupShflTests::shflXor:" in crossgl
+
+
 def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
     source = """
     __global__ void saxpy_kernel(
@@ -353,6 +420,45 @@ def test_external_rocm_saxpy_kernel_launch_crossgl_reparse():
     assert launch.kernel_name == "saxpy_kernel"
     assert "fn saxpy_kernel(" in crossgl
     assert "Kernel launch: saxpy_kernel<<<" in crossgl
+
+
+def test_external_rocm_platform_error_guards_default_codegen_reparse():
+    # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1:
+    # HIP-Basic/vulkan_interop/main.hip,
+    # HIP-Basic/vulkan_interop_mipmap/main.hip, and
+    # HIP-Doc/Programming-Guide/Porting-CUDA-code-to-HIP/
+    # identifying_compilation_target_platform/main.cpp.
+    source = """
+    #if defined(__HIP_PLATFORM_AMD__)
+    static int selected_hip_platform() { return 1; }
+    #elif defined(__HIP_PLATFORM_NVIDIA__)
+    static int selected_hip_platform() { return 2; }
+    #else
+    #error unsupported platform
+    #endif
+
+    #if defined(_WIN32)
+    static int selected_host_platform() { return 3; }
+    #elif defined(__linux__)
+    static int selected_host_platform() { return 4; }
+    #else
+    #error unsupported host
+    #endif
+
+    void host(int* out) {
+        out[0] = selected_hip_platform() + selected_host_platform();
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "i32 selected_hip_platform()" in crossgl
+    assert "return 1;" in crossgl
+    assert "return 2;" not in crossgl
+    assert "i32 selected_host_platform()" in crossgl
+    assert "return 4;" in crossgl
+    assert "return 3;" not in crossgl
+    assert "unsupported" not in crossgl
 
 
 def test_external_rocm_runtime_compilation_adjacent_raw_string_codegen_reparse():
@@ -394,7 +500,42 @@ extern "C" __global__ void saxpy_kernel()
     assert 'name: "saxpy_kernel.cu"' in crossgl
 
 
-def test_external_rocm_convolution_std_array_template_extent_codegen():
+def test_external_rocm_hiprtc_linker_commented_macro_call_codegen_reparse():
+    # Upstream shape: ROCm/rocm-examples, Programming-for-HIP-Runtime-Compiler
+    # linker API examples. The HIPRTC_CHECK invocation keeps line comments on
+    # split arguments, which must not truncate the preprocessed macro call.
+    source = r"""
+    #define CHECK_RET_CODE(call, ret_code)                                      \
+    {                                                                           \
+        if ((call) != ret_code)                                                 \
+        {                                                                       \
+            std::abort();                                                       \
+        }                                                                       \
+    }
+    #define HIPRTC_CHECK(call) CHECK_RET_CODE(call, HIPRTC_SUCCESS)
+
+    void linkWithComments(hiprtcJIT_option* options, void** option_vals) {
+        auto num_options = 0u;
+        auto rtc_link_state = hiprtcLinkState{};
+        HIPRTC_CHECK(hiprtcLinkCreate(num_options,        // number of options
+                                      options,            // options
+                                      option_vals,        // option values
+                                      &rtc_link_state));  // state output
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    link_function = ast.statements[0]
+    assert isinstance(link_function, FunctionNode)
+    assert len(link_function.body) == 3
+    assert (
+        "HIPRTC link create: options: num_options, option keys: options, "
+        "option values: option_vals, state output: rtc_link_state"
+    ) in crossgl
+
+
+def test_external_rocm_convolution_std_array_template_extent_codegen_reparse():
     source = """
     const constexpr std::array<float, 5 * 5> convolution_filter_5x5 = {
         1.0f, 3.0f, 0.0f, -2.0f, -0.0f
@@ -414,18 +555,21 @@ def test_external_rocm_convolution_std_array_template_extent_codegen():
     }
     """
 
-    ast, crossgl = generate_crossgl_from_hip(source)
+    ast, crossgl = assert_crossgl_reparses(source)
 
     host_filter = ast.statements[0]
     assert isinstance(host_filter, VariableNode)
     assert host_filter.vtype == "const std::array<float, 5*5>"
     assert set(host_filter.qualifiers) == {"constexpr"}
     assert (
-        "var convolution_filter_5x5: std::array<float, 5*5> = "
+        "var convolution_filter_5x5: array<f32, hip_array_extent_5_mul_5> = "
         "{1.0f, 3.0f, 0.0f, (-2.0f), (-0.0f)};"
     ) in crossgl
     assert "ptr<std::array" not in crossgl
-    assert "@group(0) @binding(0) var<uniform> d_mask: array<f32, (5 * 5)>;" in crossgl
+    assert (
+        "@group(0) @binding(0) var<uniform> d_mask: "
+        "array<f32, hip_array_extent_5_mul_5>;"
+    ) in crossgl
     assert "fn convolution(" in crossgl
 
 
@@ -449,6 +593,53 @@ def test_external_rocm_stb_image_trailing_aligned_attribute_codegen_reparse():
     assert "temp[0] = 1;" in crossgl
     assert "__attribute__" not in crossgl
     assert "aligned" not in crossgl
+
+
+def test_external_rocm_stb_image_write_function_type_typedef_codegen_reparse():
+    # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
+    # HIP-Doc/Tutorials/Programming-Patterns/image_convolution/stb_image_write.h.
+    source = """
+    typedef void stbi_write_func(void *context, void *data, int size);
+
+    extern int stbi_write_png_to_func(stbi_write_func *func,
+                                      void *context,
+                                      int w,
+                                      int h);
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    alias = ast.statements[0]
+    function = ast.statements[1]
+
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "stbi_write_func"
+    assert alias.alias_type == "void"
+    assert function.params[0]["type"] == "stbi_write_func *"
+    assert "typedef void stbi_write_func;" in crossgl
+    assert "i32 stbi_write_png_to_func(ptr<stbi_write_func> func" in crossgl
+
+
+def test_external_hip_examples_function_pointer_parameter_codegen_reparse():
+    # Upstream: ROCm/HIP-Examples@cdf9d101acd9a3fc89ee750f73c1f1958cbd5cc3,
+    # HIP-Examples-Applications/common/SDKUtil.hpp.
+    source = """
+    template <class T>
+    std::string toString(T t,
+                         std::ios_base& (*r)(std::ios_base&) = std::dec) {
+        std::ostringstream output;
+        output << r << t;
+        return output.str();
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[0]
+
+    assert isinstance(function, FunctionNode)
+    assert function.params[1]["type"] == "std::ios_base & (*)"
+    assert "std::string toString(T t, ptr<std::ios_base> r)" in crossgl
+    assert "ptr<std::ios_base ()>" not in crossgl
+    assert "var output: std::ostringstream;" in crossgl
 
 
 def test_external_hip_one_component_vectors_codegen_reparse():
@@ -481,6 +672,136 @@ def test_external_hip_one_component_vectors_codegen_reparse():
     assert "packed.x" not in crossgl
     assert "local.x" not in crossgl
     assert "count.x" not in crossgl
+
+
+def test_external_hip_tests_catch_test_case_block_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/deviceLib/funnelshift.cc.
+    source = """
+    #define NUM_TESTS 65
+
+    __global__ void funnelshift_kernel(unsigned int* l_out) {
+        for(int i = 0; i < NUM_TESTS; i++) {
+            l_out[i] = __funnelshift_l(0xdeadbeef, 0xfacefeed, i);
+        }
+    }
+
+    HIP_TEST_CASE(Unit_funnelshift) {
+        unsigned int* host_l_output;
+        unsigned int* device_l_output;
+
+        host_l_output = (unsigned int*)calloc(NUM_TESTS, sizeof(unsigned int));
+        HIP_CHECK(hipMalloc((void**)&device_l_output,
+                            NUM_TESTS * sizeof(unsigned int)));
+        hipLaunchKernelGGL(funnelshift_kernel,
+                           dim3(1),
+                           dim3(1),
+                           0,
+                           0,
+                           device_l_output);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    test_case = ast.statements[1]
+
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "Unit_funnelshift"
+    assert test_case.qualifiers == ["HIP_TEST_CASE"]
+    assert isinstance(test_case.body[0], VariableNode)
+    assert test_case.body[0].vtype == "unsigned int *"
+    assert "void Unit_funnelshift()" in crossgl
+    assert "var host_l_output: ptr<u32>;" in crossgl
+    assert (
+        "// Kernel launch: funnelshift_kernel<<<vec3<u32>(1, 1, 1), "
+        "vec3<u32>(1, 1, 1), 0, 0>>>()"
+    ) in crossgl
+
+
+def test_external_hip_tests_nested_section_block_codegen_reparse():
+    # Upstream: ROCm/hip-tests@8889ba5c7a89a85d5262dadcfbde17589a53ccfb,
+    # catch/multiproc/hipIpcEventHandle.cc.
+    source = """
+    HIP_TEST_CASE(Unit_hipIpcEventHandle_ParameterValidation) {
+        hipIpcEventHandle_t eventHandle;
+        hipError_t ret;
+
+        SECTION("Get event handle with event(nullptr)") {
+            ret = hipIpcGetEventHandle(&eventHandle, nullptr);
+            REQUIRE(ret == hipErrorInvalidValue);
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    test_case = ast.statements[0]
+
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "Unit_hipIpcEventHandle_ParameterValidation"
+    assert test_case.qualifiers == ["HIP_TEST_CASE"]
+    assert len(test_case.body) == 4
+    assert isinstance(test_case.body[0], VariableNode)
+    assert test_case.body[0].vtype == "hipIpcEventHandle_t"
+    assert isinstance(test_case.body[1], VariableNode)
+    assert test_case.body[1].vtype == "hipError_t"
+    assert "SECTION" not in crossgl
+    assert "HIP IPC get event handle: output: eventHandle, event: nullptr" in crossgl
+    assert "REQUIRE((ret == hipErrorInvalidValue));" in crossgl
+
+
+def test_external_hip_tests_inline_constant_global_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/memory/memoryGlobal.hh and catch/unit/memory/memoryCommon.cc.
+    source = """
+    inline __constant__ int globalVar;
+
+    void set_value(int const value) {
+        HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(globalVar), &value, sizeof(value)));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    global_var = ast.statements[0]
+
+    assert isinstance(global_var, VariableNode)
+    assert global_var.name == "globalVar"
+    assert global_var.vtype == "int"
+    assert global_var.qualifiers == ["inline", "__constant__"]
+    assert "@group(0) @binding(0) var<uniform> globalVar: i32;" in crossgl
+    assert "HIP symbol copy to: HIP_SYMBOL(globalVar)" in crossgl
+
+
+def test_external_hip_tests_bare_check_image_support_macro_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/memory/hipFree.cc.
+    source = """
+    HIP_TEMPLATE_TEST_CASE(Unit_hipFreeImplicitSyncArray, char, float, float2, float4) {
+        CHECK_IMAGE_SUPPORT
+
+        hipArray_t arrayPtr{};
+        hipExtent extent{};
+        extent.width = GENERATE(32, 128, 256, 512, 1024);
+        hipChannelFormatDesc desc = hipCreateChannelDesc<TestType>();
+
+        HIP_CHECK(hipMallocArray(&arrayPtr, &desc, extent.width, extent.height, hipArrayDefault));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    test_case = ast.statements[0]
+
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "Unit_hipFreeImplicitSyncArray"
+    assert test_case.qualifiers == ["HIP_TEMPLATE_TEST_CASE"]
+    assert isinstance(test_case.body[0], VariableNode)
+    assert test_case.body[0].vtype == "hipArray_t"
+    assert test_case.body[0].name == "arrayPtr"
+    assert "CHECK_IMAGE_SUPPORT" not in crossgl
+    assert "var arrayPtr: ptr<void> = {};" in crossgl
+    assert (
+        "HIP array allocate: arrayPtr, desc: desc, width: extent.width, "
+        "height: extent.height, flags: hipArrayDefault"
+    ) in crossgl
 
 
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():
@@ -571,6 +892,47 @@ def test_external_rocm_reduction_digit_separator_literals_crossgl_reparse():
 
     assert "100000000" in crossgl
     assert "100'000'000" not in crossgl
+
+
+def test_external_rocm_occupancy_unsigned_long_suffix_literals_crossgl_reparse():
+    # Upstream: https://github.com/ROCm/rocm-examples
+    # Commit: adaf64a066eecb4ad90036dfd1838fc95bed9914
+    # Path: Tools/rocprof-compute/occupancy.hip
+    source = """
+    constexpr size_t fully_allocate_lds = 64ul * 1024ul / sizeof(double);
+
+    __launch_bounds__(256)
+    __global__ void ldsbound(double* ptr) {
+        __shared__ double intermediates[fully_allocate_lds];
+        double x = ptr[threadIdx.x];
+        ptr[threadIdx.x] = x;
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "var fully_allocate_lds: u32 = ((64u * 1024u) / sizeof(double));" in crossgl
+    assert "64ul" not in crossgl
+    assert "1024ul" not in crossgl
+
+
+def test_external_rocm_vulkan_interop_numeric_limits_max_codegen_reparse():
+    # Upstream: https://github.com/ROCm/rocm-examples
+    # Commit: adaf64a066eecb4ad90036dfd1838fc95bed9914
+    # Path: HIP-Basic/vulkan_interop/main.hip
+    source = """
+    constexpr uint64_t frame_timeout = std::numeric_limits<uint64_t>::max();
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    declaration = ast.statements[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert declaration.name == "frame_timeout"
+    assert declaration.vtype == "uint64_t"
+    assert declaration.value.name == "std::numeric_limits<uint64_t>::max"
+    assert "var frame_timeout: u64 = numeric_limits_max<u64>();" in crossgl
+    assert "std::numeric_limits<uint64_t>::max()" not in crossgl
 
 
 def test_external_rocm_graph_api_variable_template_constant_crossgl_reparse():
@@ -1655,6 +2017,30 @@ def test_external_rocm_hip_tests_popc_intrinsics_codegen_reparse():
     assert "c[i] = bitCount(d[i]);" in crossgl
     assert "__popc" not in crossgl
     assert "__popcll" not in crossgl
+
+
+def test_external_hip_tests_unsigned_long_long_sizeof_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/math/integer_intrinsics.cc and catch/unit/deviceLib/popc.cc.
+    source = """
+    void allocate_popc_inputs() {
+        unsigned long long int* hostD;
+        hostD = (unsigned long long int*)malloc(
+            NUM * sizeof(unsigned long long int));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    assignment = ast.statements[0].body[1]
+    malloc_call = assignment.right.expression
+    sizeof_call = malloc_call.args[0].right
+
+    assert assignment.right.target_type == "unsigned long long *"
+    assert malloc_call.name == "malloc"
+    assert sizeof_call.name == "sizeof"
+    assert sizeof_call.args == ["unsigned long long"]
+    assert "var hostD: ptr<u64>;" in crossgl
+    assert "sizeof(unsigned long long)" in crossgl
 
 
 def test_external_rocm_hip_tests_byte_perm_intrinsic_codegen_reparse():

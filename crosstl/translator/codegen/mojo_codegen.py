@@ -69,6 +69,11 @@ from .enum_utils import (
     generic_type_parts,
     type_node_contains_generic_parameter,
 )
+from .image_access_contracts import (
+    explicit_image_format,
+    image_format_channel_count,
+    image_format_component_kind,
+)
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -130,6 +135,9 @@ MOJO_VECTOR_TYPES = {
     "simd_double2": ("DType.float64", 2, 2, None),
     "simd_double3": ("DType.float64", 3, 4, "0.0"),
     "simd_double4": ("DType.float64", 4, 4, None),
+    "vec2<i8>": ("DType.int8", 2, 2, None),
+    "vec3<i8>": ("DType.int8", 3, 4, "0"),
+    "vec4<i8>": ("DType.int8", 4, 4, None),
     "vec2<i32>": ("DType.int32", 2, 2, None),
     "vec3<i32>": ("DType.int32", 3, 4, "0"),
     "vec4<i32>": ("DType.int32", 4, 4, None),
@@ -154,6 +162,9 @@ MOJO_VECTOR_TYPES = {
     "simd_short2": ("DType.int16", 2, 2, None),
     "simd_short3": ("DType.int16", 3, 4, "0"),
     "simd_short4": ("DType.int16", 4, 4, None),
+    "i8vec2": ("DType.int8", 2, 2, None),
+    "i8vec3": ("DType.int8", 3, 4, "0"),
+    "i8vec4": ("DType.int8", 4, 4, None),
     "i16vec2": ("DType.int16", 2, 2, None),
     "i16vec3": ("DType.int16", 3, 4, "0"),
     "i16vec4": ("DType.int16", 4, 4, None),
@@ -169,6 +180,9 @@ MOJO_VECTOR_TYPES = {
     "vec2<u16>": ("DType.uint16", 2, 2, None),
     "vec3<u16>": ("DType.uint16", 3, 4, "0"),
     "vec4<u16>": ("DType.uint16", 4, 4, None),
+    "vec2<u8>": ("DType.uint8", 2, 2, None),
+    "vec3<u8>": ("DType.uint8", 3, 4, "0"),
+    "vec4<u8>": ("DType.uint8", 4, 4, None),
     "uint2": ("DType.uint32", 2, 2, None),
     "uint3": ("DType.uint32", 3, 4, "0"),
     "uint4": ("DType.uint32", 4, 4, None),
@@ -187,6 +201,9 @@ MOJO_VECTOR_TYPES = {
     "simd_ushort2": ("DType.uint16", 2, 2, None),
     "simd_ushort3": ("DType.uint16", 3, 4, "0"),
     "simd_ushort4": ("DType.uint16", 4, 4, None),
+    "u8vec2": ("DType.uint8", 2, 2, None),
+    "u8vec3": ("DType.uint8", 3, 4, "0"),
+    "u8vec4": ("DType.uint8", 4, 4, None),
     "u16vec2": ("DType.uint16", 2, 2, None),
     "u16vec3": ("DType.uint16", 3, 4, "0"),
     "u16vec4": ("DType.uint16", 4, 4, None),
@@ -270,8 +287,10 @@ MOJO_DTYPE_INFO = {
     "DType.float16": ("half", "half", "0.0"),
     "DType.float32": ("float", "vec", "0.0"),
     "DType.float64": ("double", "dvec", "0.0"),
+    "DType.int8": ("char", "i8vec", "0"),
     "DType.int16": ("short", "i16vec", "0"),
     "DType.int32": ("int", "ivec", "0"),
+    "DType.uint8": ("uchar", "u8vec", "0"),
     "DType.uint16": ("ushort", "u16vec", "0"),
     "DType.uint32": ("uint", "uvec", "0"),
     "DType.bool": ("bool", "bvec", "False"),
@@ -281,8 +300,10 @@ MOJO_DTYPE_SUFFIX = {
     "DType.float16": "f16",
     "DType.float32": "f32",
     "DType.float64": "f64",
+    "DType.int8": "i8",
     "DType.int16": "i16",
     "DType.int32": "i32",
+    "DType.uint8": "u8",
     "DType.uint16": "u16",
     "DType.uint32": "u32",
     "DType.bool": "bool",
@@ -295,17 +316,23 @@ MOJO_SCALAR_DTYPES = {
     "min16float": "DType.float16",
     "float": "DType.float32",
     "double": "DType.float64",
+    "i8": "DType.int8",
     "i16": "DType.int16",
     "i32": "DType.int32",
+    "int8": "DType.int8",
+    "int8_t": "DType.int8",
     "int16": "DType.int16",
     "int16_t": "DType.int16",
     "int": "DType.int32",
     "min12int": "DType.int16",
     "min16int": "DType.int16",
     "short": "DType.int16",
+    "u8": "DType.uint8",
     "u16": "DType.uint16",
     "u32": "DType.uint32",
     "uint": "DType.uint32",
+    "uint8": "DType.uint8",
+    "uint8_t": "DType.uint8",
     "uint16": "DType.uint16",
     "uint16_t": "DType.uint16",
     "min16uint": "DType.uint16",
@@ -329,6 +356,24 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "samplerCubeArray": "TextureCubeArray",
     "samplerCubeArrayShadow": "TextureCubeArrayShadow",
     "samplerCubeShadow": "TextureCubeShadow",
+    "isampler1D": "Texture1DInt",
+    "isampler1DArray": "Texture1DArrayInt",
+    "isampler2D": "Texture2DInt",
+    "isampler2DArray": "Texture2DArrayInt",
+    "isampler2DMS": "Texture2DMSInt",
+    "isampler2DMSArray": "Texture2DMSArrayInt",
+    "isampler3D": "Texture3DInt",
+    "isamplerCube": "TextureCubeInt",
+    "isamplerCubeArray": "TextureCubeArrayInt",
+    "usampler1D": "Texture1DUInt",
+    "usampler1DArray": "Texture1DArrayUInt",
+    "usampler2D": "Texture2DUInt",
+    "usampler2DArray": "Texture2DArrayUInt",
+    "usampler2DMS": "Texture2DMSUInt",
+    "usampler2DMSArray": "Texture2DMSArrayUInt",
+    "usampler3D": "Texture3DUInt",
+    "usamplerCube": "TextureCubeUInt",
+    "usamplerCubeArray": "TextureCubeArrayUInt",
     "sampler": "Sampler",
     "comparison_sampler": "Sampler",
     "SamplerState": "Sampler",
@@ -413,12 +458,39 @@ MOJO_TYPED_IMAGE_SUFFIX_INFO = {
     for width in (1, 2, 3, 4)
 }
 
+MOJO_TYPED_TEXTURE_DTYPE_SUFFIX = {
+    "DType.int32": "Int",
+    "DType.uint32": "UInt",
+}
+
+MOJO_TYPED_TEXTURE_SUFFIX_INFO = {
+    suffix if width == 4 else f"{suffix}{width}": (dtype, width)
+    for dtype, suffix in MOJO_TYPED_TEXTURE_DTYPE_SUFFIX.items()
+    for width in (1, 2, 3, 4)
+}
+
 MOJO_IMAGE_RESOURCE_BASE_TYPES = tuple(
     sorted(
         {
             resource_type
             for resource_type in MOJO_RESOURCE_TYPE_MAPPING.values()
             if resource_type.startswith(("Image", "IImage", "UImage"))
+        },
+        key=len,
+        reverse=True,
+    )
+)
+
+MOJO_TEXTURE_RESOURCE_BASE_TYPES = tuple(
+    sorted(
+        {
+            resource_type
+            for resource_type in MOJO_RESOURCE_TYPE_MAPPING.values()
+            if resource_type.startswith("Texture")
+            and not any(
+                resource_type.endswith(suffix)
+                for suffix in MOJO_TYPED_TEXTURE_SUFFIX_INFO
+            )
         },
         key=len,
         reverse=True,
@@ -812,8 +884,10 @@ MOJO_RESOURCE_OPERATION_MEMBER_REQUIREMENTS = {
 }
 
 MOJO_INTEGER_DTYPES = {
+    "DType.int8",
     "DType.int16",
     "DType.int32",
+    "DType.uint8",
     "DType.uint16",
     "DType.uint32",
 }
@@ -825,15 +899,20 @@ MOJO_FLOAT_DTYPES = {
 
 MOJO_INTEGER_INDEX_TYPES = {
     "Int",
+    "Int8",
     "Int16",
     "Int32",
     "Int64",
     "UInt",
+    "UInt8",
     "UInt16",
     "UInt32",
     "UInt64",
+    "i8",
     "i16",
     "i32",
+    "int8",
+    "int8_t",
     "int",
     "int16",
     "int16_t",
@@ -842,9 +921,12 @@ MOJO_INTEGER_INDEX_TYPES = {
     "min16int",
     "min16uint",
     "short",
+    "u8",
     "u16",
     "u32",
     "uint",
+    "uint8",
+    "uint8_t",
     "uint16",
     "uint16_t",
     "ulong",
@@ -853,10 +935,12 @@ MOJO_INTEGER_INDEX_TYPES = {
 
 MOJO_MAPPED_INTEGER_TYPES = {
     "Int",
+    "Int8",
     "Int16",
     "Int32",
     "Int64",
     "UInt",
+    "UInt8",
     "UInt16",
     "UInt32",
     "UInt64",
@@ -1155,6 +1239,7 @@ class MojoCodeGen:
         self.struct_resource_access_qualifiers = {}
         self.literal_int_constants = {}
         self.mojo_resource_binding_cursors = {}
+        self.mojo_source_resource_bindings = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
@@ -1222,8 +1307,11 @@ class MojoCodeGen:
             # Scalar Types
             "void": "None",
             "int": "Int32",
+            "i8": "Int8",
             "i16": "Int16",
             "i32": "Int32",
+            "int8": "Int8",
+            "int8_t": "Int8",
             "int16": "Int16",
             "int16_t": "Int16",
             "min12int": "Int16",
@@ -1231,8 +1319,11 @@ class MojoCodeGen:
             "short": "Int16",
             "long": "Int64",
             "uint": "UInt32",
+            "u8": "UInt8",
             "u16": "UInt16",
             "u32": "UInt32",
+            "uint8": "UInt8",
+            "uint8_t": "UInt8",
             "uint16": "UInt16",
             "uint16_t": "UInt16",
             "min16uint": "UInt16",
@@ -1409,6 +1500,7 @@ class MojoCodeGen:
             getattr(ast, "constants", [])
         )
         self.mojo_resource_binding_cursors = {}
+        self.mojo_source_resource_bindings = {}
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
@@ -2475,18 +2567,14 @@ class MojoCodeGen:
     ):
         if self.is_mojo_shared_variable(node):
             if isinstance(node, ArrayNode):
-                variable_type = self.array_type_name(
-                    node.element_type, get_array_size_from_node(node)
-                )
+                variable_type = self.array_declared_type(node)
             else:
                 variable_type = self.variable_declared_type(node) or "float"
             self.register_variable_type(getattr(node, "name", None), variable_type)
             return ""
 
         if isinstance(node, ArrayNode):
-            variable_type = self.array_type_name(
-                node.element_type, get_array_size_from_node(node)
-            )
+            variable_type = self.array_declared_type(node)
             self.register_variable_type(node.name, variable_type)
             key = (node.name, variable_type)
             if key in emitted_stage_local_variables:
@@ -3305,9 +3393,11 @@ class MojoCodeGen:
 
     def function_parameter_type_name(self, param):
         if hasattr(param, "param_type"):
-            return self.convert_type_node_to_string(param.param_type)
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(param.param_type), param
+            )
         if hasattr(param, "vtype"):
-            return param.vtype
+            return self.explicit_image_format_resource_type(param.vtype, param)
         return "float"
 
     def prepare_generic_enum_metadata(self, ast, structs):
@@ -3722,18 +3812,24 @@ class MojoCodeGen:
         """Return the explicit type on a variable declaration, if one exists."""
         var_type = getattr(node, "var_type", None)
         if var_type is not None:
-            return self.convert_type_node_to_string(var_type)
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(var_type), node
+            )
 
         member_type = getattr(node, "member_type", None)
         if member_type is not None:
-            return self.convert_type_node_to_string(member_type)
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(member_type), node
+            )
 
         vtype = getattr(node, "vtype", None)
         if vtype is None or vtype == "":
             return None
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
-            return self.convert_type_node_to_string(vtype)
-        return vtype
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(vtype), node
+            )
+        return self.explicit_image_format_resource_type(vtype, node)
 
     def format_array_size(self, size):
         if size is None:
@@ -3810,6 +3906,15 @@ class MojoCodeGen:
         if self.is_mojo_resource_type(
             mapped_base_type
         ) and self.is_texture_resource_type(mapped_base_type):
+            if generic_args:
+                element_info = self.resource_element_value_info(generic_args[0])
+                if element_info is not None:
+                    dtype, source_width, _ = element_info
+                    typed_texture = self.typed_texture_resource_type(
+                        mapped_base_type, dtype, source_width
+                    )
+                    if typed_texture != mapped_base_type:
+                        return typed_texture
             return mapped_base_type
         return None
 
@@ -3873,6 +3978,14 @@ class MojoCodeGen:
             suffix = f"{suffix}{source_width}"
         return f"{base_image_type}{suffix}"
 
+    def typed_texture_resource_type(self, base_texture_type, dtype, source_width):
+        suffix = MOJO_TYPED_TEXTURE_DTYPE_SUFFIX.get(dtype)
+        if suffix is None:
+            return base_texture_type
+        if source_width != 4:
+            suffix = f"{suffix}{source_width}"
+        return f"{base_texture_type}{suffix}"
+
     def typed_image_resource_info(self, resource_type):
         if not isinstance(resource_type, str):
             return None
@@ -3888,11 +4001,67 @@ class MojoCodeGen:
                 return base_image_type, dtype, source_width
         return None
 
+    def typed_texture_resource_info(self, resource_type):
+        if not isinstance(resource_type, str):
+            return None
+        for base_texture_type in MOJO_TEXTURE_RESOURCE_BASE_TYPES:
+            if not resource_type.startswith(base_texture_type):
+                continue
+            suffix = resource_type[len(base_texture_type) :]
+            if not suffix:
+                return None
+            suffix_info = MOJO_TYPED_TEXTURE_SUFFIX_INFO.get(suffix)
+            if suffix_info is not None:
+                dtype, source_width = suffix_info
+                return base_texture_type, dtype, source_width
+        return None
+
     def image_resource_base_type(self, resource_type):
         typed_info = self.typed_image_resource_info(resource_type)
         if typed_info is not None:
             return typed_info[0]
+        return self.texture_resource_base_type(resource_type)
+
+    def texture_resource_base_type(self, resource_type):
+        typed_info = self.typed_texture_resource_info(resource_type)
+        if typed_info is not None:
+            return typed_info[0]
         return resource_type
+
+    def explicit_image_format_resource_type(self, type_name, node):
+        image_format = explicit_image_format(node, self.attribute_value_to_string)
+        if image_format is None:
+            return type_name
+
+        type_name = self.type_name(type_name)
+        if self.is_array_type_name(type_name):
+            element_type, size = self.parse_array_type_name(type_name)
+            formatted_element_type = self.explicit_image_format_resource_type(
+                element_type, node
+            )
+            return self.array_type_name(formatted_element_type, size)
+
+        mapped_type = self.resource_type_alias(type_name) or self.type_mapping.get(
+            type_name, type_name
+        )
+        if not self.is_image_resource_type(mapped_type):
+            return type_name
+
+        component_kind = image_format_component_kind(image_format)
+        dtype = {
+            "float": "DType.float32",
+            "int": "DType.int32",
+            "uint": "DType.uint32",
+        }.get(component_kind)
+        if dtype is None:
+            return type_name
+
+        channel_count = image_format_channel_count(image_format)
+        if channel_count is None:
+            return type_name
+
+        source_width = 4 if channel_count == 1 else channel_count
+        return self.typed_image_resource_type(mapped_type, dtype, source_width)
 
     def resource_texel_coord_type(self, resource_type):
         return MOJO_RESOURCE_TEXEL_COORDS.get(
@@ -3902,6 +4071,26 @@ class MojoCodeGen:
     def resource_size_return_type(self, resource_type):
         return MOJO_RESOURCE_SIZE_RETURNS.get(
             self.image_resource_base_type(resource_type)
+        )
+
+    def resource_sample_coord_type(self, resource_type):
+        return MOJO_RESOURCE_SAMPLE_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def resource_offset_coord_type(self, resource_type):
+        return MOJO_RESOURCE_OFFSET_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def resource_compare_coord_type(self, resource_type):
+        return MOJO_RESOURCE_COMPARE_COORDS.get(
+            self.texture_resource_base_type(resource_type)
+        )
+
+    def resource_projected_coord_type(self, resource_type):
+        return MOJO_RESOURCE_PROJECTED_COORDS.get(
+            self.texture_resource_base_type(resource_type)
         )
 
     def mapped_buffer_type(self, buffer_type, element_type=None):
@@ -4171,6 +4360,51 @@ class MojoCodeGen:
             self.mojo_resource_binding_cursors.get(key, 0), end + 1
         )
 
+    def resource_attribute_names(self, node):
+        return {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+
+    def has_resource_qualifier(self, node, qualifier_name):
+        qualifier_name = str(qualifier_name).lower()
+        return qualifier_name in {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+
+    def uses_source_descriptor_array_binding(self, node, count, resource_kind=None):
+        if count <= 1:
+            return False
+        attr_names = self.resource_attribute_names(node)
+        if "binding" not in attr_names or "register" in attr_names:
+            return False
+        return (
+            self.has_resource_qualifier(node, "uniform") or resource_kind == "sampler"
+        )
+
+    def explicit_binding_is_target_native(self, node, count, resource_kind=None):
+        return not self.uses_source_descriptor_array_binding(node, count, resource_kind)
+
+    def reserve_source_resource_binding(
+        self, namespace, set_index, binding, count, name
+    ):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        for used_start, used_end, used_name in self.mojo_source_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                raise ValueError(
+                    "Conflicting Mojo source resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        self.mojo_source_resource_bindings.setdefault(key, []).append(
+            (binding, end, name)
+        )
+
     def generate_resource_metadata_comment(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
         resource_kind = self.mojo_resource_kind(type_name, kind, node)
@@ -4182,13 +4416,35 @@ class MojoCodeGen:
         namespace = self.mojo_resource_binding_namespace(resource_kind)
         set_index = self.explicit_resource_set_index(node)
         binding = self.explicit_resource_binding_index(node)
+        source_binding = None
         if binding is None:
             binding = self.next_available_resource_binding(namespace, set_index, count)
             binding_source = "automatic"
             self.reserve_resource_binding(namespace, set_index, binding, count, name)
         else:
             binding_source = "explicit"
-            self.reserve_resource_binding(namespace, set_index, binding, count, name)
+            source_binding = binding
+            uses_source_descriptor = self.uses_source_descriptor_array_binding(
+                node, count, resource_kind
+            )
+            if self.explicit_binding_is_target_native(node, count, resource_kind):
+                self.reserve_resource_binding(
+                    namespace, set_index, binding, count, name
+                )
+            else:
+                self.reserve_source_resource_binding(
+                    namespace, set_index, source_binding, 1, name
+                )
+                key = (namespace, set_index)
+                if self.resource_binding_range_conflicts(key, binding, count):
+                    binding = self.next_available_resource_binding(
+                        namespace, set_index, count
+                    )
+                self.reserve_resource_binding(
+                    namespace, set_index, binding, count, name
+                )
+            if not uses_source_descriptor:
+                source_binding = None
 
         parts = [
             "# CrossGL resource metadata:",
@@ -4200,6 +4456,8 @@ class MojoCodeGen:
         ]
         if count != 1:
             parts.append(f"count={count}")
+        if source_binding is not None and source_binding != binding:
+            parts.append(f"source_binding={source_binding}")
         register_metadata = self.resource_register_metadata(node)
         if register_metadata:
             parts.append(f"register={register_metadata}")
@@ -5520,12 +5778,24 @@ class MojoCodeGen:
             element_type = getattr(
                 member, "element_type", getattr(member, "vtype", "float")
             )
+            element_type = self.explicit_image_format_resource_type(
+                self.type_name(element_type), member
+            )
             return self.array_type_name(element_type, get_array_size_from_node(member))
         if hasattr(member, "member_type"):
-            return self.convert_type_node_to_string(member.member_type)
+            return self.explicit_image_format_resource_type(
+                self.convert_type_node_to_string(member.member_type), member
+            )
         if hasattr(member, "vtype"):
-            return member.vtype
+            return self.explicit_image_format_resource_type(member.vtype, member)
         return "float"
+
+    def array_declared_type(self, node):
+        element_type = getattr(node, "element_type", getattr(node, "vtype", "float"))
+        element_type = self.explicit_image_format_resource_type(
+            self.type_name(element_type), node
+        )
+        return self.array_type_name(element_type, get_array_size_from_node(node))
 
     def register_struct_type_metadata(self, node):
         struct_name = getattr(node, "name", None)
@@ -5676,12 +5946,7 @@ class MojoCodeGen:
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         param_infos = []
         for p in param_list:
-            if hasattr(p, "param_type"):
-                param_type = self.convert_type_node_to_string(p.param_type)
-            elif hasattr(p, "vtype"):
-                param_type = p.vtype
-            else:
-                param_type = "float"
+            param_type = self.function_parameter_type_name(p)
             param_infos.append((p, param_type))
             self.register_variable_type(getattr(p, "name", None), param_type)
 
@@ -7722,13 +7987,12 @@ class MojoCodeGen:
 
     def generate_array_declaration(self, node, indent=0):
         indent_str = "    " * indent
-        size = get_array_size_from_node(node)
-        self.register_variable_type(
-            node.name, self.array_type_name(node.element_type, size)
-        )
+        variable_type = self.array_declared_type(node)
+        self.register_variable_type(node.name, variable_type)
+        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
         return (
-            f"{indent_str}var {self.mojo_identifier(node.name)} = "
-            f"{self.array_initial_value(node.element_type, size)}\n"
+            f"{resource_comment}{indent_str}var {self.mojo_identifier(node.name)} = "
+            f"{self.array_initial_value_for_type(variable_type)}\n"
         )
 
     def generate_assignment(self, node):
@@ -9820,7 +10084,7 @@ class MojoCodeGen:
         texture_type = self.expression_result_type(validation_args[0])
         mapped_type = self.map_type(texture_type)
         self.validate_texture_sample_args(validation_args, helper_name, mapped_type)
-        if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
+        if self.resource_sample_coord_type(mapped_type) is not None:
             if sampler_arg is None:
                 if helper_name == "sample":
                     self.required_resource_sample_types.add(mapped_type)
@@ -9846,7 +10110,7 @@ class MojoCodeGen:
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"texture resource required: {resource_type}"
             )
-        if resource_type not in MOJO_RESOURCE_SAMPLE_COORDS:
+        if self.resource_sample_coord_type(resource_type) is None:
             required = (
                 "non-multisample texture required"
                 if self.is_multisample_resource_type(resource_type)
@@ -9867,7 +10131,7 @@ class MojoCodeGen:
                 f"{len(args) - 1}"
             )
 
-        expected_coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        expected_coord_type = self.resource_sample_coord_type(resource_type)
         if len(args) >= 2:
             self.validate_resource_argument_type(
                 args[1], expected_coord_type, helper_name, resource_type, "coordinate"
@@ -10687,9 +10951,12 @@ class MojoCodeGen:
         if args:
             resource_type = self.map_type(self.expression_result_type(args[0]))
             self.validate_texel_fetch_args(args, resource_type, with_offset=with_offset)
-            if with_offset and resource_type in MOJO_RESOURCE_OFFSET_COORDS:
+            if (
+                with_offset
+                and self.resource_offset_coord_type(resource_type) is not None
+            ):
                 self.required_resource_texel_fetch_offset_types.add(resource_type)
-            elif resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+            elif self.resource_texel_coord_type(resource_type) is not None:
                 self.required_resource_texel_fetch_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -10707,10 +10974,9 @@ class MojoCodeGen:
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"non-shadow texture required: {resource_type}"
             )
-        required_resources = (
-            MOJO_RESOURCE_OFFSET_COORDS if with_offset else MOJO_RESOURCE_TEXEL_COORDS
-        )
-        if resource_type not in required_resources:
+        if self.resource_texel_coord_type(resource_type) is None or (
+            with_offset and self.resource_offset_coord_type(resource_type) is None
+        ):
             raise ValueError(
                 f"Unsupported {helper_name} for Mojo codegen; "
                 f"texel-fetch{'-offset' if with_offset else ''} texture required: "
@@ -10726,7 +10992,7 @@ class MojoCodeGen:
 
         self.validate_resource_argument_type(
             args[1],
-            MOJO_RESOURCE_TEXEL_COORDS[resource_type],
+            self.resource_texel_coord_type(resource_type),
             helper_name,
             resource_type,
             "coordinate",
@@ -10737,7 +11003,7 @@ class MojoCodeGen:
         if with_offset:
             self.validate_resource_argument_type(
                 args[3],
-                MOJO_RESOURCE_OFFSET_COORDS[resource_type],
+                self.resource_offset_coord_type(resource_type),
                 helper_name,
                 resource_type,
                 "offset",
@@ -11205,7 +11471,7 @@ class MojoCodeGen:
         self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
             "name": helper_name,
             "arg_types": arg_types,
-            "return_type": self.resource_builtin_return_type(return_kind),
+            "return_type": self.resource_builtin_return_type(return_kind, args),
         }
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
@@ -11274,10 +11540,10 @@ class MojoCodeGen:
             return
 
     def texture_builtin_argument_specs(self, helper_base, resource_type):
-        sample_coord = MOJO_RESOURCE_SAMPLE_COORDS.get(resource_type)
-        compare_coord = MOJO_RESOURCE_COMPARE_COORDS.get(resource_type)
-        offset_coord = MOJO_RESOURCE_OFFSET_COORDS.get(resource_type)
-        projected_coord = MOJO_RESOURCE_PROJECTED_COORDS.get(resource_type)
+        sample_coord = self.resource_sample_coord_type(resource_type)
+        compare_coord = self.resource_compare_coord_type(resource_type)
+        offset_coord = self.resource_offset_coord_type(resource_type)
+        projected_coord = self.resource_projected_coord_type(resource_type)
 
         if helper_base in {
             "sample_offset",
@@ -11515,10 +11781,18 @@ class MojoCodeGen:
                 f"Unsupported {helper_base} for Mojo codegen; "
                 f"image resource required: {resource_type}"
             )
-        return_type = self.image_value_type(resource_type)
+        return_type = self.image_atomic_value_type(resource_type)
         if return_type not in {"Int32", "UInt32"}:
             raise ValueError(
                 "Unsupported image atomic for Mojo codegen; "
+                f"scalar integer image required: {resource_type}"
+            )
+        if self.typed_image_atomic_has_vector_value_arg(
+            args, helper_base, resource_type
+        ):
+            raise ValueError(
+                "Unsup"
+                "ported image atomic for Mojo codegen; "
                 f"scalar integer image required: {resource_type}"
             )
         self.validate_image_atomic_args(args, helper_base, resource_type, return_type)
@@ -11568,6 +11842,21 @@ class MojoCodeGen:
                 arg, value_type, helper_base, resource_type, label
             )
 
+    def typed_image_atomic_has_vector_value_arg(self, args, helper_base, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is None:
+            return False
+        _, dtype, source_width = typed_info
+        if source_width != 4 or dtype not in {"DType.int32", "DType.uint32"}:
+            return False
+        value_count = 2 if helper_base == "image_atomic_comp_swap" else 1
+        sample_count = 1 if self.is_multisample_resource_type(resource_type) else 0
+        value_index = 2 + sample_count
+        for arg in args[value_index : value_index + value_count]:
+            if self.resource_builtin_arg_type(arg) not in {"Int32", "UInt32"}:
+                return True
+        return False
+
     def resource_builtin_arg_type(self, arg):
         if isinstance(arg, bool):
             return "Bool"
@@ -11600,11 +11889,15 @@ class MojoCodeGen:
                 f"{resource_type} must be {expected_type}, got {actual_type}"
             )
 
-    def resource_builtin_return_type(self, return_kind):
+    def resource_builtin_return_type(self, return_kind, args=None):
         if return_kind == "float":
             return "Float32"
         if return_kind == "vec2":
             return "SIMD[DType.float32, 2]"
+        if args:
+            resource_type = self.map_type(self.expression_result_type(args[0]))
+            if self.is_texture_resource_type(resource_type):
+                return self.resource_sample_return_type(resource_type)
         return "SIMD[DType.float32, 4]"
 
     def resource_builtin_helper_name(self, helper_base, arg_types):
@@ -12488,7 +12781,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_sample_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        coord_type = self.resource_sample_coord_type(resource_type)
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample(tex: {resource_type}, coord: {coord_type}) -> {return_type}:\n"
@@ -12497,7 +12790,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_sample_sampler_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        coord_type = self.resource_sample_coord_type(resource_type)
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_sampler(tex: {resource_type}, sampler: Sampler, "
@@ -12507,7 +12800,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_lod_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        coord_type = self.resource_sample_coord_type(resource_type)
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_lod(tex: {resource_type}, coord: {coord_type}, "
@@ -12520,7 +12813,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_lod_sampler_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        coord_type = self.resource_sample_coord_type(resource_type)
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_lod_sampler(tex: {resource_type}, sampler: Sampler, "
@@ -12533,7 +12826,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_grad_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        coord_type = self.resource_sample_coord_type(resource_type)
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_grad(tex: {resource_type}, coord: {coord_type}, "
@@ -12543,7 +12836,7 @@ class MojoCodeGen:
         return code
 
     def generate_resource_grad_sampler_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        coord_type = self.resource_sample_coord_type(resource_type)
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_grad_sampler(tex: {resource_type}, sampler: Sampler, "
@@ -12637,22 +12930,24 @@ class MojoCodeGen:
         return code
 
     def generate_texel_fetch_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        coord_type = self.resource_texel_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn texel_fetch(tex: {resource_type}, coord: {coord_type}, "
-            "lod: Int32) -> SIMD[DType.float32, 4]:\n"
+            f"lod: Int32) -> {return_type}:\n"
         )
-        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
     def generate_texel_fetch_offset_helper(self, resource_type):
-        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
-        offset_type = MOJO_RESOURCE_OFFSET_COORDS[resource_type]
+        coord_type = self.resource_texel_coord_type(resource_type)
+        offset_type = self.resource_offset_coord_type(resource_type)
+        return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn texel_fetch_offset(tex: {resource_type}, coord: {coord_type}, "
-            f"lod: Int32, offset: {offset_type}) -> SIMD[DType.float32, 4]:\n"
+            f"lod: Int32, offset: {offset_type}) -> {return_type}:\n"
         )
-        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
     def generate_image_load_helper(self, resource_type):
@@ -12711,9 +13006,18 @@ class MojoCodeGen:
         )
 
     def resource_sample_return_type(self, resource_type):
+        return self.map_type(self.texture_result_type_name(resource_type))
+
+    def texture_result_type_name(self, resource_type):
         if self.is_shadow_resource_type(resource_type):
-            return "Float32"
-        return "SIMD[DType.float32, 4]"
+            return "float"
+        typed_info = self.typed_texture_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width == 1:
+                return MOJO_DTYPE_INFO[dtype][0]
+            return self.vector_type_name_for_dtype_width(dtype, source_width)
+        return "vec4"
 
     def image_value_type(self, resource_type):
         typed_info = self.typed_image_resource_info(resource_type)
@@ -12729,6 +13033,15 @@ class MojoCodeGen:
         if resource_type.startswith("UImage"):
             return "UInt32"
         return "SIMD[DType.float32, 4]"
+
+    def image_atomic_value_type(self, resource_type):
+        typed_info = self.typed_image_resource_info(resource_type)
+        if typed_info is not None:
+            _, dtype, source_width = typed_info
+            if source_width in {1, 4} and dtype in {"DType.int32", "DType.uint32"}:
+                return self.map_type(MOJO_DTYPE_INFO[dtype][0])
+            return self.image_value_type(resource_type)
+        return self.image_value_type(resource_type)
 
     def zero_mojo_value(self, mojo_type):
         if mojo_type in {
@@ -13962,10 +14275,14 @@ class MojoCodeGen:
                 args = self.strip_split_sampler_arg(expr.args)
                 if args:
                     resource_type = self.map_type(self.expression_result_type(args[0]))
-                    if self.is_shadow_resource_type(resource_type):
-                        return "float"
+                    return self.texture_result_type_name(resource_type)
                 return "vec4"
             if func_name in {"texelFetch", "texelFetchOffset"}:
+                if expr.args:
+                    resource_type = self.map_type(
+                        self.expression_result_type(expr.args[0])
+                    )
+                    return self.texture_result_type_name(resource_type)
                 return "vec4"
             if func_name == "textureQueryLevels":
                 return "int"
@@ -14011,6 +14328,12 @@ class MojoCodeGen:
                     return "float"
                 if return_kind == "vec2":
                     return "vec2"
+                if expr.args:
+                    resource_type = self.map_type(
+                        self.expression_result_type(expr.args[0])
+                    )
+                    if self.is_texture_resource_type(resource_type):
+                        return self.texture_result_type_name(resource_type)
                 return "vec4"
             if func_name in MOJO_SCALAR_ATOMIC_OPS and expr.args:
                 target_type = self.type_name(self.expression_result_type(expr.args[0]))
@@ -14050,9 +14373,7 @@ class MojoCodeGen:
             resource_type = self.map_type(
                 self.expression_result_type(expr.texture_expr)
             )
-            if self.is_shadow_resource_type(resource_type):
-                return "float"
-            return "vec4"
+            return self.texture_result_type_name(resource_type)
         if isinstance(expr, TextureOpNode):
             operation = getattr(expr, "operation", "")
             if operation in {
@@ -14082,6 +14403,11 @@ class MojoCodeGen:
                     return "float"
                 if return_kind == "vec2":
                     return "vec2"
+                resource_type = self.map_type(
+                    self.expression_result_type(expr.texture_expr)
+                )
+                if self.is_texture_resource_type(resource_type):
+                    return self.texture_result_type_name(resource_type)
                 return "vec4"
             if operation == "textureQueryLevels":
                 return "int"
@@ -14106,6 +14432,11 @@ class MojoCodeGen:
                 if value_type == "UInt32":
                     return "uint"
                 return "int"
+            resource_type = self.map_type(
+                self.expression_result_type(expr.texture_expr)
+            )
+            if self.is_texture_resource_type(resource_type):
+                return self.texture_result_type_name(resource_type)
             return "vec4"
         if isinstance(expr, AtomicOpNode):
             target_type = self.type_name(self.expression_result_type(expr.target))
@@ -14258,7 +14589,7 @@ class MojoCodeGen:
             return "int"
         if member in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
             return "float"
-        return "vec4"
+        return self.texture_result_type_name(resource_type)
 
     def resource_size_result_type_name(self, resource_type):
         size_type = self.resource_size_return_type(resource_type)
@@ -14645,6 +14976,7 @@ class MojoCodeGen:
         return (
             type_name in set(MOJO_RESOURCE_TYPE_MAPPING.values())
             or self.typed_image_resource_info(type_name) is not None
+            or self.typed_texture_resource_info(type_name) is not None
         )
 
     def map_operator(self, op):

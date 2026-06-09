@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
+ACTIONS_DIR = ROOT / ".github" / "actions"
 CI_COVERAGE_SCRIPT = ROOT / "tools" / "ci_coverage.py"
 PYTHON_VERSIONS = {"3.8", "3.9", "3.10", "3.11", "3.12", "3.13"}
 RUNNER_OSES = {"ubuntu-latest", "windows-latest", "macOS-latest"}
@@ -33,6 +34,11 @@ def _workflow_texts():
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(WORKFLOW_DIR.glob("*.yml"))
     }
+
+
+def _local_action_text(name):
+    path = ACTIONS_DIR / name / "action.yml"
+    return path.read_text(encoding="utf-8")
 
 
 def _load_ci_coverage_module():
@@ -90,9 +96,20 @@ def _assert_windows_python_policy(workflow_text, os_key="OS"):
     assert override in workflow_text
 
 
+def _assert_windows_legacy_python_is_excluded(workflow_text, os_key="OS"):
+    assert "exclude:" in workflow_text
+    for python_version in ("3.8", "3.9"):
+        excluded = (
+            f'python-version: "{python_version}"\n'
+            f"            {os_key}: windows-latest"
+        )
+        assert excluded in workflow_text
+
+
 def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
     workflows = _workflow_texts()
     full_suite = workflows.get("full-tests.yml", "")
+    linux_dxc_action = _local_action_text("install-linux-dxc")
 
     assert full_suite, "full-tests.yml must exist"
     assert re.search(r"\bpull_request\s*:", full_suite)
@@ -105,8 +122,9 @@ def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
         "--accept-licenses --default-answer --confirm-command install copy_only=1"
         in full_suite
     )
-    assert "DirectXShaderCompiler/releases/download/v1.9.2602" in full_suite
-    assert "linux_dxc_2026_02_20.x86_64.tar.gz" in full_suite
+    assert "uses: ./.github/actions/install-linux-dxc" in full_suite
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602" in linux_dxc_action
+    assert "linux_dxc_2026_02_20.x86_64.tar.gz" in linux_dxc_action
     assert "dxc_2026_02_20.zip" in full_suite
     assert "shader-validators:" in full_suite
     assert "macOS-latest" in full_suite
@@ -118,6 +136,7 @@ def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
 def test_full_suite_keeps_required_compiler_smoke_coverage():
     workflows = _workflow_texts()
     full_suite = workflows.get("full-tests.yml", "")
+    full_suite_ci_surface = full_suite + "\n" + _local_action_text("install-linux-dxc")
 
     assert "compiler-smoke-linux:" in full_suite
     assert "Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)" in full_suite
@@ -142,7 +161,10 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
     assert "compiler-smoke-linux-failure-summary.json" in full_suite
     assert "compiler-smoke-macos-failure-summary.json" in full_suite
     assert full_suite.count("continue-on-error: true") >= 4
-    assert "--retry 5 --retry-all-errors --retry-delay 10" in full_suite
+    assert "--retry 8" in full_suite_ci_surface
+    assert "--retry-all-errors" in full_suite_ci_surface
+    assert "--retry-connrefused" in full_suite_ci_surface
+    assert "--retry-delay 10" in full_suite_ci_surface
     assert 'Write-Warning "DXC download failed on attempt $attempt; retrying."' in (
         full_suite
     )

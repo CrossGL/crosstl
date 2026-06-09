@@ -2942,6 +2942,55 @@ def test_resource_placeholders_emit_for_sampler_types():
     assert "textureGrad" not in generated_code
 
 
+def test_mojo_integer_texture_lod_uses_integer_vector_result_types():
+    code = """
+    isampler2D signedMap;
+    usampler2DArray counterLayers;
+    sampler linearSampler;
+
+    ivec4 sampleSigned(isampler2D tex, sampler state, vec2 uv) {
+        ivec4 label = textureLod(tex, state, uv, 1.0);
+        return label;
+    }
+
+    uvec4 sampleUnsignedLayer(usampler2DArray tex, sampler state, vec3 uvLayer) {
+        uvec4 counter = textureLod(tex, state, uvLayer, 2.0);
+        return counter;
+    }
+
+    void noop() {}
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DInt:" in generated_code
+    assert "struct Texture2DArrayUInt:" in generated_code
+    assert "var signedMap: Texture2DInt = Texture2DInt()" in generated_code
+    assert (
+        "var counterLayers: Texture2DArrayUInt = Texture2DArrayUInt()" in generated_code
+    )
+    assert (
+        "fn sample_lod_sampler(tex: Texture2DInt, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2], lod: Float32) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn sample_lod_sampler(tex: Texture2DArrayUInt, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 4], lod: Float32) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert (
+        "var label: SIMD[DType.int32, 4] = "
+        "sample_lod_sampler(tex, state, uv, 1.0)" in generated_code
+    )
+    assert (
+        "var counter: SIMD[DType.uint32, 4] = "
+        "sample_lod_sampler(tex, state, uvLayer, 2.0)" in generated_code
+    )
+    assert "textureLod" not in generated_code
+    assert "isampler2D" not in generated_code
+    assert "usampler2DArray" not in generated_code
+
+
 def test_resource_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -3113,6 +3162,120 @@ def test_mojo_resource_array_binding_count_resolves_symbolic_constant():
     assert (
         "# CrossGL resource metadata: name=colorMaps kind=texture set=0 "
         "binding=2 binding_source=explicit count=2" in generated_code
+    )
+
+
+def test_mojo_vulkan_texture_descriptor_arrays_remap_target_bindings():
+    code = """
+    shader MixedTextureCompareDescriptorArrayShader {
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 0) buffer vec4* values;
+        layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+        layout(set = 0, binding = 3) uniform sampler2DShadow shadowMaps[2];
+        layout(set = 0, binding = 5) sampler linearSamplers[2];
+        layout(set = 0, binding = 6) sampler shadowSamplers[2];
+
+        void main() {
+          vec4 color =
+              textureLod(colorMaps[0], linearSamplers[1], vec2(0.25, 0.75), 1.0);
+          float visibility =
+              textureCompare(shadowMaps[1], shadowSamplers[0], vec2(0.5, 0.5), 0.25);
+          values[0] = color + vec4(visibility, 0.0, 0.0, 1.0);
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorMaps kind=texture set=0 "
+        "binding=2 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=shadowMaps kind=texture set=0 "
+        "binding=4 binding_source=explicit count=2 source_binding=3" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=linearSamplers kind=sampler set=0 "
+        "binding=5 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=shadowSamplers kind=sampler set=0 "
+        "binding=7 binding_source=explicit count=2 source_binding=6" in generated_code
+    )
+    assert "sample_lod_sampler(colorMaps[0], linearSamplers[1]" in generated_code
+    assert "_crossgl_texture_compare_sampler_Texture2DShadow" in generated_code
+    assert "shadowMaps[1], shadowSamplers[0]" in generated_code
+
+
+def test_mojo_vulkan_storage_image_atomic_descriptor_arrays_remap_target_bindings():
+    code = """
+    shader StorageImageAtomicDescriptorArrayShader {
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D signedCounters[2];
+        layout(set = 0, binding = 2, format = r32ui) readwrite uniform uimage2D unsignedCounters[2];
+
+        void main() {
+          ivec2 pixel = ivec2(0, 0);
+          int signedOld = imageAtomicAdd(signedCounters[0], pixel, 1);
+          uint unsignedOld = imageAtomicAdd(unsignedCounters[1], pixel, 1u);
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=signedCounters kind=image set=0 "
+        "binding=1 binding_source=explicit count=2 access=readwrite" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=unsignedCounters kind=image set=0 "
+        "binding=3 binding_source=explicit count=2 source_binding=2 "
+        "access=readwrite" in generated_code
+    )
+    assert "_crossgl_image_atomic_add_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+
+
+def test_mojo_vulkan_explicit_format_image_descriptor_arrays_remap_target_bindings():
+    code = """
+    shader StorageImageExplicitFormatDescriptorArrayShader {
+      compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        layout(set = 0, binding = 0, format = rgba8) readwrite uniform image2D colorImages[2];
+        layout(set = 0, binding = 1, format = r32i) readwrite uniform iimage2D labelImages[2];
+
+        void main() {
+          ivec2 pixel = ivec2(0, 0);
+          vec4 color = imageLoad(colorImages[0], pixel);
+          ivec4 label = imageLoad(labelImages[1], pixel);
+          imageStore(colorImages[0], pixel, color);
+          imageStore(labelImages[1], pixel, label);
+        }
+      }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorImages kind=image set=0 "
+        "binding=0 binding_source=explicit count=2 access=readwrite" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=labelImages kind=image set=0 "
+        "binding=2 binding_source=explicit count=2 source_binding=1 "
+        "access=readwrite" in generated_code
+    )
+    assert "image_load(colorImages[0], pixel)" in generated_code
+    assert "image_load(labelImages[1], pixel)" in generated_code
+    assert "image_store(labelImages[1], pixel, label)" in generated_code
+    assert "struct IImage2DInt4:" in generated_code
+    assert (
+        "fn image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.int32, 4]:" in generated_code
     )
 
 
@@ -20475,9 +20638,12 @@ def test_generic_vector_constructors_emit_mojo_names():
         compute {
             void main() {
                 vec2<f64> precise = vec2<f64>(1.0, 2.0);
+                vec2<f16> halfPair = vec2<f16>(1.0, 2.0);
                 vec3<f16> lowp = vec3<f16>(1.0, 2.0, 3.0);
                 vec3<i32> index = vec3<i32>(1, 2, 3);
+                vec2<i16> shortPair = vec2<i16>(1, 2);
                 vec4<i16> smallIndex = vec4<i16>(1, 2, 3, 4);
+                vec4<u8> bytes = vec4<u8>(1, 2, 3, 4);
                 vec4<u32> mask = vec4<u32>(1, 2, 3, 4);
                 vec3<u16> smallMask = vec3<u16>(1, 2, 3);
                 vec2<bool> flags = vec2<bool>(true, false);
@@ -20494,13 +20660,22 @@ def test_generic_vector_constructors_emit_mojo_names():
         "var precise: SIMD[DType.float64, 2] = SIMD[DType.float64, 2](1.0, 2.0)"
     ) in generated_code
     assert (
+        "var halfPair: SIMD[DType.float16, 2] = " "SIMD[DType.float16, 2](1.0, 2.0)"
+    ) in generated_code
+    assert (
         "var lowp: SIMD[DType.float16, 4] = SIMD[DType.float16, 4](1.0, 2.0, 3.0, 0.0)"
     ) in generated_code
     assert (
         "var index: SIMD[DType.int32, 4] = SIMD[DType.int32, 4](1, 2, 3, 0)"
     ) in generated_code
     assert (
+        "var shortPair: SIMD[DType.int16, 2] = SIMD[DType.int16, 2](1, 2)"
+    ) in generated_code
+    assert (
         "var smallIndex: SIMD[DType.int16, 4] = SIMD[DType.int16, 4](1, 2, 3, 4)"
+    ) in generated_code
+    assert (
+        "var bytes: SIMD[DType.uint8, 4] = SIMD[DType.uint8, 4](1, 2, 3, 4)"
     ) in generated_code
     assert (
         "var mask: SIMD[DType.uint32, 4] = SIMD[DType.uint32, 4](1, 2, 3, 4)"
@@ -20511,6 +20686,9 @@ def test_generic_vector_constructors_emit_mojo_names():
     assert (
         "var flags: SIMD[DType.bool, 2] = SIMD[DType.bool, 2](True, False)"
     ) in generated_code
+    assert "u84" not in generated_code
+    assert "i162" not in generated_code
+    assert "f162" not in generated_code
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code
@@ -25545,6 +25723,61 @@ def test_mojo_image_atomic_uint_constructor_value_infers_unsigned_type():
     assert "imageAtomicAdd" not in generated_code
 
 
+def test_mojo_explicit_scalar_image_format_atomics_remain_scalar():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/StorageImageAtomicShader.cgl.
+    code = """
+    shader StorageImageAtomicShader {
+        compute {
+            layout(set = 0, binding = 0, format = r32i) readwrite uniform iimage2D signedCounters;
+            layout(set = 0, binding = 1, format = r32ui) readwrite uniform uimage2D unsignedCounters;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                int signedOld = imageAtomicAdd(signedCounters, pixel, 1);
+                uint unsignedOld = imageAtomicAdd(
+                    unsignedCounters,
+                    pixel,
+                    uint(1.0)
+                );
+                int signedExchanged = imageAtomicExchange(
+                    signedCounters,
+                    pixel,
+                    signedOld
+                );
+                uint unsignedExchanged = imageAtomicExchange(
+                    unsignedCounters,
+                    pixel,
+                    unsignedOld
+                );
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct IImage2DInt4:" in generated_code
+    assert "struct UImage2DUInt4:" in generated_code
+    assert (
+        "fn _crossgl_image_atomic_add_IImage2DInt4_SIMD_DType_int32_2_Int32"
+        "(arg0: IImage2DInt4, arg1: SIMD[DType.int32, 2], arg2: Int32)"
+        " -> Int32:" in generated_code
+    )
+    assert (
+        "fn _crossgl_image_atomic_add_UImage2DUInt4_SIMD_DType_int32_2_UInt32"
+        "(arg0: UImage2DUInt4, arg1: SIMD[DType.int32, 2], arg2: UInt32)"
+        " -> UInt32:" in generated_code
+    )
+    assert "var signedOld: Int32 = _crossgl_image_atomic_add_IImage2DInt4" in (
+        generated_code
+    )
+    assert "var unsignedOld: UInt32 = _crossgl_image_atomic_add_UImage2DUInt4" in (
+        generated_code
+    )
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
+
+
 def test_mojo_storage_image_load_store_operations():
     code = """
     image2D colorImage;
@@ -26129,6 +26362,57 @@ def test_mojo_storage_image_store_on_various_formats():
         "fn image_store(image: UImage3D, coord: SIMD[DType.int32, 4], value: UInt32):"
         in generated_code
     )
+    assert "imageStore" not in generated_code
+
+
+def test_mojo_explicit_scalar_storage_image_formats_use_vector_contexts():
+    code = """
+    iimage2D labels @r32i;
+    uimage2D counters @r32ui;
+
+    shader StorageImageExplicitFormat {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                ivec4 label = imageLoad(labels, pixel);
+                imageStore(labels, pixel, label);
+                uvec4 counter = imageLoad(counters, pixel);
+                imageStore(counters, pixel, counter);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct IImage2DInt4:" in generated_code
+    assert "struct UImage2DUInt4:" in generated_code
+    assert "var labels: IImage2DInt4 = IImage2DInt4()" in generated_code
+    assert "var counters: UImage2DUInt4 = UImage2DUInt4()" in generated_code
+    assert (
+        "fn image_load(image: IImage2DInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.int32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: IImage2DInt4, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.int32, 4]):" in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2DUInt4, coord: SIMD[DType.int32, 2]) -> "
+        "SIMD[DType.uint32, 4]:" in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2DUInt4, coord: SIMD[DType.int32, 2], "
+        "value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "var label: SIMD[DType.int32, 4] = image_load(labels, pixel)" in (
+        generated_code
+    )
+    assert "image_store(labels, pixel, label)" in generated_code
+    assert "var counter: SIMD[DType.uint32, 4] = image_load(counters, pixel)" in (
+        generated_code
+    )
+    assert "image_store(counters, pixel, counter)" in generated_code
+    assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
 
 

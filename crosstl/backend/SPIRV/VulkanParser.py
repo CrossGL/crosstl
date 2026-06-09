@@ -1,6 +1,8 @@
 """Parser for Vulkan SPIR-V source AST construction."""
 
 import re
+import shlex
+import struct
 
 from ..common_ast import InitializerListNode
 from .VulkanAst import *
@@ -10,6 +12,7 @@ from .VulkanLexer import *
 class VulkanParser:
     """Parse Vulkan/SPIR-V style tokens into the Vulkan backend AST."""
 
+    MAX_SPIRV_MATERIALIZED_EXPRESSION_COMPLEXITY = 160
     SWIZZLE_COMPONENT_SETS = (set("xyzw"), set("rgba"), set("stpq"))
     GEOMETRY_INPUT_PRIMITIVE_QUALIFIERS = {
         "line",
@@ -307,6 +310,55 @@ class VulkanParser:
         "ExclusiveScan": "subgroupExclusive",
         "ClusteredReduce": "subgroupClustered",
     }
+    LEGACY_GLSLANG_SPIRV_ID_OPERANDS = {
+        "AccessChain": "all",
+        "CompositeConstruct": "all",
+        "CompositeExtract": {0, 1},
+        "Constant": {0},
+        "ConstantComposite": "all",
+        "ConvertSToF": {0, 1},
+        "ConvertUToF": {0, 1},
+        "Decorate": {0},
+        "EntryPoint": "entry_point",
+        "ExecutionMode": {0},
+        "ExecutionModeId": "execution_mode_id",
+        "ExtInstImport": set(),
+        "FAdd": {0, 1, 2},
+        "FMul": {0, 1, 2},
+        "Function": {0, 2},
+        "FunctionCall": "all",
+        "FunctionEnd": set(),
+        "FunctionParameter": {0},
+        "Label": set(),
+        "Load": {0, 1},
+        "MemberDecorate": {0},
+        "MemberName": {0},
+        "Name": {0},
+        "Return": set(),
+        "ReturnValue": {0},
+        "Store": {0, 1},
+        "TypeArray": {0, 1},
+        "TypeBool": set(),
+        "TypeFloat": set(),
+        "TypeFunction": "all",
+        "TypeInt": set(),
+        "TypeMatrix": {0},
+        "TypePointer": {1},
+        "TypeRuntimeArray": {0},
+        "TypeStruct": "all",
+        "TypeVector": {0},
+        "TypeVoid": set(),
+        "Variable": {0, 2},
+        "VectorTimesScalar": {0, 1, 2},
+    }
+    LEGACY_GLSLANG_SPIRV_GLOBAL_OPCODES = {
+        "Capability",
+        "Extension",
+        "ExtInstImport",
+        "MemoryModel",
+        "Source",
+        "SourceExtension",
+    }
     CROSSGL_RESERVED_IDENTIFIERS = {
         "as",
         "async",
@@ -386,6 +438,9 @@ class VulkanParser:
         "while",
         "workgroup",
         "yield",
+    }
+    SPIRV_VALUE_FALLBACK_RENAMES = {
+        "global": "global_",
     }
     SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS = {
         "Acos": "acos",
@@ -774,12 +829,15 @@ class VulkanParser:
         constant_types = {}
         spec_constant_ids = []
         extended_instruction_imports = {}
+        capabilities = []
         variables = []
         entry_points = []
         execution_modes = {}
 
         for result_id, opcode, operands, _line_number in instructions:
-            if opcode == "OpName" and len(operands) >= 2:
+            if opcode == "OpCapability" and operands:
+                capabilities.append(operands[0])
+            elif opcode == "OpName" and len(operands) >= 2:
                 names[operands[0]] = (
                     self.spirv_identifier_name(operands[1], operands[0])
                     if operands[1]
@@ -860,6 +918,26 @@ class VulkanParser:
                     "column_type": operands[0],
                     "column_count": operands[1],
                 }
+            elif (
+                result_id
+                and opcode
+                in {
+                    "OpTypeCooperativeMatrixKHR",
+                    "OpTypeCooperativeMatrixNV",
+                }
+                and len(operands) >= 4
+            ):
+                types[result_id] = {
+                    "kind": "cooperative_matrix",
+                    "name": self.spirv_cooperative_matrix_type_name(
+                        opcode, operands, types, constants
+                    ),
+                    "component_type": operands[0],
+                    "scope": operands[1],
+                    "rows": operands[2],
+                    "columns": operands[3],
+                    "use": operands[4] if len(operands) >= 5 else None,
+                }
             elif result_id and opcode == "OpTypeArray" and len(operands) >= 2:
                 types[result_id] = {
                     "kind": "array",
@@ -936,7 +1014,9 @@ class VulkanParser:
             elif result_id and opcode in {"OpConstant", "OpSpecConstant"}:
                 if len(operands) >= 2:
                     constant_types[result_id] = operands[0]
-                    constants[result_id] = operands[1]
+                    constants[result_id] = self.spirv_constant_literal_expression(
+                        operands[0], operands[1], types
+                    )
                     if opcode == "OpSpecConstant":
                         spec_constant_ids.append(result_id)
             elif result_id and opcode == "OpString" and operands:
@@ -979,7 +1059,7 @@ class VulkanParser:
                 if len(operands) >= 2:
                     constant_types[result_id] = operands[0]
                     constants[result_id] = self.spirv_spec_constant_op_expression(
-                        operands[1], operands[2:], names, constants
+                        operands[1], operands[2:], names, constants, types
                     )
                     spec_constant_ids.append(result_id)
             elif result_id and opcode == "OpExtInstImport" and operands:
@@ -995,6 +1075,14 @@ class VulkanParser:
                 )
 
         self.spirv_register_struct_type_names(types, names)
+        self.spirv_assign_flattened_resource_block_member_aliases(
+            variables,
+            names,
+            decorations,
+            member_names,
+            types,
+            constants,
+        )
         resource_block_type_ids = self.spirv_resource_block_struct_type_ids(
             variables, types, decorations
         )
@@ -1050,7 +1138,15 @@ class VulkanParser:
             constant_types,
             extended_instruction_imports,
         )
-        if not global_variables and not structs and not functions:
+        if (
+            not global_variables
+            and not structs
+            and not functions
+            and not self.spirv_assembly_has_metadata_only_surface(types)
+            and not self.spirv_assembly_has_linkage_metadata_surface(
+                capabilities, types, extended_instruction_imports
+            )
+        ):
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
         return ShaderNode(
@@ -1064,12 +1160,37 @@ class VulkanParser:
             spirv_decorations=decorations,
             spirv_member_decorations=member_decorations,
             spirv_member_names=member_names,
+            spirv_capabilities=capabilities,
             spirv_types=types,
             spirv_constants=constants,
             spirv_constant_types=constant_types,
             spirv_spec_constant_ids=spec_constant_ids,
             spirv_extended_instruction_imports=extended_instruction_imports,
         )
+
+    def spirv_assembly_has_metadata_only_surface(self, types):
+        metadata_type_kinds = {
+            "acceleration_structure",
+            "array",
+            "cooperative_matrix",
+            "image",
+            "named_barrier",
+            "pointer",
+            "ray_query",
+            "runtime_array",
+            "sampled_image",
+            "sampler",
+        }
+        return any(
+            type_info.get("kind") in metadata_type_kinds for type_info in types.values()
+        )
+
+    def spirv_assembly_has_linkage_metadata_surface(
+        self, capabilities, types, extended_instruction_imports
+    ):
+        if "Linkage" not in capabilities:
+            return False
+        return bool(types or extended_instruction_imports)
 
     def spirv_assembly_functions(
         self,
@@ -1137,15 +1258,11 @@ class VulkanParser:
                     self.spirv_function_parameter_type_name(
                         parameter_type_id, types, constants
                     ),
-                    names.get(
+                    self.spirv_assembly_value_name(
                         parameter_id,
-                        (
-                            self.spirv_fallback_identifier(
-                                parameter_id, f"param{index}"
-                            )
-                            if parameter_id
-                            else f"param{index}"
-                        ),
+                        names,
+                        decorations,
+                        prefix=f"param{index}",
                     ),
                     qualifiers=self.spirv_function_parameter_qualifiers(
                         parameter_type_id,
@@ -1235,6 +1352,19 @@ class VulkanParser:
         used_result_ids = self.spirv_assembly_used_result_ids(raw_instructions)
         current_label = None
 
+        def record_expression(result_id, result_type_id, expression):
+            expressions[result_id] = self.spirv_maybe_materialize_assembly_expression(
+                result_id,
+                result_type_id,
+                expression,
+                statements,
+                names,
+                decorations,
+                types,
+                constants,
+            )
+            expression_type_ids[result_id] = result_type_id
+
         for result_id, opcode, operands, _line_number in raw_instructions:
             if result_id and opcode == "OpLabel":
                 current_label = result_id
@@ -1244,6 +1374,7 @@ class VulkanParser:
                 expressions[result_id] = VariableNode(
                     "",
                     self.spirv_assembly_value_name(result_id, names, decorations),
+                    spirv_id=result_id,
                 )
                 if operands:
                     expression_type_ids[result_id] = operands[0]
@@ -1255,7 +1386,9 @@ class VulkanParser:
                 variable_name = self.spirv_assembly_value_name(
                     result_id, names, decorations
                 )
-                expressions[result_id] = VariableNode("", variable_name)
+                expressions[result_id] = VariableNode(
+                    "", variable_name, spirv_id=result_id
+                )
                 expression_type_ids[result_id] = operands[0]
                 if storage_class == "Function":
                     variable_type, array_suffix = self.spirv_type_name_and_suffix(
@@ -1295,56 +1428,67 @@ class VulkanParser:
                     names,
                     decorations,
                     constants,
+                    variables_by_id=variables_by_id,
+                    types=types,
                 )
                 expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpImage" and len(operands) >= 2:
-                expressions[result_id] = self.spirv_assembly_operand_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_operand_expression(
+                        operands[1],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpSampledImage" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
-                    self.spirv_type_name(operands[0], types) or operands[0],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.spirv_type_name(operands[0], types) or operands[0],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                            self.spirv_assembly_operand_expression(
+                                operands[2],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            ),
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode.startswith("OpImageSample") and len(operands) >= 3:
-                expressions[result_id] = self.spirv_assembly_image_sample_expression(
-                    opcode,
-                    operands[1],
-                    operands[2],
-                    operands[3:],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_image_sample_expression(
+                        opcode,
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -1786,7 +1930,9 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpCompositeConstruct" and operands:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_composite_construct_expression(
                         operands[0],
                         operands[1:],
@@ -1795,13 +1941,14 @@ class VulkanParser:
                         decorations,
                         constants,
                         types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpCompositeExtract" and len(operands) >= 2:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_composite_extract_expression(
                         operands[1],
                         operands[2:],
@@ -1813,9 +1960,8 @@ class VulkanParser:
                         types,
                         constants,
                         constant_types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpVectorExtractDynamic" and len(operands) >= 3:
@@ -1839,7 +1985,9 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpVectorInsertDynamic" and len(operands) >= 4:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_vector_insert_dynamic_expression(
                         operands[0],
                         operands[1],
@@ -1850,13 +1998,14 @@ class VulkanParser:
                         decorations,
                         constants,
                         types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpCompositeInsert" and len(operands) >= 3:
-                expressions[result_id] = (
+                record_expression(
+                    result_id,
+                    operands[0],
                     self.spirv_assembly_composite_insert_expression(
                         operands[0],
                         operands[1],
@@ -1867,25 +2016,27 @@ class VulkanParser:
                         decorations,
                         constants,
                         types,
-                    )
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpVectorShuffle" and len(operands) >= 4:
-                expressions[result_id] = self.spirv_assembly_vector_shuffle_expression(
+                record_expression(
+                    result_id,
                     operands[0],
-                    operands[1],
-                    operands[2],
-                    operands[3:],
-                    expressions,
-                    expression_type_ids,
-                    names,
-                    decorations,
-                    constants,
-                    types,
+                    self.spirv_assembly_vector_shuffle_expression(
+                        operands[0],
+                        operands[1],
+                        operands[2],
+                        operands[3:],
+                        expressions,
+                        expression_type_ids,
+                        names,
+                        decorations,
+                        constants,
+                        types,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpExtInst" and len(operands) >= 3:
@@ -1908,8 +2059,7 @@ class VulkanParser:
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
                 else:
-                    expressions[result_id] = call
-                expression_type_ids[result_id] = operands[0]
+                    record_expression(result_id, operands[0], call)
                 continue
 
             if result_id and opcode in {
@@ -2051,43 +2201,49 @@ class VulkanParser:
                 continue
 
             if result_id and opcode == "OpSelect" and len(operands) >= 4:
-                expressions[result_id] = TernaryOpNode(
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.spirv_assembly_operand_expression(
-                        operands[2],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.spirv_assembly_operand_expression(
-                        operands[3],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    TernaryOpNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.spirv_assembly_operand_expression(
+                            operands[3],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpPhi" and len(operands) >= 3:
-                expressions[result_id] = self.spirv_assembly_phi_expression(
-                    operands,
-                    current_label,
-                    phi_contexts,
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_phi_expression(
+                        operands,
+                        current_label,
+                        phi_contexts,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             operation = opcode[2:] if opcode.startswith("Op") else opcode
@@ -2096,20 +2252,23 @@ class VulkanParser:
                 and operation in self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS
                 and len(operands) >= 3
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[1:]
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_EXTENDED_ARITHMETIC_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[1:]
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2117,20 +2276,23 @@ class VulkanParser:
                 and operation in self.SPIRV_CORE_FUNCTIONS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_CORE_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[1:]
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_CORE_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operand,
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                            for operand in operands[1:]
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2138,19 +2300,22 @@ class VulkanParser:
                 and operation in self.SPIRV_DERIVATIVE_FUNCTIONS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2158,19 +2323,22 @@ class VulkanParser:
                 and operation in self.SPIRV_UNARY_FUNCTIONS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = FunctionCallNode(
-                    self.SPIRV_UNARY_FUNCTIONS[operation],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
+                record_expression(
+                    result_id,
+                    operands[0],
+                    FunctionCallNode(
+                        self.SPIRV_UNARY_FUNCTIONS[operation],
+                        [
+                            self.spirv_assembly_operand_expression(
+                                operands[1],
+                                expressions,
+                                names,
+                                decorations,
+                                constants,
+                            )
+                        ],
+                    ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2178,24 +2346,27 @@ class VulkanParser:
                 and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
                 and len(operands) >= 3
             ):
-                expressions[result_id] = BinaryOpNode(
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
-                    self.spirv_assembly_operand_expression(
-                        operands[2],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    BinaryOpNode(
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
+                        self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation],
+                        self.spirv_assembly_operand_expression(
+                            operands[2],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if (
@@ -2203,17 +2374,20 @@ class VulkanParser:
                 and operation in self.SPIRV_SPEC_CONSTANT_UNARY_OPS
                 and len(operands) >= 2
             ):
-                expressions[result_id] = UnaryOpNode(
-                    self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
+                record_expression(
+                    result_id,
+                    operands[0],
+                    UnaryOpNode(
+                        self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
+                        self.spirv_assembly_operand_expression(
+                            operands[1],
+                            expressions,
+                            names,
+                            decorations,
+                            constants,
+                        ),
                     ),
                 )
-                expression_type_ids[result_id] = operands[0]
                 continue
 
             if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
@@ -2235,8 +2409,7 @@ class VulkanParser:
                 if self.spirv_type_name(operands[0], types) == "void":
                     statements.append(call)
                 else:
-                    expressions[result_id] = call
-                expression_type_ids[result_id] = operands[0]
+                    record_expression(result_id, operands[0], call)
                 continue
 
             if opcode == "OpAtomicStore" and len(operands) >= 4:
@@ -2356,6 +2529,8 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
+                            variables_by_id=variables_by_id,
+                            types=types,
                         ),
                         self.spirv_assembly_operand_expression(
                             operands[1],
@@ -2363,6 +2538,8 @@ class VulkanParser:
                             names,
                             decorations,
                             constants,
+                            variables_by_id=variables_by_id,
+                            types=types,
                         ),
                     )
                 )
@@ -2922,6 +3099,89 @@ class VulkanParser:
             if isinstance(operand, str) and operand.startswith("%")
         }
 
+    def spirv_maybe_materialize_assembly_expression(
+        self,
+        result_id,
+        result_type_id,
+        expression,
+        statements,
+        names,
+        decorations,
+        types,
+        constants,
+    ):
+        if not result_id or not result_type_id:
+            return expression
+        if (
+            self.spirv_expression_complexity(
+                expression, self.MAX_SPIRV_MATERIALIZED_EXPRESSION_COMPLEXITY
+            )
+            <= self.MAX_SPIRV_MATERIALIZED_EXPRESSION_COMPLEXITY
+        ):
+            return expression
+
+        type_info = types.get(result_type_id, {})
+        if type_info.get("kind") in {"pointer", "function"}:
+            return expression
+        variable_type, array_suffix = self.spirv_type_name_and_suffix(
+            result_type_id, types, constants, names=names
+        )
+        if not variable_type or variable_type == "void":
+            return expression
+
+        variable_name = self.spirv_assembly_value_name(
+            result_id, names, decorations, prefix="value"
+        )
+        statements.append(
+            AssignmentNode(
+                VariableNode(
+                    variable_type,
+                    f"{variable_name}{array_suffix}",
+                    spirv_id=result_id,
+                    spirv_type_id=result_type_id,
+                ),
+                expression,
+            )
+        )
+        return VariableNode("", variable_name, spirv_id=result_id)
+
+    def spirv_expression_complexity(self, expression, limit):
+        budget = limit + 1
+
+        def count(node):
+            nonlocal budget
+            if budget <= 0:
+                return 0
+            budget -= 1
+            if node is None or isinstance(node, (str, int, float, VariableNode)):
+                return 1
+            if isinstance(node, AssignmentNode):
+                return 1 + count(node.left) + count(node.right)
+            if isinstance(node, BinaryOpNode):
+                return 1 + count(node.left) + count(node.right)
+            if isinstance(node, UnaryOpNode):
+                return 1 + count(node.operand)
+            if isinstance(node, TernaryOpNode):
+                return (
+                    1
+                    + count(node.condition)
+                    + count(node.true_expr)
+                    + count(node.false_expr)
+                )
+            if isinstance(node, FunctionCallNode):
+                return 1 + sum(count(arg) for arg in node.args)
+            if isinstance(node, MethodCallNode):
+                return 1 + count(node.object) + sum(count(arg) for arg in node.args)
+            if isinstance(node, MemberAccessNode):
+                return 1 + count(node.object)
+            if isinstance(node, ArrayAccessNode):
+                return 1 + count(node.array) + count(node.index)
+            if isinstance(node, InitializerListNode):
+                return 1 + sum(count(element) for element in node.elements)
+            return 1
+
+        return count(expression)
+
     def spirv_assembly_phi_contexts(self, raw_instructions):
         contexts = {}
         for index, (_result_id, opcode, operands, _line_number) in enumerate(
@@ -2987,16 +3247,36 @@ class VulkanParser:
         args = []
         for value, label in incoming:
             args.append(
-                self.spirv_assembly_operand_expression(
-                    value,
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
+                self.spirv_assembly_phi_operand_expression(
+                    value, expressions, names, decorations, constants
                 )
             )
             args.append(self.spirv_string_literal(str(label).lstrip("%")))
         return FunctionCallNode("spirvPhi", args)
+
+    def spirv_assembly_phi_operand_expression(
+        self, operand, expressions, names, decorations, constants
+    ):
+        if (
+            isinstance(operand, str)
+            and operand.startswith("%")
+            and operand in expressions
+        ):
+            expression = VariableNode(
+                "",
+                self.spirv_assembly_value_name(operand, names, decorations),
+            )
+            return self.spirv_maybe_non_uniform_expression(
+                operand, expression, decorations
+            )
+
+        return self.spirv_assembly_operand_expression(
+            operand,
+            expressions,
+            names,
+            decorations,
+            constants,
+        )
 
     def spirv_assembly_selection_phi_expression(
         self,
@@ -3516,6 +3796,8 @@ class VulkanParser:
             names,
             decorations,
             constants,
+            variables_by_id=variables_by_id,
+            types=types,
         )
         for index_operand in index_operands:
             access = ArrayAccessNode(
@@ -3526,6 +3808,8 @@ class VulkanParser:
                     names,
                     decorations,
                     constants,
+                    variables_by_id=variables_by_id,
+                    types=types,
                 ),
             )
         return access
@@ -3712,10 +3996,44 @@ class VulkanParser:
         if self.spirv_is_flattened_resource_block_access(
             storage_class, struct_type_id, decorations
         ):
-            member_name = member_names.get(struct_type_id, {}).get(
+            member_name = variable.get("flattened_member_aliases", {}).get(
+                member_key
+            ) or member_names.get(struct_type_id, {}).get(
                 member_key, f"member{member_key}"
             )
             access = VariableNode("", member_name)
+            for index_operand in index_operands[1:]:
+                access = ArrayAccessNode(
+                    access,
+                    self.spirv_assembly_operand_expression(
+                        index_operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
+            return access
+
+        if self.spirv_is_structured_buffer_block_access(
+            storage_class, struct_type_id, decorations
+        ):
+            member_name = member_names.get(struct_type_id, {}).get(
+                member_key, f"member{member_key}"
+            )
+            access = MemberAccessNode(
+                ArrayAccessNode(
+                    self.spirv_assembly_operand_expression(
+                        base_operand,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                    0,
+                ),
+                member_name,
+            )
             for index_operand in index_operands[1:]:
                 access = ArrayAccessNode(
                     access,
@@ -4936,6 +5254,8 @@ class VulkanParser:
         names,
         decorations,
         constants,
+        variables_by_id=None,
+        types=None,
     ):
         if operand in expressions:
             return self.spirv_maybe_non_uniform_expression(
@@ -4953,7 +5273,15 @@ class VulkanParser:
         if isinstance(operand, str) and operand.startswith("%"):
             expression = VariableNode(
                 "",
-                self.spirv_assembly_value_name(operand, names, decorations),
+                self.spirv_assembly_value_name(
+                    operand,
+                    names,
+                    decorations,
+                    storage_class=self.spirv_assembly_variable_storage_class(
+                        operand, variables_by_id, types
+                    ),
+                ),
+                spirv_id=operand,
             )
             return self.spirv_maybe_non_uniform_expression(
                 operand, expression, decorations
@@ -4979,14 +5307,27 @@ class VulkanParser:
         names,
         decorations,
         prefix="value",
+        storage_class=None,
     ):
         qualifiers = self.spirv_layout_qualifiers(decorations.get(value_id, []))
-        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(qualifiers)
+        builtin_name = self.spirv_builtin_variable_name_from_qualifiers(
+            qualifiers, storage_class=storage_class
+        )
         if builtin_name:
             return builtin_name
         if value_id in names and names[value_id]:
             return names[value_id]
-        return self.spirv_fallback_identifier(value_id, prefix)
+        fallback = self.spirv_fallback_identifier(value_id, prefix)
+        return self.SPIRV_VALUE_FALLBACK_RENAMES.get(fallback, fallback)
+
+    def spirv_assembly_variable_storage_class(self, value_id, variables_by_id, types):
+        if not variables_by_id or not types:
+            return None
+        variable = variables_by_id.get(value_id)
+        if variable is None:
+            return None
+        pointer_type = types.get(variable.get("pointer_type_id"), {})
+        return variable.get("storage_class") or pointer_type.get("storage_class")
 
     def spirv_is_flattened_resource_block_access(
         self, storage_class, struct_type_id, decorations
@@ -5002,6 +5343,16 @@ class VulkanParser:
             return True
         return False
 
+    def spirv_is_structured_buffer_block_access(
+        self, storage_class, struct_type_id, decorations
+    ):
+        struct_decorations = decorations.get(struct_type_id, [])
+        if storage_class == "StorageBuffer":
+            return self.spirv_has_decoration(struct_decorations, "Block")
+        if storage_class == "Uniform":
+            return self.spirv_has_decoration(struct_decorations, "BufferBlock")
+        return False
+
     def spirv_function_name_fallback(self, function_id, entry_points_by_id):
         if function_id in entry_points_by_id:
             return entry_points_by_id[function_id][0].get("name")
@@ -5012,26 +5363,37 @@ class VulkanParser:
     def spirv_assembly_function_return_type_name(self, type_id, types, constants):
         if type_id is None:
             return "void"
-        if types.get(type_id, {}).get("kind") in {"array", "runtime_array"}:
-            base_type, array_suffix = self.spirv_type_name_and_suffix(
-                type_id, types, constants
-            )
-            if base_type is not None:
-                return f"{base_type}{array_suffix}"
-        return self.spirv_type_name(type_id, types) or type_id or "void"
+        signature_type = self.spirv_function_signature_type_name(
+            type_id, types, constants
+        )
+        if signature_type is not None:
+            return signature_type
+        return (
+            self.spirv_type_name(type_id, types)
+            or self.spirv_fallback_identifier(type_id, "return_type")
+            or "void"
+        )
 
     def spirv_function_parameter_type_name(self, type_id, types, constants):
-        type_info = types.get(type_id, {})
-        if type_info.get("kind") == "pointer":
-            pointee_type, array_suffix = self.spirv_type_name_and_suffix(
-                type_info.get("type_id"), types, constants
-            )
-            if pointee_type is not None:
-                return f"{pointee_type}{array_suffix}"
-
+        signature_type = self.spirv_function_signature_type_name(
+            type_id, types, constants
+        )
+        if signature_type is not None:
+            return signature_type
         return self.spirv_type_name(type_id, types) or self.spirv_fallback_identifier(
             type_id, "param_type"
         )
+
+    def spirv_function_signature_type_name(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        if type_info.get("kind") == "pointer":
+            return self.spirv_function_signature_type_name(
+                type_info.get("type_id"), types, constants
+            )
+        base_type, suffix = self.spirv_type_name_and_suffix(type_id, types, constants)
+        if base_type is None:
+            return None
+        return f"{base_type}{suffix}"
 
     def spirv_written_pointer_parameter_ids(
         self, parameter_records, raw_instructions, types
@@ -5093,6 +5455,9 @@ class VulkanParser:
 
     def parse_spirv_assembly_instructions(self, code):
         instructions = []
+        if self.looks_like_legacy_glslang_spirv_disassembly(code):
+            code = self.normalize_legacy_glslang_spirv_disassembly(code)
+
         tokens = self.spirv_assembly_tokens(code)
         index = 0
 
@@ -5130,6 +5495,214 @@ class VulkanParser:
             index = next_index
 
         return instructions
+
+    def looks_like_legacy_glslang_spirv_disassembly(self, code):
+        return bool(
+            re.search(
+                r"(?m)^\s*(?:"
+                r"Capability\s+\w+\b"
+                r"|MemoryModel\s+\w+\s+\w+\b"
+                r"|EntryPoint\s+\w+\s+\d+\b"
+                r"|\d+(?:\([^)]*\))?:\s+(?:Type[A-Za-z0-9_]+|Function|Label|Variable)\b"
+                r")",
+                code,
+            )
+        )
+
+    def normalize_legacy_glslang_spirv_disassembly(self, code):
+        normalized_lines = []
+        module_index = -1
+        id_namespace = None
+        for raw_line in code.splitlines():
+            if re.match(r"\s*//\s*Module Version\b", raw_line):
+                module_index += 1
+                id_namespace = f"m{module_index}_"
+                continue
+
+            line = raw_line.split("//", 1)[0].strip()
+            if not line:
+                continue
+            try:
+                parts = shlex.split(line, comments=False, posix=True)
+            except ValueError as error:
+                if self.can_skip_unparseable_legacy_glslang_spirv_line(line):
+                    continue
+                if self.legacy_glslang_spirv_line_has_instruction_shape(line):
+                    raise SyntaxError(
+                        f"Invalid glslang SPIR-V disassembly syntax: {error}"
+                    ) from error
+                continue
+
+            instruction = self.normalize_legacy_glslang_spirv_instruction(
+                parts, id_namespace=id_namespace
+            )
+            if instruction is not None:
+                normalized_lines.append(instruction)
+
+        return "\n".join(normalized_lines)
+
+    def legacy_glslang_spirv_line_has_instruction_shape(self, line):
+        opcode_pattern = "|".join(
+            sorted(
+                set(self.LEGACY_GLSLANG_SPIRV_ID_OPERANDS)
+                | self.LEGACY_GLSLANG_SPIRV_GLOBAL_OPCODES
+            )
+        )
+        return bool(
+            re.match(r"\d+(?:\([^)]*\))?:\s+", line)
+            or re.match(rf"(?:{opcode_pattern})\b", line)
+        )
+
+    def can_skip_unparseable_legacy_glslang_spirv_line(self, line):
+        return bool(
+            re.match(
+                r"(?:\d+(?:\([^)]*\))?:\s+)?(?:Source|SourceContinued|String)\b",
+                line,
+            )
+        )
+
+    def normalize_legacy_glslang_spirv_instruction(self, parts, id_namespace=None):
+        if not parts:
+            return None
+
+        result_id = None
+        if self.is_legacy_glslang_spirv_result_token(parts[0]):
+            result_id = self.legacy_glslang_spirv_id(
+                parts.pop(0), namespace=id_namespace
+            )
+        if not parts:
+            return None
+
+        known_opcodes = (
+            set(self.LEGACY_GLSLANG_SPIRV_ID_OPERANDS)
+            | self.LEGACY_GLSLANG_SPIRV_GLOBAL_OPCODES
+        )
+        if result_id is None and parts[0] not in known_opcodes:
+            return None
+
+        if result_id is not None and parts[0] in known_opcodes:
+            opcode = parts.pop(0)
+            operands = [
+                self.normalize_legacy_glslang_spirv_operand(
+                    opcode, index, operand, id_namespace=id_namespace
+                )
+                for index, operand in enumerate(parts)
+            ]
+        elif result_id is not None and len(parts) >= 2 and parts[1] in known_opcodes:
+            result_type_token = parts.pop(0)
+            result_type = self.legacy_glslang_spirv_id(
+                result_type_token, namespace=id_namespace
+            )
+            opcode = parts.pop(0)
+            operands = [
+                result_type,
+                *[
+                    self.normalize_legacy_glslang_spirv_operand(
+                        opcode, index + 1, operand, id_namespace=id_namespace
+                    )
+                    for index, operand in enumerate(parts)
+                ],
+            ]
+            operands = self.normalize_legacy_glslang_float_constant_operands(
+                opcode, result_type_token, operands
+            )
+        else:
+            opcode = parts.pop(0)
+            operands = [
+                self.normalize_legacy_glslang_spirv_operand(
+                    opcode, index, operand, id_namespace=id_namespace
+                )
+                for index, operand in enumerate(parts)
+            ]
+
+        if not opcode.startswith("Op"):
+            opcode = f"Op{opcode}"
+        instruction = f"{result_id} = {opcode}" if result_id is not None else opcode
+        if operands:
+            instruction = f"{instruction} {' '.join(operands)}"
+        return instruction
+
+    def normalize_legacy_glslang_float_constant_operands(
+        self, opcode, result_type_token, operands
+    ):
+        if opcode not in {"Constant", "SpecConstant"} or len(operands) < 2:
+            return operands
+
+        type_label = self.legacy_glslang_spirv_type_label(result_type_token)
+        literal_widths = {
+            "float16_t": 16,
+            "float": 32,
+            "float32_t": 32,
+            "double": 64,
+            "float64_t": 64,
+        }
+        width = literal_widths.get(type_label)
+        if width is None:
+            return operands
+
+        word_count = 2 if width == 64 else 1
+        literal_words = operands[1 : 1 + word_count]
+        if len(literal_words) != word_count:
+            return operands
+
+        literal = self.legacy_glslang_float_literal_from_words(literal_words, width)
+        if literal is None:
+            return operands
+        return [operands[0], literal, *operands[1 + word_count :]]
+
+    def legacy_glslang_spirv_type_label(self, token):
+        match = re.match(r"\d+\(([^)]*)\):?$", str(token))
+        return match.group(1) if match else None
+
+    def legacy_glslang_float_literal_from_words(self, words, width):
+        try:
+            integer_words = [int(str(word), 0) for word in words]
+        except (TypeError, ValueError):
+            return None
+
+        if width == 16:
+            data = (integer_words[0] & 0xFFFF).to_bytes(2, "little")
+            value = struct.unpack("<e", data)[0]
+        elif width == 32:
+            data = (integer_words[0] & 0xFFFFFFFF).to_bytes(4, "little")
+            value = struct.unpack("<f", data)[0]
+        elif width == 64:
+            data = b"".join(
+                (word & 0xFFFFFFFF).to_bytes(4, "little") for word in integer_words
+            )
+            value = struct.unpack("<d", data)[0]
+        else:
+            return None
+        return repr(value)
+
+    def is_legacy_glslang_spirv_result_token(self, token):
+        return bool(re.match(r"\d+(?:\([^)]*\))?:$", str(token)))
+
+    def legacy_glslang_spirv_id(self, token, namespace=None):
+        namespace = namespace or ""
+        match = re.match(r"(\d+)(?:\([^)]*\))?:?$", str(token))
+        if match:
+            return f"%{namespace}{match.group(1)}"
+        if re.match(r"\d+$", str(token)):
+            return f"%{namespace}{token}"
+        return token
+
+    def normalize_legacy_glslang_spirv_operand(
+        self, opcode, operand_index, operand, id_namespace=None
+    ):
+        if self.is_legacy_glslang_spirv_id_operand(opcode, operand_index):
+            return self.legacy_glslang_spirv_id(operand, namespace=id_namespace)
+        return operand
+
+    def is_legacy_glslang_spirv_id_operand(self, opcode, operand_index):
+        id_operands = self.LEGACY_GLSLANG_SPIRV_ID_OPERANDS.get(opcode)
+        if id_operands == "all":
+            return True
+        if id_operands == "entry_point":
+            return operand_index == 1 or operand_index >= 3
+        if id_operands == "execution_mode_id":
+            return operand_index == 0 or operand_index >= 2
+        return operand_index in (id_operands or set())
 
     def spirv_assembly_tokens(self, code):
         tokens = []
@@ -5275,6 +5848,7 @@ class VulkanParser:
                 pointer_type,
                 storage_class,
                 names,
+                decorations.get(variable["id"], []),
                 member_decorations,
                 member_names,
                 types,
@@ -5498,6 +6072,7 @@ class VulkanParser:
     ):
         skip_type_ids = set(skip_type_ids or [])
         structs = []
+        seen_struct_signatures = set()
         for type_id, type_info in types.items():
             if type_info.get("kind") != "struct":
                 continue
@@ -5521,6 +6096,13 @@ class VulkanParser:
                 members.append(VariableNode(data_type, f"{member_name}{array_suffix}"))
 
             if members:
+                signature = (
+                    type_info["name"],
+                    tuple((member.vtype, member.name) for member in members),
+                )
+                if signature in seen_struct_signatures:
+                    continue
+                seen_struct_signatures.add(signature)
                 structs.append(StructNode(type_info["name"], members))
 
         return structs
@@ -5574,7 +6156,22 @@ class VulkanParser:
         ]
         return FunctionCallNode(type_name or "spirv_constant_composite", args)
 
-    def spirv_spec_constant_op_expression(self, operation, operands, names, constants):
+    def spirv_spec_constant_op_expression(
+        self, operation, operands, names, constants, types
+    ):
+        if (
+            operation
+            in {
+                "CooperativeMatrixLengthKHR",
+                "CooperativeMatrixLengthNV",
+            }
+            and operands
+        ):
+            length = self.spirv_cooperative_matrix_length(operands[0], types, constants)
+            if length is not None:
+                return str(length)
+            return "1"
+
         args = [
             self.spirv_constant_operand_expression(operand, names, constants)
             for operand in operands
@@ -5590,9 +6187,31 @@ class VulkanParser:
         if operation == "CompositeExtract" and len(args) >= 2:
             expression = args[0]
             for index in args[1:]:
-                expression = ArrayAccessNode(expression, index)
+                extracted = self.spirv_static_composite_element(expression, index)
+                expression = (
+                    extracted
+                    if extracted is not None
+                    else ArrayAccessNode(expression, index)
+                )
             return expression
         return FunctionCallNode(f"spirv_{operation}", args)
+
+    def spirv_static_composite_element(self, expression, index):
+        try:
+            element_index = int(str(index), 0)
+        except (TypeError, ValueError):
+            return None
+
+        if isinstance(expression, FunctionCallNode):
+            elements = expression.args
+        elif isinstance(expression, InitializerListNode):
+            elements = expression.elements
+        else:
+            return None
+
+        if 0 <= element_index < len(elements):
+            return elements[element_index]
+        return None
 
     def spirv_constant_operand_expression(self, operand, names, constants):
         value = constants.get(operand)
@@ -5605,6 +6224,24 @@ class VulkanParser:
         if isinstance(operand, str) and operand.startswith("%"):
             return operand.lstrip("%")
         return operand
+
+    def spirv_constant_literal_expression(self, type_id, literal, types):
+        type_info = types.get(type_id, {})
+        if type_info.get("name") not in {"half", "float", "double"}:
+            return literal
+
+        text = str(literal)
+        stripped = text.lstrip("+-")
+        if not stripped.lower().startswith("0x") or "p" not in stripped.lower():
+            return literal
+
+        try:
+            float.fromhex(text)
+        except OverflowError:
+            return "-1e+309" if text.startswith("-") else "1e+309"
+        except ValueError:
+            return literal
+        return literal
 
     def spirv_integer_constant_operand(self, operand, constants):
         value = constants.get(operand, operand)
@@ -5721,7 +6358,9 @@ class VulkanParser:
                 continue
 
             member_key = str(member_index)
-            field_name = member_names.get(struct_type_id, {}).get(
+            field_name = variable.get("flattened_member_aliases", {}).get(
+                member_key
+            ) or member_names.get(struct_type_id, {}).get(
                 member_key, f"member{member_key}"
             )
             struct_fields.append((data_type, f"{field_name}{array_suffix}"))
@@ -5761,6 +6400,107 @@ class VulkanParser:
     def spirv_has_decoration(self, decorations, target_decoration):
         return any(decoration == target_decoration for decoration, _ in decorations)
 
+    def spirv_assign_flattened_resource_block_member_aliases(
+        self,
+        variables,
+        names,
+        decorations,
+        member_names,
+        types,
+        constants,
+    ):
+        occurrences = []
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            struct_type_id = pointer_type.get("type_id")
+            struct_type = types.get(struct_type_id, {})
+            if struct_type.get("kind") != "struct":
+                continue
+            if not self.spirv_is_flattened_resource_block_access(
+                storage_class, struct_type_id, decorations
+            ):
+                continue
+            if storage_class == "Uniform" and not self.spirv_has_descriptor_binding(
+                decorations.get(variable["id"], [])
+            ):
+                continue
+
+            variable_name = self.spirv_assembly_value_name(
+                variable["id"], names, decorations
+            )
+            for member_index, member_type_id in enumerate(
+                struct_type.get("member_types", [])
+            ):
+                data_type, _array_suffix = self.spirv_type_name_and_suffix(
+                    member_type_id, types, constants
+                )
+                if data_type is None:
+                    continue
+
+                member_key = str(member_index)
+                member_name = member_names.get(struct_type_id, {}).get(
+                    member_key, f"member{member_key}"
+                )
+                occurrences.append(
+                    {
+                        "variable": variable,
+                        "variable_name": variable_name,
+                        "member_key": member_key,
+                        "member_name": member_name,
+                    }
+                )
+
+        member_counts = {}
+        for occurrence in occurrences:
+            member_counts[occurrence["member_name"]] = (
+                member_counts.get(occurrence["member_name"], 0) + 1
+            )
+        duplicate_members = {
+            member_name for member_name, count in member_counts.items() if count > 1
+        }
+        if not duplicate_members:
+            return
+
+        used_names = {
+            occurrence["member_name"]
+            for occurrence in occurrences
+            if occurrence["member_name"] not in duplicate_members
+        }
+        for occurrence in occurrences:
+            if occurrence["member_name"] not in duplicate_members:
+                continue
+
+            alias_base = self.spirv_identifier_name(
+                f"{occurrence['variable_name']}_{occurrence['member_name']}",
+                f"{occurrence['variable']['id']}_{occurrence['member_key']}",
+                prefix="member",
+            )
+            alias = self.spirv_unique_identifier(alias_base, used_names)
+            used_names.add(alias)
+            occurrence["variable"].setdefault("flattened_member_aliases", {})[
+                occurrence["member_key"]
+            ] = alias
+
+    def spirv_has_descriptor_binding(self, decorations):
+        qualifier_names = {
+            name for name, _value in self.spirv_descriptor_qualifiers(decorations)
+        }
+        return {"set", "binding"}.issubset(qualifier_names)
+
+    def spirv_unique_identifier(self, base_identifier, used_identifiers):
+        identifier = base_identifier
+        suffix = 1
+        while identifier in used_identifiers:
+            identifier = f"{base_identifier}_{suffix}"
+            suffix += 1
+        return identifier
+
     def spirv_descriptor_qualifiers(self, decorations):
         qualifiers = []
         for decoration, operands in decorations:
@@ -5778,6 +6518,7 @@ class VulkanParser:
         pointer_type,
         storage_class,
         names,
+        variable_decorations,
         member_decorations,
         member_names,
         types,
@@ -5790,6 +6531,11 @@ class VulkanParser:
 
         layouts = []
         block_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        variable_qualifiers = self.spirv_layout_qualifiers(variable_decorations)
+        variable_declaration_qualifiers = self.spirv_declaration_qualifiers(
+            variable_decorations
+        )
+        location_cursor = self.spirv_interface_base_location(variable_qualifiers)
         for member_index, member_type_id in enumerate(
             struct_type.get("member_types", [])
         ):
@@ -5808,7 +6554,12 @@ class VulkanParser:
             if not self.spirv_has_interface_qualifier(
                 qualifiers, declaration_qualifiers
             ):
-                continue
+                if location_cursor is None:
+                    continue
+                qualifiers = self.spirv_interface_member_location_qualifiers(
+                    variable_qualifiers, location_cursor
+                )
+                declaration_qualifiers = list(variable_declaration_qualifiers)
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
                 member_type_id, types, constants
@@ -5837,8 +6588,62 @@ class VulkanParser:
                     spirv_storage_class=storage_class,
                 )
             )
+            if location_cursor is not None:
+                location_cursor += self.spirv_interface_location_count(
+                    member_type_id, types, constants
+                )
 
         return layouts
+
+    def spirv_interface_base_location(self, qualifiers):
+        for name, value in qualifiers:
+            if name != "location":
+                continue
+            try:
+                return int(str(value), 0)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def spirv_interface_member_location_qualifiers(self, variable_qualifiers, location):
+        qualifiers = [
+            (name, value) for name, value in variable_qualifiers if name != "location"
+        ]
+        qualifiers.append(("location", str(location)))
+        return qualifiers
+
+    def spirv_interface_location_count(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        kind = type_info.get("kind")
+
+        if kind == "array":
+            length = self.spirv_integer_constant_operand(
+                type_info.get("length_id"), constants
+            )
+            if length is None:
+                return 1
+            return max(
+                1,
+                length
+                * self.spirv_interface_location_count(
+                    type_info.get("element_type"), types, constants
+                ),
+            )
+
+        if kind == "matrix":
+            try:
+                return max(1, int(str(type_info.get("column_count")), 0))
+            except (TypeError, ValueError):
+                return 1
+
+        if kind == "struct":
+            count = sum(
+                self.spirv_interface_location_count(member_type_id, types, constants)
+                for member_type_id in type_info.get("member_types", [])
+            )
+            return max(1, count)
+
+        return 1
 
     def spirv_layout_qualifiers(self, decorations):
         qualifiers = []
@@ -6026,6 +6831,57 @@ class VulkanParser:
         if row_count == column_count:
             return f"{prefix}{column_count}"
         return f"{prefix}{column_count}x{row_count}"
+
+    def spirv_cooperative_matrix_type_name(self, opcode, operands, types, constants):
+        component_type = self.spirv_type_name(operands[0], types) or operands[0]
+        variant = "khr" if opcode.endswith("KHR") else "nv"
+        parts = [
+            "spirvCoopMat",
+            variant,
+            component_type,
+            "scope",
+            self.spirv_cooperative_matrix_dimension_name(operands[1], constants),
+            "rows",
+            self.spirv_cooperative_matrix_dimension_name(operands[2], constants),
+            "cols",
+            self.spirv_cooperative_matrix_dimension_name(operands[3], constants),
+        ]
+        if len(operands) >= 5:
+            parts.extend(
+                [
+                    "use",
+                    self.spirv_cooperative_matrix_dimension_name(
+                        operands[4], constants
+                    ),
+                ]
+            )
+        return "_".join(self.spirv_fallback_identifier(part, "part") for part in parts)
+
+    def spirv_cooperative_matrix_dimension_name(self, operand, constants):
+        value = constants.get(operand, operand)
+        text = self.spirv_constant_expression_text(value)
+        return self.spirv_fallback_identifier(text, "value")
+
+    def spirv_cooperative_matrix_length(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        if type_info.get("kind") != "cooperative_matrix":
+            return None
+        rows = self.spirv_cooperative_matrix_static_dimension(
+            type_info.get("rows"), constants
+        )
+        columns = self.spirv_cooperative_matrix_static_dimension(
+            type_info.get("columns"), constants
+        )
+        if rows is None or columns is None:
+            return None
+        return rows * columns
+
+    def spirv_cooperative_matrix_static_dimension(self, operand, constants):
+        value = constants.get(operand, operand)
+        try:
+            return int(str(value), 0)
+        except (TypeError, ValueError):
+            return None
 
     def spirv_float_type_name(self, width):
         if width == "16":
@@ -6410,6 +7266,8 @@ class VulkanParser:
 
         while self.current_token[0] != "RBRACE":
             self.skip_hlsl_attributes()
+            while self.current_token[0] in self.PRECISION_QUALIFIER_TOKENS:
+                self.eat(self.current_token[0])
             if self.current_token[0] in [
                 "VEC2",
                 "VEC3",

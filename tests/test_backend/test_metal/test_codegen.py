@@ -55,9 +55,10 @@ def test_codegen_preserves_variadic_pack_expansion_from_mlx_integral_constant():
     """
     generated = convert(code)
 
-    assert "Us... us" in generated
-    assert "sum(us...)" in generated
+    assert "Us us" in generated
+    assert "sum(us)" in generated
     assert "post..." not in generated
+    assert parse_crossgl(generated) is not None
 
 
 def test_codegen_emits_shader_and_stages():
@@ -181,6 +182,55 @@ def test_codegen_fragment_front_facing_attribute_uses_parseable_crossgl_builtin(
     assert "@gl_IsFrontFace" not in result
     assert "@front_facing" not in result
     assert parse_crossgl(result) is not None
+
+
+def test_codegen_fragment_sample_mask_parameter_uses_input_builtin():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    fragment float4 fragment_main(uint coverage [[sample_mask]]) {
+        return float4(float(coverage), 0.0, 0.0, 1.0);
+    }
+    """
+    result = convert(code)
+
+    assert "uint coverage @gl_SampleMaskIn" in result
+    assert re.search(r"uint coverage @gl_SampleMask(?!In)\b", result) is None
+    assert parse_crossgl(result) is not None
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(result))
+
+    assert "uint coverage [[sample_mask]]" in regenerated
+
+
+def test_codegen_fragment_barycentric_attribute_uses_canonical_builtin():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct FragmentInput {
+        float4 position [[position]];
+        float3 barycentricCoords [[barycentric_coord, center_no_perspective]];
+    };
+
+    fragment float4 fragment_main(FragmentInput input [[stage_in]]) {
+        return float4(input.barycentricCoords, 1.0);
+    }
+    """
+    result = convert(code)
+
+    assert "vec3 barycentricCoords @gl_BaryCoordNoPerspEXT;" in result
+    assert "@barycentric_coord" not in result
+    assert "@center_no_perspective" not in result
+    assert parse_crossgl(result) is not None
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(result))
+
+    assert (
+        "float3 barycentricCoords [[barycentric_coord]] "
+        "[[center_no_perspective]];" in regenerated
+    )
 
 
 def test_codegen_trailing_return_type_helper_from_msl_cxx14_grammar():
@@ -467,6 +517,32 @@ def test_codegen_storage_texture_alias_uses_image_read_write():
     parse_crossgl(crossgl)
 
 
+def test_codegen_scoped_access_mode_expression_from_blender_shader():
+    # Reduced from:
+    # Repo: https://github.com/blender/blender
+    # Commit: 5711482b0608efd82006c6d9e230cf0b3e657cc1
+    # Path: source/blender/draw/engines/eevee/shaders/eevee_depth_of_field_resolve.bsl.hh
+    code = """
+    kernel void copy_read(texture2d<float, access::read> src [[texture(0)]],
+                          texture2d<float, access::write> dst [[texture(1)]],
+                          uint2 tid [[thread_position_in_grid]]) {
+        auto readMode = access::read;
+        auto readWriteMode = metal::access::read_write;
+        float4 value = src.read(tid);
+        dst.write(value, tid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "auto readMode = access_u3a_u3aread;" in crossgl
+    assert "auto readWriteMode = metal_u3a_u3aaccess_u3a_u3aread_write;" in crossgl
+    assert "image2D src @texture(0) @readonly" in crossgl
+    assert "image2D dst @texture(1) @writeonly" in crossgl
+    assert "imageLoad(src, tid)" in crossgl
+    assert "imageStore(dst, tid, value);" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_access_qualified_texture_buffer_uses_image_buffer():
     code = """
     typedef texture_buffer<uint, access::read_write> RWCounterBuffer;
@@ -572,6 +648,36 @@ def test_codegen_return_type_before_stage_qualifier_from_metal_cpp_sample():
     parse_crossgl(crossgl)
 
 
+def test_codegen_uint_vertex_id_roundtrips_to_opengl_builtin_int():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Vertex {
+        float4 position [[position]];
+        float4 color;
+    };
+
+    vertex Vertex vertex_main(const device Vertex *vertices [[buffer(0)]],
+                              uint vid [[vertex_id]]) {
+        return vertices[vid];
+    }
+
+    fragment float4 fragment_main(Vertex inVertex [[stage_in]]) {
+        return inVertex.color;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "int vid @gl_VertexID" in crossgl
+    assert "uint vid @gl_VertexID" not in crossgl
+    ast = parse_crossgl(crossgl)
+    generated = GLSLCodeGen().generate(ast)
+
+    assert "uint vid" not in generated
+    assert "verticesBuffer" in generated
+
+
 def test_codegen_gnu_attribute_between_function_qualifiers_and_return_type_from_spirv_cross():
     # Reduced from:
     # Repo: https://github.com/KhronosGroup/SPIRV-Cross
@@ -592,6 +698,32 @@ def test_codegen_gnu_attribute_between_function_qualifiers_and_return_type_from_
     assert "return uvec2(tc % 4096, tc / 4096);" in crossgl
     assert "uvec2 main0(uint tc)" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_drops_scoped_vendor_function_attribute_from_spirv_cross_quantize():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    # Path: reference/shaders-msl/asm/comp/quantize.asm.comp
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template<typename F>
+    [[clang::optnone]]
+    F spvQuantizeToF16(F fval) {
+        return F(fval);
+    }
+
+    kernel void main0(device float& out [[buffer(0)]]) {
+        out = spvQuantizeToF16(out);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "spvQuantizeToF16" in crossgl
+    assert "clang::optnone" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_reference_to_array_params_from_spirv_cross_reference():
@@ -1363,6 +1495,8 @@ def test_codegen_nested_unbraced_for_loops_from_public_msl_example():
     """
     crossgl = convert(code)
 
+    assert "vec4 pixPos @gl_FragCoord" in crossgl
+    assert "@gl_Position" not in crossgl
     assert "for (int i = 0; i < int(PIXEL_SIZE); i++)" in crossgl
     assert "for (int j = 0; j < int(PIXEL_SIZE); j++)" in crossgl
     assert "col += vec4(float(i + j));" in crossgl
@@ -1606,19 +1740,19 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
 
     kernel void compute_main(device float* data [[buffer(0)]],
                              constant float* input [[buffer(1)]],
-                             uint tid [[thread_position_in_grid]]) {
-        float value = input[tid];
-        data[tid] = value * 2.0;
+                             uint3 tid [[thread_position_in_grid]]) {
+        float value = input[tid.x];
+        data[tid.x] = value * 2.0;
     }
     """
     crossgl = convert(code)
 
     assert "RWStructuredBuffer<float> data @buffer(0)" in crossgl
     assert "StructuredBuffer<float> input @buffer(1)" in crossgl
-    assert "float value = buffer_load(input, tid);" in crossgl
-    assert "buffer_store(data, tid, value * 2.0);" in crossgl
-    assert "data[tid]" not in crossgl
-    assert "input[tid]" not in crossgl
+    assert "float value = buffer_load(input, tid.x);" in crossgl
+    assert "buffer_store(data, tid.x, value * 2.0);" in crossgl
+    assert "data[tid.x]" not in crossgl
+    assert "input[tid.x]" not in crossgl
 
     ast = parse_crossgl(crossgl)
     assert ast is not None
@@ -1626,13 +1760,14 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     assert "RWStructuredBuffer<float> data" in hlsl
     assert "StructuredBuffer<float> input" in hlsl
-    assert "float value = input.Load(tid);" in hlsl
-    assert "data.Store(tid, (value * 2.0));" in hlsl
+    assert "float value = input.Load(tid.x);" in hlsl
+    assert "data.Store(tid.x, (value * 2.0));" in hlsl
 
     metal = MetalCodeGen().generate(ast)
-    assert "void compute_main(device float* data, const device float* input" in metal
-    assert "float value = input[tid];" in metal
-    assert "data[tid] = value * 2.0;" in metal
+    assert "kernel void compute_main(device float* data" in metal
+    assert "const device float* input" in metal
+    assert "float value = input[tid.x];" in metal
+    assert "data[tid.x] = value * 2.0;" in metal
 
 
 def test_codegen_buffer_pointer_typedef_resource_resolves_element_contract():
@@ -2494,6 +2629,42 @@ def test_codegen_preserves_storage_texture_access_modes():
     assert shader_ast is not None
 
 
+def test_codegen_kernel_texture_read_write_roundtrips_as_stage_entry():
+    # Mirrors the public Metal image-processing idiom documented by Apple and
+    # Metal by Example: compute kernels reading and writing texture2d resources.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void convertToGrayscale(
+        texture2d<half, access::read> inTexture [[texture(0)]],
+        texture2d<half, access::write> outTexture [[texture(1)]],
+        uint2 gid [[thread_position_in_grid]]) {
+        half4 color = inTexture.read(gid);
+        half gray = dot(color.rgb, half3(0.299h, 0.587h, 0.114h));
+        outTexture.write(half4(gray, gray, gray, color.a), gid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "@ stage_entry" in crossgl
+    assert "image2D inTexture @texture(0) @readonly" in crossgl
+    assert "image2D outTexture @texture(1) @writeonly" in crossgl
+    assert crossgl.count("@rgba16f @metal_texture_element_half") == 2
+    assert "imageLoad(inTexture, gid)" in crossgl
+    assert "imageStore(outTexture, gid" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    metal = MetalCodeGen().generate(ast)
+
+    assert "kernel void convertToGrayscale(" in metal
+    assert "texture2d<half, access::read> inTexture [[texture(0)]]" in metal
+    assert "texture2d<half, access::write> outTexture [[texture(1)]]" in metal
+    assert "inTexture.read(uint2(gid))" in metal
+    assert "outTexture.write(half4(gray, gray, gray, color.a), uint2(gid))" in metal
+    assert "kernel void kernel_main()" not in metal
+
+
 def test_codegen_texture_query_methods_lower_to_crossgl_queries():
     code = """
     #include <metal_stdlib>
@@ -2654,6 +2825,25 @@ def test_codegen_function_constants_and_argument_buffers():
     assert "sampler linearSampler [[id(1)]];" in regenerated
     assert "device float* weights [[id(2)]];" in regenerated
     assert "constant Args args" not in regenerated
+
+
+def test_codegen_function_constant_parameter_strips_global_namespace_qualifier_from_apple_hdr_sample():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant uint32_t kExposureModeIndex [[function_constant(AAPLFunctionConstantIndexExposureType)]];
+
+    fragment half4 BloomSetup(
+        texture2d<half> logLuminanceIn [[texture(1), function_constant(::kExposureModeIndex)]]) {
+        return half4(logLuminanceIn.get_width());
+    }
+    """
+    crossgl = convert(code)
+
+    assert "@function_constant(kExposureModeIndex)" in crossgl
+    assert "@function_constant(::kExposureModeIndex)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_argument_buffer_array_of_device_pointers_from_apple_sample():
@@ -2950,6 +3140,23 @@ def test_codegen_raytracing_qualifiers_output():
     assert "callable_main" in result
 
 
+def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+    namespace rt = raytracing;
+
+    intersection void isect(rt::ray r, intersector inter) { }
+    """
+
+    result = convert(code)
+
+    assert "raytracing;" not in result
+    assert "rt::ray" not in result
+    assert "void isect(ray r, intersector inter)" in result
+    parse_crossgl(result)
+
+
 def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec():
     # Apple Metal Shading Language Specification, section 4 Address Spaces:
     # ray_data and object_data are address-space attributes for payload references.
@@ -2995,6 +3202,108 @@ def test_codegen_enum_and_typedef():
     result = convert(code)
     assert "typedef int MyInt;" in result
     assert "enum Mode" in result
+
+
+def test_codegen_size_t_typedef_uses_parseable_crossgl_alias_from_moltenvk():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/MoltenVK
+    # Commit: 5843e5da2e1f561261cb06a2f859ad39663d054f
+    # Path: MoltenVK/MoltenVK/Commands/MVKCommandPipelineStateFactoryShaderSource.h
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    typedef size_t VkDeviceSize;
+
+    typedef enum : uint32_t {
+        VK_FORMAT_BC1_RGB_UNORM_BLOCK = 131,
+    } VkFormat;
+    """
+    crossgl = convert(code)
+
+    assert "typedef u64 VkDeviceSize;" in crossgl
+    assert "typedef uint64 VkDeviceSize;" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_omits_user_type_aliases_from_public_metal_headers():
+    # Reduced from MetalPetal's MTIShaderLib.h: CrossGL can use the user type
+    # directly, but cannot parse a typedef whose source is another user type.
+    code = """
+    typedef MTIVertex VertexIn;
+
+    struct MTIVertex {
+        float4 position;
+    };
+
+    fragment float4 passthrough(VertexIn in [[stage_in]]) {
+        return in.position;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef MTIVertex VertexIn;" not in crossgl
+    assert "VertexIn in_" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_omits_namespace_self_alias_from_mlx_logging_header():
+    # Reduced from MLX logging.h: `using os_log = metal::os_log` maps to the
+    # same CrossGL type/name pair and should not emit `typedef os_log os_log`.
+    code = """
+    namespace mlx {
+    using os_log = metal::os_log;
+
+    struct os_log {
+    };
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef os_log os_log;" not in crossgl
+    assert "struct os_log" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_sanitizes_scoped_types_from_public_shader_headers():
+    # Reduced from Blender and tinygrad shader headers that reference C++
+    # namespace-scoped helper types in typedefs and function signatures.
+    code = """
+    typedef gbuffer::ClosurePacking ClosurePacking;
+    typedef ducks::rv_layout::align align_l;
+
+    void consume(shader::Type type, gbuffer::Header header) {
+        type = shader::Type::float_t;
+        header.value = 1u;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "typedef ClosurePacking ClosurePacking;" not in crossgl
+    assert "typedef align align_l;" not in crossgl
+    assert "shader::Type" not in crossgl
+    assert "gbuffer::Header" not in crossgl
+    assert "void consume(Type type, Header header)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_local_enum_declaration_from_metal_function_body():
+    code = """
+    fragment float4 local_enum_frag(float4 color [[stage_in]]) {
+        enum Mode { ModeA = 0, ModeB = 1 };
+        Mode mode = ModeA;
+        return mode == ModeA ? color : float4(0.0);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "enum Mode {" in crossgl
+    assert "ModeA = 0" in crossgl
+    assert "ModeB = 1" in crossgl
+    assert "Mode mode = ModeA;" in crossgl
+    assert "return mode == ModeA ? color : vec4(0.0);" in crossgl
+    assert "Unhandled statement type: EnumNode" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_anonymous_enum_uses_synthetic_name_from_metal_base_effect():
@@ -3287,6 +3596,34 @@ def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax
     assert parse_crossgl(result) is not None
 
 
+def test_codegen_names_unnamed_template_tag_parameters_from_mlx_nax():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: b155224b9963cd9476363b464a559232a0868000
+    # Path: mlx/backend/metal/kernels/steel/attn/nax.h
+    code = """
+    template <
+        typename CTile,
+        typename ATile,
+        typename BTile,
+        bool transpose_a,
+        bool transpose_b>
+    void tile_matmad_nax(thread CTile& C,
+                         thread ATile& A,
+                         bool_constant<transpose_a>,
+                         thread BTile& B,
+                         bool_constant<transpose_b>) {
+        const short TM = transpose_a ? 1 : 2;
+        C.val = TM;
+    }
+    """
+    result = convert(code)
+
+    assert "bool_constant<transpose_a> _unnamed_param_2" in result
+    assert "bool_constant<transpose_b> _unnamed_param_4" in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_preserves_native_address_space_qualifiers():
     code = """
     #include <metal_stdlib>
@@ -3332,6 +3669,57 @@ def test_codegen_preserves_native_address_space_qualifiers():
     assert "threadgroup Payload scratch;" in metal
     assert "float localValue = inData[tid];" in metal
     assert "unsupported Metal address-space call" not in metal
+
+
+def test_codegen_reference_return_helper_reparses_from_pytorch_linalg():
+    # Reduced from pytorch/pytorch aten/src/ATen/native/mps/kernels/LinearAlgebra.metal.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template<bool upper>
+    float& get_ref(device float* A, uint row, uint col, uint N) {
+        return A[row * N + col];
+    }
+
+    kernel void factorDiagonalBlock(device float* A [[buffer(0)]],
+                                    constant uint& N [[buffer(1)]]) {
+        uint row = 0;
+        uint col = 0;
+        get_ref<true>(A, row, col, N) = 1.0f;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "float get_ref(device float* A" in crossgl
+    assert "float& get_ref" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct TransparentFragmentValues {
+        half4 color;
+    };
+
+    kernel void resolve(
+        imageblock<TransparentFragmentValues> blockData [[threadgroup_imageblock]],
+        ushort2 localThreadID [[thread_position_in_threadgroup]]) {
+        threadgroup_imageblock TransparentFragmentValues* fragmentValues =
+            blockData.data(localThreadID);
+        half4 color = fragmentValues->color;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "threadgroup_imageblock TransparentFragmentValues* fragmentValues" in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert "threadgroup_imageblock TransparentFragmentValues* fragmentValues" in metal
+    assert "thread TransparentFragmentValues* fragmentValues" not in metal
 
 
 if __name__ == "__main__":

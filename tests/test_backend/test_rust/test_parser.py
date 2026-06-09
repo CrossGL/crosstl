@@ -113,6 +113,107 @@ def test_raw_identifier_parsing_normalizes_keyword_names():
     assert function.body[0] == "match"
 
 
+def test_absolute_use_and_type_paths_parse_from_generated_webgpu_bindings():
+    code = """
+    pub use ::wgc::naga;
+
+    pub struct Binding<'a> {
+        strings: &'a [::js_sys::JsString],
+        value: ::std::primitive::u32,
+    }
+    """
+
+    ast = parse_code(code)
+    struct = ast.structs[0]
+
+    assert ast.use_statements[0].path == "::wgc::naga"
+    assert [member.vtype for member in struct.members] == [
+        "&::js_sys::JsString[]",
+        "::std::primitive::u32",
+    ]
+
+
+def test_if_expression_continues_through_bitwise_operator_chain():
+    code = """
+    fn usage(supports_storage_resources: bool) -> wgpu::BufferUsages {
+        let usage = if supports_storage_resources {
+            wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::UNIFORM
+        } | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+        usage
+    }
+    """
+
+    ast = parse_code(code)
+    usage = ast.functions[0].body[0]
+
+    assert isinstance(usage, LetNode)
+    assert isinstance(usage.value, BinaryOpNode)
+    assert usage.value.op == "|"
+
+
+def test_raw_borrow_and_nested_reference_closure_patterns_parse():
+    code = """
+    fn raw(reference: &mut T) -> Self {
+        unsafe { Self::new(NonNull::new_unchecked(&raw mut *reference)) }
+    }
+
+    fn find(handle: u32) {
+        let _ = ep_results.iter().find(|&&(_, ty)| ty == handle);
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert len(ast.functions) == 2
+    raw_call = ast.functions[0].body[0].block.expression.args[0].args[0]
+    closure = ast.functions[1].body[0].value.args[0]
+    assert isinstance(raw_call, ReferenceNode)
+    assert isinstance(closure, ClosureNode)
+    assert isinstance(closure.params[0].pattern, ReferenceNode)
+
+
+def test_reference_named_raw_cast_parses_from_rust_cuda_surface():
+    # Reduced from Rust-GPU/Rust-CUDA crates/cust/src/surface.rs.
+    code = """
+    fn surface(raw: CUDA_RESOURCE_DESC) {
+        cuSurfObjectCreate(uninit.as_mut_ptr(), &raw as *const _).to_result()?;
+    }
+    """
+
+    ast = parse_code(code)
+    call = ast.functions[0].body[0].expression.name.object
+    cast = call.args[1]
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(cast, CastNode)
+    assert cast.target_type == "*const _"
+    assert isinstance(cast.expression, ReferenceNode)
+    assert cast.expression.expression == "raw"
+
+
+def test_for_loop_accepts_destructuring_path_patterns():
+    code = """
+    fn validate(cases: &[crate::SwitchCase]) {
+        for &crate::SwitchCase {
+            value: _,
+            ref body,
+            fall_through: _,
+        } in cases {
+            validate_block(body)?;
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert isinstance(loop.pattern, ReferenceNode)
+    assert isinstance(loop.pattern.expression, MatchStructPatternNode)
+
+
 def test_primitive_named_impl_methods_parse_from_rust_gpu_metadata():
     code = """
     pub struct TestMetadata {
@@ -138,6 +239,41 @@ def test_primitive_named_impl_methods_parse_from_rust_gpu_metadata():
 
     assert [method.name for method in impl_block.methods] == ["f32", "u32"]
     assert impl_block.methods[0].params[0].vtype == "f32"
+
+
+def test_primitive_named_member_access_parse_from_rust_gpu_codegen():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Commit: a27c0363d391a54de1feb9ee6864ad9dff72d243
+    # Paths:
+    # - crates/rustc_codegen_spirv/src/codegen_cx/declare.rs
+    # - crates/rustc_codegen_spirv/src/codegen_cx/entry.rs
+    code = """
+    impl CodegenCx {
+        fn classify(&self, element: Element) -> bool {
+            element.ty == self.tcx.types.u32
+        }
+
+        fn record(&self) {
+            self.buffer.insert(fn_id, self.tcx.types.usize);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    classify, record = ast.impl_blocks[0].methods
+
+    comparison = classify.body[0]
+    assert isinstance(comparison, BinaryOpNode)
+    assert comparison.op == "=="
+    assert isinstance(comparison.right, MemberAccessNode)
+    assert comparison.right.member == "u32"
+    assert comparison.right.object.member == "types"
+
+    insert_call = record.body[0]
+    assert isinstance(insert_call, FunctionCallNode)
+    assert insert_call.args[1].member == "usize"
+    assert insert_call.args[1].object.member == "types"
 
 
 def test_enum_parsing():
@@ -260,6 +396,118 @@ def test_macro_rules_definition_is_skipped():
 
     assert len(ast.functions) == 1
     assert ast.functions[0].name == "main"
+
+
+def test_local_macro_rules_definition_is_skipped_from_function_body():
+    code = r"""
+    fn classify(value: u32) -> u32 {
+        macro_rules! map_case {
+            ($input:expr, $($name:ident => $result:expr),*) => {
+                match $input {
+                    $($name => $result,)*
+                    _ => 0,
+                }
+            };
+        }
+
+        let mapped = map_case!(value, One => 1, Two => 2);
+        mapped
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "classify"
+    assert len(function.body) == 2
+    assert isinstance(function.body[0], LetNode)
+    assert function.body[0].name == "mapped"
+    assert function.body[1] == "mapped"
+
+
+def test_local_macro_rules_definition_is_skipped_from_block_expression():
+    code = r"""
+    fn classify(value: u32) -> u32 {
+        unsafe {
+            macro_rules! pick {
+                ($input:expr) => {
+                    $input
+                };
+            }
+
+            pick!(value)
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    unsafe_block = ast.functions[0].body[0]
+
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert unsafe_block.block.statements == []
+    assert isinstance(unsafe_block.block.returns_value, FunctionCallNode)
+    assert unsafe_block.block.returns_value.name == "pick!"
+
+
+def test_block_local_module_item_is_skipped_from_rust_gpu_type_constraints():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Commit: a27c0363d391a54de1feb9ee6864ad9dff72d243
+    # Path: crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+    code = """
+    pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+        mod pat_ctors {
+            pub const S: super::StorageClassPat = super::StorageClassPat::S;
+            pub use super::TyPat::{Array, Either, Function};
+        }
+
+        op
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "instruction_signatures"
+    assert function.return_type == "Option<&'static[InstSig<'static>]>"
+    assert function.body == ["op"]
+
+
+def test_match_guard_let_chain_parses_from_rust_gpu_format_args_decompiler():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Commit: a27c0363d391a54de1feb9ee6864ad9dff72d243
+    # Path: crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
+    code = """
+    fn decode(args: &[Value]) -> Option<(Word, Word)> {
+        let split = match *args {
+            [template, rt_args_or_tagged_len, ref trailing @ ..]
+                if trailing.len() <= 3
+                    && matches!(lookup(template.ty), Type::Pointer { .. })
+                    && let (Some(template_id), Some(rt_args_or_tagged_len_id)) =
+                        (value_id(template), value_id(rt_args_or_tagged_len))
+                    && const_str(&[template_id, rt_args_or_tagged_len_id]).is_none() =>
+            {
+                Some((template_id, rt_args_or_tagged_len_id))
+            }
+            _ => None,
+        };
+
+        split
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+    split = function.body[0]
+
+    assert isinstance(split, LetNode)
+    assert isinstance(split.value, MatchNode)
+
+    guard = split.value.arms[0].guard
+    assert isinstance(guard, ConditionChainNode)
+    assert len(guard.operands) == 4
+    assert isinstance(guard.operands[2], LetPatternConditionNode)
 
 
 def test_top_level_macro_invocations_are_skipped_from_rust_gpu_spirv_std():
@@ -551,6 +799,25 @@ def test_underscore_parameter_name_parsing():
 
     assert ast.functions[0].params[0].name == "_value"
     assert ast.functions[0].params[0].vtype == "u32"
+
+
+def test_cuda_std_tuple_pattern_impl_parameter_parsing():
+    code = """
+    impl From<(u32, u32)> for GridSize {
+        fn from((x, y): (u32, u32)) -> GridSize {
+            GridSize::xy(x, y)
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    method = ast.impl_blocks[0].functions[0]
+    param = method.params[0]
+
+    assert param.name == "_rust_pattern_param_0"
+    assert param.vtype == "(u32, u32)"
+    assert isinstance(param.pattern, TupleNode)
+    assert param.pattern.elements == ["x", "y"]
 
 
 def test_tuple_struct_and_variant_visibility_parsing():
@@ -1113,6 +1380,24 @@ def test_cfg_attributes_preserved_on_use_and_function_items():
     assert function.visibility == "pub"
     assert function.attributes[0].name == "cfg"
     assert function.attributes[0].args == ["target_os", "=", '"unknown"']
+
+
+def test_keyword_attribute_path_parses_from_rust_cuda_codegen_entrypoint():
+    code = """
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn __rustc_codegen_backend() {
+        return;
+    }
+    """
+    ast = parse_code(code)
+
+    function = ast.functions[0]
+    assert function.name == "__rustc_codegen_backend"
+    assert function.attributes[0].name == "unsafe"
+    assert function.attributes[0].args == ["no_mangle"]
+    assert function.visibility == "pub"
+    assert function.is_unsafe is True
+    assert function.abi == "C"
 
 
 def test_inner_and_nested_spirv_attributes_parse_from_rust_gpu_style_source():
@@ -1940,6 +2225,52 @@ def test_function_pointer_type_parsing():
     assert ast.functions[0].params[0].vtype == "fn(&Position) -> u32"
 
 
+def test_named_function_pointer_type_alias_parsing_from_rust_gpu():
+    # Reduced from Rust-GPU/rust-gpu crates/rustc_codegen_spirv/src/naga_transpile.rs.
+    code = """
+    pub type NagaTranspile = fn(
+        sess: &Session,
+        spv_binary: &[u32],
+    ) -> Result<(), ErrorGuaranteed>;
+    """
+
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == (
+        "fn(&Session, &u32[]) -> Result<(), ErrorGuaranteed>"
+    )
+
+
+def test_nested_qualified_associated_type_generic_from_rust_gpu():
+    # Reduced from Rust-GPU/rust-gpu crates/rustc_codegen_spirv/src/lib.rs.
+    code = """
+    pub type BackendModule = ModuleCodegen<<Self as WriteBackendMethods>::Module>;
+    """
+
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == (
+        "ModuleCodegen<<Self as WriteBackendMethods>::Module>"
+    )
+
+
+def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handler():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # 67f441da62424f83a1bb6e3f5145034e0583d495,
+    # crates/bevy_render/src/error_handler.rs.
+    code = """
+    pub struct RenderErrorHandler(
+        pub for<'a> fn(&'a RenderError, &'a mut World, &'a mut World) -> RenderErrorPolicy,
+    );
+    """
+
+    ast = parse_code(code)
+
+    assert ast.structs[0].members[0].vtype == (
+        "for<'a> fn(&RenderError, &mut World, &mut World) -> RenderErrorPolicy"
+    )
+
+
 def test_double_reference_type_and_expression_parsing():
     code = """
     fn take_slice(value: &&[u32]) {
@@ -2046,6 +2377,21 @@ def test_reference_array_type_parsing():
         pytest.fail(f"Reference array type parsing failed: {e}")
 
 
+def test_nested_array_generic_reference_type_parsing_from_naga_criterion():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # benches/criterion.rs parse_glsl inputs parameter.
+    code = """
+    fn parse_glsl(inputs: &[Box<[u8]>]) {
+        return;
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.functions[0].params[0].vtype == "&Box<[u8]>[]"
+
+
 def test_lifetime_reference_type_parsing():
     code = """
     fn borrow<'a>(value: &'a Vec3<f32>) -> &'a Vec3<f32> {
@@ -2068,6 +2414,26 @@ def test_lifetime_reference_type_parsing():
         assert borrowed_mut.return_type == "&mut Vec3<f32>"
     except Exception as e:
         pytest.fail(f"Lifetime reference type parsing failed: {e}")
+
+
+def test_lifetime_reference_generic_type_argument_spacing_from_corpus():
+    code = """
+    struct FunctionIter<'a> {
+        module: PhantomData<&'a &'a Module>,
+        next: Option<&'a Value>,
+    }
+
+    fn matrix_motion_transform_from_handle(
+        handle: TraversableHandle,
+    ) -> Option<&'static MatrixMotionTransform> {
+        return core::mem::transmute(handle);
+    }
+    """
+
+    ast = parse_code(code)
+
+    assert ast.structs[0].members[1].vtype == "Option<&'a Value>"
+    assert ast.functions[0].return_type == "Option<&'static MatrixMotionTransform>"
 
 
 def test_lifetime_receiver_parsing_from_rust_gpu_wgpu_runner():
@@ -3251,6 +3617,29 @@ def test_let_condition_chain_parsing():
         assert len(result_if.condition.operands) == 3
     except Exception as e:
         pytest.fail(f"Let condition chain parsing failed: {e}")
+
+
+def test_absolute_path_if_let_pattern_parses_from_rust_cuda_codegen_backend():
+    code = """
+    fn synthesize_features(args: Args) {
+        let mut features = vec![];
+        for opt in &args.nvvm_options {
+            if let ::nvvm::NvvmOption::Arch(arch) = opt {
+                features.extend(arch.all_target_features());
+            }
+        }
+    }
+    """
+    ast = parse_code(code)
+    loop = ast.functions[0].body[1]
+
+    assert isinstance(loop, ForNode)
+    condition = loop.body[0].condition
+    assert isinstance(condition, LetPatternConditionNode)
+    assert isinstance(condition.pattern, FunctionCallNode)
+    assert condition.pattern.name == "nvvm::NvvmOption::Arch"
+    assert condition.pattern.args == ["arch"]
+    assert condition.expression == "opt"
 
 
 def test_closure_expression_parsing():
@@ -4636,6 +5025,57 @@ def test_unsafe_extern_function_and_block_parsing():
         pytest.fail(f"Unsafe extern function and block parsing failed: {e}")
 
 
+def test_local_unsafe_extern_block_parsing_from_rust_cuda_thread_intrinsic():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/cuda_std/src/thread.rs __nvvm_warp_size declaration.
+    code = """
+    pub fn warp_size() -> u32 {
+        unsafe extern "C" {
+            fn __nvvm_warp_size() -> u32;
+        }
+
+        unsafe {
+            __nvvm_warp_size()
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "warp_size"
+    assert len(function.body) == 1
+    unsafe_block = function.body[0]
+    assert isinstance(unsafe_block, UnsafeBlockNode)
+    assert unsafe_block.block.expression.name == "__nvvm_warp_size"
+
+
+def test_associated_type_projection_alias_parsing_from_rust_cuda_gpu_rand():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/gpu_rand/src/default.rs DefaultRand SeedableRng impl.
+    code = """
+    struct Xoroshiro128StarStar;
+    struct DefaultRand;
+
+    trait SeedableRng {
+        type Seed;
+    }
+
+    impl SeedableRng for DefaultRand {
+        type Seed = <Xoroshiro128StarStar as SeedableRng>::Seed;
+    }
+    """
+
+    ast = parse_code(code)
+    alias = ast.impl_blocks[0].type_aliases[0]
+
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "Seed"
+    assert alias.alias_type == "<Xoroshiro128StarStar as SeedableRng>::Seed"
+
+
 def test_const_function_and_block_parsing():
     code = """
     pub const SCALE: i32 = 2;
@@ -4861,6 +5301,24 @@ def test_if_uppercase_condition_does_not_parse_body_as_struct_literal():
     assert isinstance(branch.if_body[0], AssignmentNode)
 
 
+def test_for_uppercase_iterable_does_not_parse_loop_body_as_struct_literal():
+    code = """
+    fn shader_loop() {
+        for gid in LAYOUT_RANGE {
+            eval_layouts(gid as u32, &mut out);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, ForNode)
+    assert loop.pattern == "gid"
+    assert loop.iterable == "LAYOUT_RANGE"
+    assert isinstance(loop.body[0], FunctionCallNode)
+
+
 def test_try_block_expression_parsing():
     code = """
     fn try_blocks(value: Result<i32, i32>, maybe: Option<i32>) -> Result<i32, i32> {
@@ -5079,6 +5537,27 @@ def test_trait_supertrait_bounds_parsing():
     assert ast.traits[0].methods[0].name == "distance"
 
 
+def test_trait_alias_parsing_from_rust_gpu_invalid_target_compiletest():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Path: tests/compiletests/ui/spirv-attr/invalid-target.rs
+    code = """
+    #![feature(trait_alias)]
+
+    #[spirv_recursive_for_testing(vertex, uniform, descriptor_set = 0)]
+    trait _TraitAlias<T> = Copy + Into<T>;
+    """
+    ast = parse_code(code)
+    trait = ast.traits[0]
+
+    assert trait.name == "_TraitAlias"
+    assert trait.generics == ["T"]
+    assert trait.supertraits == ["Copy", "Into<T>"]
+    assert trait.methods == []
+    assert trait.is_alias is True
+    assert trait.attributes[0].name == "spirv_recursive_for_testing"
+
+
 def test_struct_initialization_field_shorthand_parsing():
     code = """
     fn make_stroke(shape: Shape, thickness: f32) -> Stroke {
@@ -5094,6 +5573,32 @@ def test_struct_initialization_field_shorthand_parsing():
 
     assert isinstance(value, StructInitializationNode)
     assert value.fields == [("shape", "shape"), ("thickness", "thickness")]
+
+
+def test_rust_cuda_lowercase_struct_initialization_field_shorthand_parsing():
+    # Reduced from Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/optix/examples/ex03_window/src/gl_util.rs.
+    code = """
+    #[allow(non_camel_case_types)]
+    pub struct f32x2 {
+        x: f32,
+        y: f32,
+    }
+
+    impl f32x2 {
+        pub fn new(x: f32, y: f32) -> f32x2 {
+            f32x2 { x, y }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.impl_blocks[0].methods[0].body[0]
+
+    assert isinstance(value, StructInitializationNode)
+    assert value.struct_name == "f32x2"
+    assert value.fields == [("x", "x"), ("y", "y")]
 
 
 def test_qualified_struct_initialization_chains_in_match_arm():
@@ -5667,6 +6172,58 @@ def test_rust_gpu_ash_runner_nested_block_statement_parse():
     assert block.statements[2].expression.name.member == "queue_submit2"
     assert isinstance(block.expression, FunctionCallNode)
     assert block.expression.name == "Ok"
+
+
+def test_if_let_dereference_conditions_stop_at_block_from_naga():
+    # Reduced from gfx-rs/naga commit
+    # d0f28c0b1a3c772e55e68db1c47eff5131cb6732,
+    # src/front/interpolator.rs and src/proc/index.rs.
+    code = """
+    impl crate::Binding {
+        fn apply_default_interpolation(&mut self, ty: &crate::TypeInner) {
+            if let crate::Binding::Location {
+                location: _,
+                interpolation: ref mut interpolation @ None,
+                ref mut sampling,
+                second_blend_source: _,
+            } = *self {
+                match ty.scalar_kind() {
+                    Some(crate::ScalarKind::Float) => {
+                        *interpolation = Some(crate::Interpolation::Perspective);
+                    }
+                    Some(crate::ScalarKind::Sint | crate::ScalarKind::Uint) => {
+                        *sampling = None;
+                    }
+                    Some(_) | None => {}
+                }
+            }
+        }
+    }
+
+    impl GuardedIndex {
+        fn try_resolve_to_constant(&mut self, module: &crate::Module) {
+            if let GuardedIndex::Expression(expr) = *self {
+                if let Ok(value) = module.to_ctx().eval_expr_to_u32_from(expr) {
+                    *self = GuardedIndex::Known(value);
+                }
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    binding_if = ast.impl_blocks[0].methods[0].body[0]
+    guarded_if = ast.impl_blocks[1].methods[0].body[0]
+
+    assert isinstance(binding_if, IfNode)
+    assert isinstance(binding_if.condition, LetPatternConditionNode)
+    assert type(binding_if.condition.expression).__name__ == "DereferenceNode"
+    assert isinstance(binding_if.if_body[0], MatchNode)
+
+    assert isinstance(guarded_if, IfNode)
+    assert isinstance(guarded_if.condition, LetPatternConditionNode)
+    assert type(guarded_if.condition.expression).__name__ == "DereferenceNode"
+    assert isinstance(guarded_if.if_body[0], IfNode)
 
 
 def test_error_handling():

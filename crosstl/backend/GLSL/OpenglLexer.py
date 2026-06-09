@@ -74,6 +74,7 @@ TOKENS = tuple(
         ("COMMA", r","),
         ("COLON", r":"),
         ("QUESTION", r"\?"),
+        ("ELLIPSIS", r"\.\.\."),
         ("NUMBER", NUMBER_PATTERN),
         ("DOT", r"\."),
         ("PLUS", r"\+"),

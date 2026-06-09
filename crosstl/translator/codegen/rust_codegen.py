@@ -66,6 +66,10 @@ class RustCodeGen:
         self.type_mapping = {
             # Scalar Types
             "void": "()",
+            "i8": "i8",
+            "u8": "u8",
+            "i16": "i16",
+            "u16": "u16",
             "int": "i32",
             "short": "i16",
             "long": "i64",
@@ -77,17 +81,33 @@ class RustCodeGen:
             "float": "f32",
             "double": "f64",
             "half": "f16",
+            "f16": "f16",
             "bool": "bool",
             "string": "&'static str",
             "str": "&'static str",
             "char": "char",
             # Vector Types (using GPU-style vector types)
+            "vec2<f16>": "Vec2<f16>",
+            "vec3<f16>": "Vec3<f16>",
+            "vec4<f16>": "Vec4<f16>",
             "vec2<f32>": "Vec2<f32>",
             "vec3<f32>": "Vec3<f32>",
             "vec4<f32>": "Vec4<f32>",
             "vec2<f64>": "Vec2<f64>",
             "vec3<f64>": "Vec3<f64>",
             "vec4<f64>": "Vec4<f64>",
+            "vec2<i8>": "Vec2<i8>",
+            "vec3<i8>": "Vec3<i8>",
+            "vec4<i8>": "Vec4<i8>",
+            "vec2<u8>": "Vec2<u8>",
+            "vec3<u8>": "Vec3<u8>",
+            "vec4<u8>": "Vec4<u8>",
+            "vec2<i16>": "Vec2<i16>",
+            "vec3<i16>": "Vec3<i16>",
+            "vec4<i16>": "Vec4<i16>",
+            "vec2<u16>": "Vec2<u16>",
+            "vec3<u16>": "Vec3<u16>",
+            "vec4<u16>": "Vec4<u16>",
             "vec2<i32>": "Vec2<i32>",
             "vec3<i32>": "Vec3<i32>",
             "vec4<i32>": "Vec4<i32>",
@@ -151,14 +171,32 @@ class RustCodeGen:
             "dmat4x4": "Mat4<f64>",
             # Texture Types
             "sampler1D": "Texture1D<f32>",
+            "isampler1D": "Texture1D<i32>",
+            "usampler1D": "Texture1D<u32>",
             "sampler1DArray": "Texture1DArray<f32>",
+            "isampler1DArray": "Texture1DArray<i32>",
+            "usampler1DArray": "Texture1DArray<u32>",
             "sampler2D": "Texture2D<f32>",
+            "isampler2D": "Texture2D<i32>",
+            "usampler2D": "Texture2D<u32>",
             "sampler2DArray": "Texture2DArray<f32>",
+            "isampler2DArray": "Texture2DArray<i32>",
+            "usampler2DArray": "Texture2DArray<u32>",
             "sampler3D": "Texture3D<f32>",
+            "isampler3D": "Texture3D<i32>",
+            "usampler3D": "Texture3D<u32>",
             "samplerCube": "TextureCube<f32>",
+            "isamplerCube": "TextureCube<i32>",
+            "usamplerCube": "TextureCube<u32>",
             "samplerCubeArray": "TextureCubeArray<f32>",
+            "isamplerCubeArray": "TextureCubeArray<i32>",
+            "usamplerCubeArray": "TextureCubeArray<u32>",
             "sampler2DMS": "Texture2DMS<f32>",
+            "isampler2DMS": "Texture2DMS<i32>",
+            "usampler2DMS": "Texture2DMS<u32>",
             "sampler2DMSArray": "Texture2DMSArray<f32>",
+            "isampler2DMSArray": "Texture2DMSArray<i32>",
+            "usampler2DMSArray": "Texture2DMSArray<u32>",
             "sampler2DShadow": "DepthTexture2D<f32>",
             "sampler2DArrayShadow": "DepthTexture2DArray<f32>",
             "samplerCubeShadow": "DepthTextureCube<f32>",
@@ -3229,6 +3267,8 @@ class RustCodeGen:
                 return f"dvec{size}"
             elif element_type == "bool":
                 return f"bvec{size}"
+            elif element_type in {"i8", "u8", "i16", "u16", "f16"}:
+                return f"vec{size}<{element_type}>"
             else:
                 return f"{element_type}{size}"
         elif hasattr(type_node, "element_type") and hasattr(type_node, "rows"):
@@ -3518,6 +3558,10 @@ class RustCodeGen:
         matrix_alias = self.normalize_hlsl_matrix_type_name(type_str)
         if matrix_alias != str(type_str):
             return self.map_type(matrix_alias)
+
+        mapped_type = self.map_type(type_str)
+        if mapped_type != type_str:
+            return mapped_type
 
         if type_str.startswith("float") and len(type_str) > 5:
             size = type_str[5:]
@@ -9256,9 +9300,15 @@ class RustCodeGen:
         if member == "GetDimensions":
             return "void"
         if member in {"Sample", "sample", "texture"}:
-            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+            return (
+                "float"
+                if self.is_shadow_texture_type(texture_type)
+                else self.texture_sample_result_type(texture_type)
+            )
+        if str(member).startswith("Gather"):
+            return self.texture_gather_result_type(texture_type)
         if member in self.rust_hlsl_texture_member_operations():
-            return "vec4"
+            return self.texture_sample_result_type(texture_type)
         return None
 
     def generate_texture_helper_call(self, helper_name, args):
@@ -11731,6 +11781,8 @@ class RustCodeGen:
             "half": "f16",
             "float": "f32",
             "double": "f64",
+            "i8": "i8",
+            "u8": "u8",
             "i16": "i16",
             "u16": "u16",
             "i32": "i32",
@@ -11940,7 +11992,11 @@ class RustCodeGen:
             return self.constructor_result_type(expr)
         if isinstance(expr, TextureNode):
             texture_type = self.expression_result_type(expr.texture_expr)
-            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+            return (
+                "float"
+                if self.is_shadow_texture_type(texture_type)
+                else self.texture_sample_result_type(texture_type)
+            )
         if isinstance(expr, TextureOpNode):
             operation = getattr(expr, "operation", "")
             if operation in {
@@ -11981,7 +12037,11 @@ class RustCodeGen:
                 self.is_shadow_texture_type(texture_type)
             ):
                 return "float"
-            return "vec4"
+            if str(operation).startswith("textureGather") or str(operation).startswith(
+                "Gather"
+            ):
+                return self.texture_gather_result_type(texture_type)
+            return self.texture_sample_result_type(texture_type)
         if isinstance(expr, WaveOpNode):
             return self.wave_op_result_type(
                 getattr(expr, "operation", ""),
@@ -12209,6 +12269,12 @@ class RustCodeGen:
             "sample_projected_grad_offset_sampler",
             "texel_fetch",
             "texel_fetch_offset",
+        }:
+            if arg_types:
+                return self.texture_sample_result_type(arg_types[0])
+            return "vec4"
+
+        if mapped_name in {
             "texture_gather",
             "texture_gather_sampler",
             "texture_gather_component",
@@ -12222,6 +12288,8 @@ class RustCodeGen:
             "texture_gather_offsets_component",
             "texture_gather_offsets_component_sampler",
         }:
+            if arg_types:
+                return self.texture_gather_result_type(arg_types[0])
             return "vec4"
 
         if mapped_name.startswith("sample_shadow"):
@@ -12482,6 +12550,74 @@ class RustCodeGen:
         }:
             return "ivec3"
         return "ivec2"
+
+    def texture_sample_result_type(self, texture_type):
+        payload_type = self.texture_payload_type(texture_type)
+        if payload_type is None:
+            return "vec4"
+        return self.texture_payload_sample_result_type(payload_type)
+
+    def texture_gather_result_type(self, texture_type):
+        payload_type = self.texture_payload_type(texture_type)
+        if payload_type is None:
+            return "vec4"
+        return self.texture_payload_component_vector_result_type(payload_type)
+
+    def texture_payload_type(self, texture_type):
+        texture_type = str(texture_type or "")
+        mapped_type = self.unqualify_runtime_type_name(self.map_type(texture_type))
+        texture_base, texture_args = self.generic_type_parts(mapped_type)
+        texture_base = texture_base.rsplit("::", 1)[-1]
+        if texture_base not in {
+            "Texture1D",
+            "Texture1DArray",
+            "Texture2D",
+            "Texture2DArray",
+            "Texture3D",
+            "TextureCube",
+            "TextureCubeArray",
+            "Texture2DMS",
+            "Texture2DMSArray",
+            "DepthTexture2D",
+            "DepthTexture2DArray",
+            "DepthTextureCube",
+            "DepthTextureCubeArray",
+        }:
+            return None
+        if not texture_args:
+            return None
+        return texture_args[0]
+
+    def texture_payload_sample_result_type(self, payload_type):
+        payload_type = self.unqualify_runtime_type_name(self.map_type(payload_type))
+        vector_info = self.vector_type_info(payload_type)
+        if vector_info is not None:
+            return (
+                self.vector_type_for_components(
+                    vector_info["component_type"],
+                    vector_info["size"],
+                )
+                or "vec4"
+            )
+
+        scalar_type = self.normalize_scalar_type(payload_type)
+        if scalar_type is None:
+            return "vec4"
+        return self.vector_type_for_components(scalar_type, 4) or "vec4"
+
+    def texture_payload_component_vector_result_type(self, payload_type):
+        payload_type = self.unqualify_runtime_type_name(self.map_type(payload_type))
+        vector_info = self.vector_type_info(payload_type)
+        if vector_info is not None:
+            return (
+                self.vector_type_for_components(vector_info["component_type"], 4)
+                or "vec4"
+            )
+
+        scalar_type = self.normalize_scalar_type(payload_type)
+        if scalar_type is None:
+            return "vec4"
+        return self.vector_type_for_components(scalar_type, 4) or "vec4"
 
     def texture_dimensions_result_type(self, texture_type):
         size_type = self.texture_size_result_type(texture_type)
@@ -12890,6 +13026,26 @@ class RustCodeGen:
                 return ",".join(values)
         return None
 
+    def rust_explicit_resource_binding_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return attr_name
+        return None
+
     def rust_resource_base_type_and_count(self, type_name):
         type_name = self.type_name_string(type_name)
         if self.is_array_type_name(type_name):
@@ -12942,6 +13098,15 @@ class RustCodeGen:
             return "buffer"
         return kind
 
+    def rust_resource_binding_validation_count(self, node, resource_kind, count):
+        if (
+            resource_kind == "sampler"
+            and count != 1
+            and self.rust_explicit_resource_binding_attribute(node) == "binding"
+        ):
+            return 1
+        return count
+
     def rust_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.rust_used_resource_bindings.get(
@@ -12985,21 +13150,24 @@ class RustCodeGen:
             return ""
 
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        validation_count = self.rust_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.rust_resource_binding_namespace(resource_kind)
         set_index = self.explicit_rust_resource_set_index(node)
         binding = self.explicit_rust_resource_binding_index(node)
         if binding is None:
             binding = self.next_available_rust_resource_binding(
-                namespace, set_index, count
+                namespace, set_index, validation_count
             )
             binding_source = "automatic"
             self.reserve_rust_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
         else:
             binding_source = "explicit"
             self.reserve_rust_resource_binding(
-                namespace, set_index, binding, count, name
+                namespace, set_index, binding, validation_count, name
             )
 
         parts = [
@@ -13043,9 +13211,14 @@ class RustCodeGen:
         if not name or resource_kind is None or binding is None:
             return
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        validation_count = self.rust_resource_binding_validation_count(
+            node, resource_kind, count
+        )
         namespace = self.rust_resource_binding_namespace(resource_kind)
         set_index = self.explicit_rust_resource_set_index(node)
-        self.reserve_rust_resource_binding(namespace, set_index, binding, count, name)
+        self.reserve_rust_resource_binding(
+            namespace, set_index, binding, validation_count, name
+        )
 
     def reserve_explicit_rust_resource_bindings(self, ast):
         def reserve_variable(node):
@@ -13465,12 +13638,27 @@ class RustCodeGen:
         mapped_type = self.map_type(type_name)
         mapped_type = self.unqualify_runtime_type_name(mapped_type)
         vector_details = {
+            "Vec2<f16>": ("f16", 2),
+            "Vec3<f16>": ("f16", 3),
+            "Vec4<f16>": ("f16", 4),
             "Vec2<f32>": ("float", 2),
             "Vec3<f32>": ("float", 3),
             "Vec4<f32>": ("float", 4),
             "Vec2<f64>": ("double", 2),
             "Vec3<f64>": ("double", 3),
             "Vec4<f64>": ("double", 4),
+            "Vec2<i8>": ("i8", 2),
+            "Vec3<i8>": ("i8", 3),
+            "Vec4<i8>": ("i8", 4),
+            "Vec2<u8>": ("u8", 2),
+            "Vec3<u8>": ("u8", 3),
+            "Vec4<u8>": ("u8", 4),
+            "Vec2<i16>": ("i16", 2),
+            "Vec3<i16>": ("i16", 3),
+            "Vec4<i16>": ("i16", 4),
+            "Vec2<u16>": ("u16", 2),
+            "Vec3<u16>": ("u16", 3),
+            "Vec4<u16>": ("u16", 4),
             "Vec2<i32>": ("int", 2),
             "Vec3<i32>": ("int", 3),
             "Vec4<i32>": ("int", 4),
@@ -13559,6 +13747,8 @@ class RustCodeGen:
         scalar_type = self.normalize_scalar_type(scalar_type)
         aliases = {
             "bool": "bool",
+            "i8": "i8",
+            "u8": "u8",
             "i16": "short",
             "u16": "ushort",
             "i32": "int",
@@ -13585,6 +13775,13 @@ class RustCodeGen:
         return f"{prefix}{columns}x{rows}"
 
     def vector_type_for_components(self, component_type, component_count):
+        normalized_component = self.normalize_scalar_type(component_type)
+        if (
+            normalized_component in {"i8", "u8", "i16", "u16", "f16"}
+            and 2 <= component_count <= 4
+        ):
+            return f"vec{component_count}<{normalized_component}>"
+
         component_type = self.scalar_type_for_type_constructor(component_type)
         if component_type is None:
             return None

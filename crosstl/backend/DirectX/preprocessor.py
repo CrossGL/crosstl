@@ -336,12 +336,18 @@ class HLSLPreprocessor:
         for base in search_paths:
             candidate = os.path.join(base, target)
             if os.path.isfile(candidate):
-                with open(candidate, encoding="utf-8", errors="replace") as handle:
-                    return handle.read(), candidate
+                return self._read_source_file(candidate), candidate
 
         if self.strict:
             raise FileNotFoundError(f"Include not found: {target}")
         return None
+
+    def _read_source_file(self, filepath: str) -> str:
+        with open(filepath, "rb") as handle:
+            data = handle.read()
+        if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return data.decode("utf-16", errors="replace")
+        return data.decode("utf-8-sig", errors="replace")
 
     def _handle_line_directive(self, rest: str) -> Optional[Tuple[int, Optional[str]]]:
         parts = rest.strip().split()

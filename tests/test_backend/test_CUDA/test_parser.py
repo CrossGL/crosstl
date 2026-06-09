@@ -602,6 +602,43 @@ class TestCudaParser:
         ]
         assert [kernel.name for kernel in ast.kernels] == ["function_pointer_kernel"]
 
+    def test_public_cuda_samples_driver_function_type_typedef_parsing(self):
+        code = """
+        typedef int CUresult;
+        typedef CUresult tcuInit(unsigned int Flags);
+        typedef CUresult tcuMemcpyHtoD(
+            unsigned long long dstDevice,
+            const void *srcHost,
+            unsigned int ByteCount
+        );
+
+        extern tcuInit *cuInit;
+        extern tcuMemcpyHtoD *cuMemcpyHtoD;
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        init_alias = ast.typedefs[1]
+        memcpy_alias = ast.typedefs[2]
+        assert init_alias.name == "tcuInit"
+        assert init_alias.alias_type == "CUresult ()"
+        assert [(param.vtype, param.name) for param in init_alias.params] == [
+            ("unsigned int", "Flags"),
+        ]
+        assert memcpy_alias.name == "tcuMemcpyHtoD"
+        assert memcpy_alias.alias_type == "CUresult ()"
+        assert [(param.vtype, param.name) for param in memcpy_alias.params] == [
+            ("unsigned long long", "dstDevice"),
+            ("const void *", "srcHost"),
+            ("unsigned int", "ByteCount"),
+        ]
+        assert [(var.vtype, var.name) for var in ast.global_variables] == [
+            ("tcuInit *", "cuInit"),
+            ("tcuMemcpyHtoD *", "cuMemcpyHtoD"),
+        ]
+
     def test_public_cuda_samples_elaborated_and_qualified_type_declarations(self):
         code = """
         void configure(int n) {
@@ -1112,6 +1149,169 @@ class TestCudaParser:
         assert block.members[2].vtype == "unsigned char[4]"
         assert block.members[3].vtype == "unsigned int"
         assert ast.structs[1].name == "Segmentation"
+
+    def test_public_cuda_samples_friend_function_definition_skips_complete_body(self):
+        code = """
+        template<class T>
+        class matrix4 {
+        public:
+            T _array[16];
+
+            friend matrix4 inverse(const matrix4 &m)
+            {
+                matrix4 minv;
+                T r1[8], r2[8], r3[8], r4[8];
+                T *s[4], *tmprow;
+                s[0] = &r1[0];
+                s[1] = &r2[0];
+                if (s[0][0] == 0.0) {
+                    return minv;
+                }
+                return minv;
+            }
+
+            T trailing;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "matrix4"
+        assert [member.name for member in ast.structs[0].members] == [
+            "_array",
+            "trailing",
+        ]
+
+    def test_public_cccl_macro_prefixed_friend_operator_struct_method_parse(self):
+        code = """
+        template <typename T>
+        struct aligned_base_ptr {
+            const char* ptr;
+            int head_padding;
+
+            _CCCL_HOST_DEVICE friend bool
+            operator==(const aligned_base_ptr& a, const aligned_base_ptr& b) {
+                return a.ptr == b.ptr && a.head_padding == b.head_padding;
+            }
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.structs) == 1
+        assert ast.structs[0].name == "aligned_base_ptr"
+        assert [member.name for member in ast.structs[0].members] == [
+            "ptr",
+            "head_padding",
+        ]
+
+    def test_public_cccl_qualified_friend_function_struct_method_parse(self):
+        code = """
+        class barrier {
+            _CCCL_DEVICE_API friend ::cuda::std::uint64_t*
+            ::cuda::device::_LIBCUDACXX_ABI_NAMESPACE::barrier_native_handle(
+                barrier& __b);
+            int value;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "barrier"
+        assert [member.name for member in ast.structs[0].members] == ["value"]
+
+    def test_public_cccl_templated_friend_class_struct_declaration_parse(self):
+        code = """
+        class barrier {
+            template <typename _Barrier>
+            friend class ::cuda::std::__barrier_poll_tester_phase;
+            int value;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "barrier"
+        assert [member.name for member in ast.structs[0].members] == ["value"]
+
+    def test_public_cutlass_templated_call_operator_struct_method_parse(self):
+        code = """
+        template <>
+        struct CompactLambda<LayoutLeft> {
+            template <class Init, class Shape>
+            CUTE_HOST_DEVICE constexpr auto operator()(Init const& init,
+                                                       Shape const& si) {
+                return init;
+            }
+            int value;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "CompactLambda<LayoutLeft>"
+        assert [member.name for member in ast.structs[0].members] == ["value"]
+
+    def test_public_cutlass_templated_using_alias_struct_member_parse(self):
+        code = """
+        template <>
+        struct CompactLambda<LayoutLeft> {
+            template <class Shape>
+            using seq = tuple_seq<Shape>;
+            int value;
+        };
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.structs[0].name == "CompactLambda<LayoutLeft>"
+        assert [member.name for member in ast.structs[0].members] == ["value"]
+
+    def test_public_rapids_post_return_cuda_qualifier_function_parse(self):
+        code = """
+        template <typename T>
+        T __device__ inline normalize_nans(T const& key) {
+            return key;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].return_type == "T"
+        assert ast.functions[0].name == "normalize_nans"
+        assert ast.functions[0].qualifiers == ["__device__", "inline"]
+
+    def test_public_turbo3_gnu_attribute_local_declaration_parse(self):
+        code = """
+        void host() {
+            static __attribute__((aligned(16))) sink_async_state sink_state;
+            sink_state = {};
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.functions[0].body[0]
+        assert declaration.vtype == "sink_async_state"
+        assert declaration.name == "sink_state"
+        assert declaration.qualifiers == ["static"]
 
     def test_public_cuda_samples_function_pointer_locals_and_if_constexpr(self):
         code = """
@@ -2211,6 +2411,117 @@ class TestCudaParser:
         assert isinstance(call.args[0], UnaryOpNode)
         assert call.args[0].op == "post..."
 
+    def test_public_cccl_top_level_diagnostic_macros_and_fold_statement_parse(self):
+        code = """
+        _CCCL_DIAG_PUSH
+        _CCCL_DIAG_SUPPRESS_GCC("-Wattributes")
+        _CCCL_DIAG_SUPPRESS_NVHPC(attribute_requires_external_linkage)
+        CUB_NAMESPACE_BEGIN
+
+        template <typename... InputIt>
+        __device__ void prefetch(InputIt... ins) {
+            (..., (void)(ins += 1));
+        }
+
+        CUB_NAMESPACE_END
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "prefetch"
+        assert ast.functions[0].params[0].vtype == "InputIt ..."
+        fold_statement = ast.functions[0].body[0]
+        assert isinstance(fold_statement, FunctionCallNode)
+        assert fold_statement.name == "cuda_fold_expression"
+        assert fold_statement.args == ["(...,(void)(ins += 1))"]
+
+    def test_public_cccl_variable_template_trait_expression_parse(self):
+        code = """
+        __device__ void store() {
+            constexpr bool can_vectorize =
+                traits::is_contiguous_iterator_v<RandomAccessIteratorOut> &&
+                traits::is_trivially_relocatable_v<output_t>;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        declaration = ast.functions[0].body[0]
+        assert declaration.vtype == "bool"
+        assert declaration.qualifiers == ["constexpr"]
+        assert declaration.name == "can_vectorize"
+        assert isinstance(declaration.value, BinaryOpNode)
+        assert declaration.value.op == "&&"
+        assert declaration.value.left == (
+            "traits::is_contiguous_iterator_v<RandomAccessIteratorOut>"
+        )
+        assert declaration.value.right == "traits::is_trivially_relocatable_v<output_t>"
+
+    def test_public_cccl_dependent_decltype_using_alias_parse(self):
+        code = """
+        __device__ void copy_and_return_smem_dst() {
+            using T = typename decltype(aligned_ptr)::value_type;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        alias = ast.functions[0].body[0]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "T"
+        assert alias.alias_type == "typename decltype(aligned_ptr)::value_type"
+
+    def test_public_cccl_launch_bounds_kernel_attribute_parameters_parse(self):
+        code = """
+        template <typename Offset>
+        __launch_bounds__(128) _CCCL_KERNEL_ATTRIBUTES void transform_kernel(
+            _CCCL_GRID_CONSTANT const Offset num_items,
+            [[maybe_unused]] _CCCL_GRID_CONSTANT const bool can_vectorize,
+            kernel_arg<RandomAccessIteratorsIn>... ins) {
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert ast.functions[0].name == "transform_kernel"
+        assert ast.functions[0].attributes == ["__launch_bounds__(128)"]
+        assert [param.vtype for param in ast.functions[0].params] == [
+            "const Offset",
+            "const bool",
+            "kernel_arg<RandomAccessIteratorsIn> ...",
+        ]
+        assert [param.name for param in ast.functions[0].params] == [
+            "num_items",
+            "can_vectorize",
+            "ins",
+        ]
+
+    def test_public_cccl_nv_if_target_statement_macro_with_semicolon_parse(self):
+        code = """
+        __device__ void dispatch() {
+            NV_IF_TARGET(
+                NV_PROVIDES_SM_80,
+                (transform_kernel_ldgsts<ThreadsPerBlock>(num_items);));
+            return;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert len(ast.functions[0].body) == 1
+        assert isinstance(ast.functions[0].body[0], ReturnNode)
+
     def test_public_cuda_samples_dependent_qualified_typename_parsing(self):
         code = """
         template <typename T>
@@ -3015,6 +3326,26 @@ class TestCudaParser:
         ]
         assert isinstance(kernel.body[0], SharedMemoryNode)
         assert kernel.body[0].is_extern_shared_memory is True
+
+    def test_cxx20_trailing_requires_clause_after_template_function_parameters(self):
+        code = """
+        template <class T>
+        __device__ T id(T x) requires (sizeof(T) > 0) {
+            return x;
+        }
+        """
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        function = ast.functions[0]
+        assert function.name == "id"
+        assert function.return_type == "T"
+        assert function.qualifiers == ["__device__"]
+        assert [(param.vtype, param.name) for param in function.params] == [("T", "x")]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
 
     def test_constexpr_local_declaration_in_switch_case_parsing(self):
         code = """
@@ -4343,3 +4674,46 @@ class TestCudaParser:
 
         with pytest.raises(SyntaxError, match="duplicate default"):
             parser.parse()
+
+    def test_cuda_samples_shared_memory_macro_header_parse_without_preprocess(self):
+        # Upstream pattern:
+        # repo: https://github.com/NVIDIA/cuda-samples
+        # path: cpp/2_Concepts_and_Techniques/MC_SingleAsianOptionP/inc/cudasharedmem.h
+        code = r"""
+        template <typename T> struct SharedMemory
+        {
+            virtual __device__ T &operator*() = 0;
+            virtual __device__ T &operator[](int i) = 0;
+        };
+
+        #define BUILD_SHAREDMEMORY_TYPE(t, n)   \
+            template <> struct SharedMemory<t>  \
+            {                                   \
+                __device__ t &operator*()       \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return *n;                  \
+                }                               \
+                __device__ t &operator[](int i) \
+                {                               \
+                    extern __shared__ t n[];    \
+                    return n[i];                \
+                }                               \
+            }
+
+        BUILD_SHAREDMEMORY_TYPE(int, s_int);
+
+        __global__ void use_shared(int* out) {
+            out[0] = 1;
+        }
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        assert isinstance(ast.includes[0], PreprocessorNode)
+        assert ast.includes[0].directive == "define"
+        assert "template <> struct SharedMemory<t>" in ast.includes[0].content
+        assert ast.structs[0].name == "SharedMemory"
+        assert ast.kernels[0].name == "use_shared"

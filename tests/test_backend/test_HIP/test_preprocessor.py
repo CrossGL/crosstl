@@ -44,6 +44,41 @@ def test_preprocessor_include_with_search_path(tmp_path):
     assert "SCALE_VALUE" not in values
 
 
+def test_preprocessor_ignores_stb_style_documented_self_include(tmp_path):
+    include_file = tmp_path / "stb_image.h"
+    include_file.write_text(
+        """
+        /* Reduced from ROCm/rocm-examples Applications/optical_flow/stb_image.h.
+           Usage docs include:
+              #define STB_IMAGE_IMPLEMENTATION
+              #include "stb_image.h"
+        */
+        #ifndef STBI_INCLUDE_STB_IMAGE_H
+        #define STBI_INCLUDE_STB_IMAGE_H
+        #define STBIDEF extern
+        STBIDEF int stbi_info(char const *filename, int *x, int *y, int *comp);
+        #endif
+        """,
+        encoding="utf-8",
+    )
+
+    tokens = HipLexer(
+        """
+        #include "stb_image.h"
+        __global__ void optical_flow_kernel(int* out) { out[0] = 1; }
+        """,
+        include_paths=[str(tmp_path)],
+    ).tokenize()
+
+    ast = HipParser(tokens).parse()
+    names = [
+        statement.name
+        for statement in ast.statements
+        if statement.__class__.__name__ in {"FunctionNode", "KernelNode"}
+    ]
+    assert names == ["stbi_info", "optical_flow_kernel"]
+
+
 def test_preprocessor_preserves_unresolved_system_includes():
     tokens = HipLexer("""
         #include <hip/hip_runtime.h>
@@ -74,6 +109,61 @@ def test_preprocessor_error_directive_raises():
             #error stop
             __global__ void kernel() { }
         """).tokenize()
+
+
+def test_preprocessor_defaults_to_rocm_amd_linux_platform_branches():
+    values = token_values("""
+        #if defined(__HIP_PLATFORM_AMD__)
+        int selected_amd;
+        #elif defined(__HIP_PLATFORM_NVIDIA__)
+        int selected_nvidia;
+        #else
+        #error unsupported hip platform
+        #endif
+
+        #if defined(_WIN32)
+        int selected_windows;
+        #elif defined(__linux__)
+        int selected_linux;
+        #else
+        #error unsupported host platform
+        #endif
+    """)
+
+    assert "selected_amd" in values
+    assert "selected_linux" in values
+    assert "selected_nvidia" not in values
+    assert "selected_windows" not in values
+
+
+def test_preprocessor_platform_define_override_disables_matching_defaults():
+    values = token_values(
+        """
+        #if defined(__HIP_PLATFORM_AMD__)
+        int selected_amd;
+        #elif defined(__HIP_PLATFORM_NVIDIA__)
+        int selected_nvidia;
+        #else
+        int selected_no_hip_platform;
+        #endif
+
+        #if defined(_WIN32)
+        int selected_windows;
+        #elif defined(__linux__)
+        int selected_linux;
+        #else
+        int selected_no_host_platform;
+        #endif
+        """,
+        defines={"__HIP_PLATFORM_NVIDIA__": "1", "_WIN32": "1"},
+    )
+
+    assert "selected_nvidia" in values
+    assert "selected_windows" in values
+    assert "selected_amd" not in values
+    assert "selected_linux" not in values
+    assert "selected_no_hip_platform" not in values
+    assert "selected_no_host_platform" not in values
 
 
 def test_parser_uses_preprocessed_conditionals():
