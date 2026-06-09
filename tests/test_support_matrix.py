@@ -1479,9 +1479,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         )
         assert (
             "bounded source-map and source-remap artifact inspection samples "
-            "with source/generated span, mapping-count, source hash and byte-size "
-            "metadata, sidecar hash plus byte-size metadata, failed validation "
-            "status metadata, and custom limits"
+            "with source/generated span, mapping-count, source and generated hash "
+            "and byte-size metadata, sidecar hash plus byte-size metadata, "
+            "failed validation status metadata, and custom limits"
         ) in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

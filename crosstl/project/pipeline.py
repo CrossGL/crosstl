@@ -7501,6 +7501,17 @@ def _inspection_source_map_artifact(
     source_size = artifact.get("sourceSizeBytes")
     if _is_non_negative_int(source_size):
         sample["sourceSizeBytes"] = source_size
+    generated_hash = artifact.get("generatedHash")
+    if isinstance(generated_hash, Mapping):
+        hash_algorithm = generated_hash.get("algorithm")
+        hash_value = generated_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["generatedHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["generatedHash"] = hash_value
+    generated_size = artifact.get("generatedSizeBytes")
+    if _is_non_negative_int(generated_size):
+        sample["generatedSizeBytes"] = generated_size
 
     return {key: value for key, value in sample.items() if value is not None}
 
@@ -7535,6 +7546,17 @@ def _inspection_source_remap_artifact(
     source_size = artifact.get("sourceSizeBytes")
     if _is_non_negative_int(source_size):
         sample["sourceSizeBytes"] = source_size
+    generated_hash = artifact.get("generatedHash")
+    if isinstance(generated_hash, Mapping):
+        hash_algorithm = generated_hash.get("algorithm")
+        hash_value = generated_hash.get("value")
+        if _is_non_empty_string(hash_algorithm):
+            sample["generatedHashAlgorithm"] = hash_algorithm
+        if _is_non_empty_string(hash_value):
+            sample["generatedHash"] = hash_value
+    generated_size = artifact.get("generatedSizeBytes")
+    if _is_non_negative_int(generated_size):
+        sample["generatedSizeBytes"] = generated_size
     source_remap_hash = source_remap.get("hash")
     if isinstance(source_remap_hash, Mapping):
         hash_algorithm = source_remap_hash.get("algorithm")
