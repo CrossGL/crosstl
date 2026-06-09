@@ -2063,6 +2063,10 @@ class RustToCrossGLConverter:
         return self.normalize_receiver_type(member_type)
 
     def resolve_member_access_name(self, obj, member_name):
+        member_base, type_args = self.split_function_type_arguments(member_name)
+        if type_args:
+            member_name = self.format_function_type_arguments(member_base, type_args)
+
         if not self.is_tuple_field_member(member_name):
             return member_name
 

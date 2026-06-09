@@ -3,10 +3,12 @@
 import re
 
 from crosstl.backend.HIP.HipAst import (
+    ArrayAccessNode,
     FunctionNode,
     KernelNode,
     StructNode,
     TypeAliasNode,
+    UnaryOpNode,
     VariableNode,
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
@@ -170,6 +172,47 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "atomic_inc": "atomicAdd",
         "atomic_dec": "atomicSub",
     }
+    OPENCL_SIZEOF_SCALAR_SIZES = {
+        "bool": 1,
+        "char": 1,
+        "signed char": 1,
+        "unsigned char": 1,
+        "uchar": 1,
+        "short": 2,
+        "signed short": 2,
+        "unsigned short": 2,
+        "ushort": 2,
+        "half": 2,
+        "int": 4,
+        "signed int": 4,
+        "unsigned int": 4,
+        "uint": 4,
+        "float": 4,
+        "size_t": 8,
+        "ptrdiff_t": 8,
+        "long": 8,
+        "signed long": 8,
+        "unsigned long": 8,
+        "ulong": 8,
+        "double": 8,
+        "intptr_t": 8,
+        "uintptr_t": 8,
+        "cl_char": 1,
+        "cl_uchar": 1,
+        "cl_short": 2,
+        "cl_ushort": 2,
+        "cl_int": 4,
+        "cl_uint": 4,
+        "cl_float": 4,
+        "cl_long": 8,
+        "cl_ulong": 8,
+        "cl_double": 8,
+    }
+    OPENCL_SIZEOF_POINTER_SIZE = 8
+
+    def generate(self, ast_node):
+        self.opencl_sizeof_symbols = {}
+        return super().generate(ast_node)
 
     def visit_OpenCLProgramNode(self, node):
         """Render an OpenCL program AST as a CrossGL shader block."""
@@ -367,6 +410,7 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if self.is_host_embedded_source_string(node):
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
+        self.register_opencl_sizeof_symbol(node)
         super().visit_VariableNode(node)
 
     def is_host_embedded_source_string(self, node):
@@ -384,10 +428,187 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            if func_name == "sizeof":
+                sizeof_value = self.format_opencl_sizeof_call(raw_args)
+                if sizeof_value is not None:
+                    return str(sizeof_value)
+                return self.format_unsupported_opencl_sizeof_expression(raw_args)
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
         return super().visit_FunctionCallNode(node)
+
+    def register_opencl_sizeof_symbol(self, node):
+        name = getattr(node, "name", None)
+        vtype = getattr(node, "vtype", None)
+        if not name or not vtype:
+            return
+
+        size, element_size = self.opencl_variable_sizeof_info(
+            vtype, getattr(node, "value", None)
+        )
+        if size is None and element_size is None:
+            return
+
+        symbols = getattr(self, "opencl_sizeof_symbols", None)
+        if symbols is None:
+            symbols = {}
+            self.opencl_sizeof_symbols = symbols
+        symbols[name] = {"size": size, "element_size": element_size}
+
+    def opencl_variable_sizeof_info(self, type_name, value=None):
+        base_type, dimensions, pointer_depth = self.opencl_sizeof_type_parts(type_name)
+        if pointer_depth:
+            return (
+                self.OPENCL_SIZEOF_POINTER_SIZE,
+                self.opencl_sizeof_type_name(base_type),
+            )
+
+        if dimensions:
+            element_size = self.opencl_sizeof_type_with_dimensions(
+                base_type, dimensions[1:], value
+            )
+            outer_count = self.opencl_sizeof_array_count(dimensions[0], value)
+            total_size = (
+                element_size * outer_count
+                if element_size is not None and outer_count is not None
+                else None
+            )
+            return total_size, element_size
+
+        return self.opencl_sizeof_type_name(base_type), None
+
+    def format_opencl_sizeof_call(self, args):
+        if len(args) != 1:
+            return None
+        return self.opencl_sizeof_operand(args[0])
+
+    def format_unsupported_opencl_sizeof_expression(self, args):
+        operand = "unknown"
+        if args:
+            try:
+                operand = self.visit(args[0])
+            except Exception:  # noqa: BLE001 - best-effort diagnostic text only.
+                operand = str(args[0])
+        operand = " ".join(str(operand).replace("*/", "* /").split())
+        return f"(/* unsupported OpenCL size query: {operand} */ 0)"
+
+    def opencl_sizeof_operand(self, operand):
+        if isinstance(operand, UnaryOpNode) and operand.op == "*":
+            return self.opencl_sizeof_dereferenced_operand(operand.operand)
+
+        if isinstance(operand, ArrayAccessNode):
+            return self.opencl_sizeof_dereferenced_operand(operand.array)
+
+        if isinstance(operand, str):
+            symbols = getattr(self, "opencl_sizeof_symbols", {})
+            if operand in symbols:
+                return symbols[operand].get("size")
+            return self.opencl_sizeof_type_name(operand)
+
+        target_type = getattr(operand, "target_type", None)
+        if target_type:
+            return self.opencl_sizeof_type_name(target_type)
+
+        type_name = getattr(operand, "type_name", None)
+        if type_name:
+            return self.opencl_sizeof_type_name(type_name)
+
+        return None
+
+    def opencl_sizeof_dereferenced_operand(self, operand):
+        if isinstance(operand, str):
+            symbols = getattr(self, "opencl_sizeof_symbols", {})
+            if operand in symbols:
+                return symbols[operand].get("element_size")
+            return self.opencl_sizeof_type_name(operand)
+
+        if isinstance(operand, ArrayAccessNode):
+            return self.opencl_sizeof_dereferenced_operand(operand.array)
+
+        return self.opencl_sizeof_operand(operand)
+
+    def opencl_sizeof_type_with_dimensions(self, base_type, dimensions, value=None):
+        base_size = self.opencl_sizeof_type_name(base_type)
+        if base_size is None:
+            return None
+
+        size = base_size
+        for dimension in reversed(dimensions):
+            count = self.opencl_sizeof_array_count(dimension, value)
+            if count is None:
+                return None
+            size *= count
+        return size
+
+    def opencl_sizeof_type_name(self, type_name):
+        if not type_name:
+            return None
+
+        base_type, dimensions, pointer_depth = self.opencl_sizeof_type_parts(type_name)
+        if pointer_depth:
+            return self.OPENCL_SIZEOF_POINTER_SIZE
+
+        if dimensions:
+            return self.opencl_sizeof_type_with_dimensions(base_type, dimensions)
+
+        normalized = self.resolve_opencl_type_alias_chain(base_type)
+        normalized = self.normalize_opencl_sizeof_type_name(normalized)
+
+        scalar_size = self.OPENCL_SIZEOF_SCALAR_SIZES.get(normalized)
+        if scalar_size is not None:
+            return scalar_size
+
+        vector_match = re.fullmatch(
+            (
+                r"(char|uchar|short|ushort|int|uint|long|ulong|float|double|half)"
+                r"([234816])"
+            ),
+            normalized,
+        )
+        if vector_match:
+            scalar_type, width = vector_match.groups()
+            scalar_size = self.OPENCL_SIZEOF_SCALAR_SIZES.get(scalar_type)
+            if scalar_size is not None:
+                return scalar_size * int(width)
+
+        cl_vector_match = re.fullmatch(
+            r"cl_(char|uchar|short|ushort|int|uint|long|ulong|float|double)([234816])",
+            normalized,
+        )
+        if cl_vector_match:
+            scalar_type, width = cl_vector_match.groups()
+            scalar_size = self.OPENCL_SIZEOF_SCALAR_SIZES.get(f"cl_{scalar_type}")
+            if scalar_size is not None:
+                return scalar_size * int(width)
+
+        return None
+
+    def opencl_sizeof_type_parts(self, type_name):
+        normalized = self.normalize_opencl_sizeof_type_name(type_name)
+        dimensions = re.findall(r"\[([^\]]*)\]", normalized)
+        base_type = re.sub(r"\s*\[[^\]]*\]", "", normalized).strip()
+        pointer_depth = base_type.count("*")
+        base_type = " ".join(base_type.replace("*", " ").split())
+        return base_type, dimensions, pointer_depth
+
+    def normalize_opencl_sizeof_type_name(self, type_name):
+        normalized = self.strip_type_qualifiers(str(type_name).strip())
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized
+
+    def opencl_sizeof_array_count(self, dimension, value=None):
+        text = str(dimension).strip()
+        if text:
+            try:
+                return int(text, 0)
+            except ValueError:
+                return None
+
+        elements = getattr(value, "elements", None)
+        if elements is not None:
+            return len(elements)
+        return None
 
     def visit_AtomicOperationNode(self, node):
         args = [self.format_atomic_argument(arg, i) for i, arg in enumerate(node.args)]

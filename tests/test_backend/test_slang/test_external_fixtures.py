@@ -96,6 +96,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang-rhi",
         "commit": "9aa67530649c52b4a057a2fba185cf9247c33ec0",
     },
+    "shader-slang/neural-shading-s25": {
+        "url": "https://github.com/shader-slang/neural-shading-s25",
+        "commit": "9daf14df2cb4d665c706c76b4b9641a49a117610",
+    },
     "NVIDIAGameWorks/Falcor": {
         "url": "https://github.com/NVIDIAGameWorks/Falcor",
         "commit": "eb540f6748774680ce0039aaf3ac9279266ec521",
@@ -103,6 +107,10 @@ EXTERNAL_REPOS = {
     "HenriMichelon/vireo_samples": {
         "url": "https://github.com/HenriMichelon/vireo_samples",
         "commit": "e2d788909cc73a7f515380792796cebaaed53a7e",
+    },
+    "libretro/slang-shaders": {
+        "url": "https://github.com/libretro/slang-shaders",
+        "commit": "d5c053a87337766144ea68a7bc94bfecf889f7ec",
     },
     "NVIDIAGameWorks/RTXGI": {
         "url": "https://github.com/NVIDIAGameWorks/RTXGI",
@@ -1882,6 +1890,58 @@ EXTERNAL_FIXTURES = [
             "outputBuffer[dispatchThreadID.x] = module_.forward(1.0);",
         ],
         "not_contains": ["Expected SEMICOLON, got MODULE", " module;"],
+    },
+    {
+        "id": "libretro_crt_consumer_identifier_multiply_expression",
+        "repo": "libretro/slang-shaders",
+        "path": "crt/shaders/crt-consumer.slang",
+        "source": (
+            """
+            void main()
+            {
+                vec3 Mask = vec3(1.0);
+                float l = 0.5;
+                Mask * l * 0.9;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "Mask * l * 0.9;",
+        ],
+        "not_contains": [
+            "Unexpected token in declaration: MULTIPLY",
+        ],
+    },
+    {
+        "id": "neural_shading_hex_float_literal_codegen_reparse",
+        "repo": "shader-slang/neural-shading-s25",
+        "path": "network/step_01_basicnetwork.slang",
+        "source": (
+            """
+            float next_float(uint state)
+            {
+                return (state >> 8) * 0x1p-24;
+            }
+
+            RWStructuredBuffer<float> outputBuffer;
+
+            [numthreads(1, 1, 1)]
+            void computeMain()
+            {
+                outputBuffer[0] = next_float(1664525u);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "return (state >> 8) * 0.000000059604644775390625;",
+            "outputBuffer[0] = next_float(1664525u);",
+        ],
+        "not_contains": [
+            "0x1p-24",
+            "Expected SEMICOLON, got IDENTIFIER",
+        ],
     },
     {
         # Source: https://github.com/shader-slang/slang

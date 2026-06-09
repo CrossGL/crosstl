@@ -5427,6 +5427,7 @@ def test_trait_parsing():
     {
         type Output: Copy + Clone;
         type Scratch: Into<Vec3<f32>> = Vec3<f32>;
+        type WithScalar<S: Scalar>: CubePrimitive;
 
         fn draw(&self) -> Self::Output;
         fn update<V: Copy>(&mut self, value: V) -> U
@@ -5443,17 +5444,23 @@ def test_trait_parsing():
         assert trait.visibility == "pub"
         assert trait.generics == ["T: Into<Vec3<f32>> + Clone", "U"]
         assert trait.where_clauses == [("U", ["Debug"])]
-        assert len(trait.associated_types) == 2
+        assert len(trait.associated_types) == 3
         assert all(
             isinstance(associated_type, AssociatedTypeNode)
             for associated_type in trait.associated_types
         )
         assert trait.associated_types[0].name == "Output"
+        assert trait.associated_types[0].generics == []
         assert trait.associated_types[0].bounds == ["Copy", "Clone"]
         assert trait.associated_types[0].default_type is None
         assert trait.associated_types[1].name == "Scratch"
+        assert trait.associated_types[1].generics == []
         assert trait.associated_types[1].bounds == ["Into<Vec3<f32>>"]
         assert trait.associated_types[1].default_type == "Vec3<f32>"
+        assert trait.associated_types[2].name == "WithScalar"
+        assert trait.associated_types[2].generics == ["S: Scalar"]
+        assert trait.associated_types[2].bounds == ["CubePrimitive"]
+        assert trait.associated_types[2].default_type is None
         assert [method.name for method in trait.methods] == ["draw", "update"]
         assert trait.methods[0].params[0].vtype == "&Self"
         assert trait.methods[0].return_type == "Self::Output"

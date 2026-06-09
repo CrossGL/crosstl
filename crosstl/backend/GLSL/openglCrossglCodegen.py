@@ -651,6 +651,7 @@ class GLSLToCrossGLConverter:
         self.variable_type_scopes = []
         self.function_name_renames = {}
         self.user_function_arities = set()
+        self.struct_type_renames = {}
 
     def indent(self):
         return self.indent_str * self.indent_level
@@ -1949,7 +1950,7 @@ class GLSLToCrossGLConverter:
             name for name, count in interface_counts.items() if count > 1
         }
         if not duplicate_names:
-            return structs
+            return self.assign_crossgl_safe_struct_names(structs)
 
         used_names = {getattr(struct, "name", "") for struct in structs}
         seen = {}
@@ -1972,6 +1973,31 @@ class GLSLToCrossGLConverter:
             used_names.add(emitted_name)
             struct.glsl_interface_block_name = original_name
             struct.crossgl_struct_name = emitted_name
+
+        return self.assign_crossgl_safe_struct_names(structs)
+
+    def assign_crossgl_safe_struct_names(self, structs):
+        self.struct_type_renames = {}
+        used_names = set()
+
+        for struct in structs:
+            original_name = getattr(struct, "name", "")
+            emitted_name = self.crossgl_struct_name(struct)
+            candidate = self.sanitize_crossgl_identifier(emitted_name)
+            while candidate in used_names:
+                candidate += "_"
+
+            used_names.add(candidate)
+            if candidate == emitted_name:
+                continue
+
+            if self.is_graphics_interface_block_struct(struct) and not getattr(
+                struct, "glsl_interface_block_name", None
+            ):
+                struct.glsl_interface_block_name = original_name
+            struct.crossgl_struct_name = candidate
+            if original_name:
+                self.struct_type_renames[original_name] = candidate
 
         return structs
 
@@ -3448,6 +3474,10 @@ class GLSLToCrossGLConverter:
         return None
 
     def convert_type(self, type_name):
+        if isinstance(type_name, str):
+            renamed_type = self.struct_type_renames.get(type_name)
+            if renamed_type is not None:
+                return renamed_type
         mapped_type = self.type_map.get(type_name)
         if mapped_type is not None:
             return mapped_type

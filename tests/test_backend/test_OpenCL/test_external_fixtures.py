@@ -96,6 +96,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/test_as_type.cl",
     },
+    "pocl_common_sizeof_constant_array": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "tests/kernel/common.cl",
+    },
     "opencv_filter2d_small_block_macro_argument": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -596,6 +601,45 @@ def test_external_pocl_noinline_function_specifier_codegen_reparse():
     assert helper.name == "clear_bytes"
     assert helper.qualifiers == ["_CL_NOINLINE"]
     assert "void clear_bytes(ptr<u8> p, u8 c, u32 n)" in crossgl
+
+
+def test_external_pocl_sizeof_constant_array_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_common_sizeof_constant_array"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "tests/kernel/common.cl"
+
+    source = """
+    constant float values[] = {
+      0.0f, 0.1f, 0.9f, 1.0f,
+      1.1f, 10.0f, 1000000.0f, 1000000000000.0f,
+      MAXFLOAT, HUGE_VALF, INFINITY, (0.0f / 0.0f),
+      FLT_MAX, FLT_MIN, FLT_EPSILON,
+    };
+    constant int nvalues = sizeof(values) / sizeof(*values);
+
+    kernel void pocl_sizeof_probe(global int *out) {
+        out[0] = nvalues;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "sizeof(" not in crossgl
+    assert "var<uniform> nvalues: i32 = (60 / 4);" in crossgl
+
+
+def test_opencl_unknown_sizeof_codegen_emits_diagnostic_fallback():
+    source = """
+    kernel void unknown_sizeof_probe(global int *out) {
+        int n = sizeof(user_type);
+        out[0] = n;
+    }
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "unsupported OpenCL size query: user_type" in crossgl
+    assert "var n: i32 = (/* unsupported OpenCL size query: user_type */ 0);" in crossgl
 
 
 def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():

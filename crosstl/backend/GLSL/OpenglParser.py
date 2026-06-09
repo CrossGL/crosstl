@@ -1745,7 +1745,7 @@ class GLSLParser:
                         raise SyntaxError("GLSL variadic parameter must be last")
                     break
 
-                qualifiers = self.parse_qualifiers()
+                qualifiers, layout = self.parse_declaration_prefix()
                 param_type = self.parse_type()
                 type_array_sizes = []
                 if self.current_token[0] == "LBRACKET":
@@ -1774,6 +1774,7 @@ class GLSLParser:
                         param_type,
                         param_name,
                         qualifiers=qualifiers,
+                        layout=layout,
                         array_size=array_size,
                         array_sizes=array_sizes,
                         is_array=bool(array_sizes),

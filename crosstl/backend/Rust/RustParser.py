@@ -1795,6 +1795,10 @@ class RustParser:
         self.eat("TYPE")
         name = self.parse_name_token("associated type name")
 
+        generics = []
+        if self.current_token[0] == "LESS_THAN":
+            generics = self.parse_generics()
+
         bounds = []
         if self.current_token[0] == "COLON":
             self.eat("COLON")
@@ -1818,7 +1822,7 @@ class RustParser:
             default_type = self.collect_token_text_until({"SEMICOLON"})
 
         self.eat("SEMICOLON")
-        return AssociatedTypeNode(name, bounds, default_type, where_clauses)
+        return AssociatedTypeNode(name, bounds, default_type, where_clauses, generics)
 
     def parse_associated_const(self, visibility=None, attributes=None):
         self.eat("CONST")

@@ -41,6 +41,10 @@ class SlangToCrossGLConverter:
     HEX_NUMERIC_LITERAL = re.compile(
         r"^(?P<body>0[xX][0-9a-fA-F]+)(?P<suffix>[uUlL]*)$"
     )
+    HEX_FLOAT_NUMERIC_LITERAL = re.compile(
+        r"^(?P<body>0[xX](?:(?:[0-9a-fA-F]+(?:\.[0-9a-fA-F]*)?)|"
+        r"(?:\.[0-9a-fA-F]+))[pP][+-]?\d+)(?P<suffix>[fFhH]?)$"
+    )
     RAY_PAYLOAD_ACCESS_SEMANTIC = re.compile(r"^(read|write)\((.*)\)$")
     ASSOCIATED_DIFFERENTIAL_TYPE = re.compile(
         r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*(?:[234](?:x[234])?)?)\.Differential$"
@@ -1672,6 +1676,10 @@ class SlangToCrossGLConverter:
     def normalize_numeric_literal(self, value):
         if not isinstance(value, str):
             return value
+        hex_float_match = self.HEX_FLOAT_NUMERIC_LITERAL.match(value)
+        if hex_float_match:
+            return self.normalize_hex_float_literal(hex_float_match.group("body"))
+
         hex_match = self.HEX_NUMERIC_LITERAL.match(value)
         if hex_match:
             return self.normalize_integer_suffix(
@@ -1697,6 +1705,15 @@ class SlangToCrossGLConverter:
         except InvalidOperation:
             return value
 
+        if "." not in normalized:
+            normalized = f"{normalized}.0"
+        return normalized
+
+    def normalize_hex_float_literal(self, body):
+        try:
+            normalized = format(Decimal.from_float(float.fromhex(body)), "f")
+        except (InvalidOperation, OverflowError, ValueError):
+            return body
         if "." not in normalized:
             normalized = f"{normalized}.0"
         return normalized

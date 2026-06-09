@@ -75,6 +75,23 @@ def test_preprocessor_unknown_directive_is_filtered():
     assert "value" in values
 
 
+def test_multiline_function_macro_preserves_line_comment_boundaries():
+    values = token_values("""
+        #define saturate(c) clamp(c, 0., 1.)
+        float3 value = saturate(vec3(
+            // Libretro shaders put comments inside multiline macro arguments.
+            color.r,
+            color.g,
+            color.b));
+    """)
+
+    assert "clamp" in values
+    assert "color" in values
+    assert values.count("color") == 3
+    assert "g" in values
+    assert "b" in values
+
+
 def test_preprocessor_error_directive_raises():
     with pytest.raises(SyntaxError, match="#error"):
         SlangLexer("""

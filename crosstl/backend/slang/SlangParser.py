@@ -145,6 +145,12 @@ class SlangParser:
         "ASSIGN_SHIFT_LEFT",
         "ASSIGN_SHIFT_RIGHT",
     )
+    DECLARATION_FOLLOW_TOKENS = set(ASSIGNMENT_TOKENS) | {
+        "SEMICOLON",
+        "COMMA",
+        "COLON",
+        "LBRACKET",
+    }
     EXPRESSION_TYPE_OPERAND_TOKENS = (
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"GENERIC", "VOID"}
     )
@@ -2855,9 +2861,16 @@ class SlangParser:
         next_pos = self.skip_qualified_type_suffix_tokens(next_pos)
         next_pos = self.skip_type_array_suffix_tokens(next_pos)
         next_pos = self.skip_pointer_declarator_tokens(next_pos)
+        if (
+            next_pos >= len(self.tokens)
+            or self.tokens[next_pos][0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS
+        ):
+            return False
+
+        follow_pos = self.skip_type_array_suffix_tokens(next_pos + 1)
         return (
-            next_pos < len(self.tokens)
-            and self.tokens[next_pos][0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+            follow_pos < len(self.tokens)
+            and self.tokens[follow_pos][0] in self.DECLARATION_FOLLOW_TOKENS
         )
 
     def is_anonymous_struct_variable_declaration_start(self):

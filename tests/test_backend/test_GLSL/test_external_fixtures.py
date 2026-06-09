@@ -26,6 +26,8 @@ from crosstl.translator.parser import Parser as CrossGLParser
 
 VULKAN_SAMPLES_REPO = "https://github.com/KhronosGroup/Vulkan-Samples"
 VULKAN_SAMPLES_COMMIT = "ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a"
+OGL_SAMPLES_REPO = "https://github.com/g-truc/ogl-samples"
+OGL_SAMPLES_COMMIT = "38cada7a9458864265e25415ae61586d500ff5fc"
 
 
 @dataclass(frozen=True)
@@ -1484,6 +1486,74 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: g-truc/ogl-samples data/gl-400/tess-struct.geom.
+    # Reduced from geometry shader I/O using a user struct named `vertex`,
+    # which collides with CrossGL's vertex stage keyword during reverse codegen.
+    ExternalFixture(
+        name="ogl-samples-gl-400-geometry-struct-named-vertex",
+        repo=OGL_SAMPLES_REPO,
+        commit=OGL_SAMPLES_COMMIT,
+        path="data/gl-400/tess-struct.geom",
+        shader_type="geometry",
+        code=textwrap.dedent("""
+            #version 400 core
+
+            layout(triangles, invocations = 1) in;
+            layout(triangle_strip, max_vertices = 4) out;
+
+            struct vertex
+            {
+                vec4 Color;
+            };
+
+            in vertex Eval[];
+            out vertex Geom;
+
+            void main()
+            {
+                for(int i = 0; i < gl_in.length(); ++i)
+                {
+                    Geom.Color = Eval[i].Color;
+                    EmitVertex();
+                }
+                EndPrimitive();
+            }
+        """).strip(),
+    ),
+    # Upstream source: g-truc/ogl-samples data/gl-430/image-sampling.frag.
+    # Reduced from image function parameters whose image format is declared with
+    # a parameter-level layout qualifier.
+    ExternalFixture(
+        name="ogl-samples-gl-430-image-parameter-layout-format",
+        repo=OGL_SAMPLES_REPO,
+        commit=OGL_SAMPLES_COMMIT,
+        path="data/gl-430/image-sampling.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 420 core
+            #extension GL_ARB_shader_image_size : require
+
+            layout(binding = 0, rgba8) uniform image2D Diffuse[3];
+
+            in block
+            {
+                vec2 Texcoord;
+                flat int Instance;
+            } In;
+
+            layout(location = 0, index = 0) out vec4 Color;
+
+            vec4 fetchBilinear(layout(rgba8) in image2D Image, in vec2 Texcoord)
+            {
+                return imageLoad(Image, ivec2(Texcoord));
+            }
+
+            void main()
+            {
+                Color = fetchBilinear(Diffuse[In.Instance], In.Texcoord);
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -2638,6 +2708,51 @@ def test_codegen_ekmett_vr_scan_multi_declarator_for_fixture_snippet():
         "for (uint i = 1, i_max = min((N >> 1), 5u); (i < i_max); i <<= 1)" in crossgl
     )
     assert "for (uint i = 1; (i < i_max);" not in crossgl
+
+
+def test_codegen_ogl_samples_geometry_struct_named_vertex_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ogl-samples-gl-400-geometry-struct-named-vertex"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "struct vertex_ {" in crossgl
+    assert "in vertex_ Eval[];" in crossgl
+    assert "out vertex_ Geom;" in crossgl
+    assert "in vertex Eval[];" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_parse_ogl_samples_image_parameter_layout_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ogl-samples-gl-430-image-parameter-layout-format"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    function = next(item for item in ast.functions if item.name == "fetchBilinear")
+
+    assert function.params[0].vtype == "image2D"
+    assert function.params[0].qualifiers == ["in"]
+    assert function.params[0].layout == {"rgba8": None}
+
+
+def test_codegen_ogl_samples_image_parameter_layout_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ogl-samples-gl-430-image-parameter-layout-format"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image2D Diffuse[3] @binding(0) @rgba8;" in crossgl
+    assert "vec4 fetchBilinear(in image2D Image @rgba8, in vec2 Texcoord)" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_glslang_legacy_projected_texture_fixture_snippet():

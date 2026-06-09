@@ -56,7 +56,7 @@ class CudaParser:
     }
     POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "RESTRICT"}
     TYPE_REFERENCE_TOKENS = {"BITWISE_AND", "LOGICAL_AND"}
-    ELABORATED_TYPE_TOKENS = {"STRUCT", "UNION", "ENUM"}
+    ELABORATED_TYPE_TOKENS = {"CLASS", "STRUCT", "UNION", "ENUM"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
     ATOMIC_FUNCTION_TOKENS = {
         "ATOMICADD",
@@ -219,6 +219,7 @@ class CudaParser:
         "EXTERN",
         "CONSTEXPR",
         "REGISTER",
+        "MUTABLE",
         "SHARED",
         "CONSTANT",
         "DEVICE",
@@ -2607,7 +2608,9 @@ class CudaParser:
         self.skip_post_function_qualifiers()
         return_type = self.parse_trailing_return_type(return_type)
         body = None
-        if self.current_token[0] == "LBRACE":
+        if self.is_identifier_value("try"):
+            body = self.parse_try_statement()
+        elif self.current_token[0] == "LBRACE":
             body = self.parse_block()
         elif self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
@@ -3990,7 +3993,7 @@ class CudaParser:
         left = self.parse_logical_and_expression()
 
         while self.current_token[0] == "LOGICAL_OR":
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat("LOGICAL_OR")
             right = self.parse_logical_and_expression()
             left = BinaryOpNode(left, op, right)
@@ -4001,7 +4004,7 @@ class CudaParser:
         left = self.parse_bitwise_or_expression()
 
         while self.current_token[0] == "LOGICAL_AND":
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat("LOGICAL_AND")
             right = self.parse_bitwise_or_expression()
             left = BinaryOpNode(left, op, right)
@@ -4012,7 +4015,7 @@ class CudaParser:
         left = self.parse_bitwise_xor_expression()
 
         while self.current_token[0] == "BITWISE_OR":
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat("BITWISE_OR")
             right = self.parse_bitwise_xor_expression()
             left = BinaryOpNode(left, op, right)
@@ -4023,7 +4026,7 @@ class CudaParser:
         left = self.parse_bitwise_and_expression()
 
         while self.current_token[0] == "BITWISE_XOR":
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat("BITWISE_XOR")
             right = self.parse_bitwise_and_expression()
             left = BinaryOpNode(left, op, right)
@@ -4034,7 +4037,7 @@ class CudaParser:
         left = self.parse_equality_expression()
 
         while self.current_token[0] == "BITWISE_AND":
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat("BITWISE_AND")
             right = self.parse_equality_expression()
             left = BinaryOpNode(left, op, right)
@@ -4045,7 +4048,7 @@ class CudaParser:
         left = self.parse_relational_expression()
 
         while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat(self.current_token[0])
             right = self.parse_relational_expression()
             left = BinaryOpNode(left, op, right)
@@ -4110,7 +4113,7 @@ class CudaParser:
             "MULTIPLY",
             "BITWISE_AND",
         ]:
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat(self.current_token[0])
             operand = self.parse_unary_expression()
             return UnaryOpNode(op, operand)
@@ -5228,9 +5231,25 @@ class CudaParser:
             "SHIFT_LEFT_EQUALS",
             "SHIFT_RIGHT_EQUALS",
         ]:
-            op = self.current_token[1]
+            op = self.normalized_operator_value()
             self.eat(self.current_token[0])
             right = self.parse_assignment_expression()
             return AssignmentNode(left, right, op)
 
         return left
+
+    def normalized_operator_value(self):
+        alternative_operators = {
+            "and": "&&",
+            "and_eq": "&=",
+            "bitand": "&",
+            "bitor": "|",
+            "compl": "~",
+            "not": "!",
+            "not_eq": "!=",
+            "or": "||",
+            "or_eq": "|=",
+            "xor": "^",
+            "xor_eq": "^=",
+        }
+        return alternative_operators.get(self.current_token[1], self.current_token[1])

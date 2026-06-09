@@ -3,18 +3,22 @@ import shutil
 import subprocess
 
 from crosstl.backend.CUDA.CudaAst import (
+    AssignmentNode,
     AtomicOperationNode,
     CastNode,
     EnumNode,
     ForNode,
     FunctionCallNode,
     IfNode,
+    KernelLaunchNode,
     MemberAccessNode,
     ReturnNode,
     SharedMemoryNode,
     StructNode,
     TypeAliasNode,
+    UnaryOpNode,
     VariableNode,
+    WhileNode,
 )
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
@@ -70,6 +74,15 @@ EXTERNAL_SAMPLES = [
     },
     {
         "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "03e7b555e34480302bca1681bd7caff88aa155a9",
+        "paths": [
+            "examples/cudax/vector_add/vector_add.cu",
+            "cudax/examples/stf/linear_algebra/cg_dense_2D.cu",
+            "examples/ccclrt/kernel_launch_patterns/kernel.cu",
+        ],
+    },
+    {
+        "repo": "https://github.com/NVIDIA/cccl",
         "commit": "5ea5d42567693aad8c0e5d6316155ecc612fdc71",
         "paths": ["thrust/examples/uninitialized_vector.cu"],
     },
@@ -100,9 +113,14 @@ EXTERNAL_SAMPLES = [
         "paths": ["include/cute/stride.hpp"],
     },
     {
+        "repo": "https://github.com/NVIDIA/cutlass",
+        "commit": "1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3",
+        "paths": ["examples/common/dist_gemm_helpers.h"],
+    },
+    {
         "repo": "https://github.com/NVlabs/tiny-cuda-nn",
         "commit": "749dd70c5afc5a9dadb85e5652ed65d55e0ba187",
-        "paths": ["src/fully_fused_mlp.cu"],
+        "paths": ["src/fully_fused_mlp.cu", "src/object.cu"],
     },
     {
         "repo": "https://github.com/NVIDIA/CUDALibrarySamples",
@@ -188,6 +206,142 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_current_cccl_function_try_block_main_parses_and_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 03e7b555e34480302bca1681bd7caff88aa155a9
+    # path: examples/cudax/vector_add/vector_add.cu
+    source = """
+    __global__ void vectorAdd(float* C) {
+        C[0] = 1.0f;
+    }
+
+    int main(void) try {
+        vectorAdd<<<1, 1>>>(nullptr);
+        return 0;
+    } catch (const std::exception& e) {
+        return 1;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert [function.name for function in ast.functions] == ["main"]
+    assert [kernel.name for kernel in ast.kernels] == ["vectorAdd"]
+    assert isinstance(ast.functions[0].body[0], KernelLaunchNode)
+    assert isinstance(ast.functions[0].body[1], ReturnNode)
+    assert "i32 main()" in crossgl
+    assert "Kernel launch: vectorAdd<<<1, 1>>>()" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_mutable_template_member_declaration_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 03e7b555e34480302bca1681bd7caff88aa155a9
+    # path: cudax/examples/stf/linear_algebra/cg_dense_2D.cu
+    source = """
+    template <typename T>
+    struct solver_state {
+      size_t N;
+      mutable std::vector<std::shared_ptr<logical_data<slice<double>>>> handles;
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "solver_state"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("size_t", "N"),
+        ("std::vector<std::shared_ptr<logical_data<slice<double>>>>", "handles"),
+    ]
+    assert ast.structs[0].members[1].qualifiers == ["mutable"]
+    assert "std_vector<std_shared_ptr<logical_data<slice<double>>>> handles;" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_class_elaborated_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 03e7b555e34480302bca1681bd7caff88aa155a9
+    # path: cudax/examples/stf/linear_algebra/cg_dense_2D.cu
+    source = """
+    class vector {
+    public:
+      size_t nblocks;
+    };
+
+    void dot(vector& a, class vector& b) {
+      return;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    dot = ast.functions[0]
+    assert [(param.vtype, param.name) for param in dot.params] == [
+        ("vector &", "a"),
+        ("class vector &", "b"),
+    ]
+    assert "void dot(vector a, vector b)" in crossgl
+    assert "class vector" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cutlass_alternative_not_operator_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3
+    # path: examples/common/dist_gemm_helpers.h
+    source = """
+    using AtomicBoolean = cuda::atomic<bool>;
+
+    __global__ void delay_kernel(const AtomicBoolean* atomic_flag_ptr) {
+      while (not atomic_flag_ptr->load()) {
+        __nanosleep(40);
+      }
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    loop = ast.kernels[0].body[0]
+
+    assert isinstance(loop, WhileNode)
+    assert isinstance(loop.condition, UnaryOpNode)
+    assert loop.condition.op == "!"
+    assert "while ((!atomic_flag_ptr->load()))" in crossgl
+    assert "not atomic_flag_ptr" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_tiny_cuda_nn_fmt_named_argument_string_literal_suffix_parse():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: src/object.cu
+    source = """
+    void build(const char* device_function) {
+        auto kernel = dfmt(0,
+                           R"(template body)",
+                           "DEVICE_FUNCTION"_a = device_function);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    dfmt_call = ast.functions[0].body[0].value
+
+    assert isinstance(dfmt_call.args[2], AssignmentNode)
+    assert dfmt_call.args[2].left == '"DEVICE_FUNCTION"_a'
+    assert dfmt_call.args[2].right == "device_function"
+    assert '"DEVICE_FUNCTION"_a = device_function' in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cccl_libcudacxx_concept_emulation_declaration_is_skipped():

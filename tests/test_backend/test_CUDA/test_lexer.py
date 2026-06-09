@@ -194,6 +194,25 @@ class TestCudaLexer:
         assert "SHIFT_LEFT_EQUALS" in token_types
         assert "SHIFT_RIGHT_EQUALS" in token_types
 
+    def test_cpp_alternative_operator_tokenization(self):
+        code = "not ready and valid or fallback not_eq failed bitand mask"
+        lexer = CudaLexer(code)
+        tokens = lexer.tokenize()
+
+        assert tokens == [
+            ("LOGICAL_NOT", "not"),
+            ("IDENTIFIER", "ready"),
+            ("LOGICAL_AND", "and"),
+            ("IDENTIFIER", "valid"),
+            ("LOGICAL_OR", "or"),
+            ("IDENTIFIER", "fallback"),
+            ("NOT_EQUAL", "not_eq"),
+            ("IDENTIFIER", "failed"),
+            ("BITWISE_AND", "bitand"),
+            ("IDENTIFIER", "mask"),
+            ("EOF", ""),
+        ]
+
     def test_numeric_literal_tokenization(self):
         code = "0xffu 0XCAFEull 0b1010u 0777u 1e-3f .5f 1'000 1'000'000"
         lexer = CudaLexer(code)

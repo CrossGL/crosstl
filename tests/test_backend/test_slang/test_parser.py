@@ -3368,6 +3368,8 @@ def test_numeric_literal_parsing():
         float a = 1e-3f;
         float b = .5f;
         float c = 1.;
+        float scale = 0x1p-24;
+        float hexFloat = 0x1.8p+2f;
         uint mask = 0xffu;
         uint count = 123u;
         return a + b + c;
@@ -3378,10 +3380,12 @@ def test_numeric_literal_parsing():
     ast = parse_code(tokens)
     body = find_function(ast, "f").body
 
-    assert [stmt.right for stmt in body[:5]] == [
+    assert [stmt.right for stmt in body[:7]] == [
         "1e-3f",
         ".5f",
         "1.",
+        "0x1p-24",
+        "0x1.8p+2f",
         "0xffu",
         "123u",
     ]

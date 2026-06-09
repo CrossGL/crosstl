@@ -5487,6 +5487,40 @@ def test_lifetime_generic_type_arguments_codegen_reparse_from_corpus():
     crosstl.translator.parse(result)
 
 
+def test_lifetime_turbofish_method_call_codegen_reparse_from_cubecl_vulkan_features():
+    # Reduced from tracel-ai/cubecl commit
+    # 9afbb3144ba40c2ecb6e7fbfb662b80b94148dd5,
+    # crates/cubecl-wgpu/src/backend/vulkan/features.rs InfoExt::push_or_update.
+    code = """
+    struct DeviceCreateInfo<'a> {
+        marker: PhantomData<&'a u32>,
+    }
+
+    struct BaseOutStructure<'a> {
+        p_next: *mut BaseOutStructure<'a>,
+    }
+
+    trait InfoExt<'a>: Sized {
+        fn push_or_update(self) -> Self;
+    }
+
+    impl<'a> InfoExt<'a> for DeviceCreateInfo<'a> {
+        fn push_or_update(mut self) -> Self {
+            let this = &mut self as *mut DeviceCreateInfo<'a>;
+            let mut this = unsafe { &mut *this.cast::<BaseOutStructure<'a>>() };
+            let feat_ptr = this.cast::<BaseOutStructure<'a>>();
+            self
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "this_.cast<BaseOutStructure>()" in result
+    assert "BaseOutStructure<'a>" not in result
+    crosstl.translator.parse(result)
+
+
 def test_function_call_conversion():
     code = """
     fn test_calls() {

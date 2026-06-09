@@ -1145,6 +1145,30 @@ def test_external_hip_tests_tuple_of_vectors_return_type_codegen_reparse():
     assert "std::tuple" not in crossgl
 
 
+def test_external_hipblas_template_template_parameter_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hipBLAS
+    # Commit: 4a1f902127ba378e1e22600e17de5894327e28d5
+    # Path: clients/gtest/auxil/set_get_mode_gtest.cpp
+    source = """
+    enum aux_mode_test_type { SG_POINTER, SG_ATOMICS };
+
+    template <template <typename...> class FILTER, aux_mode_test_type AUX_TYPE>
+    void host(aux_mode_test_type value) {
+        if(value == AUX_TYPE) {
+            sink();
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    function = ast.statements[1]
+
+    assert isinstance(function, FunctionNode)
+    assert function.name == "host"
+    assert "void host(aux_mode_test_type value)" in crossgl
+    assert "if ((value == AUX_TYPE))" in crossgl
+
+
 def test_external_rocm_rocdecode_typedef_enum_codegen_reparse():
     # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
     # Common/rocdecode_utils.hpp.

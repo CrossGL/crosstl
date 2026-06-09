@@ -443,7 +443,7 @@ class CudaToCrossGLConverter:
         if normalized_type.startswith("enum "):
             type_name = normalized_type[len("enum ") :].strip()
             return self.convert_cuda_type_to_crossgl(type_name)
-        for prefix in ("struct ", "union "):
+        for prefix in ("class ", "struct ", "union "):
             if normalized_type.startswith(prefix):
                 type_name = normalized_type[len(prefix) :].strip()
                 if "*" in type_name:

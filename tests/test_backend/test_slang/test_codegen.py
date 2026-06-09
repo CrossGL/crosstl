@@ -3614,6 +3614,8 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
         float leading = .5f;
         float trailing = 1.;
         float whole = 1f;
+        float hexScale = 0x1p-24;
+        float hexHalf = 0x1.8p+2f;
         uint mask = 0xffu;
         uint count = 123u;
     }
@@ -3627,11 +3629,15 @@ def test_numeric_literal_codegen_normalizes_crossgl_float_forms():
     assert "float leading = 0.5;" in generated_code
     assert "float trailing = 1.0;" in generated_code
     assert "float whole = 1.0;" in generated_code
+    assert "float hexScale = 0.000000059604644775390625;" in generated_code
+    assert "float hexHalf = 6.0;" in generated_code
     assert "uint mask = 0xffu;" in generated_code
     assert "uint count = 123u;" in generated_code
     assert "1e-3f" not in generated_code
     assert ".5f" not in generated_code
     assert "1f" not in generated_code
+    assert "0x1p-24" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_binary_integer_literals_codegen_from_generated_conformance_sample():

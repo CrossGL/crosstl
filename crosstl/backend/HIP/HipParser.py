@@ -3937,6 +3937,7 @@ class HipParser:
             *self.RESOURCE_TYPE_TOKENS,
             *self.ELABORATED_TYPE_TOKENS,
             "TYPENAME",
+            "TEMPLATE",
             "GT",
             "RSHIFT",
             "KERNEL_LAUNCH_END",

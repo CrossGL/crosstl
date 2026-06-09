@@ -21,3 +21,16 @@ class SlangPreprocessor(HLSLPreprocessor):
             strict=strict,
             max_expansion_depth=max_expansion_depth,
         )
+
+    def _join_multiline_function_macro_call(self, lines, start):
+        line = lines[start]
+        consumed = 1
+        while self._function_macro_call_balance(line) > 0 and start + consumed < len(
+            lines
+        ):
+            next_line = lines[start + consumed]
+            if next_line.lstrip().startswith("#"):
+                break
+            line += "\n" + next_line
+            consumed += 1
+        return line, consumed
