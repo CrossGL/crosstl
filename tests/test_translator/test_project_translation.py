@@ -18140,6 +18140,9 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert payload["sourceHashStatusCounts"] == _source_hash_status_counts(
         **{"not-recorded": 1}
     )
+    assert payload["sourceSizeStatusCounts"] == _source_size_status_counts(
+        **{"not-recorded": 1}
+    )
     assert payload["generatedHashStatusCounts"] == _generated_hash_status_counts(
         **{"not-applicable": 1}
     )
@@ -19048,6 +19051,11 @@ def test_inspect_project_report_records_truncation_metadata(tmp_path):
     assert payload["failedArtifactCount"] == 3
     assert payload["truncatedFailedArtifactCount"] == 2
     assert len(payload["failedArtifacts"]) == 1
+    assert payload["failedArtifacts"][0]["sourceHashStatus"] == "not-recorded"
+    assert payload["failedArtifacts"][0]["sourceSizeStatus"] == "not-recorded"
+    assert payload["failedArtifacts"][0]["generatedHashStatus"] == "not-applicable"
+    assert payload["failedArtifacts"][0]["generatedSizeStatus"] == "not-applicable"
+    assert payload["failedArtifacts"][0]["validationStatus"] == "failed"
 
 
 def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypatch):
