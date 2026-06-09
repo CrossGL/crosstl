@@ -432,7 +432,12 @@ class MetalParser:
                         self.parse_global_variable(pre_alignas=alignas_specs),
                     )
             elif self.current_token[0] == "ENUM":
-                enums.append(self.parse_enum())
+                if self.is_function_definition():
+                    function = self.parse_function()
+                    if function is not None:
+                        functions.append(function)
+                else:
+                    enums.append(self.parse_enum())
             elif self.current_token[0] == "TYPEDEF":
                 typedef = self.parse_typedef()
                 if isinstance(typedef, StructNode):

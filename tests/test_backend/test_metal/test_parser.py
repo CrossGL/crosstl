@@ -2416,6 +2416,21 @@ def test_parse_function_pointer_typedef_from_llama_cpp():
     assert ast.typedefs[0].alias_type == "void"
 
 
+def test_parse_enum_return_prototype_from_llama_cpp_context_header():
+    code = """
+    typedef struct ggml_metal * ggml_metal_t;
+
+    enum ggml_status ggml_metal_graph_compute(
+        ggml_metal_t ctx,
+        struct ggml_cgraph * gf);
+    """
+    ast = parse_ok(code)
+
+    assert ast.functions == []
+    assert ast.structs == []
+    assert ast.enums == []
+
+
 def test_parse_struct_forward_declaration_from_mlx_complex_header():
     code = """
     struct complex64_t;

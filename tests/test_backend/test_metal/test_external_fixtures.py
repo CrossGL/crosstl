@@ -56,6 +56,7 @@ LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
 LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
 LLAMA_CPP_METAL_DEVICE_COMMIT = "f0152efe401acd5b329b5f62d87dc070a6d069f0"
+LLAMA_CPP_METAL_CONTEXT_COMMIT = "d6d0ce8215a1c324e8de04b52f9dd65c5edc129f"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
@@ -1617,6 +1618,29 @@ EXTERNAL_FIXTURES = [
             ggml_metal_library_get_pipeline_base(
                 ggml_metal_library_t lib,
                 enum ggml_op op);
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_ggml_metal_context_enum_return_prototypes",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_METAL_CONTEXT_COMMIT,
+        "source_path": "ggml/src/ggml-metal/ggml-metal-context.h",
+        "roundtrip": True,
+        "source": (
+            """
+            typedef struct ggml_metal * ggml_metal_t;
+
+            ggml_metal_t ggml_metal_init(ggml_metal_device_t dev);
+            void ggml_metal_free(ggml_metal_t ctx);
+
+            enum ggml_status ggml_metal_graph_compute(
+                ggml_metal_t ctx,
+                struct ggml_cgraph * gf);
+
+            void ggml_metal_graph_optimize(
+                ggml_metal_t ctx,
+                struct ggml_cgraph * gf);
         """
         ),
     },

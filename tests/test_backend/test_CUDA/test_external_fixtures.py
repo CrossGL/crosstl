@@ -3323,3 +3323,73 @@ def test_current_cccl_thrust_variable_template_ternary_codegen_reparse():
     assert ast.functions[0].body[0].value.condition == "is_proxy_reference_v<int>"
     assert "return (is_proxy_reference_v<int> ? 1 : 0);" in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_forceinline_function_annotation_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 3632bcc762ab095c0f3221d7f019fb14c0c1e18b
+    # path: libcudacxx/include/cuda/__bit/bit_reverse.h
+    source = """
+    _CCCL_FORCEINLINE __host__ __device__ unsigned int bit_reverse(
+        unsigned int value) {
+      return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].name == "bit_reverse"
+    assert ast.functions[0].return_type == "unsigned int"
+    assert ast.functions[0].qualifiers == [
+        "_CCCL_FORCEINLINE",
+        "__host__",
+        "__device__",
+    ]
+    assert "u32 bit_reverse(u32 value)" in crossgl
+    assert "_CCCL_FORCEINLINE" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cutlass_decltype_scoped_value_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cutlass
+    # commit: 1fc71b3ed1cab3541f7482c68ee19d0e40ef69d3
+    # path: include/cute/util/type_traits.hpp
+    source = """
+    template <class Index>
+    __device__ int cutlass_value(Index idx) {
+      int value = decltype(idx)::value;
+      return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    initializer = ast.functions[0].body[0].value
+
+    assert initializer == "decltype(idx)::value"
+    assert "var value: i32 = decltype_idx_value;" in crossgl
+    assert "decltype(idx)::value" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_cuda_scoped_enum_value_is_not_sanitized_codegen_reparse():
+    source = """
+    enum class Mode { kA = 0 };
+
+    __device__ int selected_mode() {
+      int value = Mode::kA;
+      return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "Mode"
+    assert ast.functions[0].body[0].value == "Mode::kA"
+    assert "var value: i32 = Mode::kA;" in crossgl
+    assert "Mode_kA" not in crossgl
+    assert_crossgl_reparse(crossgl)

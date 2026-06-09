@@ -334,7 +334,7 @@ class CudaToCrossGLConverter:
         text = str(value)
         if not text or text[0] in "\"'":
             return False
-        return "::" in text and "<" in text and ">" in text
+        return "::" in text and (("<" in text and ">" in text) or "(" in text)
 
     def emit(self, code):
         if code.strip():

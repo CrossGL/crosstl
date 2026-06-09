@@ -193,6 +193,7 @@ class CudaParser:
         "_CCCL_API",
         "_CCCL_DEVICE",
         "_CCCL_DEVICE_API",
+        "_CCCL_FORCEINLINE",
         "_CCCL_HOST_API",
         "_CCCL_HOST_DEVICE",
         "_CCCL_HOST_DEVICE_API",
@@ -4283,6 +4284,7 @@ class CudaParser:
                     return next_type in {
                         "LPAREN",
                         "LBRACE",
+                        "LESS_THAN",
                         "SCOPE",
                         "DOT",
                         "KERNEL_LAUNCH_START",
@@ -4305,6 +4307,7 @@ class CudaParser:
                     return next_type in {
                         "LPAREN",
                         "LBRACE",
+                        "LESS_THAN",
                         "SCOPE",
                         "DOT",
                         "KERNEL_LAUNCH_START",
@@ -4329,6 +4332,7 @@ class CudaParser:
                     return next_type in {
                         "LPAREN",
                         "LBRACE",
+                        "LESS_THAN",
                         "SCOPE",
                         "DOT",
                         "KERNEL_LAUNCH_START",
@@ -5247,6 +5251,10 @@ class CudaParser:
             if expr.op.startswith("post"):
                 return f"{self.expression_to_text(expr.operand)}{expr.op[4:]}"
             return f"{expr.op}{self.expression_to_text(expr.operand)}"
+        if isinstance(expr, FunctionCallNode):
+            name = self.expression_to_text(expr.name)
+            args = ", ".join(self.expression_to_text(arg) for arg in expr.args)
+            return f"{name}({args})"
         return str(expr)
 
     def parse_assignment_expression(self):

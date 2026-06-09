@@ -215,6 +215,41 @@ def test_external_rocblas_repeated_instantiate_tests_macro_chain_parse():
     assert calls[-1].args == ["gemm_strided_batched", "rocblas_float_complex"]
 
 
+def test_external_rocthrust_rocprim_namespace_macros_codegen_reparse():
+    # Reduced from ROCm/rocThrust@8c061ed4f0628254578a3de28df775bea765f89d
+    # and ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0.
+    source = """
+    THRUST_NAMESPACE_BEGIN
+    THRUST_EXEC_CHECK_DISABLE
+    THRUST_HOST_DEVICE THRUST_FORCEINLINE int thrust_identity(int value) {
+        return value;
+    }
+    THRUST_NAMESPACE_END
+
+    BEGIN_ROCPRIM_NAMESPACE
+    THRUST_HIP_DEVICE_FUNCTION int rocprim_identity(int value) {
+        return value;
+    }
+    END_ROCPRIM_NAMESPACE
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [statement.name for statement in ast.statements] == [
+        "thrust_identity",
+        "rocprim_identity",
+    ]
+    assert ast.statements[0].qualifiers == [
+        "THRUST_HOST_DEVICE",
+        "THRUST_FORCEINLINE",
+    ]
+    assert ast.statements[1].qualifiers == ["THRUST_HIP_DEVICE_FUNCTION"]
+    assert "i32 thrust_identity(i32 value)" in crossgl
+    assert "i32 rocprim_identity(i32 value)" in crossgl
+    assert "THRUST_" not in crossgl
+    assert "ROCPRIM_NAMESPACE" not in crossgl
+
+
 def test_external_rocm_device_globals_symbol_api_codegen_reparse():
     source = """
     constexpr unsigned int device_array_size = 16;
