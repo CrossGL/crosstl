@@ -2154,6 +2154,14 @@ def _format_include_dependency_provenance_label(dependency):
     )
     if hash_preview:
         parts.append(f"hash={hash_preview}")
+    resolved_size = dependency.get("resolvedSizeBytes")
+    if (
+        isinstance(resolved_size, int)
+        and not isinstance(resolved_size, bool)
+        and resolved_size >= 0
+    ):
+        size_label = "byte" if resolved_size == 1 else "bytes"
+        parts.append(f"size={resolved_size} {size_label}")
     if not parts:
         return ""
     return f" ({', '.join(parts)})"

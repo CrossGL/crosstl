@@ -1920,6 +1920,9 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
     material_hash = project_pipeline._source_hash(nested_dir / "material.inc")
     constants_hash = project_pipeline._source_hash(nested_dir / "constants.inc")
     shared_hash = project_pipeline._source_hash(include_dir / "shared.inc")
+    material_size = (nested_dir / "material.inc").stat().st_size
+    constants_size = (nested_dir / "constants.inc").stat().st_size
+    shared_size = (include_dir / "shared.inc").stat().st_size
 
     assert validation["success"] is True
     assert payload["units"][0]["includeDependencies"] == [
@@ -1981,6 +1984,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": material_hash["algorithm"],
             "resolvedHash": material_hash["value"],
+            "resolvedSizeBytes": material_size,
         },
         {
             "source": "shaders/include/material.inc",
@@ -1996,6 +2000,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": constants_hash["algorithm"],
             "resolvedHash": constants_hash["value"],
+            "resolvedSizeBytes": constants_size,
         },
         {
             "source": "shaders/include/material.inc",
@@ -2011,6 +2016,7 @@ def test_scan_project_records_nested_include_dependencies(tmp_path):
             "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": shared_hash["algorithm"],
             "resolvedHash": shared_hash["value"],
+            "resolvedSizeBytes": shared_size,
         },
     ]
 
@@ -2346,6 +2352,8 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
     unit_hash = project_pipeline._source_hash(repo / "main.frag")
     debug_hash = project_pipeline._source_hash(repo / "debug.inc")
     release_hash = project_pipeline._source_hash(include_dir / "release.inc")
+    debug_size = (repo / "debug.inc").stat().st_size
+    release_size = (include_dir / "release.inc").stat().st_size
     debug_hash_preview = f"{debug_hash['algorithm']}:{debug_hash['value'][:12]}..."
     release_hash_preview = (
         f"{release_hash['algorithm']}:{release_hash['value'][:12]}..."
@@ -2412,6 +2420,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": debug_hash["algorithm"],
             "resolvedHash": debug_hash["value"],
+            "resolvedSizeBytes": debug_size,
         },
         {
             "source": "main.frag",
@@ -2429,6 +2438,7 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
             "unitSourceHash": unit_hash["value"],
             "resolvedHashAlgorithm": release_hash["algorithm"],
             "resolvedHash": release_hash["value"],
+            "resolvedSizeBytes": release_size,
         },
     ]
 
@@ -2454,13 +2464,15 @@ def test_scan_project_records_variant_define_backed_include_resolution(tmp_path)
     assert (
         "- main.frag:1:1 [opengl]: resolved local include debug.inc -> debug.inc "
         f"(variant debug, source, define PROJECT_HEADER, "
-        f"unitHash={unit_hash_preview}, hash={debug_hash_preview})"
+        f"unitHash={unit_hash_preview}, hash={debug_hash_preview}, "
+        f"size={debug_size} bytes)"
     ) in result.stdout
     assert (
         "- main.frag:1:1 [opengl]: resolved system include release.inc -> "
         "includes/release.inc "
         f"(variant release, include-dir, define PROJECT_HEADER, "
-        f"unitHash={unit_hash_preview}, hash={release_hash_preview})"
+        f"unitHash={unit_hash_preview}, hash={release_hash_preview}, "
+        f"size={release_size} bytes)"
     ) in result.stdout
 
 
@@ -19215,6 +19227,8 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     unit_hash = project_pipeline._source_hash(repo / "main.frag")
     shared_hash = project_pipeline._source_hash(include_dir / "shared.inc")
     generated_hash = project_pipeline._source_hash(repo / "generated.inc")
+    shared_size = (include_dir / "shared.inc").stat().st_size
+    generated_size = (repo / "generated.inc").stat().st_size
     unit_hash_preview = f"{unit_hash['algorithm']}:{unit_hash['value'][:12]}..."
     shared_hash_preview = f"{shared_hash['algorithm']}:{shared_hash['value'][:12]}..."
     generated_hash_preview = (
@@ -19238,12 +19252,13 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
     assert (
         "- main.frag:2:1 [opengl]: resolved system include shared.inc -> "
         f"includes/shared.inc (include-dir, unitHash={unit_hash_preview}, "
-        f"hash={shared_hash_preview})"
+        f"hash={shared_hash_preview}, size={shared_size} bytes)"
     ) in result.stdout
     assert (
         "- main.frag:3:1 [opengl]: resolved local include generated.inc -> "
         f"generated.inc (source, define PROJECT_HEADER, "
-        f"unitHash={unit_hash_preview}, hash={generated_hash_preview})"
+        f"unitHash={unit_hash_preview}, hash={generated_hash_preview}, "
+        f"size={generated_size} bytes)"
     ) in result.stdout
     assert "System include dependencies:" in result.stdout
     assert (
@@ -19283,6 +19298,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "unitSourceHash": unit_hash["value"],
                 "resolvedHashAlgorithm": shared_hash["algorithm"],
                 "resolvedHash": shared_hash["value"],
+                "resolvedSizeBytes": shared_size,
             },
             {
                 "source": "main.frag",
@@ -19299,6 +19315,7 @@ def test_project_cli_inspect_report_text_includes_include_dependency_rollups(
                 "unitSourceHash": unit_hash["value"],
                 "resolvedHashAlgorithm": generated_hash["algorithm"],
                 "resolvedHash": generated_hash["value"],
+                "resolvedSizeBytes": generated_size,
             },
         ],
         "systemDependencyCount": 1,

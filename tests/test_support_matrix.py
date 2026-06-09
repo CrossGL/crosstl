@@ -599,6 +599,7 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "unit source hash metadata" in backend_support["notes"]
         assert "resolved include hash metadata" in backend_support["notes"]
+        assert "current byte-size metadata" in backend_support["notes"]
         assert (
             "OpenGL/GLSL translation with a resolved angle include and "
             "variant-specific conditional output"

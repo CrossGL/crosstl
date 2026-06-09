@@ -5989,6 +5989,7 @@ def inspect_project_report(
     payload["includeDependencies"] = _inspection_include_dependency_summary(
         summary,
         report.get("units"),
+        project=project,
         sample_limit=include_dependency_limit,
     )
     payload["includePathProcessing"] = _inspection_include_path_processing_summary(
@@ -6723,6 +6724,8 @@ def _inspection_include_dependency_sample(
     source_backend: Any,
     unit_source_hash: Any,
     dependency: Mapping[str, Any],
+    *,
+    root_path: Path | None = None,
 ) -> dict[str, Any] | None:
     include = dependency.get("include")
     status = dependency.get("status")
@@ -6767,13 +6770,36 @@ def _inspection_include_dependency_sample(
             sample["resolvedHashAlgorithm"] = hash_algorithm
         if _is_non_empty_string(hash_value):
             sample["resolvedHash"] = hash_value
+    resolved_size = _inspection_resolved_include_size(root_path, dependency)
+    if resolved_size is not None:
+        sample["resolvedSizeBytes"] = resolved_size
     return {key: value for key, value in sample.items() if value is not None}
+
+
+def _inspection_resolved_include_size(
+    root_path: Path | None, dependency: Mapping[str, Any]
+) -> int | None:
+    if root_path is None:
+        return None
+    resolved_path = dependency.get("resolvedPath")
+    if not _is_non_empty_string(resolved_path) or not _is_report_identity_path(
+        resolved_path
+    ):
+        return None
+    include_path = (root_path / resolved_path).resolve()
+    if not _is_relative_to(include_path, root_path) or not include_path.is_file():
+        return None
+    try:
+        return include_path.stat().st_size
+    except OSError:
+        return None
 
 
 def _inspection_include_dependency_summary(
     summary: Any,
     units: Any,
     *,
+    project: Any = None,
     sample_limit: int = INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     sample_limit = max(0, sample_limit)
@@ -6799,6 +6825,7 @@ def _inspection_include_dependency_summary(
     resolved_dependencies = []
     system_dependencies = []
     unresolved_dependencies = []
+    root_path = _project_root_path(project) if isinstance(project, Mapping) else None
     for unit in _record_sequence(units):
         if not isinstance(unit, Mapping):
             continue
@@ -6815,6 +6842,7 @@ def _inspection_include_dependency_summary(
                     unit.get("sourceBackend"),
                     unit.get("sourceHash"),
                     dependency,
+                    root_path=root_path,
                 )
                 if sample:
                     resolved_dependencies.append(sample)
