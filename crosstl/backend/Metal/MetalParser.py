@@ -2197,6 +2197,9 @@ class MetalParser:
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return None
+        if self.is_defaulted_or_deleted_function_declaration():
+            self.skip_defaulted_or_deleted_function_declaration()
+            return None
         self.pending_block_scope_names.append(
             {param.name for param in params if getattr(param, "name", None)}
         )
@@ -2211,6 +2214,19 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+
+    def is_defaulted_or_deleted_function_declaration(self):
+        return (
+            self.current_token[0] == "EQUALS"
+            and self.peek(1)[0] in {"DEFAULT", "IDENTIFIER"}
+            and self.peek(1)[1] in {"default", "delete"}
+            and self.peek(2)[0] == "SEMICOLON"
+        )
+
+    def skip_defaulted_or_deleted_function_declaration(self):
+        self.eat("EQUALS")
+        self.eat(self.current_token[0])
+        self.eat("SEMICOLON")
 
     def parse_function_method_qualifiers(self):
         while self.current_token[0] in {"CONST", "VOLATILE", "BITWISE_AND", "AND"}:

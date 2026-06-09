@@ -2,7 +2,7 @@
 
 import re
 from enum import Enum, auto
-from typing import Iterator, List, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -423,13 +423,37 @@ class RustLexer:
 
         yield ("EOF", "")
 
-    def _next_token(self, pos: int) -> Tuple[int, str, str]:
+    def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
         """Match the next token at ``pos`` and return its end offset."""
+        if self.code.startswith("/*", pos):
+            return self._consume_nested_block_comment(pos)
+
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
                 return match.end(0), token_type, match.group(0)
         return None
+
+    def _consume_nested_block_comment(self, pos: int) -> Tuple[int, str, str]:
+        """Skip a Rust block comment, including nested block comments."""
+        depth = 0
+        cursor = pos
+        while cursor < self._length:
+            if self.code.startswith("/*", cursor):
+                depth += 1
+                cursor += 2
+                continue
+
+            if self.code.startswith("*/", cursor):
+                depth -= 1
+                cursor += 2
+                if depth == 0:
+                    return cursor, "COMMENT_MULTI", self.code[pos:cursor]
+                continue
+
+            cursor += 1
+
+        return self._length, "COMMENT_MULTI", self.code[pos:]
 
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "RustLexer":

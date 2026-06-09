@@ -895,6 +895,35 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: Mesa Piglit
+    # Commit: ea22807ea068e400496742312eafe276a6c5e069
+    # Path: tests/spec/glsl-1.50/execution/geometry/vs-gs-max-in-out-components.shader_test
+    # Reduced from GL_ARB_arrays_of_arrays geometry shader inputs whose second
+    # array dimension is a min(...) expression.
+    ExternalFixture(
+        name="piglit-glsl-150-geometry-computed-array-of-arrays-input",
+        repo="https://gitlab.freedesktop.org/mesa/piglit",
+        commit="ea22807ea068e400496742312eafe276a6c5e069",
+        path="tests/spec/glsl-1.50/execution/geometry/vs-gs-max-in-out-components.shader_test",
+        shader_type="geometry",
+        code=textwrap.dedent("""
+            #version 150
+            #extension GL_ARB_arrays_of_arrays: require
+
+            layout(triangles) in;
+            layout(triangle_strip, max_vertices = 3) out;
+
+            flat in ivec4 f[3][min(gl_MaxVertexOutputComponents, gl_MaxGeometryInputComponents) / 4 - 1];
+            out vec4 color;
+
+            void main()
+            {
+                color = vec4(f[0][0]);
+                EmitVertex();
+                EndPrimitive();
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-fragcoord-origin-layout-flags",
         repo="https://github.com/KhronosGroup/glslang",
@@ -2462,6 +2491,22 @@ def test_codegen_piglit_unsigned_int_fixture_snippet():
     assert "uint value;" in crossgl
     assert "uint result = reverse(value);" in crossgl
     assert "unsigned int" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_piglit_geometry_computed_array_input_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "piglit-glsl-150-geometry-computed-array-of-arrays-input"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert (
+        "flat in ivec4[3][((min(gl_MaxVertexOutputComponents, "
+        "gl_MaxGeometryInputComponents) / 4) - 1)] f;" in crossgl
+    )
     assert parse_crossgl(crossgl) is not None
 
 

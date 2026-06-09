@@ -2981,11 +2981,21 @@ class HLSLToCrossGLConverter:
             "ray_any_hit": "ray_any_hit",
             "ray_callable": "ray_callable",
         }
+        functions_by_name = {func.name: func for func in ast.functions}
+        structs_by_name = {
+            struct.name: struct
+            for struct in ast.structs
+            if isinstance(struct, StructNode) and getattr(struct, "name", None)
+        }
         for func in ast.functions:
             stage_name = stage_map.get(func.qualifier)
             if stage_name:
                 code += f"    // {stage_name} Shader\n"
                 code += f"    {stage_name} {{\n"
+                if stage_name == "tessellation_control":
+                    code += self.generate_patch_constant_interface_outputs(
+                        func, functions_by_name, structs_by_name
+                    )
                 entry_name = "main" if stage_name.startswith("ray_") else None
                 code += self.generate_function(
                     func,
@@ -3003,6 +3013,93 @@ class HLSLToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def generate_patch_constant_interface_outputs(
+        self, func, functions_by_name, structs_by_name, indent=2
+    ):
+        patch_function_name = self.patch_constant_function_name(func)
+        if not patch_function_name:
+            return ""
+
+        patch_function = functions_by_name.get(patch_function_name)
+        if patch_function is None:
+            return ""
+
+        return_struct_name = self.raw_type_base(
+            getattr(patch_function, "return_type", "")
+        )
+        patch_struct = structs_by_name.get(return_struct_name)
+        if patch_struct is None:
+            return ""
+
+        existing_semantics = self.function_return_cross_stage_semantics(
+            func, structs_by_name
+        )
+        lines = ""
+        for member in getattr(patch_struct, "members", []) or []:
+            if not isinstance(member, VariableNode):
+                continue
+            semantic_names = self.cross_stage_semantic_names(
+                getattr(member, "semantic", None)
+            )
+            if not semantic_names or semantic_names & existing_semantics:
+                continue
+
+            attributes = self.format_semantic_and_interpolation_attributes(
+                member, member.semantic
+            )
+            if not attributes:
+                continue
+            lines += self.format_matrix_layout_attributes(member, indent)
+            lines += (
+                "    " * indent
+                + f"out {self.map_variable_type(member)} "
+                + f"{self.render_identifier(member.name)}"
+                + f"{self.format_array_suffixes(member)}{attributes};\n"
+            )
+        return lines
+
+    def patch_constant_function_name(self, func):
+        for attr in getattr(func, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "patchconstantfunc":
+                continue
+            args = getattr(attr, "args", getattr(attr, "arguments", [])) or []
+            if not args:
+                return None
+            value = args[0]
+            if isinstance(value, str):
+                return value.strip().strip("\"'")
+            return str(value)
+        return None
+
+    def function_return_cross_stage_semantics(self, func, structs_by_name):
+        return_type = self.raw_type_base(getattr(func, "return_type", ""))
+        return_struct = structs_by_name.get(return_type)
+        if return_struct is None:
+            return self.cross_stage_semantic_names(getattr(func, "semantic", None))
+
+        names = set()
+        for member in getattr(return_struct, "members", []) or []:
+            names.update(
+                self.cross_stage_semantic_names(getattr(member, "semantic", None))
+            )
+        return names
+
+    def cross_stage_semantic_names(self, semantic):
+        mapped = self.map_semantic(semantic)
+        names = {
+            name.lower() for name in re.findall(r"@\s*([A-Za-z_][A-Za-z0-9_]*)", mapped)
+        }
+        return {
+            name
+            for name in names
+            if not (
+                name.startswith("gl_")
+                or name.startswith("sv_")
+                or name.startswith("hlsl_")
+                or name in {"builtin", "position"}
+            )
+        }
 
     def collect_struct_variable_declarations(self, structs):
         declarations = []

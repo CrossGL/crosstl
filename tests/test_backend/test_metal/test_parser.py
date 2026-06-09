@@ -2292,6 +2292,31 @@ def test_parse_decltype_kernel_template_id_instantiation_from_mlx_jit_indexing()
     assert ast.global_variables == []
 
 
+def test_parse_deleted_template_function_declaration_from_vllm_metal():
+    # Reduced from:
+    # Repo: https://github.com/vllm-project/vllm-metal
+    # Path: vllm_metal/metal/kernels_v2/reshape_and_cache.metal
+    code = """
+    template <typename KV_T, typename CACHE_T>
+    inline CACHE_T to_cache(KV_T v) = delete;
+
+    template <>
+    inline float to_cache<float, float>(float v) {
+        return v;
+    }
+
+    kernel void real_kernel(device float* out [[buffer(0)]]) {
+        out[0] = to_cache<float, float>(1.0f);
+    }
+    """
+    ast = parse_ok(code)
+
+    assert [func.name for func in ast.functions] == [
+        "to_cache<float,float>",
+        "real_kernel",
+    ]
+
+
 def test_parse_pragma_and_type_trait_expression_from_llama_cpp():
     code = """
     void reduce(uint j, uint limit, device float* dst_row) {

@@ -2571,6 +2571,59 @@ def support_matrix_check_report_error(
     return None
 
 
+def support_matrix_check_input_error(
+    report: dict[str, Any] | None,
+    path: Path | None = None,
+) -> dict[str, Any] | None:
+    summary = support_matrix_check_summary(report, path)
+    if not summary.get("provided") or summary.get("ok") is True:
+        return None
+    if summary.get("load_error"):
+        return dict(summary["load_error"])
+
+    stale_paths = [
+        artifact.get("path")
+        for artifact in summary.get("stale_artifacts", [])
+        if artifact.get("path")
+    ]
+    if stale_paths:
+        message = "generated support matrix artifacts are stale: {}".format(
+            ", ".join(stale_paths)
+        )
+    else:
+        message = "support matrix check report did not pass"
+    return optional_json_load_error(
+        path,
+        "StaleGeneratedSupportMatrix",
+        message,
+    )["load_error"]
+
+
+def append_matrix_check_input_failure(
+    input_failures: list[dict[str, Any]],
+    matrix_check_report: dict[str, Any] | None,
+    matrix_check_report_path: Path | None,
+) -> bool:
+    error = support_matrix_check_input_error(
+        matrix_check_report,
+        matrix_check_report_path,
+    )
+    if error is None:
+        return False
+    input_failures.append(
+        {
+            "input": "matrix_check_report",
+            "path": (
+                str(matrix_check_report_path)
+                if matrix_check_report_path is not None
+                else None
+            ),
+            "error": error,
+        }
+    )
+    return True
+
+
 def write_json_report(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -3071,6 +3124,47 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- {message}", file=sys.stderr)
         return 1
 
+    close_extracted_issues = signals_allow_extracted_closure(signals)
+    close_pytest_failure_issues = (
+        signals_allow_pytest_failure_closure(signals)
+        and not args.preserve_pytest_failure_issues
+    )
+    if append_matrix_check_input_failure(
+        input_failures,
+        matrix_check_report,
+        matrix_check_report_path,
+    ):
+        print("Support issue input is invalid:", file=sys.stderr)
+        matrix_check_error = input_failures[-1]["error"]
+        print(
+            "- matrix_check_report: {type}: {message}".format(**matrix_check_error),
+            file=sys.stderr,
+        )
+        if args.plan_output is not None:
+            output = (
+                args.plan_output
+                if args.plan_output.is_absolute()
+                else ROOT / args.plan_output
+            )
+            write_json_report(
+                output,
+                issue_sync_report(
+                    desired,
+                    mode="dry-run" if args.dry_run else "sync",
+                    close_extracted_issues=close_extracted_issues,
+                    close_pytest_failure_issues=close_pytest_failure_issues,
+                    manage_sub_issues=manage_sub_issues,
+                    matrix_check_report=matrix_check_report,
+                    matrix_check_report_path=matrix_check_report_path,
+                    planned_action_budget_limits=planned_action_budget_limits,
+                    planned_action_budget_mode=args.planned_action_budget_mode,
+                    planned_closure_budget_limits=planned_closure_budget_limits,
+                    input_failures=input_failures,
+                    workflow_source=workflow_source,
+                ),
+            )
+        return 1
+
     token = os.environ.get(args.token_env) or os.environ.get("GH_TOKEN")
     if args.dry_run and not args.inspect_existing:
         token = token or "dry-run-token"
@@ -3094,11 +3188,6 @@ def main(argv: list[str] | None = None) -> int:
         "Desired support issues: total={total}, parents={parents}, backlog={backlog}, extracted={extracted}".format(
             **counts
         )
-    )
-    close_extracted_issues = signals_allow_extracted_closure(signals)
-    close_pytest_failure_issues = (
-        signals_allow_pytest_failure_closure(signals)
-        and not args.preserve_pytest_failure_issues
     )
     existing_issues = None
     existing_sub_issue_ids_by_parent = None

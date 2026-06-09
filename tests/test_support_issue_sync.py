@@ -1678,14 +1678,75 @@ def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, c
         ]
     )
 
-    assert result == 0
+    assert result == 1
     report = json.loads(plan_path.read_text(encoding="utf-8"))
     matrix_check = report["support_matrix_check"]
     assert matrix_check["provided"] is True
     assert matrix_check["ok"] is False
     assert matrix_check["load_error"]["path"] == str(matrix_check_path)
     assert matrix_check["load_error"]["type"] == "JSONDecodeError"
-    assert "Dry run: would manage 2 desired issues" in capsys.readouterr().out
+    assert report["input_failures"] == [
+        {
+            "input": "matrix_check_report",
+            "path": str(matrix_check_path),
+            "error": matrix_check["load_error"],
+        }
+    ]
+    captured = capsys.readouterr()
+    assert "Dry run: would manage 2 desired issues" not in captured.out
+    assert "matrix_check_report: JSONDecodeError" in captured.err
+
+
+def test_main_refuses_stale_support_matrix_check_report(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    matrix_check_path = tmp_path / "support-matrix-check.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    matrix_check_path.write_text(
+        json.dumps(sample_matrix_check_report(ok=False)),
+        encoding="utf-8",
+    )
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["desired"]["total"] == 2
+    assert report["planned_actions"] is None
+    assert report["support_matrix_check"]["ok"] is False
+    assert report["input_failures"] == [
+        {
+            "input": "matrix_check_report",
+            "path": str(matrix_check_path),
+            "error": {
+                "path": str(matrix_check_path),
+                "type": "StaleGeneratedSupportMatrix",
+                "message": (
+                    "generated support matrix artifacts are stale: "
+                    "support/generated/support-matrix.json"
+                ),
+            },
+        }
+    ]
+    captured = capsys.readouterr()
+    assert "Dry run: would manage 2 desired issues" not in captured.out
+    assert "matrix_check_report: StaleGeneratedSupportMatrix" in captured.err
 
 
 def test_main_writes_plan_on_malformed_matrix_input(tmp_path, capsys):

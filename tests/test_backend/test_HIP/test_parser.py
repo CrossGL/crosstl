@@ -223,6 +223,30 @@ class TestHipParser:
         assert line_broken_cast.target_type == "float *"
         assert line_broken_cast.expression == "next_s_d"
 
+    def test_public_rocm_stb_va_arg_type_arguments_parse(self):
+        # Reduced from ROCm/rocm-examples@adaf64a066eecb4ad90036dfd1838fc95bed9914,
+        # HIP-Doc/Tutorials/Programming-Patterns/image_convolution/stb_image_write.h.
+        code = """
+        typedef unsigned int stbiw_uint32;
+
+        void writefv(va_list v) {
+            unsigned char byte = (unsigned char)((va_arg(v, int)) & 0xff);
+            stbiw_uint32 word = va_arg(v, int);
+        }
+        """
+        ast = self.parse_code(code)
+
+        masked_byte = ast.statements[1].body[0].value.expression
+        word = ast.statements[1].body[1]
+
+        assert isinstance(masked_byte, BinaryOpNode)
+        assert isinstance(masked_byte.left, FunctionCallNode)
+        assert masked_byte.left.name == "va_arg"
+        assert masked_byte.left.args == ["v", "int"]
+        assert isinstance(word.value, FunctionCallNode)
+        assert word.value.name == "va_arg"
+        assert word.value.args == ["v", "int"]
+
     def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ auto load_callback_dev = load_callback;

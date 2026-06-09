@@ -4645,7 +4645,10 @@ class HipParser:
 
         while True:
             self.skip_newlines()
-            arg = self.parse_expression()
+            if self.is_type_argument():
+                arg = self.parse_type()
+            else:
+                arg = self.parse_expression()
             args.append(arg)
             self.skip_newlines()
 
@@ -4655,6 +4658,39 @@ class HipParser:
                 break
 
         return args
+
+    def is_type_argument(self):
+        if not self.is_type_argument_start_at_pos(self.pos):
+            return False
+
+        type_end = self.skip_type_at_pos(self.pos)
+        if type_end is None:
+            return False
+
+        type_end = self.skip_newlines_at_pos(type_end)
+        return type_end < len(self.tokens) and self.tokens[type_end].type in {
+            "COMMA",
+            "RPAREN",
+        }
+
+    def is_type_argument_start_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_cpp_attributes_at_pos(index)
+
+        while index < len(self.tokens) and self.tokens[index].type in {
+            *self.TYPE_PREFIX_TOKENS,
+            *self.TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+
+        index = self.skip_cpp_attributes_at_pos(index)
+        if index >= len(self.tokens):
+            return False
+
+        token = self.tokens[index]
+        if self.is_type_token(token, allow_identifier=False):
+            return True
+        return token.type == "IDENTIFIER" and self.is_identifier_type_name(token.value)
 
     def is_function_declaration(self) -> bool:
         # Simple heuristic: type followed by identifier followed by (

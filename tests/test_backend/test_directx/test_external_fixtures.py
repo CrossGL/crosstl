@@ -54,6 +54,10 @@ DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
 DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SDK_SAMPLES_REWORKED_REPO = (
+    "https://github.com/walbourn/directx-sdk-samples-reworked"
+)
+DIRECTX_SDK_SAMPLES_REWORKED_COMMIT = "1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -249,6 +253,62 @@ EXTERNAL_FIXTURES = [
             "geometry {",
             "void gs_main(GSOut points[2], inout pointStream stream) @ stage_entry",
             "buffer_append(stream, points[0]);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_sdk_subd11_patch_constant_payload_interface",
+        repo=DIRECTX_SDK_SAMPLES_REWORKED_REPO,
+        commit=DIRECTX_SDK_SAMPLES_REWORKED_COMMIT,
+        path="SubD11/SubD11.hlsl",
+        code=textwrap.dedent("""
+            struct HSOut {
+                float3 position : BEZIERPOS;
+            };
+
+            struct PatchData {
+                float edges[4] : SV_TessFactor;
+                float inside[2] : SV_InsideTessFactor;
+                float3 tangent[4] : TANGENT;
+                float2 uv[4] : TEXCOORD;
+            };
+
+            PatchData SubDToBezierConstantsHS(InputPatch<HSOut, 16> patch, uint patchID : SV_PrimitiveID) {
+                PatchData output;
+                output.tangent[0] = float3(0.0, 0.0, 1.0);
+                output.uv[0] = float2(0.0, 0.0);
+                return output;
+            }
+
+            [domain("quad")]
+            [partitioning("integer")]
+            [outputtopology("triangle_cw")]
+            [outputcontrolpoints(16)]
+            [patchconstantfunc("SubDToBezierConstantsHS")]
+            HSOut SubDToBezierHS(InputPatch<HSOut, 16> patch, uint id : SV_OutputControlPointID) {
+                HSOut output;
+                output.position = patch[id].position;
+                return output;
+            }
+
+            struct DSOut {
+                float3 tangent : TANGENT;
+                float2 uv : TEXCOORD;
+                float4 position : SV_Position;
+            };
+
+            [domain("quad")]
+            DSOut BezierEvalDS(PatchData input, float2 uv : SV_DomainLocation, const OutputPatch<HSOut, 16> patch) {
+                DSOut output;
+                output.tangent = input.tangent[0];
+                output.uv = input.uv[0];
+                output.position = float4(patch[0].position, 1.0);
+                return output;
+            }
+        """).strip(),
+        contains=(
+            "out vec3 tangent[4] @ Tangent;",
+            "out vec2 uv[4] @ TexCoord;",
+            "DSOut BezierEvalDS(PatchData input, vec2 uv @ gl_TessCoord, const outputPatch patch) @ stage_entry",
         ),
     ),
     ExternalFixture(

@@ -39,6 +39,10 @@ class VulkanToCrossGLConverter:
         "raypayloadext": "rayPayloadEXT",
         "raypayloadinext": "rayPayloadInEXT",
     }
+    MESH_STORAGE_QUALIFIER_ATTRIBUTES = {
+        "taskpayloadsharedext": "taskPayloadSharedEXT",
+        "taskpayloadsharednv": "taskPayloadSharedNV",
+    }
 
     def __init__(self):
         self.type_map = {
@@ -1101,7 +1105,7 @@ class VulkanToCrossGLConverter:
         qualifier_attributes = [
             attribute
             for qualifier in getattr(node, "qualifiers", []) or []
-            if (attribute := self.ray_storage_attribute(qualifier)) is not None
+            if (attribute := self.storage_qualifier_attribute(qualifier)) is not None
         ]
         attributes = self.ray_storage_attribute_suffix(
             [*qualifier_attributes, *ray_attributes]
@@ -1194,7 +1198,7 @@ class VulkanToCrossGLConverter:
         remaining_parts = []
         attributes = []
         for part in parts:
-            attribute = self.ray_storage_attribute(part)
+            attribute = self.storage_qualifier_attribute(part)
             if attribute is None:
                 remaining_parts.append(part)
             else:
@@ -1239,6 +1243,12 @@ class VulkanToCrossGLConverter:
 
     def ray_storage_attribute(self, qualifier):
         return self.RAY_STORAGE_QUALIFIER_ATTRIBUTES.get(str(qualifier).lower())
+
+    def storage_qualifier_attribute(self, qualifier):
+        qualifier_name = str(qualifier).lower()
+        return self.RAY_STORAGE_QUALIFIER_ATTRIBUTES.get(
+            qualifier_name
+        ) or self.MESH_STORAGE_QUALIFIER_ATTRIBUTES.get(qualifier_name)
 
     def generate_expression(self, expr):
         """Render a Vulkan backend expression node as CrossGL syntax."""

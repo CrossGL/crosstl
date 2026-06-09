@@ -11378,6 +11378,28 @@ def test_raw_pointer_generic_type_codegen_reparse_from_naga_msl_writer():
     crosstl.translator.parse(result)
 
 
+def test_nested_block_doc_comment_codegen_reparse_from_wgpu_hub():
+    # Reduced from gfx-rs/wgpu wgpu-core/src/hub.rs crate docs, where a
+    # Rust block doc comment contains a nested block comment.
+    code = """
+    /*!
+    Device hub documentation.
+    /* nested note that should stay inside the comment */
+    More documentation after the nested block.
+    */
+    pub struct Hub {
+        value: u32,
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "struct Hub {" in result
+    assert "uint value;" in result
+    assert "nested note" not in result
+    crosstl.translator.parse(result)
+
+
 def test_error_handling():
     edge_cases = [
         "fn empty() {}",

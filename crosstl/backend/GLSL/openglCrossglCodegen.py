@@ -2651,6 +2651,20 @@ class GLSLToCrossGLConverter:
             return "[]"
         return ""
 
+    def array_suffix_requires_type_position(self, node):
+        array_sizes = getattr(node, "array_sizes", None)
+        if array_sizes is None:
+            array_size = getattr(node, "array_size", None)
+            array_sizes = [array_size] if array_size is not None else []
+
+        if len(array_sizes) < 2:
+            return False
+
+        return any(
+            size is not None and "," in self.generate_array_size_expression(size)
+            for size in array_sizes
+        )
+
     def generate_array_size_expression(self, size):
         expression = self.generate_expression(size)
         if isinstance(size, FunctionCallNode) and isinstance(size.name, VariableNode):
@@ -3494,6 +3508,12 @@ class GLSLToCrossGLConverter:
             prefix_parts.append(interface_prefix)
         prefix = f"{' '.join(prefix_parts)} " if prefix_parts else ""
         array_suffix = self.array_suffix(node)
+        if (
+            not array_on_type
+            and array_suffix
+            and self.array_suffix_requires_type_position(node)
+        ):
+            array_on_type = True
         if array_on_type and array_suffix:
             var_type = f"{var_type}{array_suffix}"
             array_suffix = ""

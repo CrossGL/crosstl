@@ -400,6 +400,29 @@ def test_comments_tokenization():
         pytest.fail("Comments tokenization not implemented.")
 
 
+def test_nested_block_doc_comments_are_skipped_from_wgpu_hub():
+    # Reduced from gfx-rs/wgpu wgpu-core/src/hub.rs, where a crate-level
+    # Rust doc block contains a nested block comment.
+    code = """
+    /*!
+    Device hub documentation.
+    /* nested note that should stay inside the comment */
+    More documentation after the nested block.
+    */
+    pub struct Hub {
+        value: u32,
+    }
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("STRUCT", "struct") in tokens
+    assert ("IDENTIFIER", "Hub") in tokens
+    assert ("IDENTIFIER", "nested") not in tokens
+    assert ("IDENTIFIER", "More") not in tokens
+    assert ("MULTIPLY", "*") not in tokens
+
+
 def test_raw_identifier_tokenization_normalizes_keyword_names():
     code = "pub fn r#type(r#match: u32) -> u32 { r#match }"
     tokens = tokenize_code(code)

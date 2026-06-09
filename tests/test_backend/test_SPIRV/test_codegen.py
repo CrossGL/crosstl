@@ -6850,6 +6850,40 @@ def test_vulkan_samples_ray_tracing_hit_attribute_codegen_reparse():
     assert "hitAttributeEXT float2 attribs;" not in generated_code
 
 
+def test_vulkan_samples_mesh_task_payload_shared_codegen_reparse():
+    code = """
+    // Reduced from KhronosGroup/Vulkan-Samples
+    // shaders/mesh_shader_culling/mesh_shader_culling.mesh.
+    #version 450
+    #extension GL_EXT_mesh_shader: require
+
+    const uint numTaskInvocationsX = 2;
+    const uint numTaskInvocationsY = 2;
+
+    struct SharedData
+    {
+        vec2 position;
+        vec2 offsets[numTaskInvocationsX * numTaskInvocationsY];
+        vec2 size;
+    };
+
+    layout(local_size_x = 2, local_size_y = 2, local_size_z = 1) in;
+    taskPayloadSharedEXT SharedData sharedData;
+
+    void main()
+    {
+        vec2 globalOffset = sharedData.offsets[gl_WorkGroupID.x];
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    parse_crossgl(generated_code)
+    assert "SharedData sharedData @taskPayloadSharedEXT;" in generated_code
+    assert "taskPayloadSharedEXT SharedData sharedData;" not in generated_code
+    assert "float2 offsets[numTaskInvocationsX*numTaskInvocationsY];" in generated_code
+
+
 def test_spirv_assembly_storage_image_format_codegen():
     tokens = tokenize_code(SPIRV_STORAGE_IMAGE_FORMAT_ASSEMBLY)
     ast = parse_code(tokens)
