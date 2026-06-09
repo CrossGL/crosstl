@@ -5886,7 +5886,9 @@ def test_translate_project_records_define_processing_without_frontend_support(
     assert "Define processing issues:" in result.stdout
     assert (
         "- shader.rs -> cgl at translated/cgl/shader.cgl: "
-        "1 define not forwarded by rust lexer frontend"
+        "1 define not forwarded by rust lexer frontend "
+        "(defineNames=ENABLE_PATH, "
+        f"defineFingerprint={define_fingerprint_preview})"
     ) in result.stdout
 
 

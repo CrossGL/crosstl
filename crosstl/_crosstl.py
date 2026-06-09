@@ -2035,6 +2035,24 @@ def _format_validation_toolchain_run_sample_lines(validation):
     return lines
 
 
+def _format_define_processing_metadata_details(artifact):
+    details = []
+    define_names = artifact.get("defineNames")
+    if isinstance(define_names, list):
+        names = [name for name in define_names if isinstance(name, str) and name]
+        if names:
+            details.append("defineNames=" + ",".join(names))
+    define_fingerprint = artifact.get("defineFingerprint")
+    if isinstance(define_fingerprint, Mapping):
+        fingerprint_preview = _format_hash_preview(
+            define_fingerprint.get("algorithm"),
+            define_fingerprint.get("value"),
+        )
+        if fingerprint_preview:
+            details.append(f"defineFingerprint={fingerprint_preview}")
+    return details
+
+
 def _format_define_processing_issue_line(artifact):
     line = _format_artifact_identity_line(artifact)
     if not line:
@@ -2059,9 +2077,11 @@ def _format_define_processing_issue_line(artifact):
         f" {frontend} frontend" if isinstance(frontend, str) and frontend else ""
     )
     define_label = "define" if define_count == 1 else "defines"
+    metadata = _format_define_processing_metadata_details(artifact)
+    suffix = f" ({', '.join(metadata)})" if metadata else ""
     return (
         f"{line}: {define_count} {define_label} not forwarded"
-        f"{source_backend_label}{frontend_label}"
+        f"{source_backend_label}{frontend_label}{suffix}"
     )
 
 
@@ -2127,19 +2147,7 @@ def _format_define_processing_artifact_line(artifact):
         and define_count >= 0
     ):
         details.append(f"defines={define_count}")
-    define_names = artifact.get("defineNames")
-    if isinstance(define_names, list):
-        names = [name for name in define_names if isinstance(name, str) and name]
-        if names:
-            details.append("defineNames=" + ",".join(names))
-    define_fingerprint = artifact.get("defineFingerprint")
-    if isinstance(define_fingerprint, Mapping):
-        fingerprint_preview = _format_hash_preview(
-            define_fingerprint.get("algorithm"),
-            define_fingerprint.get("value"),
-        )
-        if fingerprint_preview:
-            details.append(f"defineFingerprint={fingerprint_preview}")
+    details.extend(_format_define_processing_metadata_details(artifact))
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {path}{suffix}"

@@ -399,7 +399,10 @@ but not define values, so artifact-level preprocessing state can be triaged
 without exposing configuration values.
 Define-processing inspection summaries also include redacted project define
 names, deterministic define fingerprints, selected variant names, and
-per-variant define records without exposing configured define values.
+per-variant define records without exposing configured define values. Text
+issue lines for unsupported define forwarding include define names and the same
+fingerprint so the affected define set can be identified without revealing
+values.
 They also record ``includePathProcessing`` metadata so active include-directory
 paths can be distinguished from include paths that were not requested or could
 not be consumed by the selected source frontend. Include-path processing
