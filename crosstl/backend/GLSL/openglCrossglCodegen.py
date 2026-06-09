@@ -560,6 +560,8 @@ class GLSLToCrossGLConverter:
             "RasterizerOrderedTextureCubeArray": "imageCubeArray",
             "StructuredBuffer": "StructuredBuffer",
             "RWStructuredBuffer": "RWStructuredBuffer",
+            "Buffer": "StructuredBuffer",
+            "RWBuffer": "RWStructuredBuffer",
             "AppendStructuredBuffer": "RWStructuredBuffer",
             "ConsumeStructuredBuffer": "StructuredBuffer",
             "RasterizerOrderedStructuredBuffer": "RWStructuredBuffer",
@@ -3483,10 +3485,30 @@ class GLSLToCrossGLConverter:
             return mapped_type
         if isinstance(type_name, str) and "<" in type_name and type_name.endswith(">"):
             base_type, generic_args = type_name.split("<", 1)
+            mapped_image_type = self.convert_hlsl_rw_texture_type(
+                base_type, generic_args[:-1]
+            )
+            if mapped_image_type is not None:
+                return mapped_image_type
             mapped_base = self.type_map.get(base_type)
             if mapped_base is not None:
                 return f"{mapped_base}<{generic_args}"
         return type_name
+
+    def convert_hlsl_rw_texture_type(self, base_type, generic_args):
+        mapped_base = self.type_map.get(base_type)
+        if mapped_base is None or not mapped_base.startswith("image"):
+            return None
+
+        normalized_args = re.sub(r"\s+", " ", generic_args.strip()).lower()
+        normalized_args = normalized_args.removeprefix("unorm ")
+        normalized_args = normalized_args.removeprefix("snorm ")
+
+        if normalized_args.startswith(("uint", "uvec")):
+            return f"u{mapped_base}"
+        if normalized_args.startswith(("int", "ivec")):
+            return f"i{mapped_base}"
+        return mapped_base
 
     def variable_declaration_type(self, node):
         var_type = self.convert_type(node.vtype)

@@ -440,7 +440,12 @@ class VulkanParser:
         "yield",
     }
     SPIRV_VALUE_FALLBACK_RENAMES = {
+        "buffer": "buffer_",
         "global": "global_",
+        "in": "in_",
+        "out": "out_",
+        "struct": "struct_",
+        "var": "var_",
     }
     SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS = {
         "Acos": "acos",
@@ -4058,7 +4063,7 @@ class VulkanParser:
             if member == member_key
         ]
         qualifiers = self.spirv_layout_qualifiers(member_layout_decorations)
-        block_name = names.get(base_operand) or base_operand.lstrip("%")
+        block_name = self.spirv_assembly_value_name(base_operand, names, decorations={})
         member_name = self.spirv_struct_member_variable_name(
             struct_type_id,
             member_key,
@@ -5874,7 +5879,9 @@ class VulkanParser:
             if data_type is None:
                 continue
 
-            variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+            variable_name = self.spirv_assembly_value_name(
+                variable["id"], names, decorations={}
+            )
             variable_name = self.spirv_builtin_variable_name_from_qualifiers(
                 qualifiers, variable_name, storage_class=storage_class
             )
@@ -6287,10 +6294,12 @@ class VulkanParser:
     def spirv_fallback_identifier(self, raw_value, prefix):
         identifier = re.sub(r"\W", "_", str(raw_value or "").lstrip("%"))
         if not identifier:
-            return prefix
+            return self.SPIRV_VALUE_FALLBACK_RENAMES.get(prefix, prefix)
         if identifier[0].isdigit():
-            return f"{prefix}_{identifier}"
-        return identifier
+            identifier = f"{prefix}_{identifier}"
+        if prefix == "part" and identifier.endswith("_"):
+            identifier = identifier.rstrip("_") or prefix
+        return self.SPIRV_VALUE_FALLBACK_RENAMES.get(identifier, identifier)
 
     def spirv_identifier_name(self, raw_name, fallback_value=None, prefix="value"):
         name = str(raw_name or "")
@@ -6530,7 +6539,9 @@ class VulkanParser:
             return []
 
         layouts = []
-        block_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        block_name = self.spirv_assembly_value_name(
+            variable["id"], names, decorations={}
+        )
         variable_qualifiers = self.spirv_layout_qualifiers(variable_decorations)
         variable_declaration_qualifiers = self.spirv_declaration_qualifiers(
             variable_decorations

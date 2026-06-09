@@ -314,6 +314,32 @@ class GLSLCodeGen:
         "ray_callable": "GL_CALLABLE_SHADER_EXT",
     }
     TEXTURE_SIZE_NO_LOD_SUFFIXES = ("2DRect", "Buffer")
+    sampled_resource_type_aliases = {
+        "Texture1D": "sampler1D",
+        "Texture1DArray": "sampler1DArray",
+        "Texture2D": "sampler2D",
+        "Texture2DArray": "sampler2DArray",
+        "Texture2DMS": "sampler2DMS",
+        "Texture2DMSArray": "sampler2DMSArray",
+        "Texture3D": "sampler3D",
+        "TextureCube": "samplerCube",
+        "TextureCubeArray": "samplerCubeArray",
+    }
+    storage_resource_type_aliases = {
+        "RWTexture1D": "image1D",
+        "RWTexture1DArray": "image1DArray",
+        "RWTexture2D": "image2D",
+        "RWTexture2DArray": "image2DArray",
+        "RWTexture2DMS": "image2DMS",
+        "RWTexture2DMSArray": "image2DMSArray",
+        "RWTexture3D": "image3D",
+        "RWTextureCube": "imageCube",
+        "RWTextureCubeArray": "imageCubeArray",
+    }
+    sampler_state_type_aliases = {
+        "SamplerState": "sampler",
+        "SamplerComparisonState": "comparison_sampler",
+    }
     RAY_STAGE_NAMES = {
         "ray_generation",
         "ray_intersection",
@@ -14566,6 +14592,46 @@ class GLSLCodeGen:
             or self.is_inferable_resource_array_type(vtype)
         )
 
+    def canonical_sampled_resource_type(self, type_name):
+        """Return GLSL sampler spelling for HLSL-style sampled resources."""
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+        return self.sampled_resource_type_aliases.get(base_type)
+
+    def canonical_storage_resource_type(self, type_name):
+        """Return GLSL image spelling for HLSL-style writable resources."""
+        if not isinstance(type_name, str):
+            return None
+
+        base_type = type_name.split("[", 1)[0].strip()
+        base_name = base_type.split("<", 1)[0].strip()
+        image_type = self.storage_resource_type_aliases.get(base_name)
+        if image_type is None:
+            return None
+
+        if "<" not in base_type or ">" not in base_type:
+            return image_type
+
+        value_type = base_type.split("<", 1)[1].rsplit(">", 1)[0].strip()
+        value_type = value_type.split(",", 1)[0].strip().lower()
+        if value_type in {"int", "i32"}:
+            return f"i{image_type}"
+        if value_type in {"uint", "u32"}:
+            return f"u{image_type}"
+        return image_type
+
+    def canonical_resource_type(self, type_name):
+        """Return canonical GLSL sampler/image/resource type for known aliases."""
+        if isinstance(type_name, str):
+            base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+            sampler_type = self.sampler_state_type_aliases.get(base_type)
+            if sampler_type is not None:
+                return sampler_type
+        return self.canonical_sampled_resource_type(
+            type_name
+        ) or self.canonical_storage_resource_type(type_name)
+
     def resource_base_type(self, vtype):
         if vtype is None:
             return ""
@@ -14576,8 +14642,8 @@ class GLSLCodeGen:
         vtype = str(vtype)
         if "[" in vtype and "]" in vtype:
             base_type, _ = parse_array_type(vtype)
-            return base_type
-        return vtype
+            return self.canonical_resource_type(base_type) or base_type
+        return self.canonical_resource_type(vtype) or vtype
 
     def resource_array_count(self, size):
         if size is None:
@@ -14932,6 +14998,10 @@ class GLSLCodeGen:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
             return f"{base_mapped}{array_suffix}"
+
+        canonical_type = self.canonical_resource_type(vtype_str)
+        if canonical_type is not None:
+            return canonical_type
 
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:

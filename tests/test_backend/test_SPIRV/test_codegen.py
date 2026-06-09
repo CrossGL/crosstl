@@ -2154,6 +2154,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_RESERVED_FALLBACK_RESOURCE_NAMES_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 199cb207b911501ddd76dcddf100a6e21c15ef23
+; Source paths: test/val/val_decoration_test.cpp,
+; test/val/val_non_uniform_test.cpp, and test/opt/simplification_test.cpp
+; Reduced from valid validation/optimization fixtures with unnamed resource ids
+; such as %var, %in, and %out. CrossGL must not emit reserved identifiers.
+OpCapability Shader
+OpCapability GroupNonUniformBallot
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %out_value
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %uniform_struct Block
+OpMemberDecorate %uniform_struct 0 Offset 0
+OpDecorate %var DescriptorSet 0
+OpDecorate %var Binding 0
+OpDecorate %struct Block
+OpMemberDecorate %struct 0 Offset 0
+OpDecorate %in DescriptorSet 0
+OpDecorate %in Binding 1
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 2
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uniform_struct = OpTypeStruct %uint
+%struct = OpTypeStruct %uint
+%ptr_uniform = OpTypePointer Uniform %uniform_struct
+%ptr_storage = OpTypePointer StorageBuffer %struct
+%ptr_output_uint = OpTypePointer Output %uint
+%var = OpVariable %ptr_uniform Uniform
+%in = OpVariable %ptr_storage StorageBuffer
+%out = OpVariable %ptr_storage StorageBuffer
+%out_value = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source version: SPIR-V 1.6 Revision 7, unified spec.
@@ -6609,6 +6650,20 @@ def test_spirv_tools_anonymous_resource_block_codegen_reparse():
     assert "RWStructuredBuffer<BufferOut> 19" not in generated_code
     assert "value_24" not in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_RESERVED_FALLBACK_RESOURCE_NAMES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer var_ @set(0) @binding(0) {" in generated_code
+    assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
+    assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
+    assert "cbuffer var @set" not in generated_code
+    assert "RWStructuredBuffer<in> in @set" not in generated_code
+    assert "RWStructuredBuffer<out> out @set" not in generated_code
 
 
 def test_spirv_tools_array_length_codegen_reparse():

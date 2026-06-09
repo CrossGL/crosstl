@@ -258,6 +258,65 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.rw.autoassign.frag.
+    # Reduced from HLSL-style UAV auto-assignment coverage that mixes
+    # RWTexture and RWBuffer generic resource spellings.
+    ExternalFixture(
+        name="glslang-spv-rw-autoassign-generic-uav-resources",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.rw.autoassign.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            RWTexture1D <float> g_tTex1df1;
+            RWBuffer <uint>     g_tBuf1du1;
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            PS_OUTPUT main()
+            {
+                float r00 = g_tTex1df1[0];
+                uint  r01 = g_tBuf1du1[0];
+
+                PS_OUTPUT psout;
+                psout.Color = 0;
+                return psout;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.rw.scalar.bracket.frag.
+    # Reduced from scalar typed RWTexture bracket access coverage. The element
+    # type controls whether CrossGL receives image, iimage, or uimage.
+    ExternalFixture(
+        name="glslang-hlsl-rwtexture-scalar-generic-elements",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.rw.scalar.bracket.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            RWTexture1D <float> g_tTex1df1;
+            RWTexture1D <int>   g_tTex1di1;
+            RWTexture1D <uint>  g_tTex1du1;
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            PS_OUTPUT main()
+            {
+               PS_OUTPUT psout;
+               float r00 = g_tTex1df1[0];
+               int   r01 = g_tTex1di1[0];
+               uint  r02 = g_tTex1du1[0];
+               psout.Color = float4(r00, float(r01), float(r02), 1.0);
+               return psout;
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.int16.amd.frag.
     # Reduced from AMD int16 literal and specialization-constant coverage.
     ExternalFixture(
@@ -2538,6 +2597,47 @@ def test_codegen_glslang_register_append_structured_buffer_fixture_snippets():
     assert "RWStructuredBuffer<uint> Buf2 @binding(2);" in crossgl
     assert "AppendStructuredBuffer<uint> Buf1" not in crossgl
     assert "vec4 main() @ gl_FragColor" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_rw_autoassign_resource_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-rw-autoassign-generic-uav-resources"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    texture = next(var for var in ast.global_variables if var.name == "g_tTex1df1")
+    buffer = next(var for var in ast.global_variables if var.name == "g_tBuf1du1")
+
+    assert texture.vtype == "RWTexture1D<float>"
+    assert buffer.vtype == "RWBuffer<uint>"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image1D g_tTex1df1;" in crossgl
+    assert "RWStructuredBuffer<uint> g_tBuf1du1;" in crossgl
+    assert "image1D<float>" not in crossgl
+    assert "RWBuffer<uint>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_rwtexture_scalar_generic_elements_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-rwtexture-scalar-generic-elements"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image1D g_tTex1df1;" in crossgl
+    assert "iimage1D g_tTex1di1;" in crossgl
+    assert "uimage1D g_tTex1du1;" in crossgl
+    assert "image1D<float>" not in crossgl
+    assert "image1D<int>" not in crossgl
+    assert "image1D<uint>" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
