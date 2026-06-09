@@ -5947,6 +5947,7 @@ def _diagnostic_identity(diagnostic: Mapping[str, Any]) -> tuple[Any, ...]:
             "target",
             "sourceBackend",
             "variant",
+            "checkKind",
             "missingCapabilities",
         )
     )
@@ -9297,6 +9298,33 @@ def _validation_toolchain_run_coverage_contract_reasons(
     return reasons
 
 
+def _failed_toolchain_run_diagnostic_contract_reasons(
+    toolchain_runs: Sequence[Any], diagnostics: Any
+) -> list[str]:
+    if not isinstance(diagnostics, list):
+        return []
+
+    diagnostic_identities = {
+        _diagnostic_identity(diagnostic)
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, Mapping)
+    }
+    reasons = []
+    for index, run in enumerate(toolchain_runs):
+        if not isinstance(run, Mapping) or run.get("status") != "failed":
+            continue
+        expected_diagnostics = _toolchain_run_diagnostics([run])
+        if not expected_diagnostics:
+            continue
+        expected_identity = _diagnostic_identity(expected_diagnostics[0].to_json())
+        if expected_identity not in diagnostic_identities:
+            reasons.append(
+                f"validation.toolchainRuns[{index}] failed run must be reported "
+                "by diagnostics"
+            )
+    return reasons
+
+
 def _diagnostic_counts_contract_reasons(
     prefix: str, value: Any, diagnostics: Sequence[Any]
 ) -> list[str]:
@@ -11848,6 +11876,12 @@ def _validation_contract_reasons(
                     "validation.toolchainRuns", toolchain_runs
                 )
             )
+            if require_validation:
+                reasons.extend(
+                    _failed_toolchain_run_diagnostic_contract_reasons(
+                        toolchain_runs, report.get("diagnostics", [])
+                    )
+                )
     return reasons
 
 

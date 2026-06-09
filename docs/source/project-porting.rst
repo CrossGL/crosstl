@@ -211,9 +211,10 @@ embedded toolchain runs reference failed report artifacts,
 validation records contain duplicate identities or inconsistent status fields,
 full reports with embedded validation artifacts omit validation summaries,
 summarized embedded validation omits declared artifacts, embedded toolchain-run
-coverage omits OK validation artifacts for available toolchains, external corpus entry
-presence, discovery, or source-backend fields do not match the project root and
-declared units, full reports omit units or skipped files that the current
+coverage omits OK validation artifacts for available toolchains, failed
+embedded toolchain runs omit matching diagnostics, external corpus entry presence,
+discovery, or source-backend fields do not match the project root and declared
+units, full reports omit units or skipped files that the current
 project scan discovers, translated outputs are missing, artifact paths resolve
 outside the repository, generated artifact hashes no longer match the files on
 disk, source files with recorded hashes are missing or changed, or opt-in
@@ -734,6 +735,7 @@ Project reports are JSON documents with:
   record shape and duplicate identity checks, validation artifact coverage,
   required validation summary records for embedded validation artifacts,
   embedded toolchain-run coverage for available toolchains,
+  failed embedded toolchain-run diagnostics,
   toolchain-run target, source-backend, check-kind, tool, and variant rollups,
   toolchain target coverage and status consistency checks,
   include dependency record shape and include dependency summary consistency,

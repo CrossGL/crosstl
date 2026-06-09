@@ -12643,6 +12643,53 @@ def test_validate_project_report_rejects_toolchain_runs_without_check_kind_in_fu
     )
 
 
+def test_validate_project_report_rejects_failed_embedded_toolchain_runs_without_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out", validate=True)
+    payload = report.to_json()
+    validation_artifact = payload["validation"]["artifacts"][0]
+    payload["validation"]["toolchainRuns"] = [
+        {
+            "source": validation_artifact["source"],
+            "target": validation_artifact["target"],
+            "path": validation_artifact["path"],
+            "sourceBackend": validation_artifact["sourceBackend"],
+            "checkKind": "artifact",
+            "command": ["crosstl-validate"],
+            "returncode": 1,
+            "status": "failed",
+            "stdout": "",
+            "stderr": "toolchain rejected artifact",
+        }
+    ]
+    payload["diagnostics"] = []
+    payload["diagnosticCounts"] = {"note": 0, "warning": 0, "error": 0}
+    payload["summary"]["diagnosticCounts"] = payload["diagnosticCounts"]
+    payload["summary"]["diagnosticsByCode"] = {}
+    payload["summary"]["diagnosticsByTarget"] = {}
+    payload["summary"]["diagnosticsBySourceBackend"] = {}
+    payload["summary"]["diagnosticsByVariant"] = {}
+    payload["summary"]["diagnosticsByCheckKind"] = {}
+    payload["summary"]["missingCapabilityCounts"] = {}
+    report_path = repo / "out" / "failed-toolchain-run-without-diagnostic-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns[0] failed run must be reported by diagnostics"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_available_toolchains_without_run_coverage(
     tmp_path,
 ):
