@@ -6536,6 +6536,7 @@ def test_translate_project_records_line_preserving_source_maps(tmp_path):
     assert payload["summary"]["sourceMapsBySourceBackend"] == {"cgl": 1}
     assert payload["summary"]["sourceMapsByVariant"] == {}
     assert payload["summary"]["sourceRemapCount"] == 1
+    assert payload["summary"]["sourceRemapMappingCount"] == len(source_map["mappings"])
     assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1}
     assert payload["summary"]["sourceRemapsByTarget"] == {"cgl": 1}
     assert payload["summary"]["sourceRemapsBySourceBackend"] == {"cgl": 1}
@@ -6663,7 +6664,7 @@ def test_source_map_rollups_count_fine_grained_artifact_maps():
         [
             {
                 "sourceMap": {"mappingGranularity": "line"},
-                "sourceRemap": {"mappingGranularity": "line"},
+                "sourceRemap": {"mappingGranularity": "line", "mappingCount": 2},
                 "target": "cgl",
                 "sourceBackend": "cgl",
             },
@@ -6692,6 +6693,7 @@ def test_source_map_rollups_count_fine_grained_artifact_maps():
         "sourceMapsBySourceBackend": {"cgl": 1, "metal": 2},
         "sourceMapsByVariant": {"debug": 1},
         "sourceRemapCount": 1,
+        "sourceRemapMappingCount": 2,
         "sourceRemapsByGranularity": {"line": 1},
         "sourceRemapsByTarget": {"cgl": 1},
         "sourceRemapsBySourceBackend": {"cgl": 1},
@@ -6803,6 +6805,7 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         "release": 1,
     }
     assert payload["summary"]["sourceRemapCount"] == 2
+    assert payload["summary"]["sourceRemapMappingCount"] == 2
     assert payload["summary"]["sourceRemapsByGranularity"] == {"file": 2}
     assert payload["summary"]["sourceRemapsByVariant"] == {
         "debug": 1,
@@ -6827,6 +6830,7 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
         "release": 1,
     }
     assert inspection["sourceMaps"]["sourceRemapsByGranularity"] == {"file": 2}
+    assert inspection["sourceMaps"]["sourceRemapMappingCount"] == 2
     assert inspection["sourceMaps"]["sourceRemapsByVariant"] == {
         "debug": 1,
         "release": 1,
@@ -6855,6 +6859,7 @@ def test_translate_project_reports_source_maps_and_remaps_by_variant(
     )
     assert result.returncode == 0
     assert "Source maps by variant: debug=1, release=1" in result.stdout
+    assert "Source remaps: 2 (2 mappings)" in result.stdout
     assert "Source remaps by granularity: file=2" in result.stdout
     assert "Source remaps by variant: debug=1, release=1" in result.stdout
     assert (
@@ -6911,6 +6916,7 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
         == expected_artifact_path
     )
     assert payload["summary"]["sourceMapsByVariant"] == {"qa/profile": 1}
+    assert payload["summary"]["sourceRemapMappingCount"] == len(source_map["mappings"])
     assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1}
     assert payload["summary"]["sourceRemapsByVariant"] == {"qa/profile": 1}
     assert payload["summary"]["artifactProvenanceIntermediateByVariant"] == {
@@ -6923,6 +6929,9 @@ def test_translate_project_sanitizes_variant_source_map_and_remap_paths(tmp_path
         "qa/profile": {"artifactCount": 1, "okCount": 1, "failedCount": 0}
     }
     assert inspection["sourceMaps"]["sourceMapsByVariant"] == {"qa/profile": 1}
+    assert inspection["sourceMaps"]["sourceRemapMappingCount"] == len(
+        source_map["mappings"]
+    )
     assert inspection["sourceMaps"]["sourceRemapsByGranularity"] == {"line": 1}
     assert inspection["sourceMaps"]["sourceRemapsByVariant"] == {"qa/profile": 1}
     assert inspection["artifactProvenance"]["intermediateByVariant"] == {
@@ -11972,6 +11981,7 @@ def test_validate_project_report_rejects_failed_artifacts_without_source_hash(
     payload["summary"]["artifactsByTarget"]["cgl"]["failedCount"] = 1
     payload["summary"]["sourceMapCount"] = 0
     payload["summary"]["sourceRemapCount"] = 0
+    payload["summary"]["sourceRemapMappingCount"] = 0
     payload["summary"]["sourceMapsByGranularity"] = {}
     payload["summary"]["sourceMapsByTarget"] = {}
     payload["summary"]["sourceMapsBySourceBackend"] = {}
@@ -12899,6 +12909,7 @@ def test_validate_project_report_rejects_stale_line_preserving_source_map_mappin
     assert len(source_map["mappings"]) > 1
     source_map["mappings"].pop()
     artifact["sourceRemap"]["mappingCount"] = len(source_map["mappings"])
+    payload["summary"]["sourceRemapMappingCount"] = len(source_map["mappings"])
     report_path = repo / "out" / "stale-line-source-map-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -13090,6 +13101,7 @@ def test_validate_project_report_rejects_current_crossgl_artifacts_without_sourc
     payload = report.to_json()
     payload["artifacts"][0].pop("sourceRemap")
     payload["summary"]["sourceRemapCount"] = 0
+    payload["summary"]["sourceRemapMappingCount"] = 0
     payload["summary"]["sourceRemapsByGranularity"] = {}
     payload["summary"]["sourceRemapsByTarget"] = {}
     payload["summary"]["sourceRemapsBySourceBackend"] = {}
@@ -13648,6 +13660,7 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
                     "sourceMapsBySourceBackend": {"unknown": 1},
                     "sourceMapsByVariant": {"debug": 1},
                     "sourceRemapCount": 1,
+                    "sourceRemapMappingCount": 1,
                     "sourceRemapsByGranularity": {"file": 1},
                     "sourceRemapsByTarget": {"cgl": 1},
                     "sourceRemapsBySourceBackend": {"cgl": 1},
@@ -13784,6 +13797,10 @@ def test_validate_project_report_rejects_inconsistent_summary_counts(tmp_path):
     )
     assert "summary.sourceRemapCount must match artifact source remaps" in (
         diagnostic["message"]
+    )
+    assert (
+        "summary.sourceRemapMappingCount must match artifact source remap mappings"
+        in (diagnostic["message"])
     )
     assert "summary.sourceRemapsByGranularity must match artifact source remaps" in (
         diagnostic["message"]
@@ -17060,6 +17077,9 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
             }
         ],
         "sourceRemapCount": 1,
+        "sourceRemapMappingCount": len(
+            project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+        ),
         "sourceRemapArtifactCount": 1,
         "truncatedSourceRemapArtifactCount": 0,
         "sourceRemapArtifacts": [
@@ -17756,6 +17776,9 @@ def test_project_cli_inspect_report_writes_json_summary(tmp_path):
             }
         ],
         "sourceRemapCount": 1,
+        "sourceRemapMappingCount": len(
+            project_pipeline._line_spans(repo / "simple.cgl", "simple.cgl")
+        ),
         "sourceRemapArtifactCount": 1,
         "truncatedSourceRemapArtifactCount": 0,
         "sourceRemapArtifacts": [

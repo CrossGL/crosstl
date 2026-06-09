@@ -152,6 +152,7 @@ REPORT_SUMMARY_FIELDS = frozenset(
         "sourceMapsBySourceBackend",
         "sourceMapsByVariant",
         "sourceRemapCount",
+        "sourceRemapMappingCount",
         "sourceRemapsByGranularity",
         "sourceRemapsByTarget",
         "sourceRemapsBySourceBackend",
@@ -1346,6 +1347,18 @@ def _source_remap_count(artifacts: Sequence[Mapping[str, Any]]) -> int:
     return sum(1 for artifact in artifacts if artifact.get("sourceRemap"))
 
 
+def _source_remap_mapping_count(artifacts: Sequence[Mapping[str, Any]]) -> int:
+    mapping_count = 0
+    for artifact in artifacts:
+        source_remap = artifact.get("sourceRemap")
+        if not isinstance(source_remap, Mapping):
+            continue
+        artifact_mapping_count = source_remap.get("mappingCount")
+        if _is_non_negative_int(artifact_mapping_count):
+            mapping_count += artifact_mapping_count
+    return mapping_count
+
+
 def _source_remap_counts_by_granularity(
     artifacts: Sequence[Mapping[str, Any]],
 ) -> dict[str, int]:
@@ -1844,6 +1857,7 @@ def _source_map_rollups(artifacts: Sequence[Mapping[str, Any]]) -> dict[str, Any
         "sourceMapsBySourceBackend": _source_map_counts_by_source_backend(artifacts),
         "sourceMapsByVariant": _source_map_counts_by_variant(artifacts),
         "sourceRemapCount": _source_remap_count(artifacts),
+        "sourceRemapMappingCount": _source_remap_mapping_count(artifacts),
         "sourceRemapsByGranularity": _source_remap_counts_by_granularity(artifacts),
         "sourceRemapsByTarget": _source_remap_counts_by_target(artifacts),
         "sourceRemapsBySourceBackend": _source_remap_counts_by_source_backend(
@@ -6974,6 +6988,13 @@ def _inspection_source_map_summary(
         and source_remap_count >= 0
     ):
         payload["sourceRemapCount"] = source_remap_count
+    source_remap_mapping_count = summary.get("sourceRemapMappingCount")
+    if (
+        isinstance(source_remap_mapping_count, int)
+        and not isinstance(source_remap_mapping_count, bool)
+        and source_remap_mapping_count >= 0
+    ):
+        payload["sourceRemapMappingCount"] = source_remap_mapping_count
     for field_name in (
         "sourceMapsByGranularity",
         "sourceMapsByTarget",
@@ -11232,6 +11253,14 @@ def _summary_contract_reasons(
                 summary.get("sourceRemapCount"),
                 source_map_rollups["sourceRemapCount"],
                 "artifact source remaps",
+            )
+        )
+        reasons.extend(
+            _count_field_contract_reasons(
+                "summary.sourceRemapMappingCount",
+                summary.get("sourceRemapMappingCount"),
+                source_map_rollups["sourceRemapMappingCount"],
+                "artifact source remap mappings",
             )
         )
         reasons.extend(

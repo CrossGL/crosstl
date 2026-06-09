@@ -257,7 +257,8 @@ source-remap status, toolchain status, and toolchain-run target,
 source-backend, check-kind, tool, and variant rollups, report
 source-backend, source override mappings, file-extension, and artifact
 target rollups, source-map count, granularity, target, and source-backend
-rollups, source-remap granularity, target, and source-backend rollups,
+rollups, source-remap count, mapping-count, granularity, target, and
+source-backend rollups,
 artifact matrix completion counts, target and variant completion rollups,
 sampled missing and extra artifact identities,
 bounded validation artifact and validation toolchain-run samples with
@@ -482,8 +483,9 @@ Project reports are JSON documents with:
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
   backend, variant, target backend, source-map granularity, source-map target,
-  source-map source backend, source-map variant, source-remap granularity,
-  source-remap target, source-remap source backend, source-remap variant,
+  source-map source backend, source-map variant, source-remap mapping count,
+  source-remap granularity, source-remap target, source-remap source backend,
+  source-remap variant,
   include dependency kind,
   include dependency status, include dependency source backend, include
   dependency source-backend status, include dependency resolution source,
@@ -554,8 +556,9 @@ Project reports are JSON documents with:
   anchors as file spans and may include one or more positive-length mappings
   whose source and generated files match the anchors. Line-preserving source and
   generated artifacts include line-granularity mappings with UTF-8 byte offsets.
-  The report records the sidecar path, mapping count, hash, generated-file
-  identity, summary rollups by target and source backend, and bounded inspection
+  The report records the sidecar path, per-artifact mapping count, aggregate
+  source-remap mapping count, hash, generated-file identity, summary rollups by
+  target and source backend, and bounded inspection
   samples for source-map and source-remap artifacts. Validation checks that
   artifact-level source-map spans still cover the current source and generated
   files, recomputes line-preserving mappings, requires source-remap metadata

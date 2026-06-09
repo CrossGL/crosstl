@@ -1263,8 +1263,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
             backend_support["notes"]
         )
         assert (
-            "source-remap summary rollups by granularity and including variant "
-            "rollups"
+            "source-remap summary totals for artifact count and mapping count "
+            "plus rollups by granularity, target, source backend, and variant"
         ) in (backend_support["notes"])
         assert (
             "sanitized variant output segments in source-map and source-remap paths"
@@ -1283,6 +1283,9 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert "missing source-map and source-remap granularity or variant rollups" in (
             backend_support["notes"]
         )
+        assert "source-remap mapping-count summary mismatches" in (
+            backend_support["notes"]
+        )
         assert "source-remap mapping-count mismatches" in backend_support["notes"]
         assert "current artifact-level source-map span coverage" in (
             backend_support["notes"]
@@ -1297,7 +1300,8 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         ) in backend_support["notes"]
         assert (
             "text inspection derives file-level source-map counts from total "
-            "and fine-grained source-map totals"
+            "and fine-grained source-map totals and reports aggregate "
+            "source-remap mapping counts"
         ) in backend_support["notes"]
         assert (
             "artifact provenance summary rollups by pipeline, intermediate "

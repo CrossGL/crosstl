@@ -1173,6 +1173,13 @@ def _format_source_remap_counts(summary):
         or source_remap_count < 0
     ):
         return None
+    source_remap_mapping_count = summary.get("sourceRemapMappingCount")
+    if (
+        isinstance(source_remap_mapping_count, int)
+        and not isinstance(source_remap_mapping_count, bool)
+        and source_remap_mapping_count >= 0
+    ):
+        return f"Source remaps: {source_remap_count} ({source_remap_mapping_count} mappings)"
     return f"Source remaps: {source_remap_count}"
 
 
