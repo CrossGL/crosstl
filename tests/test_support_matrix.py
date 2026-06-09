@@ -681,6 +681,10 @@ def test_project_include_resolution_documents_status_reporting():
         )
         assert "resolved include size" in backend_support["notes"]
         assert (
+            "expected/actual include hash and byte-size mismatch context"
+            in backend_support["notes"]
+        )
+        assert (
             "current-scan mismatch labels include resolved path, resolution source, "
             "and project-define provenance"
         ) in backend_support["notes"]

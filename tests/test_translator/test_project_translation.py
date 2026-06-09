@@ -3116,6 +3116,7 @@ def test_validate_project_report_rejects_stale_include_dependency_hashes(
     )
 
     report = scan_project(repo).to_report(targets=["cgl"])
+    report_payload = report.to_json()
     report_path = repo / "include-dependencies-report.json"
     report.write_json(report_path)
     (shader_dir / "local.inc").write_text("vec4 changed_color();\n", encoding="utf-8")
@@ -3129,6 +3130,13 @@ def test_validate_project_report_rejects_stale_include_dependency_hashes(
         "units[0].includeDependencies[0].resolvedHash must match current "
         "include file"
     ) in diagnostic["message"]
+    expected_hash = report_payload["units"][0]["includeDependencies"][0]["resolvedHash"]
+    actual_hash = project_pipeline._source_hash(shader_dir / "local.inc")
+    assert (
+        f"(expected {expected_hash['algorithm']}:{expected_hash['value']}, "
+        f"actual {actual_hash['algorithm']}:{actual_hash['value']})"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_missing_include_dependency_sizes(
@@ -3192,6 +3200,12 @@ def test_validate_project_report_rejects_stale_include_dependency_sizes(
         "units[0].includeDependencies[0].resolvedSizeBytes must match current "
         "include file"
     ) in diagnostic["message"]
+    expected_size = payload["units"][0]["includeDependencies"][0]["resolvedSizeBytes"]
+    actual_size = include_path.stat().st_size
+    assert (
+        f"(expected {expected_size} bytes, actual {actual_size} bytes)"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_include_dependency_resolution_mismatches(

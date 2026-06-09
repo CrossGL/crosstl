@@ -9483,14 +9483,19 @@ def _current_include_dependency_contract_reasons(
     resolved_hash = dependency.get("resolvedHash")
     include_path = (root_path / expected_path).resolve()
     if not _hash_contract_reasons(f"{prefix}.resolvedHash", resolved_hash):
-        if not _hash_matches_report(_source_hash(include_path), resolved_hash):
-            reasons.append(f"{prefix}.resolvedHash must match current include file")
+        actual_hash = _source_hash(include_path)
+        if not _hash_matches_report(actual_hash, resolved_hash):
+            reasons.append(
+                f"{prefix}.resolvedHash must match current include file "
+                f"({_hash_mismatch_context(actual_hash, resolved_hash)})"
+            )
     resolved_size = dependency.get("resolvedSizeBytes")
-    if (
-        _is_non_negative_int(resolved_size)
-        and resolved_size != include_path.stat().st_size
-    ):
-        reasons.append(f"{prefix}.resolvedSizeBytes must match current include file")
+    actual_size = include_path.stat().st_size
+    if _is_non_negative_int(resolved_size) and resolved_size != actual_size:
+        reasons.append(
+            f"{prefix}.resolvedSizeBytes must match current include file "
+            f"({_size_mismatch_context(resolved_size, actual_size)})"
+        )
     return reasons
 
 
