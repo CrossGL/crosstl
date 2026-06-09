@@ -1008,6 +1008,13 @@ class CudaParser:
                 index += 1
                 saw_long_long = True
 
+            if (
+                saw_long_long
+                and index < len(self.tokens)
+                and self.tokens[index][0] in {"SIGNED", "UNSIGNED"}
+            ):
+                index += 1
+
             if index < len(self.tokens) and self.tokens[index][0] == "INT":
                 return index + 1
             if (
@@ -2884,6 +2891,9 @@ class CudaParser:
         if token_type == "LONG" and self.current_token[0] == "LONG":
             type_name += f" {self.current_token[1]}"
             self.eat("LONG")
+            if self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                type_name += f" {self.current_token[1]}"
+                self.eat(self.current_token[0])
             if self.current_token[0] == "INT":
                 type_name += f" {self.current_token[1]}"
                 self.eat("INT")
@@ -4952,6 +4962,9 @@ class CudaParser:
             if self.current_token[0] == "LONG":
                 self.eat("LONG")
                 saw_long_long = True
+
+            if saw_long_long and self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                self.eat(self.current_token[0])
 
             if self.current_token[0] == "INT":
                 self.eat("INT")

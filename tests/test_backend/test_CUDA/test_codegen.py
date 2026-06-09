@@ -447,6 +447,7 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("void") == "void"
         assert codegen.convert_cuda_type_to_crossgl("long long") == "i64"
         assert codegen.convert_cuda_type_to_crossgl("unsigned long long") == "u64"
+        assert codegen.convert_cuda_type_to_crossgl("long long unsigned int") == "u64"
         assert codegen.convert_cuda_type_to_crossgl("half") == "f16"
         assert codegen.convert_cuda_type_to_crossgl("__half") == "f16"
         assert codegen.convert_cuda_type_to_crossgl("half2") == "vec2<f16>"

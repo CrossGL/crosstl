@@ -6370,6 +6370,7 @@ class CudaToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "long long unsigned int": "u64",
             "int8_t": "i8",
             "uint8_t": "u8",
             "int16_t": "i16",

@@ -436,6 +436,30 @@ def test_cuda_samples_helper_multiprocess_elaborated_struct_cast_codegen_reparse
     assert_crossgl_reparse(crossgl)
 
 
+def test_cuda_samples_matrix_mul_drv_multiword_integer_cast_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: Samples/0_Introduction/matrixMulDrv/matrixMulDrv.cpp
+    source = """
+    void host(size_t totalGlobalMem) {
+        double totalGlobalMemInGbytes =
+            (double)(long long unsigned int)totalGlobalMem / (1024.0 * 1024.0 * 1024.0);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+    outer_cast = ast.functions[0].body[0].value.left
+
+    assert isinstance(outer_cast, CastNode)
+    assert outer_cast.target_type == "double"
+    assert isinstance(outer_cast.expression, CastNode)
+    assert outer_cast.expression.target_type == "long long unsigned int"
+    assert "f64(u64(totalGlobalMem))" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_simple_ipc_platform_error_guard_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples
