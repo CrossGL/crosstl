@@ -20,6 +20,7 @@ from crosstl.backend.GLSL.OpenglAst import (
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -96,6 +97,162 @@ EXTERNAL_FIXTURES = [
                 case 2:  color = vec4(0.5); break;
                 default: color = vec4(0.0); break;
                 }
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/Vulkan-Samples
+    # Path: shaders/dynamic_line_rasterization/glsl/grid.frag.
+    # Covers default GLSL reverse-codegen preserving fragment stage context for
+    # derivative operations such as fwidth().
+    ExternalFixture(
+        name="vulkan-samples-dynamic-line-grid-fragment-stage-roundtrip",
+        repo=VULKAN_SAMPLES_REPO,
+        commit=VULKAN_SAMPLES_COMMIT,
+        path="shaders/dynamic_line_rasterization/glsl/grid.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 450
+
+            layout(location = 0) in vec3 nearPoint;
+            layout(location = 1) in vec3 farPoint;
+            layout(location = 0) out vec4 outColor;
+
+            vec4 grid(vec3 pos) {
+                vec2 coord = pos.xz;
+                vec2 derivative = fwidth(coord);
+                vec2 gridLine = abs(fract(coord - 0.5) - 0.5) / derivative;
+                float line = min(gridLine.x, gridLine.y);
+                return vec4(0.5, 0.5, 0.5, 1.0 - min(line, 1.0));
+            }
+
+            void main() {
+                float t = -nearPoint.y / (farPoint.y - nearPoint.y);
+                vec3 pos = nearPoint + t * (farPoint - nearPoint);
+                outColor = grid(pos);
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.buffer.autoassign.frag.
+    # Covers HLSL-style cbuffers/register annotations accepted by glslang.
+    ExternalFixture(
+        name="glslang-spv-buffer-autoassign-cbuffer-register",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.buffer.autoassign.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            cbuffer MyUB1 : register(b5)
+            {
+                float g_a;
+                int g_b;
+            };
+
+            cbuffer MyUB2
+            {
+                float g_c;
+            };
+
+            cbuffer MyUB3
+            {
+                float g_d;
+            };
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            PS_OUTPUT main()
+            {
+                PS_OUTPUT psout;
+                psout.Color = g_a + g_b + g_c + g_d;
+                return psout;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.register.autoassign.frag.
+    # Covers HLSL-style resource/register annotations accepted by glslang.
+    ExternalFixture(
+        name="glslang-spv-register-autoassign-resources",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.register.autoassign.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            SamplerState g_sSamp1 : register(s0);
+            SamplerState g_sSamp3[2] : register(s2);
+            SamplerState g_sSamp4;
+
+            Texture1D g_tTex1 : register(t1);
+            Texture1D g_tTex3[2] : register(t3);
+            Texture1D g_tTex4;
+
+            struct MyStruct_t
+            {
+                int a;
+                float b;
+                float3 c;
+            };
+
+            uniform MyStruct_t mystruct : register(b4);
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            float4 Func1()
+            {
+                return g_tTex1.Sample(g_sSamp1, 0.1) +
+                    g_tTex3[1].Sample(g_sSamp3[1], 0.3) +
+                    mystruct.c[1];
+            }
+
+            PS_OUTPUT main()
+            {
+                PS_OUTPUT psout;
+                psout.Color = Func1();
+                return psout;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.register.subpass.frag.
+    # Reduced from HLSL-style subpass input resource register coverage.
+    ExternalFixture(
+        name="glslang-spv-register-subpass-input-resources",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.register.subpass.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            layout(input_attachment_index = 1) SubpassInput<float4> subpass_f4 : register(t1);
+            layout(input_attachment_index = 4) SubpassInputMS<float4> subpass_ms_f4;
+
+            float4 main() : SV_Target0
+            {
+                float4 result00 = subpass_f4.SubpassLoad();
+                float4 result10 = subpass_ms_f4.SubpassLoad(3);
+                return result00 + result10;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.ssboAlias.frag.
+    # Reduced from HLSL-style append structured-buffer register coverage.
+    ExternalFixture(
+        name="glslang-spv-register-append-structured-buffer",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.ssboAlias.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            AppendStructuredBuffer<uint> Buf1 : register(u1);
+            AppendStructuredBuffer<uint> Buf2 : register(u2);
+
+            float4 main() : SV_Target
+            {
+                Buf1.Append(10u);
+                Buf2.Append(20u);
+                return float4(1.0, 3.0, 5.0, 1.0);
             }
         """).strip(),
     ),
@@ -279,6 +436,26 @@ EXTERNAL_FIXTURES = [
 
             void main() {
               gl_Position = vec4(X(3) + Y(4) + Z(2));
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/tokenPaste.vert.
+    # Reduced from the object-like macro paste case: #define noArg fl##oat.
+    ExternalFixture(
+        name="glslang-token-paste-object-like-macro",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/tokenPaste.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 450
+
+            #define noArg fl##oat
+            noArg argless;
+
+            void main()
+            {
+                argless = 1.0;
             }
         """).strip(),
     ),
@@ -740,6 +917,65 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: Mesa Piglit
+    # Commit: ea22807ea068e400496742312eafe276a6c5e069
+    # Path: tests/spec/ext_gpu_shader4/execution/open-coded-bitfieldReverse.shader_test
+    # Reduced from GL_EXT_gpu_shader4 coverage using the legacy `unsigned int`
+    # spelling for return types, parameters, locals, and uniforms.
+    ExternalFixture(
+        name="piglit-ext-gpu-shader4-unsigned-int-bitfield-reverse",
+        repo="https://gitlab.freedesktop.org/mesa/piglit",
+        commit="ea22807ea068e400496742312eafe276a6c5e069",
+        path="tests/spec/ext_gpu_shader4/execution/open-coded-bitfieldReverse.shader_test",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 120
+            #extension GL_EXT_gpu_shader4: require
+
+            unsigned int reverse(unsigned int u)
+            {
+                unsigned int step1 = (u << 16) | (u >> 16);
+                return step1;
+            }
+
+            uniform unsigned int value;
+
+            void main()
+            {
+                unsigned int result = reverse(value);
+                gl_FragColor = vec4(float(result & 1u));
+            }
+        """).strip(),
+    ),
+    # Upstream source: Mesa Piglit
+    # Commit: ea22807ea068e400496742312eafe276a6c5e069
+    # Path: tests/spec/glsl-1.50/execution/geometry/vs-gs-max-in-out-components.shader_test
+    # Reduced from GL_ARB_arrays_of_arrays geometry shader inputs whose second
+    # array dimension is a min(...) expression.
+    ExternalFixture(
+        name="piglit-glsl-150-geometry-computed-array-of-arrays-input",
+        repo="https://gitlab.freedesktop.org/mesa/piglit",
+        commit="ea22807ea068e400496742312eafe276a6c5e069",
+        path="tests/spec/glsl-1.50/execution/geometry/vs-gs-max-in-out-components.shader_test",
+        shader_type="geometry",
+        code=textwrap.dedent("""
+            #version 150
+            #extension GL_ARB_arrays_of_arrays: require
+
+            layout(triangles) in;
+            layout(triangle_strip, max_vertices = 3) out;
+
+            flat in ivec4 f[3][min(gl_MaxVertexOutputComponents, gl_MaxGeometryInputComponents) / 4 - 1];
+            out vec4 color;
+
+            void main()
+            {
+                color = vec4(f[0][0]);
+                EmitVertex();
+                EndPrimitive();
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="glslang-fragcoord-origin-layout-flags",
         repo="https://github.com/KhronosGroup/glslang",
@@ -902,6 +1138,49 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: godotengine/godot
+    # Commit: a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # Path: servers/rendering/renderer_rd/shaders/blit.glsl
+    # Reduced from Godot's hash-bracketed stage sections, where #[vertex]
+    # appears before that section's #version directive.
+    ExternalFixture(
+        name="godot-rd-blit-hash-stage-marker-before-version",
+        repo="https://github.com/godotengine/godot",
+        commit="a4f5e8cddf68487bdc358bc2ccf745d98363139b",
+        path="servers/rendering/renderer_rd/shaders/blit.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #[vertex]
+
+            #version 450
+
+            layout(push_constant, std140) uniform Pos {
+                vec4 src_rect;
+            } data;
+
+            layout(location = 0) out vec2 uv;
+
+            void main() {
+                uv = data.src_rect.xy;
+                gl_Position = vec4(uv, 0.0, 1.0);
+            }
+
+            #[fragment]
+
+            #version 450
+
+            layout(push_constant, std140) uniform Pos {
+                vec4 src_rect;
+            } data;
+
+            layout(location = 0) in vec2 uv;
+            layout(location = 0) out vec4 color;
+
+            void main() {
+                color = vec4(uv, 0.0, 1.0);
+            }
+        """).strip(),
+    ),
     ExternalFixture(
         name="godot-betsy-bc1-hash-section-preamble",
         repo="https://github.com/godotengine/godot",
@@ -957,6 +1236,53 @@ EXTERNAL_FIXTURES = [
             void main() {
                 gl_Position = projection * vec4(vertex, 1.0);
             }
+        """).strip(),
+    ),
+    # Upstream source: godotengine/godot
+    # Commit: a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # Path: servers/rendering/renderer_rd/shaders/cluster_render.glsl
+    # Reduced from duplicate padding member names across distinct uniform blocks.
+    ExternalFixture(
+        name="godot-rd-cluster-render-duplicate-cbuffer-padding-members",
+        repo="https://github.com/godotengine/godot",
+        commit="a4f5e8cddf68487bdc358bc2ccf745d98363139b",
+        path="servers/rendering/renderer_rd/shaders/cluster_render.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #[vertex]
+
+            #version 450
+
+            layout(push_constant, std430) uniform Params {
+                uint base_index;
+                uint pad0;
+            } params;
+
+            layout(set = 0, binding = 1, std140) uniform State {
+                mat4 projection;
+                uint pad0;
+            } state;
+
+            void main() {
+                uint local = params.base_index + state.pad0;
+                gl_Position = state.projection * vec4(float(local));
+            }
+        """).strip(),
+    ),
+    # Upstream source: godotengine/godot
+    # Commit: a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # Path: servers/rendering/renderer_rd/shaders/samplers_inc.glsl
+    # Reduced from engine-configured sampler binding expressions where the base
+    # define is supplied outside the include file.
+    ExternalFixture(
+        name="godot-rd-samplers-symbolic-binding-base",
+        repo="https://github.com/godotengine/godot",
+        commit="a4f5e8cddf68487bdc358bc2ccf745d98363139b",
+        path="servers/rendering/renderer_rd/shaders/samplers_inc.glsl",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            layout(set = 0, binding = SAMPLERS_BINDING_FIRST_INDEX + 0) uniform sampler SAMPLER_NEAREST_CLAMP;
+            layout(set = 0, binding = SAMPLERS_BINDING_FIRST_INDEX + 1) uniform sampler SAMPLER_LINEAR_CLAMP;
         """).strip(),
     ),
     ExternalFixture(
@@ -1199,6 +1525,24 @@ def test_parse_glslang_layout_only_builtin_spec_constant_fixture():
     assert builtin.layout == {"constant_id": "24"}
 
 
+def test_codegen_vulkan_samples_fragment_stage_preserved_by_default_converter():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "vulkan-samples-dynamic-line-grid-fragment-stage-roundtrip"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = GLSLToCrossGLConverter().generate(ast)
+
+    assert "fragment {" in crossgl
+    assert "vertex {" not in crossgl
+    assert "fwidth(coord)" in crossgl
+
+    regenerated_glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "fwidth(coord)" in regenerated_glsl
+
+
 def test_parse_glslang_perprimitive_nv_interface_block_fixture():
     fixture = next(
         item
@@ -1362,6 +1706,22 @@ def test_parse_glslang_preprocessor_edge_case_block_comment_macro_fixture():
     assert (
         "output.gl_Position = vec4(((((3 + 2) + (2 * 4)) + 2) + (3 * 2)));" in crossgl
     )
+    parse_crossgl(crossgl)
+
+
+def test_parse_glslang_token_paste_object_like_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-token-paste-object-like-macro"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    argless = next(var for var in ast.global_variables if var.name == "argless")
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert argless.vtype == "float"
+    assert "float argless;" in crossgl
     parse_crossgl(crossgl)
 
 
@@ -1739,6 +2099,28 @@ def test_parse_godot_bracketed_stage_marker_fixture():
     assert [function.name for function in ast.functions] == ["main"]
 
 
+def test_codegen_godot_hash_stage_marker_before_version_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-rd-blit-hash-stage-marker-before-version"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+
+    assert ast.preprocessor == ["#version 450"]
+    assert [function.name for function in ast.functions] == ["main"]
+    assert [var.name for var in ast.io_variables] == ["uv"]
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "vertex {" in crossgl
+    assert "fragment {" not in crossgl
+    assert "color" not in crossgl
+    assert "output.uv = src_rect.xy;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_parse_godot_hash_section_preamble_fixture():
     fixture = next(
         item
@@ -1789,6 +2171,96 @@ def test_parse_godot_escaped_mode_define_fixture():
     crossgl = generate_crossgl(fixture.code, fixture.shader_type)
     assert "MODE_SHADOW" not in crossgl
     assert "USE_RGBA_SHADOWS" not in crossgl
+    assert "VertexOutput main(VertexInput input)" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_godot_duplicate_cbuffer_padding_members_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-rd-cluster-render-duplicate-cbuffer-padding-members"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "uint pad0;" in crossgl
+    assert "uint State_pad0;" in crossgl
+    assert "uint local = (base_index + State_pad0);" in crossgl
+    assert "base_index + pad0" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_godot_symbolic_sampler_binding_fixture_regenerates():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "godot-rd-samplers-symbolic-binding-base"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    sampler = next(var for var in ast.uniforms if var.name == "SAMPLER_NEAREST_CLAMP")
+
+    assert sampler.layout["set"] == "0"
+    assert isinstance(sampler.layout["binding"], BinaryOpNode)
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "sampler SAMPLER_NEAREST_CLAMP @set(0);" in crossgl
+    assert "@binding((SAMPLERS_BINDING_FIRST_INDEX + 0))" not in crossgl
+    assert "@binding((SAMPLERS_BINDING_FIRST_INDEX + 1))" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    regenerated = GLSLCodeGen().generate(shader_ast)
+
+    assert GLSLParser(GLSLLexer(regenerated).tokenize(), "auto").parse() is not None
+
+
+def test_parse_godot_canvas_occlusion_filters_inactive_stage_sections():
+    # Reduced from godotengine/godot drivers/gles3/shaders/canvas_occlusion.glsl
+    # at 070dc9897ea1b84ab2a7ec04b9bc1b94f38a0eaf. The full shader repeats
+    # uniform names in its vertex and fragment sections.
+    code = textwrap.dedent("""
+        #[vertex]
+
+        layout(location = 0) in vec3 vertex;
+
+        uniform highp mat4 projection;
+        uniform highp vec2 direction;
+
+        void main() {
+            vec4 vtx = vec4(vertex, 1.0);
+            gl_Position = projection * vtx;
+        }
+
+        #[fragment]
+
+        uniform highp mat4 projection;
+        uniform highp vec2 direction;
+        uniform highp float z_far;
+
+        layout(location = 0) out highp float out_buf;
+
+        void main() {
+            out_buf = z_far + direction.x;
+        }
+    """).strip()
+
+    ast = parse_glsl(code, "auto")
+
+    assert ast.shader_type == "vertex"
+    assert [(uniform.vtype, uniform.name) for uniform in ast.uniforms] == [
+        ("mat4", "projection"),
+        ("vec2", "direction"),
+    ]
+    assert [function.name for function in ast.functions] == ["main"]
+
+    crossgl = GLSLToCrossGLConverter(shader_type=None).generate(ast)
+
+    assert crossgl.count("mat4 projection;") == 1
+    assert crossgl.count("vec2 direction;") == 1
+    assert "float z_far;" not in crossgl
+    assert "out_buf" not in crossgl
     assert "VertexOutput main(VertexInput input)" in crossgl
     parse_crossgl(crossgl)
 
@@ -1864,6 +2336,141 @@ def test_codegen_vulkan_samples_descriptor_set_uniform_block_fixture():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_glslang_cbuffer_register_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-buffer-autoassign-cbuffer-register"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    myub1 = next(struct for struct in ast.structs if struct.name == "MyUB1")
+    ps_output = next(struct for struct in ast.structs if struct.name == "PS_OUTPUT")
+    color = next(member for member in ps_output.members if member.name == "Color")
+
+    assert myub1.interface_layout == {"binding": "5"}
+    assert getattr(myub1, "hlsl_cbuffer", False) is True
+    assert color.semantic == "SV_Target0"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "cbuffer MyUB1 @binding(5) {" in crossgl
+    assert "cbuffer MyUB2 {" in crossgl
+    assert "cbuffer MyUB3 {" in crossgl
+    assert "vec4 Color @ gl_FragData[0];" in crossgl
+    assert "PS_OUTPUT main()" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_register_autoassign_resource_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-register-autoassign-resources"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    sampler = next(var for var in ast.global_variables if var.name == "g_sSamp1")
+    sampler_array = next(var for var in ast.global_variables if var.name == "g_sSamp3")
+    sampler_without_register = next(
+        var for var in ast.global_variables if var.name == "g_sSamp4"
+    )
+    texture = next(var for var in ast.global_variables if var.name == "g_tTex1")
+    texture_array = next(var for var in ast.global_variables if var.name == "g_tTex3")
+    texture_without_register = next(
+        var for var in ast.global_variables if var.name == "g_tTex4"
+    )
+    mystruct = next(var for var in ast.uniforms if var.name == "mystruct")
+    ps_output = next(struct for struct in ast.structs if struct.name == "PS_OUTPUT")
+    color = next(member for member in ps_output.members if member.name == "Color")
+
+    assert sampler.layout == {"binding": "0"}
+    assert sampler_array.layout == {"binding": "2"}
+    assert sampler_array.array_sizes[0].value == "2"
+    assert sampler_without_register.layout is None
+    assert texture.layout == {"binding": "1"}
+    assert texture_array.layout == {"binding": "3"}
+    assert texture_array.array_sizes[0].value == "2"
+    assert texture_without_register.layout is None
+    assert mystruct.layout == {"binding": "4"}
+    assert color.semantic == "SV_Target0"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "sampler g_sSamp1 @binding(0);" in crossgl
+    assert "sampler g_sSamp3 @binding(2)[2];" in crossgl
+    assert "sampler g_sSamp4;" in crossgl
+    assert "texture1D g_tTex1 @binding(1);" in crossgl
+    assert "texture1D g_tTex3 @binding(3)[2];" in crossgl
+    assert "texture1D g_tTex4;" in crossgl
+    assert "struct MyStruct_t" in crossgl
+    assert "cbuffer mystruct @binding(4) {" in crossgl
+    assert "vec4 Color @ gl_FragData[0];" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_register_subpass_input_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-register-subpass-input-resources"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    subpass = next(var for var in ast.global_variables if var.name == "subpass_f4")
+    subpass_ms = next(
+        var for var in ast.global_variables if var.name == "subpass_ms_f4"
+    )
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert subpass.vtype == "SubpassInput<float4>"
+    assert subpass.layout == {"input_attachment_index": "1", "binding": "1"}
+    assert subpass_ms.vtype == "SubpassInputMS<float4>"
+    assert subpass_ms.layout == {"input_attachment_index": "4"}
+    assert main.semantic == "SV_Target0"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert (
+        "subpassInput<float4> subpass_f4 @input_attachment_index(1) @binding(1);"
+        in crossgl
+    )
+    assert "subpassInputMS<float4> subpass_ms_f4 @input_attachment_index(4);" in crossgl
+    assert (
+        "@input_attachment_index(1) @binding(1) @input_attachment_index(1)"
+        not in crossgl
+    )
+    assert "vec4 main() @ gl_FragData[0]" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_register_append_structured_buffer_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-register-append-structured-buffer"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    buf1 = next(var for var in ast.global_variables if var.name == "Buf1")
+    buf2 = next(var for var in ast.global_variables if var.name == "Buf2")
+    main = next(function for function in ast.functions if function.name == "main")
+
+    assert buf1.vtype == "AppendStructuredBuffer<uint>"
+    assert buf1.layout == {"binding": "1"}
+    assert buf2.layout == {"binding": "2"}
+    assert main.semantic == "SV_Target"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "RWStructuredBuffer<uint> Buf1 @binding(1);" in crossgl
+    assert "RWStructuredBuffer<uint> Buf2 @binding(2);" in crossgl
+    assert "AppendStructuredBuffer<uint> Buf1" not in crossgl
+    assert "vec4 main() @ gl_FragColor" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_parse_vulkan_samples_buffer_device_address_fixture():
     fixture = next(
         item
@@ -1934,6 +2541,59 @@ def test_parse_glslang_subroutine_association_list_fixture():
         "subT2",
         "main",
     ]
+
+
+def test_parse_piglit_unsigned_int_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "piglit-ext-gpu-shader4-unsigned-int-bitfield-reverse"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    reverse = next(function for function in ast.functions if function.name == "reverse")
+    value = next(var for var in ast.uniforms if var.name == "value")
+    step1 = next(var for var in reverse.body if getattr(var, "name", None) == "step1")
+    main = next(function for function in ast.functions if function.name == "main")
+    result = next(var for var in main.body if getattr(var, "name", None) == "result")
+
+    assert reverse.return_type == "uint"
+    assert reverse.params[0].vtype == "uint"
+    assert value.vtype == "uint"
+    assert step1.vtype == "uint"
+    assert result.vtype == "uint"
+
+
+def test_codegen_piglit_unsigned_int_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "piglit-ext-gpu-shader4-unsigned-int-bitfield-reverse"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "uint reverse(uint u)" in crossgl
+    assert "uint value;" in crossgl
+    assert "uint result = reverse(value);" in crossgl
+    assert "unsigned int" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_piglit_geometry_computed_array_input_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "piglit-glsl-150-geometry-computed-array-of-arrays-input"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert (
+        "flat in ivec4[3][((min(gl_MaxVertexOutputComponents, "
+        "gl_MaxGeometryInputComponents) / 4) - 1)] f;" in crossgl
+    )
+    assert parse_crossgl(crossgl) is not None
 
 
 @pytest.mark.parametrize("fixture", EXTERNAL_FIXTURES, ids=lambda fixture: fixture.name)

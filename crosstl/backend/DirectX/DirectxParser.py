@@ -264,6 +264,26 @@ EFFECT_BLOCK_KEYWORDS = {
     "technique11",
 }
 
+STATEMENT_START_TOKENS = {
+    "RETURN",
+    "IF",
+    "FOR",
+    "WHILE",
+    "DO",
+    "SWITCH",
+    "BREAK",
+    "CONTINUE",
+    "DISCARD",
+    "LBRACE",
+}
+
+UNEXPANDED_STATEMENT_ATTRIBUTE_MACROS = {
+    "UNITY_BRANCH": "branch",
+    "UNITY_FLATTEN": "flatten",
+    "UNITY_LOOP": "loop",
+    "UNITY_UNROLL": "unroll",
+}
+
 SCALAR_CONSTRUCTOR_TOKENS = {
     "FLOAT",
     "HALF",
@@ -295,6 +315,18 @@ COMPOSITE_DECLARATOR_IDENTIFIER_TOKENS = {
     "UVECTOR",
     "BVECTOR",
     "MATRIX",
+}
+
+FIXED_WIDTH_TYPEDEF_NAME_TOKENS = {
+    "FLOAT16_T",
+    "FLOAT32_T",
+    "FLOAT64_T",
+    "INT16_T",
+    "INT32_T",
+    "INT64_T",
+    "UINT16_T",
+    "UINT32_T",
+    "UINT64_T",
 }
 
 
@@ -415,12 +447,12 @@ class HLSLParser:
                     f"Expected identifier after type, got {self.current_token[0]}"
                 )
 
-            name = self.parse_declarator_identifier()
-            if self.current_token_is_double_colon():
-                name = self.parse_scoped_name(name)
+            name = self.parse_function_declarator_name()
 
             if self.current_token[0] == "LPAREN":
+                synthetic_start = len(self.synthetic_structs)
                 func = self.parse_function(return_type, name, qualifiers, attributes)
+                structs.extend(self.synthetic_structs[synthetic_start:])
                 functions.append(func)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
@@ -521,6 +553,26 @@ class HLSLParser:
             self.tokens[index][0]
         )
 
+    def is_macro_like_identifier(self, token):
+        token_type, value = token
+        if token_type != "IDENTIFIER":
+            return False
+        text = str(value)
+        return any(char.isalpha() for char in text) and text.upper() == text
+
+    def skip_unexpanded_member_macro(self):
+        if not self.is_macro_like_identifier(self.current_token):
+            return False
+        if self.peek()[0] not in {"LPAREN", "SEMICOLON", "RBRACE"}:
+            return False
+
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+        return True
+
     def parse_identifier(self):
         if self.is_identifier_token(self.current_token[0]):
             token = self.current_token
@@ -538,13 +590,11 @@ class HLSLParser:
         )
 
     def parse_typedef_name(self):
-        if self.is_identifier_token(self.current_token[0]) or self.current_token[0] in {
-            "FVECTOR",
-            "IVECTOR",
-            "UVECTOR",
-            "BVECTOR",
-            "MATRIX",
-        }:
+        if (
+            self.is_identifier_token(self.current_token[0])
+            or self.current_token[0] in COMPOSITE_DECLARATOR_IDENTIFIER_TOKENS
+            or self.current_token[0] in FIXED_WIDTH_TYPEDEF_NAME_TOKENS
+        ):
             token = self.current_token
             self.eat(token[0])
             return token[1]
@@ -597,6 +647,11 @@ class HLSLParser:
                 if depth == 0:
                     self.eat("GREATER_THAN")
                     return
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    self.eat("SHIFT_RIGHT")
+                    return
             self.eat(token_type)
 
         raise SyntaxError("Unterminated template argument list")
@@ -634,11 +689,15 @@ class HLSLParser:
             qualifiers = self.parse_qualifiers()
             alias_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
+            attributes = []
+            if self.current_token[0] == "LBRACKET" and self.peek()[0] == "LBRACKET":
+                attributes = self.parse_attribute_list()
             array_sizes = self.parse_array_suffixes()
             self.eat("SEMICOLON")
 
             alias = TypeAliasNode(alias_type, name)
             alias.qualifiers = qualifiers
+            alias.attributes = attributes
             alias.array_sizes = array_sizes
             return alias
 
@@ -895,6 +954,12 @@ class HLSLParser:
         if self.current_token_is_double_colon():
             self.eat_double_colon()
 
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "typename"
+        ):
+            self.eat("IDENTIFIER")
+
         if not self.is_type_token(self.current_token[0]):
             raise SyntaxError(f"Expected type, got {self.current_token[0]}")
 
@@ -904,7 +969,7 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected struct type name, got {self.current_token[0]}"
                 )
-            return self.parse_identifier()
+            return self.parse_type_suffixes(self.parse_identifier())
 
         base = self.current_token[1]
         self.eat(self.current_token[0])
@@ -916,21 +981,27 @@ class HLSLParser:
             type_name = f"{type_name} {self.current_token[1]}"
             self.eat(self.current_token[0])
 
-        while self.current_token[0] == "COLON" and self.peek()[0] == "COLON":
-            self.eat("COLON")
-            self.eat("COLON")
-            if self.current_token[0] != "IDENTIFIER":
-                raise SyntaxError(
-                    f"Expected identifier after scoped type, got {self.current_token[0]}"
-                )
-            type_name += f"::{self.current_token[1]}"
-            self.eat("IDENTIFIER")
-
-        if self.current_token[0] == "LESS_THAN":
-            args = self.parse_generic_arguments()
-            type_name = f"{type_name}<{', '.join(args)}>"
+        type_name = self.parse_type_suffixes(type_name)
 
         return type_name
+
+    def parse_type_suffixes(self, type_name):
+        while True:
+            if self.current_token[0] == "LESS_THAN":
+                args = self.parse_generic_arguments()
+                type_name = f"{type_name}<{', '.join(args)}>"
+                continue
+            if self.current_token_is_double_colon():
+                self.eat_double_colon()
+                if self.current_token[0] != "IDENTIFIER":
+                    raise SyntaxError(
+                        "Expected identifier after scoped type, "
+                        f"got {self.current_token[0]}"
+                    )
+                type_name += f"::{self.current_token[1]}"
+                self.eat("IDENTIFIER")
+                continue
+            return type_name
 
     def parse_generic_arguments(self):
         args = []
@@ -944,6 +1015,16 @@ class HLSLParser:
                     args.append(self.format_generic_argument_tokens(current))
                 self.eat("GREATER_THAN")
                 return args
+            if token_type == "SHIFT_RIGHT" and depth > 0:
+                current.append(("GREATER_THAN", ">"))
+                if depth == 1:
+                    args.append(self.format_generic_argument_tokens(current))
+                    self.eat("SHIFT_RIGHT")
+                    return args
+                current.append(("GREATER_THAN", ">"))
+                depth -= 2
+                self.eat("SHIFT_RIGHT")
+                continue
             if token_type == "COMMA" and depth == 0:
                 args.append(self.format_generic_argument_tokens(current))
                 current = []
@@ -1177,9 +1258,7 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected struct base identifier, got {self.current_token[0]}"
                 )
-            base_name = self.parse_identifier()
-            if self.current_token_is_double_colon():
-                base_name = self.parse_scoped_name(base_name)
+            base_name = self.parse_type_suffixes(self.parse_identifier())
             base_classes.append(base_name)
             if self.current_token[0] != "COMMA":
                 break
@@ -1210,6 +1289,10 @@ class HLSLParser:
                 depth += 1
             elif token_type == "GREATER_THAN":
                 depth -= 1
+                if depth == 0:
+                    return idx + 1
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
                 if depth == 0:
                     return idx + 1
             elif token_type == "EOF":
@@ -1252,6 +1335,11 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
             if self.is_constructor_or_destructor_member(name):
                 methods.append(
                     self.parse_constructor_or_destructor_member(
@@ -1353,6 +1441,11 @@ class HLSLParser:
             member_attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
             if self.is_constructor_or_destructor_member(nested_name):
                 nested_methods.append(
                     self.parse_constructor_or_destructor_member(
@@ -1445,7 +1538,7 @@ class HLSLParser:
         self.synthetic_enum_count += 1
         return f"AnonymousEnum_{self.synthetic_enum_count}"
 
-    def parse_member_declarator_name(self):
+    def parse_operator_overload_name(self):
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "operator"
@@ -1468,7 +1561,39 @@ class HLSLParser:
             raise SyntaxError(
                 f"Expected overloaded operator name, got {self.current_token[0]}"
             )
+        raise SyntaxError(
+            f"Expected overloaded operator name, got {self.current_token[0]}"
+        )
+
+    def parse_member_declarator_name(self):
+        if self.is_anonymous_bitfield_declarator_start():
+            return None
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "operator"
+        ):
+            return self.parse_operator_overload_name()
         return self.parse_declarator_identifier()
+
+    def parse_function_declarator_name(self):
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] == "operator"
+        ):
+            name = self.parse_operator_overload_name()
+        else:
+            name = self.parse_declarator_identifier()
+        while self.current_token_is_double_colon():
+            self.eat_double_colon()
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and self.current_token[1] == "operator"
+            ):
+                member = self.parse_operator_overload_name()
+            else:
+                member = self.parse_identifier()
+            name = f"{name}::{member}"
+        return name
 
     def parse_enum(self):
         self.eat("ENUM")
@@ -1560,6 +1685,11 @@ class HLSLParser:
             attributes = self.parse_attribute_list()
             self.parse_template_declaration_prefixes()
             member_qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
+            if self.current_token_is_keyword("USING", "using"):
+                self.parse_using_directive()
+                continue
             if self.is_constructor_or_destructor_member(explicit_name):
                 methods.append(
                     self.parse_constructor_or_destructor_member(
@@ -1667,6 +1797,8 @@ class HLSLParser:
             is_prototype = True
         else:
             body = self.parse_block()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
 
         function = FunctionNode(
             return_type="",
@@ -1743,11 +1875,17 @@ class HLSLParser:
         members = []
         methods = []
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+            if self.current_token_is_keyword("NAMESPACE", "namespace"):
+                namespace_ast = self.parse_namespace_block()
+                members.extend(namespace_ast.global_variables)
+                continue
             if self.current_token[0] in {"CBUFFER", "TBUFFER"}:
                 members.append(self.parse_cbuffer(attributes=[]))
                 continue
             member_attributes = self.parse_attribute_list()
             qualifiers = self.parse_qualifiers()
+            if self.skip_unexpanded_member_macro():
+                continue
             if self.current_token[0] == "STRUCT":
                 declarations = self.parse_nested_struct_member(
                     name,
@@ -1831,6 +1969,8 @@ class HLSLParser:
             is_prototype = True
         else:
             body = self.parse_block()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
 
         qualifier = self.infer_function_qualifier(
             name, attributes, params, semantic, body
@@ -2104,6 +2244,10 @@ class HLSLParser:
             before_index = self.current_index
             qualifiers.extend(self.parse_qualifiers())
 
+            while self.is_unexpanded_parameter_modifier_macro_at(self.current_index):
+                self.eat("IDENTIFIER")
+                qualifiers.extend(self.parse_qualifiers())
+
             if (
                 self.current_token[0] == "IDENTIFIER"
                 and self.current_token[1] in primitive_qualifiers
@@ -2126,6 +2270,23 @@ class HLSLParser:
             if self.current_index == before_index:
                 break
         return qualifiers
+
+    def is_unexpanded_parameter_modifier_macro_at(self, index):
+        if index >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_type != "IDENTIFIER":
+            return False
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", str(token_value)):
+            return False
+
+        type_start = index + 1
+        while type_start < len(self.tokens) and self.is_qualifier_token_at(type_start):
+            type_start += 1
+
+        type_end = self.skip_type_name_at(type_start)
+        return type_end is not None and self.is_declarator_identifier_token_at(type_end)
 
     def is_parameter_role_token_at(self, index, roles):
         if index >= len(self.tokens):
@@ -2158,12 +2319,14 @@ class HLSLParser:
             return None
 
         attributes = self.parse_attribute_list()
+        attributes.extend(self.parse_unexpanded_statement_modifier_macros())
+        attributes.extend(self.parse_attribute_list())
 
         if self.current_token[0] == "RETURN":
             self.eat("RETURN")
             value = None
             if self.current_token[0] != "SEMICOLON":
-                value = self.parse_expression()
+                value = self.parse_expression(allow_comma=True)
             self.eat("SEMICOLON")
             return self.attach_attributes(ReturnNode(value), attributes)
 
@@ -2216,6 +2379,13 @@ class HLSLParser:
             self.parse_class_declaration()
             return None
 
+        if self.skip_unexpanded_statement_macro():
+            return None
+
+        if self.looks_like_local_struct_declaration():
+            qualifiers = self.parse_qualifiers()
+            return self.parse_local_struct_declaration(qualifiers, attributes)
+
         if self.looks_like_function_prototype():
             self.parse_local_function_prototype(attributes)
             return None
@@ -2233,7 +2403,7 @@ class HLSLParser:
         if self.current_token[0] == "STRUCT":
             return self.parse_struct()
 
-        expr = self.parse_expression()
+        expr = self.parse_expression(allow_comma=True)
         self.eat("SEMICOLON")
         return self.attach_attributes(expr, attributes)
 
@@ -2270,6 +2440,60 @@ class HLSLParser:
 
         return self.tokens[idx][0] == "SEMICOLON"
 
+    def skip_unexpanded_statement_macro(self):
+        if not self.is_macro_like_identifier(self.current_token):
+            return False
+        if self.peek()[0] != "LPAREN":
+            return False
+
+        end_index = self.skip_parenthesized_list_at(self.current_index + 1)
+        if end_index is None or end_index >= len(self.tokens):
+            return False
+        if self.tokens[end_index][0] == "SEMICOLON":
+            return False
+        if self.tokens[end_index][0] in {
+            "COMMA",
+            "RPAREN",
+            "RBRACKET",
+            "PLUS",
+            "MINUS",
+            "MULTIPLY",
+            "DIVIDE",
+            "MOD",
+            "BITWISE_AND",
+            "BITWISE_OR",
+            "BITWISE_XOR",
+            "SHIFT_LEFT",
+            "SHIFT_RIGHT",
+            "LESS_THAN",
+            "GREATER_THAN",
+            "LESS_EQUAL",
+            "GREATER_EQUAL",
+            "EQUAL",
+            "NOT_EQUAL",
+            "LOGICAL_AND",
+            "LOGICAL_OR",
+            *ASSIGNMENT_TOKENS,
+        }:
+            return False
+
+        self.eat("IDENTIFIER")
+        self.skip_balanced_delimiter_block("LPAREN", "RPAREN")
+        return True
+
+    def parse_unexpanded_statement_modifier_macros(self):
+        attributes = []
+        while (
+            self.is_macro_like_identifier(self.current_token)
+            and self.peek()[0] in STATEMENT_START_TOKENS
+        ):
+            macro_name = str(self.current_token[1])
+            attribute_name = UNEXPANDED_STATEMENT_ATTRIBUTE_MACROS.get(macro_name)
+            if attribute_name:
+                attributes.append(AttributeNode(attribute_name))
+            self.eat("IDENTIFIER")
+        return attributes
+
     def parse_local_function_prototype(self, attributes=None):
         qualifiers = self.parse_qualifiers()
         attributes = list(attributes or [])
@@ -2278,7 +2502,7 @@ class HLSLParser:
         return_type = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes.extend(self.parse_attribute_list())
-        name = self.parse_declarator_identifier()
+        name = self.parse_function_declarator_name()
         return self.parse_function(return_type, name, qualifiers, attributes)
 
     def attach_attributes(self, node, attributes):
@@ -2293,6 +2517,42 @@ class HLSLParser:
         if isinstance(stmt, list):
             return stmt
         return [stmt]
+
+    def looks_like_local_struct_declaration(self):
+        idx = self.current_index
+        saw_qualifier = False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            saw_qualifier = True
+            idx += 1
+
+        if (
+            not saw_qualifier
+            or idx >= len(self.tokens)
+            or self.tokens[idx][0] != "STRUCT"
+        ):
+            return False
+
+        idx += 1
+        if idx < len(self.tokens) and self.is_identifier_token_at(idx):
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_angle_list_at(idx)
+                if idx is None:
+                    return False
+
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+
+    def parse_local_struct_declaration(self, qualifiers, attributes):
+        struct = self.parse_struct(
+            declaration_qualifiers=qualifiers,
+            declaration_attributes=attributes,
+        )
+        declarations = list(getattr(struct, "variable_declarations", []) or [])
+        struct.variables = []
+        struct.variable_declarations = []
+        if getattr(struct, "name", None):
+            self.synthetic_structs.append(struct)
+        return declarations or None
 
     def looks_like_declaration(self):
         idx = self.current_index
@@ -2460,7 +2720,12 @@ class HLSLParser:
             idx += 1
             if not self.is_identifier_token_at(idx):
                 return None
-            return idx + 1
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_angle_list_at(idx)
+                if idx is None:
+                    return None
+            return idx
 
         base = self.tokens[idx][1]
         idx += 1
@@ -2486,6 +2751,11 @@ class HLSLParser:
                     depth += 1
                 elif self.tokens[idx][0] == "GREATER_THAN":
                     depth -= 1
+                    if depth == 0:
+                        idx += 1
+                        break
+                elif self.tokens[idx][0] == "SHIFT_RIGHT" and depth > 1:
+                    depth -= 2
                     if depth == 0:
                         idx += 1
                         break
@@ -2530,25 +2800,47 @@ class HLSLParser:
         declarations = []
         name = first_name
         while True:
-            declarations.append(
-                self.parse_variable_declaration_rest(
-                    vtype,
-                    name,
-                    qualifiers=qualifiers,
-                    attributes=attributes,
-                    allow_semantic=allow_semantic,
-                    consume_semicolon=False,
+            if name is None:
+                self.parse_anonymous_bitfield_declaration_rest()
+            else:
+                declarations.append(
+                    self.parse_variable_declaration_rest(
+                        vtype,
+                        name,
+                        qualifiers=qualifiers,
+                        attributes=attributes,
+                        allow_semantic=allow_semantic,
+                        consume_semicolon=False,
+                    )
                 )
-            )
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
-            name = self.parse_declarator_identifier()
+            if self.is_anonymous_bitfield_declarator_start():
+                name = None
+            else:
+                name = self.parse_declarator_identifier()
 
         if consume_semicolon:
             self.eat("SEMICOLON")
 
         return declarations
+
+    def is_anonymous_bitfield_declarator_start(self):
+        return self.current_token[0] == "COLON" and self.peek()[0] in {
+            "NUMBER",
+            "HEX_NUMBER",
+            "BINARY_NUMBER",
+            "OCT_NUMBER",
+        }
+
+    def parse_anonymous_bitfield_declaration_rest(self):
+        bit_width = self.parse_bitfield_width()
+        if bit_width is None:
+            raise SyntaxError(
+                f"Expected anonymous bitfield width, got {self.current_token[0]}"
+            )
+        self.parse_attribute_list()
 
     def parse_variable_declaration_rest(
         self,
@@ -2585,6 +2877,8 @@ class HLSLParser:
         sampler_state = None
         if self.is_sampler_state_type(vtype) and self.current_token[0] == "LBRACE":
             sampler_state = self.parse_sampler_state_block()
+            if self.is_sampler_state_initializer(value):
+                value = None
         elif self.current_token[0] == "LBRACE":
             self.skip_balanced_brace_block()
 
@@ -2649,7 +2943,12 @@ class HLSLParser:
         return str(vtype).split("<", 1)[0] in {
             "SamplerState",
             "SamplerComparisonState",
+            "sampler",
+            "sampler_state",
         }
+
+    def is_sampler_state_initializer(self, value):
+        return isinstance(value, str) and value.lower() == "sampler_state"
 
     def parse_sampler_state_block(self):
         self.eat("LBRACE")
@@ -2658,11 +2957,40 @@ class HLSLParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
             self.eat("EQUALS")
-            value = self.parse_expression()
+            value = self.parse_sampler_state_value()
             self.eat("SEMICOLON")
             state.append((name, value))
         self.eat("RBRACE")
         return state
+
+    def parse_sampler_state_value(self):
+        if self.current_token[0] == "LESS_THAN":
+            return self.parse_sampler_state_angle_value()
+        return self.parse_expression()
+
+    def parse_sampler_state_angle_value(self):
+        self.eat("LESS_THAN")
+        tokens = []
+        depth = 1
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if token_type == "LESS_THAN":
+                depth += 1
+                tokens.append(self.current_token)
+                self.eat("LESS_THAN")
+                continue
+            if token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.eat("GREATER_THAN")
+                    return self.format_generic_argument_tokens(tokens)
+                tokens.append(self.current_token)
+                self.eat("GREATER_THAN")
+                continue
+            tokens.append(self.current_token)
+            self.eat(token_type)
+
+        raise SyntaxError("Unterminated sampler_state angle-bracket value")
 
     def parse_condition_expression(self):
         if self.looks_like_declaration():
@@ -2794,7 +3122,12 @@ class HLSLParser:
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
             if self.current_token[0] == "CASE":
-                cases.append(self.parse_switch_case())
+                case = self.parse_switch_case()
+                cases.append(case)
+                cases.extend(getattr(case, "additional_cases", []))
+                nested_default = getattr(case, "additional_default_body", None)
+                if nested_default is not None:
+                    default_body = nested_default
             elif self.current_token[0] == "DEFAULT":
                 self.eat("DEFAULT")
                 self.eat("COLON")
@@ -2830,7 +3163,21 @@ class HLSLParser:
         self.eat("COLON")
 
         body = []
+        additional_cases = []
+        additional_default_body = None
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
+            if self.current_token[0] == "LBRACE":
+                (
+                    block_body,
+                    block_cases,
+                    block_default_body,
+                ) = self.parse_switch_scoped_block()
+                body.extend(block_body)
+                additional_cases.extend(block_cases)
+                if block_default_body is not None:
+                    additional_default_body = block_default_body
+                continue
+
             stmt = self.parse_statement()
             if stmt is None:
                 continue
@@ -2839,10 +3186,82 @@ class HLSLParser:
             else:
                 body.append(stmt)
 
-        return CaseNode(value, body)
+        case = CaseNode(value, body)
+        case.additional_cases = additional_cases
+        case.additional_default_body = additional_default_body
+        return case
 
-    def parse_expression(self):
-        return self.parse_assignment_expression()
+    def parse_switch_scoped_block(self):
+        self.eat("LBRACE")
+        body = []
+        cases = []
+        default_body = None
+
+        while self.current_token[0] not in ["RBRACE", "EOF"]:
+            if self.current_token[0] == "CASE":
+                case = self.parse_switch_case()
+                body.extend(case.body)
+                cases.append(case)
+                cases.extend(getattr(case, "additional_cases", []))
+                nested_default = getattr(case, "additional_default_body", None)
+                if nested_default is not None:
+                    default_body = nested_default
+                continue
+
+            if self.current_token[0] == "DEFAULT":
+                self.eat("DEFAULT")
+                self.eat("COLON")
+                default_body = []
+                while self.current_token[0] not in [
+                    "CASE",
+                    "DEFAULT",
+                    "RBRACE",
+                    "EOF",
+                ]:
+                    if self.current_token[0] == "LBRACE":
+                        (
+                            block_body,
+                            block_cases,
+                            block_default_body,
+                        ) = self.parse_switch_scoped_block()
+                        default_body.extend(block_body)
+                        body.extend(block_body)
+                        cases.extend(block_cases)
+                        if block_default_body is not None:
+                            default_body = block_default_body
+                        continue
+
+                    stmt = self.parse_statement()
+                    if stmt is None:
+                        continue
+                    if isinstance(stmt, list):
+                        default_body.extend(stmt)
+                        body.extend(stmt)
+                    else:
+                        default_body.append(stmt)
+                        body.append(stmt)
+                continue
+
+            stmt = self.parse_statement()
+            if stmt is None:
+                continue
+            if isinstance(stmt, list):
+                body.extend(stmt)
+            else:
+                body.append(stmt)
+
+        self.eat("RBRACE")
+        return body, cases, default_body
+
+    def parse_expression(self, allow_comma=False):
+        expr = self.parse_assignment_expression()
+        if allow_comma:
+            while self.current_token[0] == "COMMA":
+                op = self.current_token[1]
+                self.eat("COMMA")
+                right = self.parse_assignment_expression()
+                expr = BinaryOpNode(expr, op, right)
+        return expr
 
     def parse_assignment_expression(self):
         left = self.parse_conditional_expression()
@@ -3051,7 +3470,7 @@ class HLSLParser:
                 expr = MemberAccessNode(expr, member)
             elif self.current_token_is_double_colon():
                 expr = self.parse_scoped_name(expr)
-            elif self.looks_like_template_call_arguments() and isinstance(expr, str):
+            elif self.looks_like_template_id_arguments() and isinstance(expr, str):
                 expr = self.format_templated_name(expr, self.parse_generic_arguments())
             elif self.current_token[0] == "LPAREN":
                 args = self.parse_call_arguments()
@@ -3096,12 +3515,99 @@ class HLSLParser:
                         else ("EOF", "")
                     )
                     return next_token[0] == "LPAREN"
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN"
             elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
                 return False
             elif token_type == "EOF":
                 return False
             idx += 1
         return False
+
+    def looks_like_template_id_arguments(self):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        depth = 0
+        idx = self.current_index
+        saw_top_level_comma = False
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN" or (
+                        saw_top_level_comma
+                        and next_token[0]
+                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    )
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN" or (
+                        saw_top_level_comma
+                        and next_token[0]
+                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    )
+            elif depth == 1 and token_type == "COMMA":
+                saw_top_level_comma = True
+            elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
+                return False
+            elif token_type == "EOF":
+                return False
+            idx += 1
+        return False
+
+    def looks_like_scoped_template_arguments(self):
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        depth = 0
+        idx = self.current_index
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LESS_THAN":
+                depth += 1
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    return self.is_scoped_template_argument_follower(idx + 1)
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
+                if depth == 0:
+                    return self.is_scoped_template_argument_follower(idx + 1)
+            elif depth == 1 and token_type in {"SEMICOLON", "RPAREN", "RBRACE"}:
+                return False
+            elif token_type == "EOF":
+                return False
+            idx += 1
+        return False
+
+    def is_scoped_template_argument_follower(self, index):
+        if index >= len(self.tokens):
+            return False
+        if self.tokens[index][0] == "LPAREN":
+            return True
+        return self.token_at_is_double_colon(index)
 
     def parse_scoped_name(self, prefix):
         if not isinstance(prefix, str):
@@ -3111,6 +3617,10 @@ class HLSLParser:
         while self.current_token_is_double_colon():
             self.eat_double_colon()
             member = self.parse_identifier()
+            if self.looks_like_scoped_template_arguments():
+                member = self.format_templated_name(
+                    member, self.parse_generic_arguments()
+                )
             scoped_name = f"{scoped_name}::{member}"
         return scoped_name
 
@@ -3143,6 +3653,15 @@ class HLSLParser:
                 depth += 1
             elif token_type == "GREATER_THAN":
                 depth -= 1
+                if depth == 0:
+                    next_token = (
+                        self.tokens[idx + 1]
+                        if idx + 1 < len(self.tokens)
+                        else ("EOF", "")
+                    )
+                    return next_token[0] == "LPAREN"
+            elif token_type == "SHIFT_RIGHT" and depth > 1:
+                depth -= 2
                 if depth == 0:
                     next_token = (
                         self.tokens[idx + 1]

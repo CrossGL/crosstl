@@ -6,9 +6,55 @@ from typing import Dict, List, Optional, Tuple
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
+HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
+
 
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
+
+    def _handle_include(
+        self, rest: str, file_path: Optional[str]
+    ) -> Optional[Tuple[str, str]]:
+        match = re.match(r"\s*([<\"])([^>\"]+)[>\"]", rest)
+        if not match:
+            return None
+        delimiter = match.group(1)
+        target = match.group(2)
+
+        search_paths: List[str] = []
+        if delimiter == '"' and file_path:
+            search_paths.append(os.path.dirname(file_path))
+        search_paths.extend(self.include_paths)
+
+        targets = [target]
+        normalized_target = target.replace("\\", os.sep)
+        if normalized_target != target:
+            targets.append(normalized_target)
+
+        for base in search_paths:
+            for include_target in targets:
+                candidate = os.path.join(base, include_target)
+                if os.path.isfile(candidate):
+                    return self._read_source_file(candidate), candidate
+
+        if self.strict:
+            raise FileNotFoundError(f"Include not found: {target}")
+        return None
+
+    def _handle_define(self, rest: str):
+        rest = rest.lstrip()
+        name_match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", rest)
+        name = name_match.group(0) if name_match else None
+
+        super()._handle_define(rest)
+
+        macro = self.macros.get(name) if name else None
+        if (
+            macro is not None
+            and not macro.is_function_like()
+            and "##" in macro.replacement
+        ):
+            macro.replacement = self._replace_params(macro.replacement, {})
 
     def _split_logical_lines(self, code: str) -> List[str]:
         return super()._split_logical_lines(
@@ -165,6 +211,10 @@ class GLSLPreprocessor:
                 i = self._skip_block_comment(code, i)
                 continue
             if ch == "#":
+                marker_end = self._skip_hash_bracketed_marker_line(code, i)
+                if marker_end is not None:
+                    i = marker_end
+                    continue
                 directive = self._read_directive(code, i)
                 if directive == "version":
                     return i
@@ -186,8 +236,36 @@ class GLSLPreprocessor:
             if code.startswith("/*", i):
                 i = self._skip_block_comment(code, i)
                 continue
+            marker_end = self._skip_hash_bracketed_marker_line(code, i)
+            if marker_end is not None:
+                i = marker_end
+                continue
             return True
         return False
+
+    def _skip_hash_bracketed_marker_line(self, code: str, start: int) -> Optional[int]:
+        match = HASH_BRACKETED_MARKER_RE.match(code, start)
+        if not match:
+            return None
+
+        i = match.end()
+        while i < len(code) and code[i] in " \t\r\f\v":
+            i += 1
+        if i >= len(code):
+            return i
+        if code[i] == "\n":
+            return i + 1
+        if code.startswith("//", i):
+            return self._skip_line_comment(code, i)
+        if code.startswith("/*", i):
+            after_comment = self._skip_block_comment(code, i)
+            while after_comment < len(code) and code[after_comment] in " \t\r\f\v":
+                after_comment += 1
+            if after_comment >= len(code):
+                return after_comment
+            if code[after_comment] == "\n":
+                return after_comment + 1
+        return None
 
     def _read_directive(self, code: str, start: int) -> str:
         match = re.match(r"#\s*([A-Za-z_][A-Za-z0-9_]*)", code[start:])

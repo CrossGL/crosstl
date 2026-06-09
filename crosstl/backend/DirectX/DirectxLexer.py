@@ -5,11 +5,20 @@ import re
 from enum import Enum, auto
 from typing import Iterator, List, Optional, Tuple
 
-from .preprocessor import HLSLPreprocessor
+from .preprocessor import HLSLPreprocessor, Macro
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 DEFAULT_PREPROCESSOR_DEFINES = {"HLSL": "1"}
+DEFAULT_PREPROCESSOR_MACROS = (
+    Macro("TEXTURE2D", params=["textureName"], replacement="Texture2D textureName"),
+    Macro("SAMPLER", params=["samplerName"], replacement="SamplerState samplerName"),
+    Macro(
+        "SAMPLE_TEXTURE2D",
+        params=["textureName", "samplerName", "coord2"],
+        replacement="textureName.Sample(samplerName, coord2)",
+    ),
+)
 SHADERLAB_PROGRAM_OPEN_MARKERS = frozenset(
     {"CGINCLUDE", "CGPROGRAM", "HLSLINCLUDE", "HLSLPROGRAM"}
 )
@@ -110,7 +119,7 @@ TOKENS = tuple(
             "MATRIX",
             r"\b(float|half|fixed|double|int|uint|bool|min16float|min10float|"
             r"min16int|min12int|min16uint|float16_t|float32_t|int16_t|"
-            r"float64_t|int32_t|int64_t|uint16_t|uint32_t|uint64_t)[1-4]x[1-4]\b",
+            r"float64_t|int32_t|int64_t|uint16_t|uint32_t|uint64_t|dword)[1-4]x[1-4]\b",
         ),
         # Vector types (must come before scalar types)
         (
@@ -119,7 +128,7 @@ TOKENS = tuple(
             r"float32_t|float64_t)[1-4]\b",
         ),
         ("IVECTOR", r"\b(int|min16int|min12int|int16_t|int32_t|int64_t)[1-4]\b"),
-        ("UVECTOR", r"\b(uint|min16uint|uint16_t|uint32_t|uint64_t)[1-4]\b"),
+        ("UVECTOR", r"\b(uint|min16uint|uint16_t|uint32_t|uint64_t|dword)[1-4]\b"),
         ("BVECTOR", r"\bbool[1-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),
@@ -195,8 +204,8 @@ TOKENS = tuple(
             r"|(?:"
             r"\d+\.(?!(?:[xyzwrgbaXYZWRGBA]{1,4})(?![a-zA-Z0-9_]))\d*"
             r"|\.\d+"
-            r")(?:[eE][+-]?\d+)?[fFhH]?"
-            r"|\d+[eE][+-]?\d+[fFhH]?"
+            r")(?:[eE][+-]?\d+)?[fFhHlL]?"
+            r"|\d+[eE][+-]?\d+[fFhHlL]?"
             r"|\d+(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?|[fFhH])?",
         ),
         # Brackets and braces
@@ -591,7 +600,10 @@ class HLSLLexer:
                 defines=preprocessor_defines,
                 strict=strict_preprocessor,
             )
+            for macro in DEFAULT_PREPROCESSOR_MACROS:
+                preprocessor.macros.setdefault(macro.name, macro)
             code = preprocessor.preprocess(code, file_path=file_path)
+        code = code.replace("\ufeff", "")
         self.code = code
         self._length = len(code)
 
@@ -637,8 +649,13 @@ class HLSLLexer:
                 cursor += match.end()
 
         if not found_program_block:
+            if self._looks_like_shaderlab_source(code):
+                return ""
             return code
         return "\n".join(extracted_lines)
+
+    def _looks_like_shaderlab_source(self, code: str) -> bool:
+        return re.search(r'(?m)^\s*Shader\s+"[^"]+"', code) is not None
 
     def _find_shaderlab_program_marker(self, text: str, markers):
         for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
@@ -702,9 +719,14 @@ class HLSLLexer:
     @classmethod
     def from_file(cls, filepath: str) -> "HLSLLexer":
         """Create a lexer instance from a source file."""
-        with open(filepath, encoding="utf-8", errors="replace") as f:
-            base_dir = os.path.dirname(filepath)
-            return cls(f.read(), file_path=filepath, include_paths=[base_dir])
+        with open(filepath, "rb") as f:
+            data = f.read()
+        if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+            code = data.decode("utf-16", errors="replace")
+        else:
+            code = data.decode("utf-8-sig", errors="replace")
+        base_dir = os.path.dirname(filepath)
+        return cls(code, file_path=filepath, include_paths=[base_dir])
 
 
 class Lexer:

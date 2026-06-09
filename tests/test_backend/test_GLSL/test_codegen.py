@@ -156,6 +156,36 @@ def test_codegen_vertex_roundtrip():
         assert name in output
 
 
+def test_codegen_multiline_for_header_from_graphicsfuzz_bubblesort():
+    # Reduced from google/graphicsfuzz
+    # shaders/src/main/glsl/samples/100/stable_bubblesort_flag.frag at
+    # aa32d4cb556647ddaaf2048815bd6bca07d1bdab.
+    code = textwrap.dedent("""
+        #version 100
+
+        precision mediump float;
+        uniform vec2 resolution;
+
+        void main()
+        {
+            float data[2];
+            for(
+                int i = 0;
+                i < 2;
+                i ++
+            )
+            {
+                data[i] = float(i);
+            }
+            gl_FragColor = vec4(data[0] / resolution.x);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "for (int i = 0; (i < 2); (i++))" in crossgl
+
+
 def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar():
     # GLSL 4.60 layout-qualifier is "layout ( ... )"; newlines are whitespace.
     code = textwrap.dedent("""
@@ -176,6 +206,132 @@ def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar()
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "layout(location = 0) in vec3 position;" in glsl
+
+
+def test_codegen_spirv_intrinsics_annotations_roundtrip_from_glslang():
+    # Reduced from KhronosGroup/glslang GL_EXT_spirv_intrinsics tests.
+    code = textwrap.dedent("""
+        #version 460 core
+        #extension GL_EXT_spirv_intrinsics : require
+
+        layout(local_size_x = 1) in;
+        spirv_execution_mode(5027);
+
+        spirv_decorate_string(extensions = ["SPV_GOOGLE_hlsl_functionality1"], 5635, "foobar")
+        spirv_decorate(0)
+        float annotatedValue = 0.5;
+
+        spirv_instruction(id = 61)
+        uint loadUint(spirv_type(id = 32, uint) pointer, spirv_literal uint memoryOperands);
+
+        void accept(spirv_type(id = 30) payload) {}
+
+        void main() {
+            spirv_type(id = 30) dummy;
+            annotatedValue = float(loadUint(dummy, 0x2));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "float annotatedValue = 0.5;" in crossgl
+    assert "uint loadUint(spirv_type pointer, uint memoryOperands)" in crossgl
+    assert "spirv_type dummy;" in crossgl
+
+
+def test_codegen_function_call_array_sizes_roundtrip_from_glslang_constfold():
+    # Reduced from KhronosGroup/glslang Test/constFold.frag at
+    # 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515.
+    code = textwrap.dedent("""
+        #version 430
+
+        const mat3 m3 = mat3(1.0);
+        const vec2 v2 = vec2(1, 2);
+        const vec3 v3 = vec3(3, 4, 5);
+        float a3[int(m3[1][0])];
+        float a4[uint(mat3(v2, v3, v2, v2)[2][2])];
+
+        out vec4 FragColor;
+
+        void main()
+        {
+            vec4 array2[2];
+            vec4 array3[3];
+            vec4 arrayMax[int(max(float(array2.length()), float(array3.length())))];
+            FragColor = vec4(a3[0], a4[0], arrayMax.length(), 1.0);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "float a3[(int(m3[1][0]))];" in crossgl
+    assert (
+        "vec4 arrayMax[(int(max(float(array2.length()), float(array3.length()))))];"
+        in crossgl
+    )
+
+
+def test_codegen_half_float_suffix_and_ssbo_struct_array_roundtrip_from_glslang():
+    # Reduced from KhronosGroup/glslang spv.float16.frag and bfloat struct
+    # constructor coverage.
+    code = textwrap.dedent("""
+        #version 450 core
+        #extension GL_AMD_gpu_shader_half_float : enable
+        #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+        #extension GL_ARB_gpu_shader_int64 : enable
+
+        layout(local_size_x = 1) in;
+
+        struct S {
+            float16_t x;
+        };
+
+        layout(row_major, std430) buffer B2 {
+            S v[2];
+        };
+
+        const S sc = S(0.125hf);
+        const int64_t signedLong = -10L;
+        const uint64_t unsignedLong = 0xFFFFFFFFul;
+
+        void main() {}
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "const S sc = S(0.125);" in crossgl
+    assert "S{" not in crossgl
+    assert "S v[2] @row_major @glsl_buffer_block(std430);" in crossgl
+    assert "0.125hf" not in crossgl
+    assert "const int64_t signedLong = (-10);" in crossgl
+    assert "const uint64_t unsignedLong = 0xFFFFFFFFu;" in crossgl
+
+
+def test_codegen_unary_rhs_after_newline_from_crt_royale_roundtrip():
+    # Reduced from libretro/glsl-shaders crt-royale-geometry-aa-last-pass.glsl,
+    # which has a parenthesized return expression with "+\n -term".
+    code = textwrap.dedent("""
+        #version 130
+
+        float curve_weight(float x)
+        {
+            return (
+                0.0264727330997042 * min(x, 6.83134964622778) +
+                -0.0597255978950933 * min(7.41043194481873, x)
+            );
+        }
+
+        void main()
+        {
+            gl_Position = vec4(curve_weight(1.0));
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+
+    assert "-0.0597255978950933" in crossgl
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "-0.0597255978950933" in glsl
 
 
 def test_codegen_fragment_roundtrip():
@@ -323,7 +479,7 @@ def test_codegen_for_init_custom_struct_declaration_from_glsl_460_grammar():
     output = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
 
     assert (
-        "for (Cursor cursor = Cursor{0}; (cursor.value < 2); (cursor.value++))"
+        "for (Cursor cursor = Cursor(0); (cursor.value < 2); (cursor.value++))"
         in output
     )
     assert "cursor.value += 1;" in output
@@ -711,6 +867,38 @@ def test_codegen_texture_intrinsics_use_canonical_crossgl_resources():
     assert "textureLod(tex, uv, 1.0)" in glsl
     assert "textureGrad(tex, uv, vec2(1.0), vec2(1.0))" in glsl
     assert "textureGather(tex, uv)" in glsl
+
+
+def test_codegen_gles_precision_qualified_sampler_roundtrip():
+    # Reduced from common ES texture shader idioms: precision defaults,
+    # precision-qualified sampler uniforms, and texture() sampling.
+    code = textwrap.dedent("""
+        #version 300 es
+        precision mediump float;
+        precision lowp sampler2D;
+
+        layout(location = 0) in highp vec2 coord;
+        layout(location = 0) out lowp vec4 fragColor;
+        uniform highp sampler2D texSampler;
+
+        void main()
+        {
+            lowp vec4 col = texture(texSampler, coord);
+            fragColor = col;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "sampler2D texSampler @highp;" in crossgl
+    assert "vec2 coord @location(0) @highp;" in crossgl
+    assert "vec4 col @lowp = texture(texSampler, input.coord);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "precision lowp sampler2D;" in glsl
+    assert "layout(binding = 0) uniform highp sampler2D texSampler;" in glsl
+    assert "layout(location = 0) in highp vec2 coord;" in glsl
+    assert "lowp vec4 col = texture(texSampler, coord);" in glsl
 
 
 def test_codegen_native_shadow_texture_imports_compare_helpers():
@@ -1234,6 +1422,37 @@ def test_codegen_vulkan_descriptor_sets_preserved_on_resources():
     parse_crossgl(crossgl)
 
 
+def test_codegen_constant_expression_resource_binding_from_godot_scene_forward():
+    # Reduced from godotengine/godot@a4f5e8cddf68487bdc358bc2ccf745d98363139b
+    # servers/rendering/renderer_rd/shaders/forward_clustered/scene_forward_clustered.glsl.
+    # That file includes samplers_inc.glsl after defining
+    # SAMPLERS_BINDING_FIRST_INDEX to 12, producing resource bindings like
+    # 12 + 0.
+    code = textwrap.dedent("""
+        #version 450
+        #define SAMPLERS_BINDING_FIRST_INDEX 12
+
+        layout(set = 1, binding = SAMPLERS_BINDING_FIRST_INDEX + 0)
+        uniform sampler2D SAMPLER_NEAREST_CLAMP;
+
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(SAMPLER_NEAREST_CLAMP, vec2(0.5));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "sampler2D SAMPLER_NEAREST_CLAMP @set(1) @binding(12);" in crossgl
+    assert "@binding((12 + 0))" not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "layout(binding = 1036) uniform sampler2D SAMPLER_NEAREST_CLAMP;" in glsl
+    GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
+
+
 def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
     # Test/300samplerExternalYUV.frag.
@@ -1253,14 +1472,14 @@ def test_codegen_external_yuv_sampler_uniforms_are_resources_from_glslang():
     crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
 
     assert "__samplerExternal2DY2YEXT sExt;" in crossgl
-    assert "__samplerExternal2DY2YEXT highExt;" in crossgl
+    assert "__samplerExternal2DY2YEXT highExt @highp;" in crossgl
     assert "cbuffer Uniforms" not in crossgl
     assert "texture(sExt, vec2(0.2))" in crossgl
     assert "texture(highExt, vec2(0.2))" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
     assert "uniform __samplerExternal2DY2YEXT sExt;" in glsl
-    assert "uniform __samplerExternal2DY2YEXT highExt;" in glsl
+    assert "uniform highp __samplerExternal2DY2YEXT highExt;" in glsl
     assert "texture(sExt, vec2(0.2))" in glsl
     assert "texture(highExt, vec2(0.2))" in glsl
 
@@ -1433,6 +1652,43 @@ def test_codegen_comma_separated_for_updates():
     assert "for (uint i = 0; (i < 3); (++i), (++plane_index))" in crossgl
 
 
+def test_codegen_skips_unsupported_tensor_arm_uniforms_from_vulkan_samples():
+    # Reduced from KhronosGroup/Vulkan-Samples
+    # shaders/tensor_and_data_graph/compute_shaders_with_tensors/glsl/postprocessing.comp.
+    code = textwrap.dedent("""
+        #version 460
+        #extension GL_ARM_tensors : enable
+
+        layout(set = 0, binding = 0) uniform tensorARM<float, 4> input_tensor;
+        layout(set = 0, binding = 1) writeonly uniform tensorARM<float, 4> output_tensor;
+
+        layout(push_constant) uniform push_constants
+        {
+            float time;
+        };
+
+        layout(local_size_x = 1, local_size_y = 1) in;
+        void main()
+        {
+            float value[3];
+            uint pixel_coords[4] = uint[](0, gl_GlobalInvocationID.y, gl_GlobalInvocationID.x, 0);
+            tensorReadARM(input_tensor, pixel_coords, value);
+            tensorWriteARM(output_tensor, pixel_coords, value);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "tensorARM" not in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "cbuffer push_constants @push_constant" in crossgl
+    assert "tensorReadARM(input_tensor, pixel_coords, value)" in crossgl
+    assert "tensorWriteARM(output_tensor, pixel_coords, value)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    GLSLParser(GLSLLexer(glsl).tokenize(), "compute").parse()
+
+
 def test_codegen_type_only_atomic_uint_layout_default_from_glslang_spec_examples():
     # Reduced from KhronosGroup/glslang Test/specExamples.vert.
     code = textwrap.dedent("""
@@ -1512,6 +1768,31 @@ def test_codegen_parenthesized_comma_assignment_expression():
 
     assert "int b = (a = 1, (a + 2));" in crossgl
     assert "float((a = 3, b))" in crossgl
+
+
+def test_codegen_parenthesized_assignment_array_access_from_glslang_coopmat():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/spv.coopmat.comp, which uses .length() on an indexed value and
+    # indexes the result of a compound assignment.
+    code = textwrap.dedent("""
+        #version 450 core
+
+        vec4 mats[3];
+        int elementCount[mats[1].length()];
+
+        void main() {
+            vec4 m = vec4(1.0);
+            float md1 = 0.0;
+            md1 += (m += m)[2];
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "compute", ShaderStage.COMPUTE)
+
+    assert "int elementCount[(mats[1]).length()];" in crossgl
+    assert "md1 += (m += m)[2];" in crossgl
+    assert "mats[1].length()" not in crossgl
+    assert "md1 += m += m[2];" not in crossgl
 
 
 def test_codegen_unnamed_function_parameters_get_stable_names():
@@ -1753,7 +2034,7 @@ def test_codegen_reserved_helper_name_from_glslang_struct_sample_roundtrip():
     assert "compute_(vec4(1.0))" in crossgl
     assert "S compute(" not in crossgl
     assert " compute(vec4" not in crossgl
-    assert "S{value}" in crossgl
+    assert "S(value)" in crossgl
 
 
 def test_codegen_do_while_continue_roundtrip_preserves_condition_check():
@@ -1927,6 +2208,62 @@ def test_codegen_uniform_struct_specifier_uses_uniform_buffer():
     parse_crossgl(crossgl)
 
 
+def test_codegen_fallback_uniform_block_avoids_struct_name_collision_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.int16.frag, where an
+    # interface block named Uniforms collides with the fallback loose-uniform
+    # CrossGL cbuffer name.
+    code = textwrap.dedent("""
+        #version 450
+
+        layout(binding = 0) uniform Uniforms
+        {
+            uint index;
+        };
+
+        layout(std140, binding = 1) uniform Block
+        {
+            int value;
+        } block;
+
+        void main()
+        {
+            int local_value = int(index) + block.value;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct Uniforms" in crossgl
+    assert "cbuffer GlobalUniforms" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_image_rect_format_metadata_reparse_from_glslang():
+    # Reduced from KhronosGroup/glslang Test/spv.atomicFloat.comp. CrossGL
+    # preserves the rectangle image resource but cannot validate format
+    # attributes on image2DRect resource types yet.
+    code = textwrap.dedent("""
+        #version 450 core
+        #extension GL_EXT_shader_atomic_float : enable
+
+        layout(local_size_x = 1) in;
+        layout(r32f, binding = 4) coherent volatile uniform image2DRect fimage2DRect;
+
+        void main()
+        {
+            imageAtomicAdd(fimage2DRect, ivec2(0, 0), 2.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert "image2DRect fimage2DRect" in crossgl
+    assert "@binding(4)" in crossgl
+    assert "@r32f" not in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_local_struct_with_mixed_array_declarators_from_khronos_webgl():
     code = textwrap.dedent("""
         precision mediump float;
@@ -2005,6 +2342,35 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
     assert "mvp_uniform.view_proj" not in crossgl
     assert "gl_Position = (view_proj * vec4(1.0));" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_arrayed_descriptor_uniform_block_preserves_instance_metadata():
+    code = textwrap.dedent("""
+        #version 450
+        struct Foo { vec4 v; };
+        layout(set = 2, binding = 4) uniform UBO { Foo foo; } ubos[2];
+        layout(location = 0) out vec4 FragColor;
+
+        void main() {
+            FragColor = ubos[1].foo.v;
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "struct UBO" in crossgl
+    assert "Foo foo;" in crossgl
+    assert "uniform UBO ubos[2] @set(2) @binding(4);" in crossgl
+    assert "cbuffer Uniforms" not in crossgl
+    assert "ubos[1].foo.v" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "uniform UBO {" in glsl
+    assert "Foo foo;" in glsl
+    assert "} ubos[2];" in glsl
+    assert "FragColor = ubos[1].foo.v;" in glsl
 
 
 def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():

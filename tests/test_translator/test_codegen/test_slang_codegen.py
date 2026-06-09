@@ -910,6 +910,22 @@ def test_fragment_sample_mask_struct_output_maps_to_slang_coverage():
     assert "gl_SampleMask" not in generated_code
 
 
+def test_fragment_stencil_ref_return_maps_to_slang_semantic():
+    code = """
+    shader main {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint main() : SV_StencilRef" in generated_code
+    assert "gl_FragStencilRefEXT" not in generated_code
+
+
 def test_fragment_sample_mask_rejects_non_uint_slang_type():
     code = """
     shader main {
@@ -5613,6 +5629,44 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_Position" not in generated_code
     assert ": gl_FragColor" not in generated_code
     assert ": gl_GlobalInvocationID" not in generated_code
+
+
+def test_barycentric_semantics_map_to_slang_system_value():
+    perspective_code = """
+    shader BarycentricPerspectiveShader {
+        fragment {
+            vec4 main(vec3 bary @ gl_BaryCoordEXT) @ gl_FragColor {
+                return vec4(bary, 1.0);
+            }
+        }
+    }
+    """
+    perspective_generated = generate_code(parse_code(tokenize_code(perspective_code)))
+
+    assert (
+        "float4 main(float3 bary : SV_Barycentrics) : SV_Target"
+        in perspective_generated
+    )
+    assert ": gl_BaryCoordEXT" not in perspective_generated
+
+    no_perspective_code = """
+    shader BarycentricNoPerspectiveShader {
+        fragment {
+            vec4 main(vec3 bary @ gl_BaryCoordNoPerspEXT) @ gl_FragColor {
+                return vec4(bary, 1.0);
+            }
+        }
+    }
+    """
+    no_perspective_generated = generate_code(
+        parse_code(tokenize_code(no_perspective_code))
+    )
+
+    assert (
+        "float4 main(noperspective float3 bary : SV_Barycentrics) : SV_Target"
+        in no_perspective_generated
+    )
+    assert ": gl_BaryCoordNoPerspEXT" not in no_perspective_generated
 
 
 def test_struct_semantics_validate_builtin_types_and_stage_context_for_slang():
@@ -10626,6 +10680,54 @@ def test_generic_vector_constructors_emit_slang_names():
     assert "vec4<" not in generated_code
 
 
+def test_narrow_generic_vector_constructors_emit_slang_vector_types():
+    code = """
+    shader main {
+        vec2<i8> narrowSigned(vec2<i8> input) {
+            vec2<i8> inc = vec2<i8>(1, 2);
+            return input + inc;
+        }
+
+        vec4<u8> narrowUnsigned(vec4<u8> input) {
+            vec4<u8> inc = vec4<u8>(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+
+        vec3<i16> signedShort(vec3<i16> input) {
+            vec3<i16> inc = vec3<i16>(1, 2, 3);
+            return input + inc;
+        }
+
+        vec2<u16> unsignedShort(vec2<u16> input) {
+            vec2<u16> inc = vec2<u16>(1u, 2u);
+            return input + inc;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "vector<int8_t, 2> narrowSigned(vector<int8_t, 2> input)" in generated_code
+    assert "vector<int8_t, 2> inc = vector<int8_t, 2>(1, 2);" in generated_code
+    assert (
+        "vector<uint8_t, 4> narrowUnsigned(vector<uint8_t, 4> input)" in generated_code
+    )
+    assert (
+        "vector<uint8_t, 4> inc = vector<uint8_t, 4>(1u, 2u, 3u, 4u);" in generated_code
+    )
+    assert "vector<int16_t, 3> signedShort(vector<int16_t, 3> input)" in generated_code
+    assert "vector<int16_t, 3> inc = vector<int16_t, 3>(1, 2, 3);" in generated_code
+    assert (
+        "vector<uint16_t, 2> unsignedShort(vector<uint16_t, 2> input)" in generated_code
+    )
+    assert "vector<uint16_t, 2> inc = vector<uint16_t, 2>(1u, 2u);" in generated_code
+
+    for invalid_token in ("i82", "u84", "i163", "u162", "vec2<", "vec3<", "vec4<"):
+        assert invalid_token not in generated_code
+
+
 def test_scalar_aliases_emit_slang_fundamental_type_names():
     # Slang's fundamental scalar type names are float/int/uint/double
     # (with *_t aliases), not CrossGL's f32/i32/u32/f64 spellings.
@@ -10847,6 +10949,70 @@ def test_conflicting_slang_resource_binding_metadata_raises(resource_source, mes
         generate_code(ast)
 
 
+def test_slang_vulkan_descriptor_arrays_do_not_reserve_adjacent_bindings():
+    code = """
+    shader SlangAdjacentVkDescriptorArrayBindings {
+        sampler2D maps[2] @binding(0);
+        sampler states @binding(1);
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] Sampler2D<float4> maps[2] "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] SamplerState states " ": register(s1);" in generated_code
+    )
+
+
+def test_slang_sampler_descriptor_arrays_remap_overlapping_target_registers():
+    code = """
+    shader SlangMixedTextureCompareDescriptorArrayBindings {
+        sampler2DShadow shadowMaps[2] @set(0) @binding(3);
+        sampler linearSamplers[2] @set(0) @binding(5);
+        sampler shadowSamplers[2] @set(0) @binding(6);
+
+        float sampleShadow(int descriptor, vec2 uv, float depth) {
+            return textureCompare(
+                shadowMaps[descriptor],
+                shadowSamplers[descriptor],
+                uv,
+                depth
+            );
+        }
+
+        fragment {
+            vec4 main(vec2 uv, float depth) @ gl_FragColor {
+                float sampled = sampleShadow(1, uv, depth);
+                return vec4(sampled, sampled, sampled, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(5, 0)]] SamplerState linearSamplers[2] "
+        ": register(s5, space0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(6, 0)]] SamplerComparisonState shadowSamplers[2] "
+        ": register(s7, space0);" in generated_code
+    )
+    assert (
+        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)"
+        in (generated_code)
+    )
+
+
 def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
     code = """
     shader AutoResourceBindings {
@@ -10873,7 +11039,7 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "[[vk::binding(7, 0)]] cbuffer Camera : register(b0)" in generated_code
+    assert "[[vk::binding(6, 0)]] cbuffer Camera : register(b0)" in generated_code
     assert (
         "[[vk::binding(0, 0)]] Sampler2D<float4> firstTexture "
         ": register(t0);" in generated_code
@@ -10903,7 +11069,7 @@ def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots():
         ": register(s0);" in generated_code
     )
     assert (
-        "[[vk::binding(6, 0)]] RWTexture2D<uint> counters "
+        "[[vk::binding(4, 0)]] RWTexture2D<uint> counters "
         ": register(u0);" in generated_code
     )
 
@@ -12142,6 +12308,13 @@ def test_byte_address_interlocked_member_calls_reject_value_contexts():
             sampler2d overlap @binding(1);
             """,
             "t1 overlaps 'textures' t0-t1",
+        ),
+        (
+            """
+            sampler linearSamplers[2] @register(s5);
+            sampler shadowSamplers[2] @register(s6);
+            """,
+            "s6-s7 overlaps 'linearSamplers' s5-s6",
         ),
         (
             """

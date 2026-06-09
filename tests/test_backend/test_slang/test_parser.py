@@ -237,6 +237,39 @@ def test_glsl_layout_qualifiers_and_uniform_blocks_from_libretro_shader():
     ]
 
 
+def test_glsl_storage_buffer_block_from_allow_glsl_parsing():
+    code = """
+    buffer MyBlockName {
+        vec4 result;
+    } outputBuffer;
+
+    void main() {
+        outputBuffer.result = vec4(1.0);
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    block = ast.cbuffers[0]
+    instance = block.instances[0]
+    assignment = find_function(ast, "main").body[0]
+
+    assert block.name == "MyBlockName"
+    assert block.glsl_block_kind == "buffer"
+    assert block.qualifiers == ["buffer"]
+    assert [(member.vtype, member.name) for member in block.members] == [
+        ("vec4", "result")
+    ]
+    assert (instance.vtype, instance.name, instance.glsl_block_kind) == (
+        "MyBlockName",
+        "outputBuffer",
+        "buffer",
+    )
+    assert isinstance(assignment.left, MemberAccessNode)
+    assert assignment.left.object.name == "outputBuffer"
+    assert assignment.left.member == "result"
+
+
 def test_struct_array_member_declarator_parsing():
     code = """
     struct Cluster {
@@ -1128,6 +1161,43 @@ def test_interface_struct_and_extension_conformance_metadata_parsing():
     assert not extension.methods[0].is_declaration
 
 
+def test_dunder_extension_multi_interface_conformance_parse():
+    # Reduced from shader-slang/slang tests/compute/extension-multi-interface.slang.
+    code = """
+    interface ISub {
+        float subf(float u, float v);
+    }
+
+    interface IAddAndSub {
+        float addf(float u, float v);
+        float subf(float u, float v);
+    }
+
+    struct Simple {
+        float base;
+    };
+
+    __extension Simple : ISub, IAddAndSub
+    {
+        float subf(float u, float v)
+        {
+            return base + u - v;
+        }
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    extension = ast.extensions[0]
+    assert isinstance(extension, ExtensionNode)
+    assert extension.extended_type == "Simple"
+    assert extension.conformances == ["ISub", "IAddAndSub"]
+    assert len(extension.methods) == 1
+    assert extension.methods[0].name == "subf"
+    assert isinstance(extension.methods[0].body[0], ReturnNode)
+
+
 def test_interface_associated_type_requirement_from_model_viewer_sample():
     code = """
     interface IMaterial
@@ -1211,6 +1281,32 @@ def test_typealias_declarations_from_shader_toy_and_mlp_vec_samples():
     assert [(member.vtype, member.name) for member in struct.members] == [
         ("CoopVec<NFloat, N>", "data")
     ]
+
+
+def test_generic_typealias_declaration_from_slang_neural_modules():
+    # Source: shader-slang/slang source/standard-modules/neural/hash-function.slang
+    # and source/standard-modules/neural/WaveMatrix.slang declare generic
+    # aliases before the `=` target type.
+    code = """
+    implementing neural;
+
+    internal typealias uvec<int Dim> = Array<uint32_t, Dim>;
+    internal typealias MatrixA<int Rows, int Cols> =
+        WaveMatrix<half, linalg.CoopMatMatrixUse.MatrixA, Rows, Cols>;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.implementing_modules == ["neural"]
+    assert [(node.original_type, node.new_type) for node in ast.typedefs] == [
+        ("Array<uint32_t, Dim>", "uvec<intDim>"),
+        (
+            "WaveMatrix<half, linalg.CoopMatMatrixUse.MatrixA, Rows, Cols>",
+            "MatrixA<intRows, intCols>",
+        ),
+    ]
+    assert ast.typedefs[0].qualifiers == ["internal"]
 
 
 def test_local_typealias_declaration_parses_in_function_body():
@@ -1427,6 +1523,44 @@ def test_struct_subscript_accessor_from_generated_conformance_sample_parse():
     assert method.body == method.property_accessors["get"]
     assert isinstance(method.body[0], ReturnNode)
     assert isinstance(method.body[0].value, TernaryOpNode)
+
+
+def test_generic_subscript_accessor_from_generated_conformance_sample_parse():
+    # Source: shader-slang/slang@e2bb86bad99385790cb7d24655fc9d090346a4ca
+    # docs/generated/tests/conformance/generics/generic-subscript-functional.slang
+    code = """
+    struct TestStruct
+    {
+        float arr[5];
+
+        __subscript<T>(T i) -> float
+            where T : IInteger
+        {
+            get { return arr[i.toInt()]; }
+            set { arr[i.toInt()] = newValue; }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    method = ast.structs[0].methods[0]
+
+    assert method.name == "operator[]"
+    assert method.slang_name == "__subscript"
+    assert method.generic_parameters == "<T>"
+    assert method.is_generic is True
+    assert [
+        (
+            constraint.parameter,
+            constraint.relation,
+            constraint.constraint_type,
+        )
+        for constraint in method.generic_constraints
+    ] == [("T", ":", "IInteger")]
+    assert [param.vtype for param in method.params] == ["T"]
+    assert [param.name for param in method.params] == ["i"]
+    assert list(method.property_accessors) == ["get", "set"]
 
 
 def test_attributed_subscript_set_accessor_from_upstream_bug_sample_parse():
@@ -4025,6 +4159,44 @@ def test_comma_separated_expression_statement_from_slang_shaders():
     assert isinstance(if_body[2], AssignmentNode)
     assert if_body[2].left.name == "w2"
     assert if_body[2].operator == "*="
+
+
+def test_generic_prefix_struct_from_official_compute_tests_parse():
+    code = """
+    __generic<T>
+    struct GenStruct
+    {
+        T x;
+        T y;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert struct.name == "GenStruct"
+    assert struct.generic_parameters == "<T>"
+    assert [member.name for member in struct.members] == ["x", "y"]
+    assert [member.vtype for member in struct.members] == ["T", "T"]
+
+
+def test_numeric_bitfield_members_from_official_language_tests_parse():
+    code = """
+    struct S
+    {
+        int foo : 8;
+        uint bar : 24;
+    };
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    struct = ast.structs[0]
+
+    assert [member.name for member in struct.members] == ["foo", "bar"]
+    assert [member.vtype for member in struct.members] == ["int", "uint"]
+    assert [member.semantic for member in struct.members] == [None, None]
 
 
 if __name__ == "__main__":

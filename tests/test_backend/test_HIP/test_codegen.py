@@ -28,6 +28,146 @@ class TestHipCodeGen:
         assert "hipBlockDim_y" not in result
         assert "warpSize" not in result
 
+    def test_public_hip_examples_buffer_kernel_parameter_reparse(self):
+        code = """
+        __global__ void group_prefixSum(float* buffer) {
+            buffer[threadIdx.x] = 1.0f;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "buffer_: array<f32>" in result
+        assert "buffer_[gl_LocalInvocationID.x] = 1.0f;" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_rocm_module_api_unnamed_function_parameter_codegen_reparse(self):
+        # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
+        # HIP-Basic/module_api/main.hip.
+        code = """
+        int main(int, char** argv) {
+            return argv[0][0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "i32 main(i32 _param0, ptr<ptr<i8>> argv)" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_unnamed_kernel_parameter_codegen_reparse(self):
+        code = """
+        __global__ void fill(float*, unsigned int n) {
+            if (threadIdx.x < n) {
+                return;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "@group(0) @binding(0) var<storage, read_write> _param0: array<f32>"
+            in result
+        )
+        assert "u32 n" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_hip_examples_qualified_method_conversion_reparse(self):
+        code = """
+        class RecursiveGaussian {
+        public:
+            int readInputImage(std::string inputImageName);
+        };
+
+        int RecursiveGaussian::readInputImage(std::string inputImageName) {
+            return 0;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert (
+            "i32 RecursiveGaussian_readInputImage(std::string inputImageName)" in result
+        )
+        assert "i32 RecursiveGaussian::readInputImage" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_rocm_graph_helpers_operator_overload_conversion_reparse(self):
+        # Reduced from ROCm/rocm-examples@adaf64a066eecb4ad90036dfd1838fc95bed9914,
+        # HIP-Doc/Tutorials/graph_api/src/cudaHelpers.hpp.
+        code = """
+        __host__ __device__ __forceinline__ auto operator+(
+            float3 firstSummand, float3 secondSummand) -> float3 {
+            return float3 {
+                firstSummand.x + secondSummand.x,
+                firstSummand.y + secondSummand.y,
+                firstSummand.z + secondSummand.z
+            };
+        }
+
+        __host__ __device__ __forceinline__ auto operator/=(
+            float3 lhs, float rhs) -> float3 {
+            return float3 {
+                lhs.x / rhs,
+                lhs.y / rhs,
+                lhs.z / rhs
+            };
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "vec3<f32> operator_plus(" in result
+        assert "vec3<f32> operator_div_assign(" in result
+        assert "operator+(" not in result
+        assert "operator/=(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_public_hip_examples_variadic_helper_type_conversion_reparse(self):
+        code = """
+        template <typename T, typename... Args>
+        T* make_unique(Args&&... args) {
+            return new T(std::forward<Args>(args)...);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "ptr<T> make_unique(Args args)" in result
+        assert "Args ... args" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_basic_kernel_conversion(self):
         code = """
         #include <hip/hip_runtime.h>
@@ -542,6 +682,7 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
         assert codegen.convert_hip_type_to_crossgl("bool") == "bool"
         assert codegen.convert_hip_type_to_crossgl("void") == "void"
+        assert codegen.convert_hip_type_to_crossgl("long long unsigned int") == "u64"
         assert codegen.convert_hip_type_to_crossgl("half") == "f16"
         assert codegen.convert_hip_type_to_crossgl("__half") == "f16"
         assert codegen.convert_hip_type_to_crossgl("half2") == "vec2<f16>"
@@ -4289,7 +4430,7 @@ class TestHipCodeGen:
         ) in result
         assert (
             "// HIP batched 3D memory copy: count: 1, operations: (&batch3DOp), "
-            "fail index output: failIndex, flags: 0ull, stream: stream"
+            "fail index output: failIndex, flags: 0u, stream: stream"
         ) in result
         assert "// HIP 3D peer memory copy: params: peerCopyParams" in result
         assert (
@@ -5689,7 +5830,7 @@ class TestHipCodeGen:
         ) in result
         assert (
             "// HIP batched 3D memory copy: count: 1, operations: batch3DOps, "
-            "fail index output: failIndices[1], flags: 0ull, stream: stream"
+            "fail index output: failIndices[1], flags: 0u, stream: stream"
         ) in result
         assert (
             "// HIP get symbol address: output: symbolPtrs[0], symbol: symbol" in result
@@ -11004,11 +11145,11 @@ class TestHipCodeGen:
         ) in result
         assert (
             "// HIP stream wait value64: stream: stream, address: ptr64, "
-            "value: 11ull, flags: hipStreamWaitValueGte"
+            "value: 11u, flags: hipStreamWaitValueGte"
         ) in result
         assert (
             "// HIP stream write value64: stream: stream, address: ptr64, "
-            "value: 13ull, flags: 0"
+            "value: 13u, flags: 0"
         ) in result
         assert (
             "// HIP stream batch memory op: stream: stream, count: 2, "
@@ -11022,7 +11163,7 @@ class TestHipCodeGen:
         assert (
             "var wrote: bool = "
             "((/* HIP stream write value64: stream: stream, address: ptr64, "
-            "value: 2ull, flags: 0 */ hipSuccess) == hipSuccess);"
+            "value: 2u, flags: 0 */ hipSuccess) == hipSuccess);"
         ) in result
         assert (
             "var selected: hipError_t = "
@@ -15992,7 +16133,7 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var h: std::vector<float> = std::vector<float>(n);" in result
+        assert "var h: array<f32> = std::vector<float>(n);" in result
         assert (
             "// HIP memory copy: h.data() -> d, bytes: "
             "(h.size() * sizeof(float)), kind: hipMemcpyHostToDevice"
@@ -16017,8 +16158,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var h: std::array<float, 4> = {1.0f, 2.0f, 3.0f, 4.0f};" in result
-        assert "var zeros: std::array<float, 4> = {};" in result
+        assert "var h: array<f32, 4> = {1.0f, 2.0f, 3.0f, 4.0f};" in result
+        assert "var zeros: array<f32, 4> = {};" in result
         assert (
             "// HIP memory copy: h.data() -> d, bytes: "
             "(h.size() * sizeof(float)), kind: hipMemcpyHostToDevice"
@@ -16099,7 +16240,7 @@ class TestHipCodeGen:
         assert "var tid: u32 = gl_LocalInvocationID.x;" in result
         assert "var lid: u32 = (gl_LocalInvocationID.x % 32);" in result
         assert "var bid: u32 = gl_WorkGroupID.x;" in result
-        assert "var warp_mask: u64 = (1ull << lid);" in result
+        assert "var warp_mask: u64 = (1u << lid);" in result
         assert "std::uint" not in result
         assert "std::size_t" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
@@ -16121,10 +16262,11 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "void prepare(std::vector<float> h) {" in result
+        assert "void prepare(array<f32> h) {" in result
         assert "std::fill(h.begin(), h.end(), 1.0f);" in result
-        assert "u32 count(std::vector<float> h) {" in result
+        assert "u32 count(array<f32> h) {" in result
         assert "return h.size();" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_multi_declarator_host_setup_conversion(self):
         code = """
@@ -16143,9 +16285,9 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var a: std::vector<float> = std::vector<float>(n);" in result
-        assert "var b: std::vector<float> = std::vector<float>(n);" in result
-        assert "var c: std::vector<float> = std::vector<float>(n);" in result
+        assert "var a: array<f32> = std::vector<float>(n);" in result
+        assert "var b: array<f32> = std::vector<float>(n);" in result
+        assert "var c: array<f32> = std::vector<float>(n);" in result
         assert "var d_a: ptr<f32>;" in result
         assert "var d_b: ptr<f32>;" in result
         assert "var x: i32 = 1;" in result
@@ -16490,8 +16632,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var ids: std::array<unsigned int, 4> = {};" in result
-        assert "var flags: std::vector<const unsigned int>;" in result
+        assert "var ids: array<u32, 4> = {};" in result
+        assert "var flags: array<u32>;" in result
         assert "unsignedint" not in result
         assert "constunsigned" not in result
 
@@ -16514,8 +16656,8 @@ class TestHipCodeGen:
         codegen = HipToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "var table: std::vector<std::array<unsigned int, 4>>;" in result
-        assert "var rows: std::vector<std::vector<float>>;" in result
+        assert "var table: array<array<u32, 4>>;" in result
+        assert "var rows: array<array<f32>>;" in result
         assert "var pointer: ptr<ptr<f32>> = new<ptr<f32>>(nullptr);" in result
         assert "var owned: ptr<f32> = new_array<f32>(n);" in result
         assert "std::unique_ptr" not in result
@@ -16545,7 +16687,7 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "typedef ptr<f32> HostBuffer;" in result
-        assert "typedef std::vector<std::array<unsigned int, 4>> Table;" in result
+        assert "typedef array<array<u32, 4>> Table;" in result
         assert "typedef ptr<f32> LocalBuffer;" in result
         assert "var h: HostBuffer = new_array<f32>(n);" in result
         assert "var hp: ptr<HostBuffer> = (&h);" in result
@@ -16850,14 +16992,14 @@ class TestHipCodeGen:
         assert "var cached: f32 = 1.0f;" in result
         assert "var mask: u32 = 3u;" in result
         assert "var signedMask: i32 = (-1);" in result
-        assert "var wide: i64 = 2ll;" in result
-        assert "var uwide: u64 = 3ull;" in result
+        assert "var wide: i64 = 2;" in result
+        assert "var uwide: u64 = 3u;" in result
         assert "out: array<u32>" in result
         assert "f32 scale" in result
         assert "i64 x" in result
         assert "var local: i32 = 1;" in result
         assert "var idx: u32 = 2u;" in result
-        assert "var y: u64 = 1ull;" in result
+        assert "var y: u64 = 1u;" in result
         assert "var z: i64 = i64(x);" in result
         assert "var tmp: f32 = 0.0f;" in result
 
@@ -17188,3 +17330,58 @@ class TestHipCodeGen:
         assert "default:" in result
         assert "case 1:" in result
         assert result.index("default:") < result.index("case 1:")
+
+    def test_public_rocm_conditional_alias_comparison_codegen_reparse(self):
+        code = """
+        template <typename InDataType, typename WeiDataType>
+        void host(S s) {
+            using ComputeType = std::conditional_t<
+                sizeof(InDataType) < sizeof(WeiDataType),
+                InDataType,
+                WeiDataType>;
+            if (s.log_level_ > 0) {
+                sink();
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert (
+            "typedef std::conditional_t<sizeof(InDataType)<sizeof(WeiDataType), "
+            "InDataType, WeiDataType> ComputeType;"
+        ) in result
+        assert "if ((s.log_level_ > 0)) {" in result
+
+    def test_public_rocm_top_level_conditional_member_alias_codegen_reparse(self):
+        # Reduced from ROCm/HIP docs/tools/example_codes/
+        # template_warp_size_reduction.hip.
+        code = """
+        template<std::uint32_t WarpSize>
+        using lane_mask_t = typename std::conditional<
+            WarpSize == 32,
+            std::uint32_t,
+            std::uint64_t>::type;
+
+        template<std::uint32_t WarpSize>
+        __global__ void block_reduce(lane_mask_t<WarpSize>* mask) {
+            lane_mask_t<WarpSize> value = mask[threadIdx.x];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+        assert "typedef conditional_t<WarpSize==32, u32, u64> lane_mask_t;" in result
+        assert "array<lane_mask_t<WarpSize>>" in result

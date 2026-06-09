@@ -84,6 +84,8 @@ REAL_WORLD_TARGET_EXTENSION_BACKENDS = (
     ("rust", (".rs", ".rust"), ShaderLanguage.RUST),
 )
 
+SOURCE_ONLY_BACKEND_DIRS = {"OpenCL"}
+
 
 def _backend_root():
     return os.path.abspath(
@@ -124,6 +126,8 @@ def test_backend_registry_covers_backend_dirs():
     discover_backend_plugins()
     missing = []
     for name in _backend_dirs():
+        if name in SOURCE_ONLY_BACKEND_DIRS:
+            continue
         normalized = _normalize_backend_dir(name)
         if not codegen.get_backend(normalized):
             missing.append(name)
@@ -154,13 +158,17 @@ def test_source_registry_covers_backend_dirs():
         ".frag",
         ".fragment",
         ".comp",
+        ".cs",
         ".csh",
         ".compute",
         ".geom",
+        ".gs",
         ".gsh",
         ".geometry",
         ".tesc",
+        ".tcs",
         ".tese",
+        ".tes",
     ),
 )
 def test_source_registry_recognizes_glsl_stage_extensions(extension):
@@ -196,6 +204,16 @@ def test_source_registry_recognizes_slang_real_world_extensions(extension):
     assert SOURCE_REGISTRY.get_by_extension(extension).name == "slang"
     assert (
         SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "slang"
+    )
+
+
+@pytest.mark.parametrize("extension", (".cl", ".opencl"))
+def test_source_registry_recognizes_opencl_real_world_extensions(extension):
+    register_default_sources()
+
+    assert SOURCE_REGISTRY.get_by_extension(extension).name == "opencl"
+    assert (
+        SOURCE_REGISTRY.get_by_extension(f"shader{extension.upper()}").name == "opencl"
     )
 
 

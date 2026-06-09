@@ -787,6 +787,41 @@ def test_parse_geometry_interface_block_member_qualifiers_roundtrip():
     assert "in VertexIn vertexIn[]" not in glsl
 
 
+def test_parse_duplicate_geometry_interface_block_names_roundtrip():
+    code = """
+    #version 450 core
+    layout(points) in;
+    layout(points, max_vertices = 1) out;
+
+    in SharedBlock {
+        vec4 value;
+    } inputBlock[];
+
+    out SharedBlock {
+        vec4 value;
+    } outputBlock;
+
+    void main() {
+        outputBlock.value = inputBlock[0].value;
+        EmitVertex();
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "struct SharedBlock {" in crossgl
+    assert "@glsl_interface_block_name(SharedBlock)" in crossgl
+    assert "struct SharedBlock_out {" in crossgl
+
+    glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+    assert "in SharedBlock {" in glsl
+    assert "} inputBlock[];" in glsl
+    assert "out SharedBlock {" in glsl
+    assert "} outputBlock;" in glsl
+    assert "SharedBlock_out" not in glsl
+
+
 def test_parse_tessellation_interface_block_member_qualifiers_roundtrip():
     code = """
     #version 450 core

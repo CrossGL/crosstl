@@ -400,6 +400,29 @@ def test_comments_tokenization():
         pytest.fail("Comments tokenization not implemented.")
 
 
+def test_nested_block_doc_comments_are_skipped_from_wgpu_hub():
+    # Reduced from gfx-rs/wgpu wgpu-core/src/hub.rs, where a crate-level
+    # Rust doc block contains a nested block comment.
+    code = """
+    /*!
+    Device hub documentation.
+    /* nested note that should stay inside the comment */
+    More documentation after the nested block.
+    */
+    pub struct Hub {
+        value: u32,
+    }
+    """
+
+    tokens = tokenize_code(code)
+
+    assert ("STRUCT", "struct") in tokens
+    assert ("IDENTIFIER", "Hub") in tokens
+    assert ("IDENTIFIER", "nested") not in tokens
+    assert ("IDENTIFIER", "More") not in tokens
+    assert ("MULTIPLY", "*") not in tokens
+
+
 def test_raw_identifier_tokenization_normalizes_keyword_names():
     code = "pub fn r#type(r#match: u32) -> u32 { r#match }"
     tokens = tokenize_code(code)
@@ -485,6 +508,24 @@ def test_byte_literals_tokenization():
         ), "Hash raw byte string not tokenized correctly"
     except SyntaxError:
         pytest.fail("Byte literals tokenization not implemented.")
+
+
+def test_unicode_char_literal_range_tokenization_from_naga_wgsl_lexer():
+    code = r"""
+    const fn is_comment_end(c: char) -> bool {
+        match c {
+            '\u{000a}'..='\u{000d}' | '\u{0085}' | '\u{2028}' => true,
+            _ => false,
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    char_literals = [token[1] for token in tokens if token[0] == "CHAR_LIT"]
+
+    assert r"'\u{000a}'" in char_literals
+    assert r"'\u{000d}'" in char_literals
+    assert r"'\u{2028}'" in char_literals
 
 
 def test_escaped_newline_byte_string_continuation_tokenization():

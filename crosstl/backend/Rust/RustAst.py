@@ -686,6 +686,17 @@ class BlockNode(ASTNode):
         return f"BlockNode(statements={len(self.statements)}, returns_value={self.returns_value})"
 
 
+class LabeledBlockNode(ASTNode):
+    """Node representing a labeled block expression."""
+
+    def __init__(self, label, body):
+        self.label = label
+        self.body = body
+
+    def __repr__(self):
+        return f"LabeledBlockNode(label={self.label}, body={self.body})"
+
+
 class ConstNode(ASTNode):
     """Node representing a const declaration"""
 

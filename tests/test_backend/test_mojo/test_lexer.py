@@ -132,9 +132,11 @@ def test_assignment_ops_tokenization():
         a += 3
         a -= 2
         a *= 4
+        a **= 3
         a /= 2
         a //= 2
         a %= 3
+        a @= matrix
         a ^= 1
         a |= 2
         a &= 7
@@ -144,6 +146,8 @@ def test_assignment_ops_tokenization():
     try:
         tokens = tokenize_code(code)
         assert ("FLOOR_DIVIDE_EQUALS", "//=") in tokens
+        assert ("POWER_EQUALS", "**=") in tokens
+        assert ("AT_EQUALS", "@=") in tokens
     except SyntaxError:
         pytest.fail("Assignment operators tokenization not implemented.")
 
@@ -422,6 +426,27 @@ def test_string_literals_tokenization():
         pytest.fail("String literals tokenization not implemented.")
 
 
+def test_simple_string_with_embedded_triple_quote_text_from_numojo_ndarray():
+    # Reduced from Mojo-Numerics-and-Algorithms-group/NuMojo commit
+    # 785bae6c9e3d87f6a003afabdd2e7554891e9311,
+    # numojo/core/ndarray.mojo.
+    code = r'''
+    fn main():
+        let rendered = (
+            String("numojo.array[")
+            + String('](\n"""\n')
+            + value
+            + '\n"""\n)'
+        )
+    '''
+    tokens = tokenize_code(code)
+    string_literals = [token[1] for token in tokens if token[0] == "STRING_LITERAL"]
+
+    assert '"numojo.array["' in string_literals
+    assert '\'](\\n"""\\n\'' in string_literals
+    assert '\'\\n"""\\n)\'' in string_literals
+
+
 def test_triple_quoted_string_literal_tokenization_from_mojo_reference():
     # Reduced from https://mojolang.org/docs/reference/literals/
     code = '''
@@ -432,6 +457,35 @@ string"""
     tokens = tokenize_code(code)
 
     assert ("STRING_LITERAL", '"Multi-line\\nstring"') in tokens
+
+
+def test_triple_quoted_call_argument_tokenization_from_modular_fast_div():
+    code = '''
+    fn main():
+        assert_equal(
+            """div: 33
+mprime: 4034666248
+""",
+            String(value),
+        )
+    '''
+    tokens = tokenize_code(code)
+
+    assert ("STRING_LITERAL", '"div: 33\\nmprime: 4034666248\\n"') in tokens
+
+
+def test_nested_prefixed_tstring_tokenization_from_modular_format_tests():
+    code = r"""
+    fn main():
+        var tstring = t"hello \t{x}, {rt"world \t{x}"}"
+    """
+    tokens = tokenize_code(code)
+
+    assert ("IDENTIFIER", "t") in tokens
+    assert (
+        "STRING_LITERAL",
+        r'"hello \\t{x}, {rt\"world \\t{x}\"}"',
+    ) in tokens
 
 
 def test_backtick_metadata_identifiers_tokenization_from_modular_kernels():

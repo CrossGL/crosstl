@@ -14,6 +14,7 @@ from crosstl.backend.Mojo.MojoAst import (
     ContinueNode,
     DictComprehensionNode,
     DictLiteralNode,
+    ExtensionNode,
     ForNode,
     FunctionCallNode,
     FunctionNode,
@@ -151,6 +152,38 @@ def test_bracketed_ref_parameter_convention_parse_from_modular_amd_helpers():
     ]
 
 
+def test_multiline_header_continuation_dedent_before_body_parses():
+    # Reduced from Practical-Mojo-Examples ml_algorithms and snake_game files,
+    # where the parameter continuation indentation is deeper than the body.
+    code = """
+    struct NormResult:
+        var data: List[Float64]
+        var min_val: Float64
+        var max_val: Float64
+
+        fn __init__(out self, var data: List[Float64],
+                    min_val: Float64, max_val: Float64):
+            self.data = data^
+            self.min_val = min_val
+            self.max_val = max_val
+
+    fn draw_cell(canvas: PythonObject, x: Int, y: Int,
+                 color: String, cell: Int) raises:
+        "Draw one grid cell as a filled rectangle."
+        var x1 = x * cell
+        var y1 = y * cell
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "NormResult")
+    init_method = struct_node.methods[0]
+    draw_cell = find_function(ast, "draw_cell")
+
+    assert len(init_method.body) == 3
+    assert all(isinstance(statement, AssignmentNode) for statement in init_method.body)
+    assert isinstance(draw_cell.body[0], PassNode)
+    assert [statement.name for statement in draw_cell.body[1:]] == ["x1", "y1"]
+
+
 def test_function_type_parameter_parsing_from_modular_gpu_reduction():
     # Reduced from https://github.com/modular/modular.git commit
     # daa47bb846cc213723a54c51844ea4e923eb5e13,
@@ -209,6 +242,89 @@ def test_thin_function_type_parameter_parsing_from_official_parameter_docs():
         ("compare", "def(Scalar[dtype], Scalar[dtype]) thin -> Int"),
     ]
     assert function.return_type == "Int"
+
+
+def test_comptime_function_type_value_with_terminal_raises_parse():
+    code = """
+    struct _Test:
+        comptime fn_type = def() thin raises
+        var test_fn: Self.fn_type
+    """
+    ast = parse_code(tokenize_code(code))
+    struct_node = find_struct(ast, "_Test")
+    fn_type = struct_node.members[0]
+
+    assert isinstance(fn_type, VariableDeclarationNode)
+    assert fn_type.initial_value == "def() thin raises"
+    assert struct_node.members[1].name == "test_fn"
+
+
+def test_fn_function_type_alias_parse_from_ksandvik_memset():
+    # Reduced from ksandvik/mojo-examples examples/memset.mojo.
+    code = """
+    alias memset_fn_type = fn (BufferPtrType, ValueType, Int) -> None
+
+    fn measure_time(func: memset_fn_type) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    alias = ast.global_variables[0]
+    function = find_function(ast, "measure_time")
+
+    assert alias.name == "memset_fn_type"
+    assert alias.initial_value == "fn(BufferPtrType, ValueType, Int) -> None"
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("func", "memset_fn_type")
+    ]
+
+
+def test_function_type_with_raises_error_type_parse_from_modular_cublaslt():
+    # Reduced from Modular max/kernels/src/_cublas/cublaslt.mojo.
+    code = """
+    fn register_callback(
+        callback: def(Result) thin raises Error -> UnsafePointer[Int8, ImmutAnyOrigin]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "register_callback")
+
+    assert function.params[0].vtype == (
+        "def(Result) thin raises Error -> UnsafePointer[Int8, ImmutAnyOrigin]"
+    )
+
+
+def test_mlir_region_statement_parse_from_coroutine_stdlib():
+    code = """
+    def _suspend_async[body: def(AnyCoroutine) capturing -> None]():
+        __mlir_region await_body(hdl: __mlir_type.`!co.routine`):
+            body(hdl)
+            __mlir_op.`co.suspend.end`()
+        __mlir_op.`co.suspend`[_region="await_body".value]()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "_suspend_async")
+
+    assert isinstance(function.body[0], PassNode)
+    assert isinstance(function.body[1], CallNode)
+
+
+def test_mlir_op_expression_payload_specialization_parse_from_coroutine_intrinsic():
+    code = """
+    def _suspend_async():
+        __mlir_op.co_suspend["await_body".value]()
+    """
+    ast = parse_code(tokenize_code(code))
+    call = find_function(ast, "_suspend_async").body[0]
+
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, ArrayAccessNode)
+    assert isinstance(call.callee.array, MemberAccessNode)
+    assert call.callee.array.object.name == "__mlir_op"
+    assert call.callee.array.member == "co_suspend"
+    assert isinstance(call.callee.index, MemberAccessNode)
+    assert call.callee.index.object == '"await_body"'
+    assert call.callee.index.member == "value"
 
 
 def test_variadic_and_deinit_parameters_parse_from_current_docs():
@@ -303,6 +419,22 @@ def test_variadic_keyword_parameter_parse_from_current_docs():
     assert loop.iterable.method == "items"
 
 
+def test_heterogeneous_variadic_type_pack_parse_from_current_docs():
+    code = """
+    def count_many_things[*ArgTypes: Intable](*args: *ArgTypes) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "count_many_things")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("args", "*ArgTypes")
+    ]
+    assert getattr(function.params[0], "is_variadic", False)
+    assert not getattr(function.params[0], "is_variadic_keyword", False)
+    assert function.return_type == "Int"
+
+
 def test_function_parameter_separator_markers_parse_from_official_docs():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
@@ -370,6 +502,29 @@ def test_default_keyword_parameter_name_parse_from_modular_stdlib():
     assert function.params[1].default_value == "0"
     assert function.return_type == "SIMD[dtype, width]"
     assert function.body[0].value.name == "default"
+
+
+def test_constant_keyword_parameter_name_parse_from_modular_conv():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/conv.mojo
+    # PadConstant.execute, where `constant` is an argument name.
+    code = """
+    def execute(
+        padding: InputTensor[rank=1, ...],
+        constant: Scalar[dtype=dtype],
+        ctx: DeviceContext,
+    ) raises:
+        sink(constant)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "execute")
+
+    assert [(param.name, param.vtype) for param in function.params] == [
+        ("padding", "InputTensor[rank=1, ...]"),
+        ("constant", "Scalar[dtype=dtype]"),
+        ("ctx", "DeviceContext"),
+    ]
+    assert function.body[0].args[0].name == "constant"
 
 
 def test_ref_binding_declaration_parse_from_official_variables_docs():
@@ -569,6 +724,60 @@ def test_struct_generic_parameter_list_parsing_from_modular_corpus():
     assert [(member.vtype, member.name) for member in grid.members] == [
         ("InlineArray[Int, Self.rows*Self.cols]", "cells")
     ]
+
+
+def test_struct_standalone_string_metadata_and_ellipsis_members_parse():
+    code = """
+    struct cudnnMultiHeadAttnWeightKind_t(TrivialRegisterPassable):
+        var _value: Int32
+        comptime ATTN_Q_WEIGHTS = Self(0)
+        "Input projection weights for 'queries'."
+
+    struct IOSpec[mut: Bool, input: IO](TrivialRegisterPassable):
+        ...
+        comptime Input = IOSpec[false, IO.Input]()
+    """
+    ast = parse_code(tokenize_code(code))
+    weight_kind = find_struct(ast, "cudnnMultiHeadAttnWeightKind_t")
+    io_spec = find_struct(ast, "IOSpec")
+
+    assert isinstance(weight_kind.members[2], PassNode)
+    assert isinstance(io_spec.members[0], PassNode)
+    assert io_spec.members[1].name == "Input"
+
+
+def test_attributed_nested_type_declarations_parse_in_type_bodies():
+    code = """
+    struct Outer:
+        @fieldwise_init
+        struct Inner:
+            var value: Int
+
+        trait Capability:
+            ...
+    """
+    ast = parse_code(tokenize_code(code))
+    outer = find_struct(ast, "Outer")
+
+    assert isinstance(outer.members[0], StructNode)
+    assert outer.members[0].name == "Inner"
+    assert isinstance(outer.members[1], TraitNode)
+
+
+def test_builtin_type_keyword_struct_names_parse():
+    code = """
+    struct Bool(Boolable):
+        var value: Int1
+
+    struct Int(Intable):
+        var value: Int64
+
+    struct String(Writable):
+        var value: UnsafePointer[UInt8]
+    """
+    ast = parse_code(tokenize_code(code))
+
+    assert [node.name for node in ast.structs] == ["Bool", "Int", "String"]
 
 
 def test_parenthesized_import_items_and_floor_divide_parsing():
@@ -817,6 +1026,28 @@ def test_for_in_iterable_parsing_preserves_loop_iterable():
     assert loop.iterable.name == "values"
 
 
+def test_for_in_nested_tuple_target_parse_from_kv_cache_utils():
+    code = """
+    fn main(prompt_lens: List[Int], cache_lens: List[Int]):
+        for batch, (prompt_len, cache_len) in enumerate(zip(prompt_lens, cache_lens)):
+            sink(batch, prompt_len, cache_len)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    loop = ast.functions[0].body[0]
+
+    assert isinstance(loop, RangeForNode)
+    assert isinstance(loop.name, TupleNode)
+    batch, lengths = loop.name.elements
+    assert batch.name == "batch"
+    assert isinstance(lengths, TupleNode)
+    assert [element.name for element in lengths.elements] == [
+        "prompt_len",
+        "cache_len",
+    ]
+    assert isinstance(loop.iterable, FunctionCallNode)
+
+
 def test_for_in_target_conventions_parse_from_modular_control_flow_docs():
     # Reduced from https://github.com/modular/modular.git commit
     # 04cff5a4cc491ec2bf6850ce99e0253075fc908c,
@@ -936,6 +1167,95 @@ def test_comptime_for_parsing_preserves_loop_shape():
     assert isinstance(c_style_loop.update, AssignmentNode)
 
 
+def test_comptime_if_elif_survives_multiline_generic_return_parse():
+    code = """
+    def load[width: Int]():
+        comptime if width == 1:
+            return call_ld_intrinsic[S]()
+        elif width == 2:
+            return call_ld_intrinsic[
+                _RegisterPackType[S, S]
+            ]()
+        elif width == 4:
+            return call_ld_intrinsic[
+                _RegisterPackType[S, S, S, S]
+            ]()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "load")
+    branch = function.body[0]
+
+    assert isinstance(branch, IfNode)
+    assert getattr(branch, "is_comptime", False)
+    assert isinstance(branch.else_body[0], IfNode)
+    assert isinstance(branch.else_body[0].else_body[0], IfNode)
+
+
+def test_multiline_generic_call_return_keeps_following_functions_top_level():
+    # Reduced from Modular max/kernels/src/_cublas/cublas.mojo generated wrappers.
+    code = """
+    def _get_dylib_function[
+        func_name: StaticString, result_type: TrivialRegisterPassable
+    ]() raises -> result_type:
+        return _ffi_get_dylib_function[
+            CUDA_CUBLAS_LIBRARY(),
+            func_name,
+            result_type,
+        ]()
+
+
+    def cublasScopy(handle: cublasHandle_t) raises -> Result:
+        return _get_dylib_function[
+            "cublasScopy_v2_64",
+            def(
+                type_of(handle),
+            ) thin -> Result,
+        ]()(handle)
+
+
+    def cublasDgemv(handle: cublasHandle_t) raises -> Result:
+        return _get_dylib_function[
+            "cublasDgemv_v2_64",
+            def(
+                type_of(handle),
+            ) thin -> Result,
+        ]()(handle)
+    """
+    ast = parse_code(tokenize_code(code))
+    top_level_functions = [
+        node.name for node in ast.functions if isinstance(node, FunctionNode)
+    ]
+
+    assert top_level_functions == [
+        "_get_dylib_function",
+        "cublasScopy",
+        "cublasDgemv",
+    ]
+
+
+def test_comptime_if_elif_survives_multiline_call_statement_parse():
+    code = """
+    def store[width: Int](data: InlineArray[Scalar[dtype], width], tmem_addr: UInt32):
+        comptime if width == 1:
+            inlined_assembly[asm_str, NoneType, has_side_effect=true](
+                data[0],
+                tmem_addr,
+            )
+        elif width == 2:
+            inlined_assembly[asm_str, NoneType, has_side_effect=true](
+                data[0], data[1],
+                tmem_addr,
+            )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "store")
+    branch = function.body[0]
+
+    assert isinstance(branch, IfNode)
+    assert getattr(branch, "is_comptime", False)
+    assert isinstance(branch.else_body[0], IfNode)
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_parsing():
     code = """
     def matmul_idiomatic_tiled[
@@ -978,6 +1298,69 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_parsing():
     assert [arg.name for arg in copy_call.args] == ["a_shared", "a_tile"]
 
 
+def test_generic_specialization_ellipsis_parse_from_modular_distributed():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/distributed.mojo
+    # vendor_ccl.allreduce specialization arguments.
+    code = """
+    def execute():
+        vendor_ccl.allreduce[
+            ngpus=num_devices,
+            output_lambda=output_lambda[output_index=index, ...],
+        ](in_tensors)
+    """
+    ast = parse_code(tokenize_code(code))
+    call = find_function(ast, "execute").body[0]
+    specialization_args = call.callee.index.elements
+    output_lambda = specialization_args[1].right.index.elements
+
+    assert isinstance(call, CallNode)
+    assert call.callee.array.member == "allreduce"
+    assert specialization_args[0].left.name == "ngpus"
+    assert output_lambda[0].left.name == "output_index"
+    assert output_lambda[1].name == "..."
+
+
+def test_comptime_function_type_expression_parse_from_modular_graph_kernels():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/kernels.mojo
+    # where a comptime declaration stores a thin function type.
+    code = """
+    def execute(payload: OpaquePointer):
+        comptime _HostFuncTy = def(OpaquePointer[MutAnyOrigin]) thin -> None
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "execute").body[0]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert declaration.name == "_HostFuncTy"
+    assert declaration.initial_value == (
+        "def(OpaquePointer[MutAnyOrigin]) thin -> None"
+    )
+    assert getattr(declaration, "is_comptime", False)
+
+
+def test_comptime_assert_parenthesized_or_condition_parse_from_modular_conv():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/conv.mojo
+    # Conv.execute CUDA rank guard.
+    code = """
+    def execute():
+        comptime assert (input.rank == 4 and filter.rank == 4) or (
+            input.rank == 5 and filter.rank == 5
+        ), "only rank 4 or 5 tensor is supported on cuda gpu"
+    """
+    ast = parse_code(tokenize_code(code))
+    assertion = find_function(ast, "execute").body[0]
+
+    assert isinstance(assertion, FunctionCallNode)
+    assert assertion.name == "assert"
+    assert getattr(assertion, "is_comptime", False)
+    assert isinstance(assertion.args[0], BinaryOpNode)
+    assert assertion.args[0].op == "||"
+    assert assertion.args[1] == '"only rank 4 or 5 tensor is supported on cuda gpu"'
+
+
 def test_modular_top_k_type_of_parameter_type_parsing():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
@@ -1002,6 +1385,28 @@ def test_modular_top_k_type_of_parameter_type_parsing():
         ("out_idxs", "type_of(out_idxs_tensor)"),
         ("in_vals", "type_of(in_vals_tensor)"),
     ]
+
+
+def test_tuple_assignment_with_index_targets_parse_from_modular_logprobs():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/logprobs.mojo
+    # FixedHeightMinHeap.swap.
+    code = """
+    def swap(mut self, a: Int, b: Int) -> None:
+        self.k_array[a], self.k_array[b] = self.k_array[b], self.k_array[a]
+    """
+    ast = parse_code(tokenize_code(code))
+    assignment = find_function(ast, "swap").body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, TupleNode)
+    assert isinstance(assignment.right, TupleNode)
+    assert [target.array.member for target in assignment.left.elements] == [
+        "k_array",
+        "k_array",
+    ]
+    assert [target.index.name for target in assignment.left.elements] == ["a", "b"]
+    assert [value.index.name for value in assignment.right.elements] == ["b", "a"]
 
 
 def test_statement_attributes_parse_from_real_world_mojo():
@@ -1114,6 +1519,31 @@ def test_multiline_postfix_chain_parsing_from_modular_custom_ops():
     assert isinstance(fill_call.object, MethodCallNode)
     assert fill_call.object.method == "stack_allocation"
     assert isinstance(fill_call.object.object, ArrayAccessNode)
+
+
+def test_newline_indexed_call_continuation_parsing_from_modular_scatternd():
+    # Reduced from https://github.com/modular/mojo.git commit
+    # 30d351c58441f196471c59211dad6e9ad91c1235,
+    # max/kernels/test/gpu/examples/test_scatterND.mojo test_scatternd_gpu.
+    code = """
+    fn main():
+        _ = test_case[
+            DType.float32,
+            d0=4,
+        ]
+        (
+            data,
+            indices,
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    assignment = find_function(ast, "main").body[0]
+    call = assignment.right
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, ArrayAccessNode)
+    assert [arg.name for arg in call.args] == ["data", "indices"]
 
 
 def test_multiline_index_expression_parsing_from_modular_pmpp_examples():
@@ -1242,6 +1672,23 @@ def test_parenthesized_where_clause_with_and_constraints_parsing():
     assert function.where_clause is not None
     assert "&&" in function.where_clause
     assert "type_of" in function.where_clause
+    assert function.body
+
+
+def test_where_clause_with_sibling_parenthesized_constraints_parse():
+    code = """
+    def move_from(
+        self: UnsafePointer[T, _],
+        src: UnsafePointer[T, _],
+    ) where (type_of(self).mut) && (type_of(src).mut):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "move_from")
+
+    assert function.where_clause is not None
+    assert "&&" in function.where_clause
+    assert function.where_clause.count("type_of") == 2
     assert function.body
 
 
@@ -1406,8 +1853,10 @@ def test_assignment_ops_parsing():
         a += 3
         a -= 2
         a *= 4
+        a **= 3
         a /= 2
         a %= 3
+        a @= matrix
         a ^= 1
         a |= 2
         a &= 7
@@ -1554,6 +2003,23 @@ def test_import_parsing():
         pytest.fail("Import parsing not implemented.")
 
 
+def test_backtick_import_item_parse_from_numojo_type_aliases():
+    # Reduced from Mojo-Numerics-and-Algorithms-group/NuMojo commit
+    # 785bae6c9e3d87f6a003afabdd2e7554891e9311,
+    # numojo/__init__.mojo top-level type alias re-exports.
+    code = """
+    from numojo.core.type_aliases import (
+        Shape,
+        `1j`,
+    )
+    """
+    ast = parse_code(tokenize_code(code))
+    import_node = ast.includes[0]
+
+    assert import_node.module_name == "numojo.core.type_aliases"
+    assert import_node.items == ["Shape", "`1j`"]
+
+
 def test_relative_import_path_parsing_from_modular_corpus():
     code = """
     from .add_constant import *
@@ -1691,6 +2157,32 @@ def test_nested_generic_type_annotation_parsing():
     assert function.body[0].vtype == "InlineArray[SIMD[DType.float32, 4], 2]"
 
 
+def test_inline_if_generic_type_argument_parse_from_modular_comm():
+    # Reduced from Modular max/kernels/src/comm/allreduce.mojo and
+    # max/kernels/src/comm/reducescatter.mojo parameter type arguments.
+    code = """
+    fn reduce[
+        dtype: DType,
+        in_layout: TensorLayout,
+        use_multimem: Bool = False,
+        ngpus: Int,
+    ](
+        src_tensors: InlineArray[
+            TileTensor[dtype, in_layout, ImmutAnyOrigin],
+            1 if use_multimem else ngpus,
+        ],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    param = find_function(ast, "reduce").params[0]
+
+    assert param.vtype == (
+        "InlineArray[TileTensor[dtype, in_layout, ImmutAnyOrigin], "
+        "1 if use_multimem else ngpus]"
+    )
+
+
 def test_ternary_operator_parsing():
     code = """
     fn main():
@@ -1741,6 +2233,70 @@ def test_multiline_parenthesized_inline_if_parsing_from_mojo_gpu_puzzles():
     assert isinstance(inline_if.true_expr, ArrayAccessNode)
     assert inline_if.true_expr.array.name == "shared_cache"
     assert inline_if.false_expr.name == "series_correction"
+
+
+def test_multiline_inline_if_else_chain_parse_from_modular_dtype_helpers():
+    # Reduced from Modular stdlib DType/unsafe helpers with fmt-off inline-if chains.
+    code = """
+    def _llvm_bitwidth(dtype: DType) -> Int:
+        return (
+            1 if dtype == DType._uint1 else
+            2 if dtype == DType._uint2 else
+            4 if dtype == DType._uint4 else
+            8
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    result = find_function(ast, "_llvm_bitwidth").body[0].value
+
+    assert isinstance(result, TernaryOpNode)
+    assert result.true_expr == "1"
+    assert isinstance(result.false_expr, TernaryOpNode)
+    assert result.false_expr.true_expr == "2"
+    assert isinstance(result.false_expr.false_expr, TernaryOpNode)
+    assert result.false_expr.false_expr.true_expr == "4"
+    assert result.false_expr.false_expr.false_expr == "8"
+
+
+def test_multiline_parenthesized_operator_rhs_parse_from_modular_conv():
+    code = """
+    def get_input_idx(self, q: Int, r: Int, s: Int):
+        return (
+            Index(n, do, ho, wo) * self.stride
+            +
+            (Index(q, r, s) * self.dilation)
+            -
+            self.padding
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    result = find_function(ast, "get_input_idx").body[0].value
+
+    assert isinstance(result, BinaryOpNode)
+    assert result.op == "-"
+    assert isinstance(result.left, BinaryOpNode)
+    assert result.left.op == "+"
+
+
+def test_multiline_parenthesized_string_concat_parse_from_modular_asserts():
+    # Reduced from Modular layout/matmul comptime assert diagnostic strings.
+    code = """
+    def main():
+        comptime assert value == expected, (
+            "Expected value "
+            "to match "
+            + String(expected)
+            + ", got "
+            + String(value)
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    assertion = find_function(ast, "main").body[0]
+    message = assertion.args[1]
+
+    assert isinstance(message, BinaryOpNode)
+    assert message.op == "+"
+    assert '"Expected value to match "' in repr(message)
 
 
 def test_at_attributes_attach_to_declarations():
@@ -2030,6 +2586,35 @@ def test_slice_index_access_parse_from_modular_stdlib_slice_tests():
     assert open_slice.index.stop is None
     assert open_slice.index.step is None
     assert open_slice.index.has_step
+
+
+def test_keyword_slice_index_parse_from_modular_stdlib():
+    # Reduced from Modular string/path stdlib byte-indexed slices.
+    code = """
+    def main():
+        var head = path_str[byte=i:]
+        var prefix = String(e)[byte=:expected_msg.byte_length()]
+        var suffix = self[byte=:-suffix.byte_length()]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    head = function.body[0].initial_value
+    prefix = function.body[1].initial_value
+    suffix = function.body[2].initial_value
+
+    assert isinstance(head.index, AssignmentNode)
+    assert head.index.left.name == "byte"
+    assert isinstance(head.index.right, SliceNode)
+    assert head.index.right.start.name == "i"
+    assert head.index.right.stop is None
+
+    assert isinstance(prefix.index.right, SliceNode)
+    assert prefix.index.right.start is None
+    assert isinstance(prefix.index.right.stop, MethodCallNode)
+
+    assert isinstance(suffix.index.right, SliceNode)
+    assert suffix.index.right.start is None
+    assert isinstance(suffix.index.right.stop, UnaryOpNode)
 
 
 def test_member_access_parsing():
@@ -2358,6 +2943,53 @@ def test_adjacent_string_literals_in_call_parse_from_modular_tiled_matmul_exampl
     assert call.args == ['"Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)"']
 
 
+def test_prefixed_adjacent_string_literals_in_call_parse_from_modular_trace_gemv():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/benchmarks/gpu/nn/trace_gemv_partial_norm.mojo.
+    code = """
+    def main():
+        print(
+            t"{b},"
+            t"{Int(trace_host[base + 0])},"
+            t"{Int(trace_host[base + 1])}"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0]
+
+    assert call.args == [
+        't"{b},{Int(trace_host[base + 0])},{Int(trace_host[base + 1])}"'
+    ]
+
+
+def test_adjacent_string_after_binary_string_parse_from_modular_topk_gpu_fi():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/test/gpu/nn/test_topk_gpu_fi.mojo.
+    code = """
+    def main():
+        raise Error(
+            "Sampled index "
+            + String(idx)
+            + " is NOT in the top-K set! This indicates a bug in the"
+            " sampling kernel."
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    error_call = function.body[0].args[0]
+    message = error_call.args[0]
+
+    assert isinstance(error_call, FunctionCallNode)
+    assert isinstance(message, BinaryOpNode)
+    assert (
+        message.right
+        == '" is NOT in the top-K set! This indicates a bug in the sampling kernel."'
+    )
+
+
 def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_docs():
     code = """
     def main():
@@ -2376,6 +3008,164 @@ def test_identifier_tuple_declaration_and_assignment_parse_from_layout_tensor_do
     assert isinstance(assignment.left, TupleNode)
     assert [element.name for element in assignment.left.elements] == ["row", "col"]
     assert isinstance(assignment.right, TupleNode)
+    assert assignment.right.elements == ["0", "0"]
+
+
+def test_bool_literal_tokens_can_be_local_binding_names_parse():
+    code = """
+    def main():
+        var false = false
+        var true, flag = true, false
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    false_decl = function.body[0]
+    tuple_decl = function.body[1]
+
+    assert false_decl.name == "false"
+    assert false_decl.initial_value == "false"
+    assert isinstance(tuple_decl.name, TupleNode)
+    assert [element.name for element in tuple_decl.name.elements] == ["true", "flag"]
+    assert isinstance(tuple_decl.initial_value, TupleNode)
+    assert tuple_decl.initial_value.elements == ["true", "false"]
+
+
+def test_list_literal_elements_continue_binary_expression_across_newline_parse():
+    code = """
+    def main():
+        var values = [
+            "Warmup Total: "
+            + String(count),
+            List("123456789012345".as_bytes())
+            + [0xED],
+        ]
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    values = function.body[0].initial_value
+
+    assert isinstance(values, ListLiteralNode)
+    assert len(values.elements) == 2
+    assert all(isinstance(element, BinaryOpNode) for element in values.elements)
+    assert values.elements[0].op == "+"
+    assert values.elements[1].op == "+"
+
+
+def test_tuple_assignment_with_mixed_targets_and_ref_binding_parse():
+    code = """
+    def main():
+        curr_index, res.data[i] = divmod(curr_index, IntType(shape.get[i]()))
+        count, ref chars = mapping.value()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    index_assignment = function.body[0]
+    ref_assignment = function.body[1]
+
+    assert isinstance(index_assignment, AssignmentNode)
+    assert isinstance(index_assignment.left, TupleNode)
+    index_target = index_assignment.left.elements[1]
+    assert index_assignment.left.elements[0].name == "curr_index"
+    assert isinstance(index_target, ArrayAccessNode)
+    assert isinstance(index_target.array, MemberAccessNode)
+    assert index_target.array.object.name == "res"
+    assert index_target.array.member == "data"
+    assert index_target.index.name == "i"
+
+    assert isinstance(ref_assignment, AssignmentNode)
+    assert isinstance(ref_assignment.left, TupleNode)
+    count_target, chars_target = ref_assignment.left.elements
+    assert count_target.name == "count"
+    assert chars_target.name == "chars"
+    assert getattr(chars_target, "target_convention", None) == "ref"
+
+
+def test_empty_tuple_expression_parse_from_variadic_and_unsafe_union():
+    code = """
+    def main():
+        var empty = ()
+        var u = UnsafeUnion[Int32, Float32](unsafe_uninitialized=())
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    empty = function.body[0].initial_value
+    unsafe_union = function.body[1].initial_value
+
+    assert isinstance(empty, TupleNode)
+    assert empty.elements == []
+    assert isinstance(unsafe_union, VectorConstructorNode)
+    assert isinstance(unsafe_union.args[0].right, TupleNode)
+    assert unsafe_union.args[0].right.elements == []
+
+
+def test_binding_convention_assignment_targets_parse_from_mojo_reference():
+    code = """
+    def main():
+        ref a = var b = var c = "Hello"
+        (var list) = values
+        (var codepoint), (ref expected_utf8) = elements
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    ref_binding = function.body[0]
+    list_assignment = function.body[1]
+    tuple_assignment = function.body[2]
+
+    assert isinstance(ref_binding, VariableDeclarationNode)
+    assert getattr(ref_binding, "binding_convention", None) == "ref"
+    assert isinstance(ref_binding.initial_value, AssignmentNode)
+    assert ref_binding.initial_value.left.name == "b"
+    assert getattr(ref_binding.initial_value.left, "target_convention", None) == "var"
+    nested_assignment = ref_binding.initial_value.right
+    assert isinstance(nested_assignment, AssignmentNode)
+    assert nested_assignment.left.name == "c"
+    assert getattr(nested_assignment.left, "target_convention", None) == "var"
+
+    assert isinstance(list_assignment, AssignmentNode)
+    assert list_assignment.left.name == "list"
+    assert getattr(list_assignment.left, "target_convention", None) == "var"
+
+    assert isinstance(tuple_assignment, AssignmentNode)
+    assert isinstance(tuple_assignment.left, TupleNode)
+    codepoint, expected_utf8 = tuple_assignment.left.elements
+    assert codepoint.name == "codepoint"
+    assert getattr(codepoint, "target_convention", None) == "var"
+    assert expected_utf8.name == "expected_utf8"
+    assert getattr(expected_utf8, "target_convention", None) == "ref"
+
+
+def test_var_default_parameter_parse_from_stdlib_collections():
+    code = """
+    struct Counter:
+        def pop(mut self, value: Self.V, var default: Int) -> Int:
+            return self._data.pop(value, default)
+    """
+    ast = parse_code(tokenize_code(code))
+    struct = find_struct(ast, "Counter")
+    method = struct.methods[0]
+    default_param = method.params[2]
+
+    assert default_param.name == "default"
+    assert default_param.vtype == "Int"
+    assert getattr(default_param, "parameter_convention", None) == "var"
+
+
+def test_typed_member_assignment_parse_from_platform_stat_structs():
+    code = """
+    struct Stat:
+        def __init__(out self):
+            self.unused: InlineArray[Int64, 2] = [0, 0]
+    """
+    ast = parse_code(tokenize_code(code))
+    struct = find_struct(ast, "Stat")
+    assignment = struct.methods[0].body[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert isinstance(assignment.left, MemberAccessNode)
+    assert assignment.left.object.name == "self"
+    assert assignment.left.member == "unused"
+    assert getattr(assignment, "target_type", None) == "InlineArray[Int64, 2]"
+    assert isinstance(assignment.right, ListLiteralNode)
     assert assignment.right.elements == ["0", "0"]
 
 
@@ -2523,6 +3313,26 @@ def test_try_except_parse_from_layout_tensor_gpu_docs():
     assert isinstance(statement.except_body[0], FunctionCallNode)
 
 
+def test_try_except_name_after_multiline_specialized_call_parse():
+    code = """
+    def main():
+        try:
+            bench_bf16[
+                num_heads=32,
+                head_dim=256,
+            ](m, ctx)
+        except e:
+            print("bench failed:", e)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    statement = function.body[0]
+
+    assert isinstance(statement, TryExceptNode)
+    assert statement.exception_name == "e"
+    assert isinstance(statement.try_body[0], VectorConstructorNode)
+
+
 def test_try_except_else_finally_parse_from_official_error_docs():
     # Reduced from the full try syntax documented at:
     # https://docs.modular.com/mojo/manual/errors/
@@ -2587,6 +3397,36 @@ def test_modular_tuning_config_trait_base_list_parse():
     assert isinstance(trait.members[0], PassNode)
 
 
+def test_extension_block_parse_from_modular_gpu_kernels():
+    # Reduced from Modular SM90 matmul and RDNA attention __extension blocks.
+    code = """
+    __extension HopperMatmulSM90Kernel:
+        @staticmethod
+        @always_inline
+        def run_persistent[
+            tile_shape: IndexList[2],
+        ](problem_shape: IndexList[3]) -> Int:
+            return 1
+
+    __extension AttentionRDNA:
+        def mha_decode(mut self, num_partitions: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+
+    assert len(ast.extensions) == 2
+    extension = ast.extensions[0]
+    assert isinstance(extension, ExtensionNode)
+    assert extension.name == "HopperMatmulSM90Kernel"
+    assert [method.name for method in extension.methods] == ["run_persistent"]
+    assert extension.methods[0].return_type == "Int"
+    assert [attr.name for attr in extension.methods[0].attributes] == [
+        "staticmethod",
+        "always_inline",
+    ]
+    assert ast.extensions[1].methods[0].params[0].name == "self"
+
+
 def test_function_local_imports_parse_from_layout_tensor_gpu_docs():
     code = """
     def simd_width_example():
@@ -2630,6 +3470,109 @@ def test_postfix_transfer_marker_parse_from_life_examples():
     assert xor_value.body[0].value.op == "^"
 
 
+def test_postfix_transfer_marker_before_member_call_parse_from_modular_primitives():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/src/graph_compiler/builtin_primitives/primitives.mojo.
+    code = """
+    def make_buffer(buf: ByteBuffer, shape: Shape) -> MutByteBuffer:
+        return MutByteBuffer(buf^.take_ptr(), shape)
+
+    def xor_value(a: Int, b: Int) -> Int:
+        return a ^ b
+    """
+    ast = parse_code(tokenize_code(code))
+    make_buffer = find_function(ast, "make_buffer")
+    xor_value = find_function(ast, "xor_value")
+
+    transferred_call = make_buffer.body[0].value.args[0]
+    assert isinstance(transferred_call, MethodCallNode)
+    assert transferred_call.method == "take_ptr"
+    assert transferred_call.object.name == "buf"
+    assert getattr(transferred_call.object, "is_transfer", False)
+    assert isinstance(xor_value.body[0].value, BinaryOpNode)
+    assert xor_value.body[0].value.op == "^"
+
+
+def test_return_tuple_parse_from_modular_comma_bucket():
+    # Reduced from Modular max/kernels examples that previously left the comma
+    # for statement termination after parsing only the first return expression.
+    code = """
+    def map_fn() -> Tuple[IndexList[stencil_rank], IndexList[stencil_rank]]:
+        return lower_bound, upper_bound
+
+    def take_results(deinit self) -> Tuple[Int, InlineArray[Int, Self.num_allocs]]:
+        return self.pool_size, self.offsets
+    """
+    ast = parse_code(tokenize_code(code))
+    map_fn = find_function(ast, "map_fn")
+    take_results = find_function(ast, "take_results")
+
+    map_return = map_fn.body[0].value
+    assert isinstance(map_return, TupleNode)
+    assert [element.name for element in map_return.elements] == [
+        "lower_bound",
+        "upper_bound",
+    ]
+
+    results_return = take_results.body[0].value
+    assert isinstance(results_return, TupleNode)
+    assert [element.member for element in results_return.elements] == [
+        "pool_size",
+        "offsets",
+    ]
+
+
+def test_comptime_tuple_declaration_parse_from_modular_grouped_matmul():
+    # Reduced from Modular max/kernels/src/linalg/grouped_matmul.mojo.
+    code = """
+    def writeback():
+        comptime dst_m_offset, dst_n_offset = divmod(dst_idx, N)
+    """
+    ast = parse_code(tokenize_code(code))
+    declaration = find_function(ast, "writeback").body[0]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert getattr(declaration, "is_comptime", False)
+    assert isinstance(declaration.name, TupleNode)
+    assert [target.name for target in declaration.name.elements] == [
+        "dst_m_offset",
+        "dst_n_offset",
+    ]
+    assert isinstance(declaration.initial_value, FunctionCallNode)
+    assert declaration.initial_value.name == "divmod"
+
+
+def test_parenthesized_return_type_parse_from_modular_shared_memory():
+    # Reduced from Modular max/kernels/src/linalg/structuring.mojo and
+    # max/kernels/src/linalg/matmul/gpu/sm90/matmul_kernels.mojo.
+    code = """
+    def ptr() -> (
+        UnsafePointer[
+            Int8, MutExternalOrigin, address_space=AddressSpace.SHARED
+        ]
+    ):
+        pass
+
+    def common_kernel_init() -> (
+        Tuple[
+            Int,
+            Int,
+            Bool,
+        ]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    ptr = find_function(ast, "ptr")
+    common_kernel_init = find_function(ast, "common_kernel_init")
+
+    assert ptr.return_type == (
+        "UnsafePointer[Int8, MutExternalOrigin, " "address_space=AddressSpace.SHARED]"
+    )
+    assert common_kernel_init.return_type == "Tuple[Int, Int, Bool]"
+
+
 def test_type_member_expression_parse_from_modular_testing_examples():
     code = """
     def inc(n: Int) raises -> Int:
@@ -2648,6 +3591,43 @@ def test_type_member_expression_parse_from_modular_testing_examples():
     assert isinstance(call_arg, MemberAccessNode)
     assert call_arg.object.name == "Int"
     assert call_arg.member == "MAX"
+
+
+def test_double_bracket_specialized_call_parse_from_vendor_blas_tests():
+    code = """
+    def main() raises:
+        if has_amd_gpu_accelerator():
+            test_matmul[[DType.float8_e4m3fnuz, DType.bfloat16]]()
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0].if_body[0]
+
+    assert isinstance(call, CallNode)
+    assert isinstance(call.callee, ArrayAccessNode)
+    assert call.callee.array.name == "test_matmul"
+    assert isinstance(call.callee.index, TupleNode)
+    assert [element.member for element in call.callee.index.elements] == [
+        "float8_e4m3fnuz",
+        "bfloat16",
+    ]
+
+
+def test_switch_keyword_can_be_value_name_parse_from_tile_tests():
+    code = """
+    def main():
+        def print_wrapper[tile_size: Int, switch: Bool](offset: Int):
+            print(offset, tile_size, switch)
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    nested = function.body[0]
+    call = nested.body[0]
+
+    assert isinstance(nested, FunctionNode)
+    assert nested.name == "print_wrapper"
+    assert isinstance(call, FunctionCallNode)
+    assert call.args[2].name == "switch"
 
 
 def test_alias_declarations_parse_as_comptime_aliases():
@@ -2699,6 +3679,24 @@ def test_struct_comptime_member_from_modular_custom_ops_parse():
     assert isinstance(size_member.initial_value, FunctionCallNode)
     assert size_member.initial_value.name == "product"
     assert struct_node.members[1].vtype == "DeviceBuffer[Self.dtype]"
+
+
+def test_trait_comptime_associated_type_intersection_parse():
+    code = """
+    trait Boxable:
+        comptime Associated: Writable & Copyable & ImplicitlyDestructible
+
+        def unbox(self) -> Self.Associated:
+            ...
+    """
+    ast = parse_code(tokenize_code(code))
+    trait = ast.traits[0]
+    associated = trait.members[0]
+
+    assert isinstance(associated, VariableDeclarationNode)
+    assert associated.name == "Associated"
+    assert associated.vtype == "Writable&Copyable&ImplicitlyDestructible"
+    assert getattr(associated, "is_comptime", False)
 
 
 def test_bare_annotated_assignment_with_initializer_parsing():
@@ -3335,6 +4333,93 @@ string"""
     assert isinstance(declaration, VariableDeclarationNode)
     assert declaration.name == "message"
     assert declaration.initial_value == '"Multi-line\\nstring"'
+
+
+def test_triple_quoted_call_argument_parse_from_modular_fast_div():
+    code = '''
+    fn main():
+        assert_equal(
+            """div: 33
+mprime: 4034666248
+""",
+            String(value),
+        )
+    '''
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    call = function.body[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.args[0] == '"div: 33\\nmprime: 4034666248\\n"'
+    assert isinstance(call.args[1], VectorConstructorNode)
+    assert call.args[1].type_name == "String"
+
+
+def test_soft_infix_line_continuations_parse_from_practical_examples():
+    # Reduced from ahmetax/Practical-Mojo-Examples v0.26.2 examples that
+    # split long expressions after and before infix operators.
+    code = """
+    fn fmt_time(ns: UInt) -> String:
+        return String(ns // 1_000_000) + "." +
+               String((ns % 1_000_000) // 10_000) + " ms"
+
+    fn accumulate(state: RunState, a: Float32):
+        var xbi = (state.xb.data + 1).load[width=4](0)
+            + a * (state.value_cache.data + 1).load[width=4](0)
+    """
+    ast = parse_code(tokenize_code(code))
+    fmt_time = find_function(ast, "fmt_time")
+    accumulate = find_function(ast, "accumulate")
+
+    assert isinstance(fmt_time.body[0], ReturnNode)
+    assert isinstance(fmt_time.body[0].value, BinaryOpNode)
+    declaration = accumulate.body[0]
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert isinstance(declaration.initial_value, BinaryOpNode)
+
+
+def test_braced_type_initializer_suffix_parse_from_nbody_example():
+    # Reduced from ksandvik/mojo-examples examples/nbody.mojo Planet.__init__.
+    code = """
+    struct Planet:
+        var pos: SIMD[DType.float64, 4]
+        var velocity: SIMD[DType.float64, 4]
+        var mass: Float64
+
+        fn __init__(
+            pos: SIMD[DType.float64, 4],
+            velocity: SIMD[DType.float64, 4],
+            mass: Float64,
+        ) -> Self:
+            return Self {
+                pos: pos,
+                velocity: velocity,
+                mass: mass,
+            }
+    """
+    ast = parse_code(tokenize_code(code))
+    init_method = find_struct(ast, "Planet").methods[0]
+    value = init_method.body[0].value
+
+    assert isinstance(value, FunctionCallNode)
+    assert value.name == "Self"
+    assert [arg.left.name for arg in value.args] == ["pos", "velocity", "mass"]
+
+
+def test_nested_prefixed_tstring_parse_from_modular_format_tests():
+    code = r"""
+    fn main():
+        var tstring = t"hello \t{x}, {rt"world \t{x}"}"
+        var greeting = String(t"Hello, {t"dear {name}"}!")
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    tstring = function.body[0]
+    greeting = function.body[1]
+
+    assert isinstance(tstring, VariableDeclarationNode)
+    assert tstring.initial_value == r't"hello \\t{x}, {rt\"world \\t{x}\"}"'
+    assert isinstance(greeting.initial_value, VectorConstructorNode)
 
 
 def test_numeric_literals_parsing():

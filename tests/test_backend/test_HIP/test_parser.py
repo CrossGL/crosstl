@@ -182,6 +182,102 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_public_hip_examples_typedef_struct_multi_alias_parsing(self):
+        code = """
+        typedef struct _GaussParms
+        {
+            float nsigma;
+            float coefn;
+        } GaussParms, *pGaussParms;
+        """
+        ast = self.parse_code(code)
+
+        struct_node = ast.statements[0]
+        pointer_alias = ast.statements[1]
+
+        assert isinstance(struct_node, StructNode)
+        assert struct_node.name == "GaussParms"
+        assert [member.name for member in struct_node.members] == ["nsigma", "coefn"]
+
+        assert isinstance(pointer_alias, TypeAliasNode)
+        assert pointer_alias.name == "pGaussParms"
+        assert pointer_alias.alias_type == "GaussParms *"
+
+    def test_public_hip_examples_line_broken_cast_argument_parsing(self):
+        code = """
+        void host(float* vsq_d, float* next_s_d) {
+            int gridSize = 256;
+            int groupSize = 256;
+            hipLaunchKernelGGL(rtm8, dim3(gridSize), dim3(groupSize), 0, 0,
+                               (float*)vsq_d, (
+                                   float*)next_s_d);
+        }
+        """
+        ast = self.parse_code(code)
+
+        launch = ast.statements[0].body[2]
+        line_broken_cast = launch.args[1]
+
+        assert isinstance(launch, KernelLaunchNode)
+        assert isinstance(line_broken_cast, CastNode)
+        assert line_broken_cast.target_type == "float *"
+        assert line_broken_cast.expression == "next_s_d"
+
+    def test_public_rocm_stb_va_arg_type_arguments_parse(self):
+        # Reduced from ROCm/rocm-examples@adaf64a066eecb4ad90036dfd1838fc95bed9914,
+        # HIP-Doc/Tutorials/Programming-Patterns/image_convolution/stb_image_write.h.
+        code = """
+        typedef unsigned int stbiw_uint32;
+
+        void writefv(va_list v) {
+            unsigned char byte = (unsigned char)((va_arg(v, int)) & 0xff);
+            stbiw_uint32 word = va_arg(v, int);
+        }
+        """
+        ast = self.parse_code(code)
+
+        masked_byte = ast.statements[1].body[0].value.expression
+        word = ast.statements[1].body[1]
+
+        assert isinstance(masked_byte, BinaryOpNode)
+        assert isinstance(masked_byte.left, FunctionCallNode)
+        assert masked_byte.left.name == "va_arg"
+        assert masked_byte.left.args == ["v", "int"]
+        assert isinstance(word.value, FunctionCallNode)
+        assert word.value.name == "va_arg"
+        assert word.value.args == ["v", "int"]
+
+    def test_public_rocm_stb_sbpush_macro_comma_expression_parse(self):
+        # Reduced from ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
+        # HIP-Doc/Tutorials/Programming-Patterns/image_convolution/stb_image_write.h.
+        code = r"""
+        #define stbiw__sbraw(a) ((int *)(void *)(a)-2)
+        #define stbiw__sbm(a) stbiw__sbraw(a)[0]
+        #define stbiw__sbn(a) stbiw__sbraw(a)[1]
+        #define stbiw__sbneedgrow(a, n) \
+            ((a) == 0 || stbiw__sbn(a) + n >= stbiw__sbm(a))
+        #define stbiw__sbmaybegrow(a, n) \
+            (stbiw__sbneedgrow(a, (n)) ? stbiw__sbgrow(a, n) : 0)
+        #define stbiw__sbgrow(a, n) \
+            stbiw__sbgrowf((void **)&(a), (n), sizeof(*(a)))
+        #define stbiw__sbpush(a, v) \
+            (stbiw__sbmaybegrow(a, 1), (a)[stbiw__sbn(a)++] = (v))
+
+        void write_byte(unsigned char **out, unsigned char byte) {
+            stbiw__sbpush(*out, byte);
+        }
+        """
+        ast = self.parse_code(code)
+
+        comma_expr = ast.statements[0].body[0]
+
+        assert isinstance(comma_expr, BinaryOpNode)
+        assert comma_expr.op == ","
+        assert isinstance(comma_expr.left, TernaryOpNode)
+        assert isinstance(comma_expr.right, AssignmentNode)
+        assert isinstance(comma_expr.right.left, ArrayAccessNode)
+        assert comma_expr.right.operator == "="
+
     def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ auto load_callback_dev = load_callback;
@@ -2687,6 +2783,21 @@ class TestHipParser:
         assert body[4].vtype == "Table"
         assert body[5].name == "consume"
 
+    def test_public_rocm_optical_flow_function_pointer_typedef_parsing(self):
+        code = """
+        typedef stbi_uc *(*resample_row_func)(stbi_uc *out,
+                                              stbi_uc *in0,
+                                              stbi_uc *in1,
+                                              int w,
+                                              int hs);
+        """
+        ast = self.parse_code(code)
+
+        alias = ast.statements[0]
+        assert isinstance(alias, TypeAliasNode)
+        assert alias.name == "resample_row_func"
+        assert alias.alias_type == "stbi_uc * (*)"
+
     def test_public_rocm_device_query_namespace_block_parsing(self):
         code = """
         namespace
@@ -2995,6 +3106,29 @@ class TestHipParser:
         assert isinstance(loop.update[1], UnaryOpNode)
         assert loop.update[1].op == "--"
         assert loop.update[1].operand == "j"
+
+    def test_multi_expression_for_initializer_parsing(self):
+        code = """
+        void host(int n, int *val, int *out, int out_stride) {
+            int i;
+            int *v;
+            int *o;
+            for (i = 0, v = val, o = out; i < n; ++i, v += 8, o += out_stride) {
+                sink(o[i]);
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        loop = ast.statements[0].body[3]
+        assert isinstance(loop, ForNode)
+        assert isinstance(loop.init, list)
+        assert len(loop.init) == 3
+        assert [init.left for init in loop.init] == ["i", "v", "o"]
+        assert [init.operator for init in loop.init] == ["=", "=", "="]
 
     def test_range_based_for_loop_parsing(self):
         code = """
@@ -3353,6 +3487,49 @@ class TestHipParser:
         assert isinstance(function.body[0], ReturnNode)
         assert function.body[0].value == "x"
 
+    def test_template_prefixed_leading_requires_clause_parsing(self):
+        code = """
+        template <class T>
+        requires (sizeof(T) > 0)
+        __device__ T id(T x) {
+            return x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "T"
+        assert function.name == "id"
+        assert "__device__" in function.qualifiers
+        assert function.params == [{"type": "T", "name": "x"}]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
+
+    def test_cxx20_trailing_requires_clause_after_template_function_parameters(self):
+        code = """
+        template <class T>
+        __device__ T id(T x) requires (sizeof(T) > 0) {
+            return x;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        function = ast.statements[0]
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "T"
+        assert function.name == "id"
+        assert "__device__" in function.qualifiers
+        assert function.params == [{"type": "T", "name": "x"}]
+        assert isinstance(function.body[0], ReturnNode)
+        assert function.body[0].value == "x"
+
     def test_template_prefixed_using_alias_with_dependent_type_parsing(self):
         code = """
         template <std::uint32_t WarpSize>
@@ -3418,6 +3595,65 @@ class TestHipParser:
         assert branch.condition == "std::is_same_v<T, float>"
         assert isinstance(branch.else_body, IfNode)
         assert branch.else_body.condition == "T::value"
+
+    def test_public_rocm_optical_flow_static_const_declaration_split_parsing(self):
+        code = """
+        static
+        const char *stbi__g_failure_reason;
+
+        extern const char *stbi_failure_reason(void) {
+            return stbi__g_failure_reason;
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0]
+        function = ast.statements[1]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "const char *"
+        assert declaration.name == "stbi__g_failure_reason"
+        assert declaration.qualifiers == ["static"]
+        assert isinstance(function, FunctionNode)
+        assert function.return_type == "const char *"
+        assert function.name == "stbi_failure_reason"
+
+    def test_public_rocm_optical_flow_unsigned_cast_parsing(self):
+        code = """
+        void host(int r) {
+            if ((unsigned)r > 255) {
+                r = 255;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        branch = ast.statements[0].body[0]
+        assert isinstance(branch, IfNode)
+        assert isinstance(branch.condition, BinaryOpNode)
+        assert branch.condition.op == ">"
+        assert isinstance(branch.condition.left, CastNode)
+        assert branch.condition.left.target_type == "unsigned int"
+        assert branch.condition.left.expression == "r"
+
+    def test_public_rocm_optical_flow_goto_and_label_parse(self):
+        code = """
+        void host(int flag) {
+            if (flag) {
+                goto errorEnd;
+            }
+            flag = 0;
+        errorEnd:
+            return;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        assert isinstance(body[0], IfNode)
+        assert body[0].if_body == []
+        assert isinstance(body[1], AssignmentNode)
+        assert isinstance(body[2], ReturnNode)
 
     def test_public_rocm_scoped_using_declarations_are_skipped(self):
         code = """
@@ -3964,3 +4200,32 @@ class TestHipParser:
 
         with pytest.raises(SyntaxError, match="duplicate default"):
             parser.parse()
+
+    def test_public_rocm_conditional_alias_comparison_does_not_leak(self):
+        code = """
+        template <typename InDataType, typename WeiDataType>
+        void host(S s) {
+            using ComputeType = std::conditional_t<
+                sizeof(InDataType) < sizeof(WeiDataType),
+                InDataType,
+                WeiDataType>;
+            if (s.log_level_ > 0) {
+                sink();
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        body = ast.statements[0].body
+        assert isinstance(body[0], TypeAliasNode)
+        assert body[0].name == "ComputeType"
+        assert body[0].alias_type == (
+            "std::conditional_t<sizeof(InDataType)<sizeof(WeiDataType), "
+            "InDataType, WeiDataType>"
+        )
+        assert isinstance(body[1], IfNode)
+        assert isinstance(body[1].condition, BinaryOpNode)
+        assert body[1].condition.op == ">"

@@ -38,10 +38,12 @@ class SlangParser:
         "pervertex",
         "row_major",
         "column_major",
+        "MATRIX_LAYOUT",
         "__prefix",
         "__postfix",
         "__exported",
         "__ref",
+        "__constref",
         "__func_extension",
         "expand",
         "each",
@@ -145,11 +147,14 @@ class SlangParser:
     EXPRESSION_TYPE_OPERAND_TOKENS = (
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"GENERIC", "VOID"}
     )
+    EXPRESSION_PACK_MARKER_IDENTIFIERS = {"expand", "each"}
+    CONTEXTUAL_IDENTIFIER_TOKENS = {"IDENTIFIER", "MODULE"}
 
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[self.pos]
+        self.anonymous_struct_counter = 0
         self.skip_comments()
 
     def skip_comments(self):
@@ -165,6 +170,13 @@ class SlangParser:
             self.skip_comments()
         else:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
+
+    def parse_contextual_identifier(self):
+        if self.current_token[0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS:
+            raise SyntaxError(f"Expected IDENTIFIER, got {self.current_token[0]}")
+        value = self.current_token[1]
+        self.eat(self.current_token[0])
+        return value
 
     def parse(self):
         shader = self.parse_shader()
@@ -210,28 +222,46 @@ class SlangParser:
                 exports.append(self.parse_export(attributes=pending_attributes))
             elif declaration_token == "INTERFACE":
                 interfaces.append(self.parse_interface())
-            elif declaration_token == "STRUCT":
+            elif (
+                declaration_token == "STRUCT"
+                or self.is_generic_prefixed_struct_declaration_start()
+            ):
                 structs.append(self.parse_struct())
             elif declaration_token == "EXTENSION":
                 extensions.append(self.parse_extension())
             elif declaration_token in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
-            elif self.is_glsl_uniform_block_declaration_start():
+            elif self.is_glsl_interface_block_declaration_start():
                 cbuffers.append(
-                    self.parse_glsl_uniform_block(attributes=pending_attributes)
+                    self.parse_glsl_interface_block(attributes=pending_attributes)
                 )
             elif self.is_standalone_layout_declaration_start():
                 self.skip_semicolon_terminated_declaration()
             elif declaration_token == "ENUM":
                 enums.append(self.parse_enum())
-            elif declaration_token in {"TYPEDEF", "TYPEALIAS"}:
+            elif (
+                declaration_token
+                in {
+                    "TYPEDEF",
+                    "TYPEALIAS",
+                }
+                or self.is_generic_prefixed_typedef_declaration_start()
+            ):
                 typedefs.append(self.parse_typedef())
             elif self.is_namespace_declaration_start():
                 global_variables.extend(self.parse_namespace_declaration())
+            elif self.is_global_generic_value_param_declaration_start():
+                global_variables.append(
+                    self.parse_global_generic_value_param(attributes=pending_attributes)
+                )
             elif self.is_require_capability_declaration_start():
                 self.skip_semicolon_terminated_declaration()
             elif self.is_using_declaration_start():
                 self.skip_semicolon_terminated_declaration()
+            elif self.is_namespace_marker_macro_start():
+                self.eat("IDENTIFIER")
+            elif self.is_top_level_macro_invocation_start():
+                self.skip_top_level_macro_invocation()
             elif self.current_token[0] in self.TOP_LEVEL_DECLARATION_TOKENS:
                 if self.is_func_keyword_declaration_start():
                     functions.append(
@@ -281,6 +311,7 @@ class SlangParser:
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
+        current_pos = self.skip_leading_global_scope_tokens(current_pos)
         if current_pos >= len(self.tokens) or self.tokens[current_pos][0] == "EOF":
             return False
 
@@ -356,7 +387,8 @@ class SlangParser:
         return current_pos
 
     def is_namespace_declaration_start(self):
-        body_pos = self.namespace_declaration_body_index(self.pos)
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        body_pos = self.namespace_declaration_body_index(current_pos)
         return body_pos is not None and self.tokens[body_pos][0] == "LBRACE"
 
     def namespace_declaration_body_index(self, index):
@@ -397,6 +429,7 @@ class SlangParser:
         return current_pos
 
     def parse_namespace_declaration(self):
+        self.parse_qualifiers()
         self.eat("IDENTIFIER")
         namespace_name = self.parse_namespace_path()
         self.eat("LBRACE")
@@ -474,8 +507,35 @@ class SlangParser:
                 return
             self.eat(self.current_token[0])
 
+    def is_namespace_marker_macro_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+        name = self.current_token[1]
+        return name.startswith("BEGIN_NAMESPACE") or name.startswith("END_NAMESPACE")
+
+    def is_top_level_macro_invocation_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1].isupper()
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "LPAREN"
+        )
+
+    def skip_top_level_macro_invocation(self):
+        self.eat("IDENTIFIER")
+        self.parse_balanced_parenthesized_tokens("top-level macro invocation")
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
     def is_require_capability_declaration_start(self):
         return self.current_token == ("IDENTIFIER", "__require_capability")
+
+    def is_global_generic_value_param_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        return current_pos < len(self.tokens) and self.tokens[current_pos] == (
+            "IDENTIFIER",
+            "__generic_value_param",
+        )
 
     def is_using_declaration_start(self):
         return self.current_token == ("IDENTIFIER", "using")
@@ -563,6 +623,18 @@ class SlangParser:
                 current_pos = self.skip_generic_type_suffix_tokens(current_pos)
         return current_pos
 
+    def is_leading_global_scope_at(self, index):
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "COLON"
+            and self.tokens[index + 1][0] == "COLON"
+        )
+
+    def skip_leading_global_scope_tokens(self, current_pos):
+        if self.is_leading_global_scope_at(current_pos):
+            return current_pos + 2
+        return current_pos
+
     def is_qualifier_token_at(self, index):
         token_type, token_value = self.tokens[index]
         return token_type in self.QUALIFIER_TOKENS or (
@@ -644,6 +716,23 @@ class SlangParser:
         if current_pos >= len(self.tokens):
             return "EOF"
         return self.tokens[current_pos][0]
+
+    def is_generic_prefixed_typedef_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return current_pos < len(self.tokens) and self.tokens[current_pos][0] in {
+            "TYPEDEF",
+            "TYPEALIAS",
+        }
+
+    def is_generic_prefixed_struct_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return (
+            current_pos < len(self.tokens) and self.tokens[current_pos][0] == "STRUCT"
+        )
 
     def parse_qualifiers(self):
         qualifiers = []
@@ -950,6 +1039,9 @@ class SlangParser:
         ]
 
     def parse_type_name(self, allow_array_suffix=False):
+        if self.is_leading_global_scope_at(self.pos):
+            self.eat("COLON")
+            self.eat("COLON")
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
         if self.current_token[0] == "LESS_THAN":
@@ -1144,16 +1236,17 @@ class SlangParser:
         node.buffer_kind = buffer_kind
         return node
 
-    def is_glsl_uniform_block_declaration_start(self):
+    def is_glsl_interface_block_declaration_start(self, allowed_block_kinds=None):
+        allowed_block_kinds = allowed_block_kinds or {"uniform", "buffer"}
         current_pos = self.pos
-        saw_uniform = False
+        block_kind = None
         while current_pos < len(self.tokens):
             if self.is_layout_qualifier_at(current_pos):
                 current_pos = self.skip_layout_qualifier_tokens(current_pos)
                 continue
             token_type, token_value = self.tokens[current_pos]
-            if token_type == "IDENTIFIER" and token_value == "uniform":
-                saw_uniform = True
+            if token_type == "IDENTIFIER" and token_value in allowed_block_kinds:
+                block_kind = token_value
                 current_pos += 1
                 continue
             if self.is_qualifier_token_at(current_pos):
@@ -1161,15 +1254,23 @@ class SlangParser:
                 continue
             break
 
-        if not saw_uniform or current_pos + 1 >= len(self.tokens):
+        if block_kind is None or current_pos + 1 >= len(self.tokens):
             return False
         if self.tokens[current_pos][0] not in self.TYPE_NAME_TOKENS:
             return False
         return self.tokens[current_pos + 1][0] == "LBRACE"
 
-    def parse_glsl_uniform_block(self, attributes=None):
+    def is_glsl_uniform_block_declaration_start(self):
+        return self.is_glsl_interface_block_declaration_start({"uniform"})
+
+    def parse_glsl_interface_block(self, attributes=None):
         attributes = attributes or []
         qualifiers = self.parse_qualifiers()
+        block_kind = "uniform" if "uniform" in qualifiers else None
+        if self.current_token == ("IDENTIFIER", "buffer"):
+            block_kind = "buffer"
+            qualifiers.append("buffer")
+            self.eat("IDENTIFIER")
         name = self.parse_type_name()
         self.eat("LBRACE")
         members = []
@@ -1188,6 +1289,7 @@ class SlangParser:
                     qualifiers=qualifiers,
                     array_sizes=self.parse_array_suffixes(),
                     attributes=attributes,
+                    glsl_block_kind=block_kind,
                 )
             )
             if self.current_token[0] != "COMMA":
@@ -1201,7 +1303,11 @@ class SlangParser:
         node.qualifiers = qualifiers
         node.attributes = attributes
         node.instances = instances
+        node.glsl_block_kind = block_kind
         return node
+
+    def parse_glsl_uniform_block(self, attributes=None):
+        return self.parse_glsl_interface_block(attributes=attributes)
 
     def parse_global_variable(self, attributes=None):
         attributes = attributes or []
@@ -1253,6 +1359,36 @@ class SlangParser:
         if len(declarations) == 1:
             return declarations[0]
         return declarations
+
+    def parse_global_generic_value_param(self, attributes=None):
+        attributes = attributes or []
+        qualifiers = self.parse_qualifiers()
+        self.eat("IDENTIFIER")
+
+        var_name = self.current_token[1]
+        self.eat("IDENTIFIER")
+        self.eat("COLON")
+
+        var_type = self.parse_type_name(allow_array_suffix=True)
+        var_type += self.parse_pointer_suffix()
+        variable = VariableNode(
+            var_type,
+            var_name,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            array_sizes=[],
+            storage_modifier="__generic_value_param",
+        )
+
+        if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+            op = self.current_token[1]
+            self.eat(self.current_token[0])
+            declaration = AssignmentNode(variable, self.parse_expression(), op)
+        else:
+            declaration = variable
+
+        self.eat("SEMICOLON")
+        return declaration
 
     def parse_import(self):
         self.eat("IMPORT")
@@ -1323,7 +1459,10 @@ class SlangParser:
         declaration_token = self.peek_declaration_token_type()
         if declaration_token == "INTERFACE":
             exported_item = self.parse_interface()
-        elif declaration_token == "STRUCT":
+        elif (
+            declaration_token == "STRUCT"
+            or self.is_generic_prefixed_struct_declaration_start()
+        ):
             exported_item = self.parse_struct()
         elif declaration_token == "EXTENSION":
             exported_item = self.parse_extension()
@@ -1429,15 +1568,19 @@ class SlangParser:
         return node
 
     def parse_struct(self):
-        qualifiers = self.parse_qualifiers()
+        qualifiers, prefix_generic_parameters, prefix_generic_constraints = (
+            self.parse_typedef_prefixes()
+        )
         self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
-        generic_parameters = None
+        generic_parameters = prefix_generic_parameters
+        generic_parameters_from_prefix = prefix_generic_parameters is not None
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         conformances = self.parse_conformance_clause()
-        generic_constraints = self.parse_generic_constraint_clauses()
+        generic_constraints = prefix_generic_constraints
+        generic_constraints.extend(self.parse_generic_constraint_clauses())
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             node = StructNode(name, [])
@@ -1446,6 +1589,7 @@ class SlangParser:
             node.enums = []
             node.structs = []
             node.generic_parameters = generic_parameters
+            node.generic_parameters_from_prefix = generic_parameters_from_prefix
             node.generic_constraints = generic_constraints
             node.conformances = conformances
             node.qualifiers = qualifiers
@@ -1473,13 +1617,23 @@ class SlangParser:
                 self.eat("SEMICOLON")
                 continue
             declaration_token = self.peek_declaration_token_type()
-            if declaration_token in {"TYPEDEF", "TYPEALIAS"}:
+            if (
+                declaration_token
+                in {
+                    "TYPEDEF",
+                    "TYPEALIAS",
+                }
+                or self.is_generic_prefixed_typedef_declaration_start()
+            ):
                 typedefs.append(self.parse_typedef())
                 continue
             if declaration_token == "ENUM":
                 enums.append(self.parse_enum())
                 continue
-            if declaration_token == "STRUCT":
+            if (
+                declaration_token == "STRUCT"
+                or self.is_generic_prefixed_struct_declaration_start()
+            ):
                 structs.append(self.parse_struct())
                 continue
             if self.is_constructor():
@@ -1529,6 +1683,7 @@ class SlangParser:
         node.enums = enums
         node.structs = structs
         node.generic_parameters = generic_parameters
+        node.generic_parameters_from_prefix = generic_parameters_from_prefix
         node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
@@ -1557,7 +1712,10 @@ class SlangParser:
             array_sizes = self.parse_array_suffixes()
             semantic = None
             if self.current_token[0] == "COLON":
-                semantic = self.parse_semantic_annotations()
+                if self.is_numeric_bitfield_width_start():
+                    self.parse_bitfield_width()
+                else:
+                    semantic = self.parse_semantic_annotations()
             value = None
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
@@ -1578,6 +1736,17 @@ class SlangParser:
             self.eat("COMMA")
         self.eat("SEMICOLON")
         return members
+
+    def is_numeric_bitfield_width_start(self):
+        return (
+            self.current_token[0] == "COLON"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] in {"NUMBER", "FLOAT_NUMBER"}
+        )
+
+    def parse_bitfield_width(self):
+        self.eat("COLON")
+        self.parse_expression()
 
     def is_property_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
@@ -1640,17 +1809,26 @@ class SlangParser:
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
-        return (
-            current_pos + 1 < len(self.tokens)
-            and self.tokens[current_pos] == ("IDENTIFIER", "__subscript")
-            and self.tokens[current_pos + 1][0] == "LPAREN"
-        )
+        if current_pos + 1 >= len(self.tokens) or self.tokens[current_pos] != (
+            "IDENTIFIER",
+            "__subscript",
+        ):
+            return False
+
+        next_pos = current_pos + 1
+        if self.tokens[next_pos][0] == "LESS_THAN":
+            next_pos = self.skip_generic_type_suffix_tokens(next_pos)
+        return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "LPAREN"
 
     def parse_subscript_declaration(self, attributes=None, allow_signature=False):
         attributes = attributes or []
         qualifiers, is_generic = self.parse_declaration_prefixes()
         slang_name = self.current_token[1]
         self.eat("IDENTIFIER")
+        generic_parameters = None
+        if self.current_token[0] == "LESS_THAN":
+            generic_parameters = self.parse_generic_type_suffix()
+            is_generic = True
         self.eat("LPAREN")
         params = self.parse_parameters()
         self.eat("RPAREN")
@@ -1680,6 +1858,7 @@ class SlangParser:
             body,
             qualifiers=qualifiers,
             is_generic=is_generic,
+            generic_parameters=generic_parameters,
             generic_constraints=generic_constraints,
             is_declaration=is_declaration,
             attributes=attributes,
@@ -2025,7 +2204,9 @@ class SlangParser:
         return enum
 
     def parse_typedef(self):
-        qualifiers = self.parse_qualifiers()
+        qualifiers, prefix_generic_parameters, generic_constraints = (
+            self.parse_typedef_prefixes()
+        )
         if self.current_token[0] == "TYPEDEF":
             self.eat("TYPEDEF")
             original_type = self.parse_type_name(allow_array_suffix=True)
@@ -2036,13 +2217,123 @@ class SlangParser:
             self.eat("TYPEALIAS")
             new_type = self.current_token[1]
             self.eat("IDENTIFIER")
+            if self.current_token[0] == "LESS_THAN":
+                new_type += self.parse_generic_type_suffix()
+            elif prefix_generic_parameters:
+                new_type += prefix_generic_parameters
             self.eat("EQUALS")
             original_type = self.parse_type_name(allow_array_suffix=True)
             original_type += self.parse_pointer_suffix()
         self.eat("SEMICOLON")
         node = TypedefNode(original_type, new_type)
         node.qualifiers = qualifiers
+        node.generic_constraints = generic_constraints
         return node
+
+    def parse_typedef_prefixes(self):
+        qualifiers = []
+        generic_parameters = None
+        generic_constraints = []
+        while (
+            self.current_token[0] == "GENERIC"
+            or self.is_layout_qualifier_at(self.pos)
+            or self.is_declaration_annotation_at(self.pos)
+            or self.is_qualifier_token_at(self.pos)
+        ):
+            if self.current_token[0] == "GENERIC":
+                self.eat("GENERIC")
+                if self.current_token[0] == "LESS_THAN":
+                    generic_parameters, generic_constraints = (
+                        self.parse_generic_parameter_prefix()
+                    )
+            elif self.is_layout_qualifier_at(self.pos):
+                qualifiers.append(self.parse_layout_qualifier())
+            elif self.is_declaration_annotation_at(self.pos):
+                self.parse_declaration_annotation()
+            else:
+                qualifiers.append(self.current_token[1])
+                self.eat(self.current_token[0])
+        return qualifiers, generic_parameters, generic_constraints
+
+    def parse_generic_parameter_prefix(self):
+        parameters = []
+        constraints = []
+        current_parameter = []
+        self.eat("LESS_THAN")
+        depth = 1
+        while depth > 0:
+            token_type, token_value = self.current_token
+            if token_type == "EOF":
+                raise SyntaxError("Unterminated generic parameter prefix")
+            if token_type == "LESS_THAN":
+                depth += 1
+                current_parameter.append((token_type, token_value))
+            elif token_type == "GREATER_THAN":
+                depth -= 1
+                if depth == 0:
+                    self.append_generic_parameter_prefix(
+                        parameters, constraints, current_parameter
+                    )
+                    self.eat("GREATER_THAN")
+                    break
+                current_parameter.append((token_type, token_value))
+            elif token_type == "COMMA" and depth == 1:
+                self.append_generic_parameter_prefix(
+                    parameters, constraints, current_parameter
+                )
+                current_parameter = []
+            else:
+                current_parameter.append((token_type, token_value))
+            self.eat(token_type)
+        if not parameters:
+            return None, constraints
+        return f"<{', '.join(parameters)}>", constraints
+
+    def append_generic_parameter_prefix(self, parameters, constraints, tokens):
+        parameter = self.generic_parameter_prefix_name(tokens)
+        if parameter:
+            parameters.append(parameter)
+        constraint = self.generic_parameter_prefix_constraint(parameter, tokens)
+        if constraint:
+            constraints.append(constraint)
+
+    def generic_parameter_prefix_name(self, tokens):
+        significant = [
+            (token_type, token_value)
+            for token_type, token_value in tokens
+            if token_type not in {"COMMENT_SINGLE", "COMMENT_MULTI"}
+        ]
+        if not significant:
+            return None
+        first_type, first_value = significant[0]
+        if (
+            first_type in self.TYPE_NAME_TOKENS
+            and len(significant) > 1
+            and significant[1][0] == "IDENTIFIER"
+        ):
+            return significant[1][1]
+        if first_type == "IDENTIFIER" and first_value in {"let", "type", "typename"}:
+            if len(significant) > 1 and significant[1][0] == "IDENTIFIER":
+                return significant[1][1]
+        if first_type == "IDENTIFIER":
+            return first_value
+        return None
+
+    def generic_parameter_prefix_constraint(self, parameter, tokens):
+        if not parameter:
+            return None
+        for index, (token_type, _) in enumerate(tokens):
+            if token_type != "COLON":
+                continue
+            constraint_parts = []
+            for constraint_type, constraint_value in tokens[index + 1 :]:
+                if constraint_type in {"COMMENT_SINGLE", "COMMENT_MULTI"}:
+                    continue
+                constraint_parts.append(str(constraint_value))
+            if not constraint_parts:
+                return None
+            return GenericConstraintNode(parameter, "".join(constraint_parts))
+        return None
 
     def parse_associated_type(self):
         qualifiers = self.parse_qualifiers()
@@ -2152,6 +2443,7 @@ class SlangParser:
             body,
             qualifiers=qualifiers,
             qualifier=shader_type,
+            semantic=None,
             is_generic=is_generic,
             generic_parameters=generic_parameters,
             generic_constraints=generic_constraints,
@@ -2250,6 +2542,8 @@ class SlangParser:
     def parse_generic_constraints(self):
         constraints = []
         self.eat("WHERE")
+        previous_parameter = None
+        previous_relation = None
         while True:
             if self.current_token[0] != "IDENTIFIER":
                 raise SyntaxError(
@@ -2273,6 +2567,10 @@ class SlangParser:
                 }:
                     relation = self.current_token[1]
                     self.eat("IDENTIFIER")
+            elif previous_relation == ":":
+                constraint_type = parameter
+                parameter = previous_parameter
+                relation = previous_relation
             else:
                 raise SyntaxError(
                     "Only simple generic conformance and equality constraints are supported"
@@ -2280,6 +2578,8 @@ class SlangParser:
             constraint = GenericConstraintNode(parameter, constraint_type)
             constraint.relation = relation
             constraints.append(constraint)
+            previous_parameter = parameter
+            previous_relation = relation
             if self.current_token[0] != "COMMA":
                 break
             self.eat("COMMA")
@@ -2379,6 +2679,8 @@ class SlangParser:
             return self.parse_block()
         if self.is_labeled_statement_start():
             return self.parse_labeled_statement()
+        if self.is_anonymous_struct_variable_declaration_start():
+            return self.parse_anonymous_struct_variable_declaration()
         if self.current_token[0] in {"TYPEDEF", "TYPEALIAS"}:
             return self.parse_typedef()
         if self.current_token == ("IDENTIFIER", "defer"):
@@ -2527,26 +2829,88 @@ class SlangParser:
         if current_pos >= len(self.tokens):
             return False
 
+        current_pos = self.skip_leading_global_scope_tokens(current_pos)
+        if current_pos >= len(self.tokens):
+            return False
+
         token_type = self.tokens[current_pos][0]
         if token_type not in (
             self.DECLARATION_TYPE_TOKENS | self.RESOURCE_TYPE_TOKENS | {"IDENTIFIER"}
         ):
             return False
-        if token_type == "IDENTIFIER" and self.tokens[current_pos + 1][0] not in {
-            "IDENTIFIER",
-            "LBRACKET",
-            "LESS_THAN",
-            "MULTIPLY",
-            "DOT",
-            "COLON",
-        }:
+        if token_type == "IDENTIFIER" and self.tokens[current_pos + 1][0] not in (
+            self.CONTEXTUAL_IDENTIFIER_TOKENS
+            | {
+                "LBRACKET",
+                "LESS_THAN",
+                "MULTIPLY",
+                "DOT",
+                "COLON",
+            }
+        ):
             return False
 
         next_pos = self.skip_generic_type_suffix_tokens(current_pos + 1)
         next_pos = self.skip_qualified_type_suffix_tokens(next_pos)
         next_pos = self.skip_type_array_suffix_tokens(next_pos)
         next_pos = self.skip_pointer_declarator_tokens(next_pos)
-        return next_pos < len(self.tokens) and self.tokens[next_pos][0] == "IDENTIFIER"
+        return (
+            next_pos < len(self.tokens)
+            and self.tokens[next_pos][0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+        )
+
+    def is_anonymous_struct_variable_declaration_start(self):
+        return (
+            self.current_token[0] == "STRUCT"
+            and self.pos + 1 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] == "LBRACE"
+        )
+
+    def parse_anonymous_struct_variable_declaration(self):
+        self.eat("STRUCT")
+        struct_name = self.next_anonymous_struct_name()
+        self.eat("LBRACE")
+        members = []
+        while self.current_token[0] != "RBRACE":
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated anonymous struct declaration")
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+                continue
+            members.extend(self.parse_struct_field_members())
+        self.eat("RBRACE")
+
+        declarations = []
+        while True:
+            name = self.parse_contextual_identifier()
+            variable = VariableNode(
+                struct_name,
+                name,
+                array_sizes=self.parse_array_suffixes(),
+            )
+            if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                declarations.append(
+                    AssignmentNode(variable, self.parse_expression(), op)
+                )
+            else:
+                declarations.append(variable)
+
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        self.eat("SEMICOLON")
+        struct = StructNode(struct_name, members)
+        struct.is_anonymous = True
+        struct.is_local_declaration = True
+        return [struct, *declarations]
+
+    def next_anonymous_struct_name(self):
+        name = f"SLANG_anonymous_{self.anonymous_struct_counter}"
+        self.anonymous_struct_counter += 1
+        return name
 
     def parse_variable_declaration_or_assignment(self):
         qualifiers = self.parse_qualifiers()
@@ -2558,8 +2922,7 @@ class SlangParser:
         declarations = []
 
         while True:
-            name = self.current_token[1]
-            self.eat("IDENTIFIER")
+            name = self.parse_contextual_identifier()
             array_sizes = self.parse_array_suffixes()
             variable = VariableNode(
                 var_type,
@@ -2999,6 +3362,12 @@ class SlangParser:
         if self.current_token == ("IDENTIFIER", "no_diff"):
             self.eat("IDENTIFIER")
             return self.parse_unary()
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.EXPRESSION_PACK_MARKER_IDENTIFIERS
+        ):
+            self.eat("IDENTIFIER")
+            return self.parse_unary()
         if self.current_token[0] == "LPAREN" and self.is_c_style_cast_start():
             return self.parse_c_style_cast()
         return self.parse_primary()
@@ -3078,8 +3447,8 @@ class SlangParser:
 
     def parse_primary(self):
         if (
-            self.current_token[0]
-            in {"IDENTIFIER"} | self.EXPRESSION_TYPE_OPERAND_TOKENS
+            self.current_token[0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+            or self.current_token[0] in self.EXPRESSION_TYPE_OPERAND_TOKENS
         ):
             if self.current_token[0] in self.EXPRESSION_TYPE_OPERAND_TOKENS:
                 type_name = self.current_token[1]
@@ -3102,12 +3471,16 @@ class SlangParser:
                         return VariableNode(type_name, f"{var_name}[{index}]")
                     return VariableNode(type_name, var_name)
                 elif self.current_token[0] == "LPAREN":
-                    return self.parse_vector_constructor(type_name)
+                    return self.parse_postfix_suffixes(
+                        self.parse_vector_constructor(type_name)
+                    )
                 elif self.current_token[0] == "LBRACE":
-                    return self.parse_vector_constructor(
-                        type_name,
-                        open_token="LBRACE",
-                        close_token="RBRACE",
+                    return self.parse_postfix_suffixes(
+                        self.parse_vector_constructor(
+                            type_name,
+                            open_token="LBRACE",
+                            close_token="RBRACE",
+                        )
                     )
                 elif self.current_token[0] == "DOT":
                     return self.parse_postfix_suffixes(VariableNode("", type_name))
@@ -3318,8 +3691,7 @@ class SlangParser:
         return text.strip()
 
     def parse_function_call_or_identifier(self):
-        name = self.current_token[1]
-        self.eat("IDENTIFIER")
+        name = self.parse_contextual_identifier()
         while True:
             if (
                 self.current_token[0] == "LESS_THAN"
@@ -3342,7 +3714,7 @@ class SlangParser:
             break
         if self.current_token[0] == "LBRACKET" and self.is_array_constructor_suffix():
             name += self.parse_type_array_suffixes()
-            return self.parse_vector_constructor(name)
+            return self.parse_postfix_suffixes(self.parse_vector_constructor(name))
         if name == "__intrinsic_asm" and self.current_token[0] == "STRING":
             arg = self.current_token[1]
             self.eat("STRING")

@@ -74,6 +74,44 @@ def test_preprocessor_error_directive_raises():
         """).tokenize()
 
 
+def test_preprocessor_defaults_to_linux_cuda_sample_platform_branch():
+    values = token_values("""
+        #if defined(__linux__)
+        #define CPU_ATOMIC_ADD32(a, x) __sync_add_and_fetch(a, x)
+        #elif defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
+        #define CPU_ATOMIC_ADD32(a, x) InterlockedAdd((volatile LONG *)a, x)
+        #else
+        #error Unsupported system
+        #endif
+
+        __device__ int add_one(int* value) {
+            return CPU_ATOMIC_ADD32(value, 1);
+        }
+    """)
+
+    assert "__sync_add_and_fetch" in values
+    assert "InterlockedAdd" not in values
+
+
+def test_preprocessor_platform_define_override_disables_default_linux_branch():
+    values = token_values(
+        """
+        #if defined(__linux__)
+        int selected_linux;
+        #elif defined(_WIN32)
+        int selected_windows;
+        #else
+        int selected_none;
+        #endif
+        """,
+        defines={"_WIN32": "1"},
+    )
+
+    assert "selected_windows" in values
+    assert "selected_linux" not in values
+    assert "selected_none" not in values
+
+
 def test_parser_uses_preprocessed_conditionals():
     tokens = CudaLexer("""
         #define USE_SELECTED 1

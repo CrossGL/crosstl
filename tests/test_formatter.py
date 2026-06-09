@@ -44,10 +44,14 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.frag") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.fsh") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.fragment") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.cs") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.csh") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.compute") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.gs") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.gsh") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.geometry") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.tcs") == ShaderLanguage.GLSL
+        assert formatter.detect_language("shader.tes") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.mesh") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.task") == ShaderLanguage.GLSL
         assert formatter.detect_language("shader.rgen") == ShaderLanguage.GLSL

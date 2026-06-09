@@ -124,6 +124,39 @@ def test_codegen_geometry_layout_roundtrip_preserves_adjacency_and_invocations()
     assert "return output;" not in glsl
 
 
+def test_codegen_geometry_repeated_stream_layouts_from_glslang_roundtrip():
+    # Reduced from KhronosGroup/glslang Test/glsl.nvgpushader5.geom.
+    code = """
+    #version 150
+    #extension GL_NV_gpu_shader5 : enable
+
+    sample in vec4 colorSampIn[3];
+    sample out vec4 colorSampOut;
+
+    layout(triangles, invocations = 6) in;
+    layout(points, stream = 0) out;
+    layout(stream = 1) out;
+
+    void main() {
+        EmitStreamVertex(1);
+        EndStreamPrimitive(0);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "geometry")
+
+    assert "sample in vec4 colorSampIn[3];" in crossgl
+    assert "sample out vec4 colorSampOut;" in crossgl
+    assert "layout(points, stream = 0) out;" in crossgl
+    assert "layout(stream = 1) out;" in crossgl
+    parse_crossgl(crossgl)
+
+    glsl = regenerate_glsl(code, "geometry")
+
+    assert "layout(points, stream = 0) out;" in glsl
+    assert "layout(stream = 1) out;" in glsl
+
+
 def test_codegen_geometry_builtin_gl_pervertex_redeclarations_roundtrip():
     # Reduced from Khronos GLSL 4.60.8 section 7.5, which documents
     # redeclaring the built-in gl_PerVertex block.

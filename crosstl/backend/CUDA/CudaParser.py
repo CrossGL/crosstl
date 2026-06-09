@@ -160,6 +160,10 @@ class CudaParser:
         "noexcept",
         "__noexcept",
     }
+    STRUCT_METHOD_IDENTIFIER_SPECIFIERS = {
+        "explicit",
+        "friend",
+    }
     STATEMENT_DIRECTIVE_FOLLOW_TOKENS = {
         "FOR",
         "IF",
@@ -168,9 +172,23 @@ class CudaParser:
         "SWITCH",
         "LBRACE",
     }
+    TOP_LEVEL_MACRO_STATEMENT_FOLLOW_TOKENS = {
+        "EOF",
+        "PREPROCESSOR",
+        "TEMPLATE",
+        "NAMESPACE",
+        "STRUCT",
+        "CLASS",
+        "UNION",
+        "ENUM",
+        "TYPEDEF",
+        "USING",
+        "EXTERN",
+    }
     FUNCTION_IDENTIFIER_SPECIFIERS = {
         "APIENTRY",
         "CALLBACK",
+        "CUTE_HOST_DEVICE",
         "CUDARTAPI",
         "_CCCL_API",
         "_CCCL_DEVICE",
@@ -178,6 +196,7 @@ class CudaParser:
         "_CCCL_HOST_API",
         "_CCCL_HOST_DEVICE",
         "_CCCL_HOST_DEVICE_API",
+        "_CCCL_KERNEL_ATTRIBUTES",
         "_CCCL_NODEBUG_HOST_API",
         "VKAPI_ATTR",
         "VKAPI_CALL",
@@ -189,6 +208,7 @@ class CudaParser:
         "STATIC",
         "EXTERN",
         "CONSTEXPR",
+        "REGISTER",
         "SHARED",
         "CONSTANT",
         "DEVICE",
@@ -198,6 +218,7 @@ class CudaParser:
         "STATIC",
         "EXTERN",
         "CONSTEXPR",
+        "REGISTER",
         "SHARED",
         "CONSTANT",
         "DEVICE",
@@ -215,6 +236,9 @@ class CudaParser:
         "DEVICE",
         "MANAGED",
     }
+    CUDA_PARAMETER_ATTRIBUTE_TOKENS = set()
+    CUDA_PARAMETER_ATTRIBUTE_IDENTIFIERS = {"_CCCL_GRID_CONSTANT"}
+    CUDA_STATEMENT_MACRO_INVOCATION_IDENTIFIERS = {"NV_IF_TARGET"}
     CUDA_FUNCTION_ENTRY_TOKENS = {"GLOBAL", "TILE_GLOBAL", "TILE", "DEVICE", "HOST"}
     FUNCTION_ATTRIBUTE_TOKENS = {"LAUNCH_BOUNDS", "CLUSTER_DIMS", "BLOCK_SIZE"}
     FUNCTION_SPECIFIER_TOKENS = {
@@ -232,6 +256,11 @@ class CudaParser:
         *FUNCTION_ATTRIBUTE_TOKENS,
     }
     POST_RETURN_FUNCTION_SPECIFIER_TOKENS = {
+        "GLOBAL",
+        "TILE_GLOBAL",
+        "TILE",
+        "DEVICE",
+        "HOST",
         "INLINE",
         "FORCEINLINE",
         "NOINLINE",
@@ -387,11 +416,6 @@ class CudaParser:
             index += 1
 
         index = self.skip_cpp_attribute_specifiers_at_index(index)
-        while (
-            index < len(self.tokens)
-            and self.tokens[index][0] in self.TYPE_QUALIFIER_TOKENS
-        ):
-            index += 1
 
         index = self.skip_type_at_index(index, allow_unknown_identifier_declarator=True)
         if index is None:
@@ -434,6 +458,8 @@ class CudaParser:
                 includes.append(self.parse_preprocessor())
             elif self.is_cpp_attribute_specifier_start():
                 self.skip_cpp_attribute_specifiers()
+            elif self.is_concept_declaration_start():
+                self.skip_concept_declaration()
             elif self.current_token[0] == "TEMPLATE":
                 self.parse_template_declaration()
             elif self.is_namespace_alias_start():
@@ -470,6 +496,8 @@ class CudaParser:
                 self.skip_out_of_class_member_definition()
             elif self.is_function_pointer_declaration_start():
                 self.skip_out_of_class_member_definition()
+            elif self.is_top_level_macro_statement_start():
+                self.skip_top_level_macro_statement()
             elif self.is_macro_block_invocation_start():
                 self.skip_macro_block_invocation()
             elif self.peek_function():
@@ -533,11 +561,6 @@ class CudaParser:
             saved_index += 1
 
         saved_index = self.skip_cpp_attribute_specifiers_at_index(saved_index)
-        while (
-            saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
-        ):
-            saved_index += 1
 
         saved_index = self.skip_type_at_index(
             saved_index, allow_unknown_identifier_declarator=True
@@ -589,12 +612,6 @@ class CudaParser:
             if self.tokens[saved_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
                 saved_index = self.skip_function_attribute_at_index(saved_index)
                 continue
-            saved_index += 1
-
-        while (
-            saved_index < len(self.tokens)
-            and self.tokens[saved_index][0] in self.TYPE_QUALIFIER_TOKENS
-        ):
             saved_index += 1
 
         saved_index = self.skip_type_at_index(
@@ -697,6 +714,15 @@ class CudaParser:
                     return index
                 index += 1
 
+        return index
+
+    def skip_gnu_attributes_at_index(self, index):
+        while (
+            index + 1 < len(self.tokens)
+            and self.tokens[index] == ("IDENTIFIER", "__attribute__")
+            and self.tokens[index + 1][0] == "LPAREN"
+        ):
+            index = self.skip_balanced_tokens_at_index(index + 1, "LPAREN", "RPAREN")
         return index
 
     def skip_type_at_index(self, index, allow_unknown_identifier_declarator=False):
@@ -846,6 +872,7 @@ class CudaParser:
 
         index += 1
         index = self.skip_cpp_attribute_specifiers_at_index(index)
+        index = self.skip_cuda_parameter_attributes_at_index(index)
         if index >= len(self.tokens):
             return False
 
@@ -866,6 +893,7 @@ class CudaParser:
         return self.is_plausible_function_parameter_at_index(index)
 
     def is_plausible_function_parameter_at_index(self, index):
+        index = self.skip_cuda_parameter_attributes_at_index(index)
         type_end = self.skip_type_at_index(
             index, allow_unknown_identifier_declarator=True
         )
@@ -902,6 +930,17 @@ class CudaParser:
 
         return False
 
+    def skip_cuda_parameter_attributes_at_index(self, index):
+        while index < len(self.tokens) and (
+            self.tokens[index][0] in self.CUDA_PARAMETER_ATTRIBUTE_TOKENS
+            or (
+                self.tokens[index][0] == "IDENTIFIER"
+                and self.tokens[index][1] in self.CUDA_PARAMETER_ATTRIBUTE_IDENTIFIERS
+            )
+        ):
+            index += 1
+        return index
+
     def is_function_pointer_parameter_start_at_index(self, index):
         type_end = self.skip_type_at_index(
             index, allow_unknown_identifier_declarator=True
@@ -937,6 +976,7 @@ class CudaParser:
             "LPAREN",
             "LBRACE",
             "COMMA",
+            "RPAREN",
         }
 
     def is_global_qualified_name_start_at_index(self, index):
@@ -969,6 +1009,13 @@ class CudaParser:
             if index < len(self.tokens) and self.tokens[index][0] == "LONG":
                 index += 1
                 saw_long_long = True
+
+            if (
+                saw_long_long
+                and index < len(self.tokens)
+                and self.tokens[index][0] in {"SIGNED", "UNSIGNED"}
+            ):
+                index += 1
 
             if index < len(self.tokens) and self.tokens[index][0] == "INT":
                 return index + 1
@@ -1274,9 +1321,20 @@ class CudaParser:
             return self.parse_function_pointer_type_alias_declarator(alias_type)
 
         name = self.parse_name_component()
+        if self.current_token[0] == "LPAREN":
+            return self.parse_function_type_alias_declarator(alias_type, name)
+
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def parse_function_type_alias_declarator(self, return_type, name):
+        params = self.parse_parameters()
+        alias_type = f"{return_type} ()".strip()
+        alias = TypeAliasNode(alias_type, name)
+        alias.params = params
+        self.type_aliases.add(name)
+        return alias
 
     def parse_function_pointer_type_alias_declarator(self, return_type):
         self.eat("LPAREN")
@@ -1376,6 +1434,15 @@ class CudaParser:
             self.eat("RPAREN")
             attributes.append(f"{name}({args})")
         return attributes
+
+    def skip_gnu_attributes(self):
+        while (
+            self.current_token == ("IDENTIFIER", "__attribute__")
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "LPAREN"
+        ):
+            self.eat("IDENTIFIER")
+            self.skip_balanced_parentheses()
 
     def parse_cuda_declaration_attributes(self):
         while self.is_cuda_declaration_attribute_identifier():
@@ -1507,6 +1574,39 @@ class CudaParser:
 
         return " ".join(tokens)
 
+    def collect_balanced_raw_tokens_until(self, terminator):
+        tokens = []
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if (
+                token_type == terminator
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+            ):
+                break
+
+            tokens.append(self.current_token)
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth > 0:
+                brace_depth -= 1
+            self.eat(token_type)
+
+        return tokens
+
     def parse_using_alias(self):
         self.eat("IDENTIFIER")
         if self.current_token[0] == "NAMESPACE":
@@ -1519,7 +1619,10 @@ class CudaParser:
             return None
 
         self.eat("ASSIGN")
-        if self.is_decltype_alias_type_start():
+        if (
+            self.is_decltype_alias_type_start()
+            or self.is_dependent_decltype_alias_type_start()
+        ):
             alias_type = self.parse_alias_type_expression_until_semicolon()
             self.eat("SEMICOLON")
             self.type_aliases.add(name)
@@ -1539,6 +1642,14 @@ class CudaParser:
             and self.current_token[1] == "decltype"
             and self.current_index + 1 < len(self.tokens)
             and self.tokens[self.current_index + 1][0] == "LPAREN"
+        )
+
+    def is_dependent_decltype_alias_type_start(self):
+        return (
+            self.current_token[0] == "TYPENAME"
+            and self.current_index + 2 < len(self.tokens)
+            and self.tokens[self.current_index + 1] == ("IDENTIFIER", "decltype")
+            and self.tokens[self.current_index + 2][0] == "LPAREN"
         )
 
     def parse_alias_type_expression_until_semicolon(self):
@@ -1650,6 +1761,116 @@ class CudaParser:
             "SEMICOLON",
         }
 
+    def is_shared_aggregate_declaration_start(self):
+        index = self.current_index
+        index, _ = self.skip_aggregate_declaration_prefixes_at_index(index)
+
+        index = self.skip_alignment_attributes_at_index(index)
+        index = self.skip_gnu_attributes_at_index(index)
+        if index >= len(self.tokens) or self.tokens[index][0] not in {
+            "STRUCT",
+            "UNION",
+        }:
+            return False
+
+        index = self.skip_cuda_struct_attribute_prefix_at_index(index + 1)
+        if (
+            index < len(self.tokens)
+            and self.tokens[index][0] in self.NAME_COMPONENT_TOKENS
+        ):
+            index += 1
+            if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+                index = self.skip_template_at_index(index)
+                if index is None:
+                    return False
+
+        return index < len(self.tokens) and self.tokens[index][0] == "LBRACE"
+
+    def skip_aggregate_declaration_prefixes_at_index(self, index):
+        qualifiers = []
+        while index < len(self.tokens):
+            token_type, token_value = self.tokens[index]
+            if token_type in self.DECLARATION_PREFIX_TOKENS or token_type in {
+                "CONST",
+                "VOLATILE",
+            }:
+                qualifiers.append(token_value)
+                index += 1
+                continue
+            break
+        return index, qualifiers
+
+    def parse_aggregate_declaration_prefixes(self):
+        qualifiers = []
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if token_type in self.DECLARATION_PREFIX_TOKENS or token_type in {
+                "CONST",
+                "VOLATILE",
+            }:
+                qualifiers.append(token_value)
+                self.eat(token_type)
+                continue
+            break
+        return qualifiers
+
+    def parse_shared_aggregate_declaration(self):
+        qualifiers = self.parse_aggregate_declaration_prefixes()
+        self.parse_alignment_attributes()
+        self.skip_gnu_attributes()
+
+        self.eat(self.current_token[0])
+        attributes = self.parse_cuda_struct_attribute_prefix()
+
+        tag_name = None
+        if self.current_token[0] in self.NAME_COMPONENT_TOKENS:
+            tag_name = self.parse_name_component()
+            if self.current_token[0] == "LESS_THAN":
+                tag_name += self.parse_template_suffix()
+
+        self.eat("LBRACE")
+        members = self.parse_struct_members()
+        self.eat("RBRACE")
+
+        declarators = []
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            name = self.parse_name_component()
+            array_suffix = self.parse_array_suffix()
+            declarators.append((name, array_suffix))
+            if self.current_token[0] == "ASSIGN":
+                self.eat("ASSIGN")
+                self.parse_expression()
+            elif self.current_token[0] == "LBRACE":
+                self.parse_initializer_list()
+            if self.current_token[0] != "COMMA":
+                break
+
+        self.eat("SEMICOLON")
+
+        if not tag_name:
+            first_name = declarators[0][0] if declarators else "union"
+            prefix = "__anonymous_shared" if "__shared__" in qualifiers else "anonymous"
+            tag_name = f"{prefix}_{first_name}_layout"
+
+        self.struct_names.add(tag_name)
+        nodes = [StructNode(tag_name, members, attributes=attributes)]
+        for name, array_suffix in declarators:
+            vtype = f"{tag_name}{array_suffix}"
+            if "__shared__" in qualifiers:
+                nodes.append(self.create_shared_memory_node(vtype, name, qualifiers))
+            else:
+                nodes.append(
+                    VariableNode(
+                        vtype,
+                        name,
+                        qualifiers=qualifiers,
+                    )
+                )
+        return nodes if len(nodes) > 1 else nodes[0]
+
     def skip_until_semicolon(self):
         while self.current_token[0] not in {"SEMICOLON", "EOF"}:
             self.eat(self.current_token[0])
@@ -1712,13 +1933,13 @@ class CudaParser:
                 return False
 
         saw_scope = False
-        while (
-            index + 1 < len(self.tokens)
-            and self.tokens[index][0] == "SCOPE"
-            and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
-        ):
+        while index < len(self.tokens) and self.tokens[index][0] == "SCOPE":
+            member_end = self.scoped_member_name_component_end_index_at(index + 1)
+            if member_end is None:
+                return False
+
             saw_scope = True
-            index += 2
+            index = member_end
             if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
                 index = self.skip_template_at_index(index)
                 if index is None:
@@ -1727,6 +1948,30 @@ class CudaParser:
         return (
             saw_scope and index < len(self.tokens) and self.tokens[index][0] == "LPAREN"
         )
+
+    def scoped_member_name_component_end_index_at(self, index):
+        if index < len(self.tokens) and self.tokens[index][0] == "TEMPLATE":
+            index += 1
+
+        if index >= len(self.tokens):
+            return None
+
+        token_type, token_value = self.tokens[index]
+        if token_type == "IDENTIFIER" and token_value == "operator":
+            return self.operator_function_name_end_index_at(index)
+
+        if token_type == "BITWISE_NOT":
+            return (
+                index + 2
+                if index + 1 < len(self.tokens)
+                and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
+                else None
+            )
+
+        if token_type in self.NAME_COMPONENT_TOKENS:
+            return index + 1
+
+        return None
 
     def skip_out_of_class_member_definition(self):
         while self.current_token[0] not in {"LPAREN", "SEMICOLON", "EOF"}:
@@ -1766,6 +2011,13 @@ class CudaParser:
         if self.current_token[0] == "COLON":
             self.eat("COLON")
             underlying_type = self.parse_type()
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            enum_node = EnumNode(name, [])
+            enum_node.underlying_type = underlying_type
+            enum_node.is_scoped = is_scoped
+            return enum_node
 
         self.eat("LBRACE")
         members = self.parse_enum_members()
@@ -1812,8 +2064,22 @@ class CudaParser:
                 self.eat(self.current_token[0])
                 self.eat("COLON")
                 continue
-            if self.is_identifier_value("friend"):
+            if self.is_friend_type_declaration_start():
                 self.skip_until_semicolon()
+                continue
+            if self.is_identifier_value("friend"):
+                if self.is_struct_method_start():
+                    self.skip_struct_method()
+                else:
+                    self.skip_until_semicolon()
+                continue
+            if self.is_templated_type_alias_start():
+                self.parse_template_declaration()
+                self.parse_type_alias()
+                continue
+            if self.is_templated_struct_or_class_declaration_start():
+                self.parse_template_declaration()
+                self.parse_struct()
                 continue
             if self.is_anonymous_aggregate_member_start():
                 members.extend(self.parse_anonymous_aggregate_member())
@@ -1835,6 +2101,43 @@ class CudaParser:
             members.extend(member_declarations)
             self.eat("SEMICOLON")
         return members
+
+    def is_templated_type_alias_start(self):
+        if self.current_token[0] != "TEMPLATE":
+            return False
+        index = self.skip_optional_template_declaration_at_index(self.current_index)
+        return index < len(self.tokens) and self.tokens[index] == (
+            "IDENTIFIER",
+            "using",
+        )
+
+    def is_templated_struct_or_class_declaration_start(self):
+        if self.current_token[0] != "TEMPLATE":
+            return False
+        index = self.skip_optional_template_declaration_at_index(self.current_index)
+        return index < len(self.tokens) and self.tokens[index][0] in {"STRUCT", "CLASS"}
+
+    def is_friend_type_declaration_start(self):
+        index = self.current_index
+        index = self.skip_optional_template_declaration_at_index(index)
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
+        while index < len(self.tokens):
+            token_type, token_value = self.tokens[index]
+            if token_type in self.FUNCTION_ATTRIBUTE_TOKENS:
+                index = self.skip_function_attribute_at_index(index)
+                continue
+            if self.is_function_identifier_specifier_at_index(index):
+                index += 1
+                continue
+            if token_value == "friend":
+                break
+            return False
+
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index] == ("IDENTIFIER", "friend")
+            and self.tokens[index + 1][0] in {"CLASS", "STRUCT"}
+        )
 
     def is_struct_access_label(self):
         return (
@@ -1879,6 +2182,7 @@ class CudaParser:
 
         while name_index < len(self.tokens) and (
             self.tokens[name_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS
+            or self.tokens[name_index][0] in self.POST_RETURN_FUNCTION_SPECIFIER_TOKENS
             or self.is_function_identifier_specifier_at_index(name_index)
         ):
             if self.tokens[name_index][0] in self.FUNCTION_ATTRIBUTE_TOKENS:
@@ -1889,11 +2193,36 @@ class CudaParser:
         token_type, token_value = self.tokens[name_index]
         if token_value == "operator":
             return True
+        qualified_name_end = self.qualified_function_name_end_index_at(name_index)
+        if qualified_name_end is not None:
+            return (
+                qualified_name_end < len(self.tokens)
+                and self.tokens[qualified_name_end][0] == "LPAREN"
+            )
         return (
             self.is_function_name_token(self.tokens[name_index])
             and name_index + 1 < len(self.tokens)
             and self.tokens[name_index + 1][0] == "LPAREN"
         )
+
+    def qualified_function_name_end_index_at(self, index):
+        if index < len(self.tokens) and self.tokens[index][0] == "SCOPE":
+            index += 1
+
+        if (
+            index >= len(self.tokens)
+            or self.tokens[index][0] not in self.NAME_COMPONENT_TOKENS
+        ):
+            return None
+
+        index += 1
+        while (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "SCOPE"
+            and self.tokens[index + 1][0] in self.NAME_COMPONENT_TOKENS
+        ):
+            index += 2
+        return index
 
     def is_macro_block_invocation_start(self):
         return (
@@ -1937,6 +2266,111 @@ class CudaParser:
             character.isupper() or character.isdigit() or character == "_"
             for character in name
         )
+
+    def is_statement_macro_invocation_start(self):
+        return (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1]
+            in self.CUDA_STATEMENT_MACRO_INVOCATION_IDENTIFIERS
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "LPAREN"
+        )
+
+    def skip_statement_macro_invocation(self):
+        self.eat("IDENTIFIER")
+        self.skip_balanced_parentheses()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
+    def is_top_level_macro_statement_start(self):
+        end_index = self.top_level_macro_statement_end_index(self.current_index)
+        return end_index is not None
+
+    def is_concept_declaration_start(self):
+        index = self.skip_optional_template_declaration_at_index(self.current_index)
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
+
+        if index + 2 >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_type != "IDENTIFIER":
+            return False
+
+        if token_value == "concept":
+            name_index = index + 1
+        elif token_value == "_CCCL_CONCEPT" or token_value.endswith("_CONCEPT"):
+            name_index = index + 1
+        else:
+            return False
+
+        return (
+            name_index + 1 < len(self.tokens)
+            and self.tokens[name_index][0] in self.NAME_COMPONENT_TOKENS
+            and self.tokens[name_index + 1][0] == "ASSIGN"
+        )
+
+    def skip_concept_declaration(self):
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if (
+                token_type == "SEMICOLON"
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+            ):
+                self.eat("SEMICOLON")
+                break
+
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth > 0:
+                brace_depth -= 1
+
+            self.eat(token_type)
+
+    def top_level_macro_statement_end_index(self, index):
+        if (
+            index >= len(self.tokens)
+            or self.tokens[index][0] != "IDENTIFIER"
+            or not self.is_macro_like_identifier(self.tokens[index][1])
+        ):
+            return None
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LPAREN":
+            index = self.skip_balanced_tokens_at_index(index, "LPAREN", "RPAREN")
+
+        if index < len(self.tokens) and self.tokens[index][0] == "SEMICOLON":
+            return index + 1
+        if index >= len(self.tokens):
+            return index
+
+        follow_type, follow_value = self.tokens[index]
+        if follow_type == "IDENTIFIER" and self.is_macro_like_identifier(follow_value):
+            return index
+        if follow_type in self.TOP_LEVEL_MACRO_STATEMENT_FOLLOW_TOKENS:
+            return index
+        return None
+
+    def skip_top_level_macro_statement(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def is_statement_directive_marker_start(self):
         if self.current_token[0] != "IDENTIFIER":
@@ -2013,6 +2447,11 @@ class CudaParser:
             if (
                 token_type in self.FUNCTION_SPECIFIER_TOKENS
                 or token_type == "VIRTUAL"
+                or (
+                    token_type == "IDENTIFIER"
+                    and self.tokens[index][1]
+                    in self.STRUCT_METHOD_IDENTIFIER_SPECIFIERS
+                )
                 or self.is_function_identifier_specifier_at_index(index)
             ):
                 if (
@@ -2021,6 +2460,16 @@ class CudaParser:
                     and self.tokens[index + 1][0] == "STRING"
                 ):
                     index += 2
+                    continue
+                if (
+                    token_type == "IDENTIFIER"
+                    and self.tokens[index][1] == "explicit"
+                    and index + 1 < len(self.tokens)
+                    and self.tokens[index + 1][0] == "LPAREN"
+                ):
+                    index = self.skip_balanced_tokens_at_index(
+                        index + 1, "LPAREN", "RPAREN"
+                    )
                     continue
                 index += 1
                 continue
@@ -2059,12 +2508,19 @@ class CudaParser:
         if self.is_cpp_attribute_specifier_start():
             self.skip_cpp_attribute_specifiers()
 
-        while self.current_token[0] not in {"SEMICOLON", "LBRACE", "RBRACE", "EOF"}:
-            self.eat(self.current_token[0])
+        while self.current_token[0] not in {"SEMICOLON", "RBRACE", "EOF"}:
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_parentheses()
+            elif self.current_token[0] == "LBRACKET":
+                self.skip_balanced_brackets()
+            elif self.current_token[0] == "LBRACE":
+                self.skip_balanced_brace_block()
+                if self.current_token[0] not in {"COMMA", "LBRACE"}:
+                    break
+            else:
+                self.eat(self.current_token[0])
 
-        if self.current_token[0] == "LBRACE":
-            self.skip_balanced_brace_block()
-        elif self.current_token[0] == "SEMICOLON":
+        if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
     def skip_balanced_brace_block(self):
@@ -2195,7 +2651,15 @@ class CudaParser:
                 if token_value == "noexcept" and self.current_token[0] == "LPAREN":
                     self.skip_balanced_parentheses()
                 continue
+            if token_type == "IDENTIFIER" and token_value == "requires":
+                self.skip_requires_clause()
+                continue
             break
+
+    def skip_requires_clause(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
 
     def parse_function_attribute(self):
         attribute_name = self.current_token[1]
@@ -2257,6 +2721,7 @@ class CudaParser:
     def parse_parameter(self):
         if self.is_cpp_attribute_specifier_start():
             self.skip_cpp_attribute_specifiers()
+        self.skip_cuda_parameter_attributes()
 
         if self.is_ellipsis_at_current_index():
             self.consume_ellipsis()
@@ -2277,6 +2742,7 @@ class CudaParser:
 
         if self.is_cpp_attribute_specifier_start():
             self.skip_cpp_attribute_specifiers()
+        self.skip_cuda_parameter_attributes()
 
         param_name = self.parse_name_component()
         if self.is_cpp_attribute_specifier_start():
@@ -2284,6 +2750,13 @@ class CudaParser:
         param_type += self.parse_array_suffix()
         self.skip_parameter_default()
         return VariableNode(param_type, param_name)
+
+    def skip_cuda_parameter_attributes(self):
+        while self.current_token[0] in self.CUDA_PARAMETER_ATTRIBUTE_TOKENS or (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.CUDA_PARAMETER_ATTRIBUTE_IDENTIFIERS
+        ):
+            self.eat(self.current_token[0])
 
     def is_ellipsis_at_current_index(self):
         return self.is_ellipsis_at_index(self.current_index)
@@ -2318,8 +2791,12 @@ class CudaParser:
 
         if self.current_token[0] == "LPAREN":
             self.parse_parameters()
+        array_suffix = self.parse_array_suffix()
 
-        param_type = f"{return_type} ({pointer_prefix})".strip()
+        if array_suffix:
+            param_type = f"{return_type} {pointer_prefix} {array_suffix}".strip()
+        else:
+            param_type = f"{return_type} ({pointer_prefix})".strip()
         self.skip_parameter_default()
         return VariableNode(param_type, name)
 
@@ -2478,6 +2955,9 @@ class CudaParser:
         if token_type == "LONG" and self.current_token[0] == "LONG":
             type_name += f" {self.current_token[1]}"
             self.eat("LONG")
+            if self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                type_name += f" {self.current_token[1]}"
+                self.eat(self.current_token[0])
             if self.current_token[0] == "INT":
                 type_name += f" {self.current_token[1]}"
                 self.eat("INT")
@@ -2524,10 +3004,12 @@ class CudaParser:
     def parse_variable_declaration(self):
         qualifiers = self.parse_declaration_prefixes()
         self.parse_alignment_attributes()
+        self.skip_gnu_attributes()
 
         vtype = self.parse_type()
         self.parse_interleaved_declaration_qualifiers(qualifiers)
         self.parse_alignment_attributes()
+        self.skip_gnu_attributes()
         name = self.parse_name_component()
         vtype += self.parse_array_suffix()
         self.skip_bitfield_width()
@@ -2554,6 +3036,7 @@ class CudaParser:
     def parse_variable_declaration_list(self):
         qualifiers = self.parse_declaration_prefixes()
         self.parse_alignment_attributes()
+        self.skip_gnu_attributes()
 
         first_type = self.parse_type()
         base_type = self.strip_declarator_markers(first_type)
@@ -2827,10 +3310,15 @@ class CudaParser:
             declaration = self.parse_function_pointer_variable_declaration()
             self.eat("SEMICOLON")
             return declaration
+        elif self.is_shared_aggregate_declaration_start():
+            return self.parse_shared_aggregate_declaration()
         elif self.is_struct_or_class_declaration_start():
             return self.parse_struct()
         elif self.is_macro_block_invocation_start():
             self.skip_macro_block_invocation()
+            return None
+        elif self.is_statement_macro_invocation_start():
+            self.skip_statement_macro_invocation()
             return None
         elif self.is_statement_directive_marker_start():
             self.skip_statement_directive_marker()
@@ -2842,6 +3330,8 @@ class CudaParser:
         elif self.current_token[0] == "ENUM":
             return self.parse_enum()
         elif self.is_parenthesized_comma_expression_statement():
+            if self.is_fold_expression_statement_start():
+                return self.parse_fold_expression_statement()
             return self.parse_parenthesized_comma_expression_statement()
         else:
             expr = self.parse_assignment_expression()
@@ -2884,6 +3374,57 @@ class CudaParser:
             index += 1
 
         return False
+
+    def is_fold_expression_statement_start(self):
+        return self.current_token[0] == "LPAREN" and self.is_ellipsis_at_index(
+            self.current_index + 1
+        )
+
+    def parse_fold_expression_statement(self):
+        raw_tokens = self.collect_balanced_raw_tokens_until("SEMICOLON")
+        self.eat("SEMICOLON")
+        raw_expression = self.format_lambda_raw_tokens(raw_tokens)
+        return FunctionCallNode("cuda_fold_expression", [raw_expression])
+
+    def is_parenthesized_fold_expression_start(self):
+        if self.current_token[0] != "LPAREN":
+            return False
+
+        depth = 0
+        index = self.current_index
+        while index < len(self.tokens):
+            token_type = self.tokens[index][0]
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return False
+            elif depth == 1 and self.is_ellipsis_at_index(index):
+                return True
+            elif token_type == "EOF":
+                return False
+            index += 1
+        return False
+
+    def parse_parenthesized_fold_expression(self):
+        raw_tokens = []
+        depth = 0
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            raw_tokens.append(self.current_token)
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                self.eat("RPAREN")
+                if depth == 0:
+                    break
+                continue
+            self.eat(token_type)
+
+        raw_expression = self.format_lambda_raw_tokens(raw_tokens)
+        return FunctionCallNode("cuda_fold_expression", [raw_expression])
 
     def parse_parenthesized_comma_expression_statement(self):
         self.eat("LPAREN")
@@ -3073,6 +3614,7 @@ class CudaParser:
 
         saved_index = self.skip_declaration_prefixes_at_index(saved_index)
         saved_index = self.skip_alignment_attributes_at_index(saved_index)
+        saved_index = self.skip_gnu_attributes_at_index(saved_index)
 
         saved_index = self.skip_type_at_index(
             saved_index, allow_unknown_identifier_declarator=True
@@ -3083,6 +3625,7 @@ class CudaParser:
                 saved_index
             )
             saved_index = self.skip_alignment_attributes_at_index(saved_index)
+            saved_index = self.skip_gnu_attributes_at_index(saved_index)
             if (
                 saved_index < len(self.tokens)
                 and self.tokens[saved_index][0] in self.NAME_COMPONENT_TOKENS
@@ -3418,8 +3961,18 @@ class CudaParser:
 
         return clobbers
 
-    def parse_expression(self):
-        return self.parse_assignment_expression()
+    def parse_expression(self, allow_comma=False):
+        expr = self.parse_assignment_expression()
+        if allow_comma and self.current_token[0] == "COMMA":
+            return self.parse_comma_expression(expr)
+        return expr
+
+    def parse_comma_expression(self, first_expr):
+        expressions = [first_expr]
+        while self.current_token[0] == "COMMA":
+            self.eat("COMMA")
+            expressions.append(self.parse_assignment_expression())
+        return FunctionCallNode("cuda_comma_expression", expressions)
 
     def parse_ternary_expression(self):
         expr = self.parse_logical_or_expression()
@@ -3702,6 +4255,9 @@ class CudaParser:
                         "COMMA",
                         "RPAREN",
                         "RBRACKET",
+                        "SEMICOLON",
+                        "LOGICAL_AND",
+                        "LOGICAL_OR",
                     }
             elif token_type == "SHIFT_RIGHT":
                 depth -= 2
@@ -3720,6 +4276,9 @@ class CudaParser:
                         "COMMA",
                         "RPAREN",
                         "RBRACKET",
+                        "SEMICOLON",
+                        "LOGICAL_AND",
+                        "LOGICAL_OR",
                     }
                 if depth < 0:
                     return False
@@ -3740,6 +4299,9 @@ class CudaParser:
                         "COMMA",
                         "RPAREN",
                         "RBRACKET",
+                        "SEMICOLON",
+                        "LOGICAL_AND",
+                        "LOGICAL_OR",
                     }
                 if depth < 0:
                     return False
@@ -3956,6 +4518,8 @@ class CudaParser:
             self.eat(self.current_token[0])
             return value
         elif self.current_token[0] == "IDENTIFIER":
+            if self.is_requires_expression_start():
+                return self.parse_requires_expression()
             if self.current_token[1] == "new":
                 return self.parse_new_expression()
 
@@ -3987,6 +4551,8 @@ class CudaParser:
             else:
                 return CudaBuiltinNode(builtin_name)
         elif self.current_token[0] == "LPAREN":
+            if self.is_parenthesized_fold_expression_start():
+                return self.parse_parenthesized_fold_expression()
             if self.is_cast_expression():
                 self.eat("LPAREN")
                 target_type = self.parse_type()
@@ -3995,7 +4561,7 @@ class CudaParser:
                 return CastNode(target_type, expr)
 
             self.eat("LPAREN")
-            expr = self.parse_expression()
+            expr = self.parse_expression(allow_comma=True)
             self.eat("RPAREN")
             return expr
         elif self.current_token[0] == "LBRACE":
@@ -4004,6 +4570,33 @@ class CudaParser:
             raise SyntaxError(
                 f"Unexpected token in primary expression: {self.current_token}"
             )
+
+    def is_requires_expression_start(self):
+        if (
+            self.current_token[0] != "IDENTIFIER"
+            or self.current_token[1] != "requires"
+            or self.current_index + 1 >= len(self.tokens)
+        ):
+            return False
+
+        next_type = self.tokens[self.current_index + 1][0]
+        if next_type == "LBRACE":
+            return True
+        if next_type != "LPAREN":
+            return False
+
+        body_index = self.skip_balanced_tokens_at_index(
+            self.current_index + 1, "LPAREN", "RPAREN"
+        )
+        return body_index < len(self.tokens) and self.tokens[body_index][0] == "LBRACE"
+
+    def parse_requires_expression(self):
+        self.eat("IDENTIFIER")
+        if self.current_token[0] == "LPAREN":
+            self.skip_balanced_parentheses()
+        if self.current_token[0] == "LBRACE":
+            self.skip_balanced_brace_block()
+        return "true"
 
     def is_lambda_expression_start(self):
         if self.current_token[0] != "LBRACKET":
@@ -4413,27 +5006,30 @@ class CudaParser:
             while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
                 self.eat(self.current_token[0])
 
-            if self.current_token[0] not in self.TYPE_TOKENS or (
-                self.current_token[0] == "IDENTIFIER"
-                and not self.is_identifier_type_name(self.current_token[1])
-                and not self.is_identifier_cast_target_at_current_index()
-                and not self.is_qualified_identifier_cast_target_at_current_index()
-            ):
-                return False
+            if self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
+                self.parse_elaborated_type_name()
+            else:
+                if self.current_token[0] not in self.TYPE_TOKENS or (
+                    self.current_token[0] == "IDENTIFIER"
+                    and not self.is_identifier_type_name(self.current_token[1])
+                    and not self.is_identifier_cast_target_at_current_index()
+                    and not self.is_qualified_identifier_cast_target_at_current_index()
+                ):
+                    return False
 
-            token_type = self.current_token[0]
-            self.eat(token_type)
-            self.consume_composite_scalar_type_suffix(token_type)
+                token_type = self.current_token[0]
+                self.eat(token_type)
+                self.consume_composite_scalar_type_suffix(token_type)
 
-            while True:
-                if self.current_token[0] == "LESS_THAN":
-                    self.parse_template_suffix()
-                    continue
-                if self.current_token[0] == "SCOPE":
-                    self.eat("SCOPE")
-                    self.parse_name_component()
-                    continue
-                break
+                while True:
+                    if self.current_token[0] == "LESS_THAN":
+                        self.parse_template_suffix()
+                        continue
+                    if self.current_token[0] == "SCOPE":
+                        self.eat("SCOPE")
+                        self.parse_name_component()
+                        continue
+                    break
 
             while self.current_token[0] in {
                 "MULTIPLY",
@@ -4459,6 +5055,9 @@ class CudaParser:
             if self.current_token[0] == "LONG":
                 self.eat("LONG")
                 saw_long_long = True
+
+            if saw_long_long and self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                self.eat(self.current_token[0])
 
             if self.current_token[0] == "INT":
                 self.eat("INT")

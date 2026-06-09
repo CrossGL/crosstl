@@ -42,12 +42,31 @@ DIRECTX_SHADER_COMPILER_REWRITER_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01b
 DIRECTX_SHADER_COMPILER_BINARY_OP_SUGAR_COMMIT = (
     "8ed708842c1ccb24bd914eff03125c837a01be71"
 )
+DIRECTX_SHADER_COMPILER_NAMESPACE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
+DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT = "8ed708842c1ccb24bd914eff03125c837a01be71"
+DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
+DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
+DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
+DIRECTX_SHADER_COMPILER_MATRIX_COMMA_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+DIRECTX_SDK_SAMPLES_REWORKED_REPO = (
+    "https://github.com/walbourn/directx-sdk-samples-reworked"
+)
+DIRECTX_SDK_SAMPLES_REWORKED_COMMIT = "1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c"
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
 FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
 WICKED_ENGINE_REPO = "https://github.com/turanszkij/WickedEngine"
 WICKED_ENGINE_COMMIT = "9df7a530aed53cc59b345f751939e513170ddf3c"
+UNITY_BUILT_IN_SHADERS_REPO = "https://github.com/TwoTailsGames/Unity-Built-in-Shaders"
+UNITY_BUILT_IN_SHADERS_COMMIT = "6a63f93bc1f20ce6cd47f981c7494e8328915621"
 
 
 EXTERNAL_FIXTURES = [
@@ -211,6 +230,109 @@ EXTERNAL_FIXTURES = [
             "groupshared vec4 SharedArr[64];",
             "void fn_(vec4 Arr[64], float F)",
             "fn_(SharedArr, 6.0);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_geometry_inputpatch_parameter",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_GEOMETRY_INPUTPATCH_COMMIT,
+        path="tools/clang/test/CodeGenHLSL/lib_entries2.hlsl",
+        code=textwrap.dedent("""
+            struct GSOut {
+              float4 pos : SV_Position;
+            };
+
+            [shader("geometry")]
+            [maxvertexcount(3)]
+            [instance(24)]
+            void gs_main(InputPatch<GSOut, 2> points, inout PointStream<GSOut> stream) {
+              stream.Append(points[0]);
+              stream.RestartStrip();
+            }
+        """).strip(),
+        contains=(
+            "geometry {",
+            "void gs_main(GSOut points[2], inout pointStream stream) @ stage_entry",
+            "buffer_append(stream, points[0]);",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_sdk_subd11_patch_constant_payload_interface",
+        repo=DIRECTX_SDK_SAMPLES_REWORKED_REPO,
+        commit=DIRECTX_SDK_SAMPLES_REWORKED_COMMIT,
+        path="SubD11/SubD11.hlsl",
+        code=textwrap.dedent("""
+            struct HSOut {
+                float3 position : BEZIERPOS;
+            };
+
+            struct PatchData {
+                float edges[4] : SV_TessFactor;
+                float inside[2] : SV_InsideTessFactor;
+                float3 tangent[4] : TANGENT;
+                float2 uv[4] : TEXCOORD;
+            };
+
+            PatchData SubDToBezierConstantsHS(InputPatch<HSOut, 16> patch, uint patchID : SV_PrimitiveID) {
+                PatchData output;
+                output.tangent[0] = float3(0.0, 0.0, 1.0);
+                output.uv[0] = float2(0.0, 0.0);
+                return output;
+            }
+
+            [domain("quad")]
+            [partitioning("integer")]
+            [outputtopology("triangle_cw")]
+            [outputcontrolpoints(16)]
+            [patchconstantfunc("SubDToBezierConstantsHS")]
+            HSOut SubDToBezierHS(InputPatch<HSOut, 16> patch, uint id : SV_OutputControlPointID) {
+                HSOut output;
+                output.position = patch[id].position;
+                return output;
+            }
+
+            struct DSOut {
+                float3 tangent : TANGENT;
+                float2 uv : TEXCOORD;
+                float4 position : SV_Position;
+            };
+
+            [domain("quad")]
+            DSOut BezierEvalDS(PatchData input, float2 uv : SV_DomainLocation, const OutputPatch<HSOut, 16> patch) {
+                DSOut output;
+                output.tangent = input.tangent[0];
+                output.uv = input.uv[0];
+                output.position = float4(patch[0].position, 1.0);
+                return output;
+            }
+        """).strip(),
+        contains=(
+            "out vec3 tangent[4] @ Tangent;",
+            "out vec2 uv[4] @ TexCoord;",
+            "DSOut BezierEvalDS(PatchData input, vec2 uv @ gl_TessCoord, const outputPatch patch) @ stage_entry",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_inline_spirv_scoped_capability_attributes",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/inline-spirv/spv.inline.capability.hlsl",
+        code=textwrap.dedent("""
+            [[vk::ext_capability(39)]]
+            typedef vk::SpirvType<21, 8, 8, vk::Literal<vk::integral_constant<uint, 8> >, vk::Literal<vk::integral_constant<bool, false> > > uint8_t;
+
+            [[vk::ext_capability(4447)]]
+            uint8_t val;
+
+            [[vk::ext_capability(4428)]]
+            void main() {
+            }
+        """).strip(),
+        contains=(
+            "vk_SpirvType uint8_t;",
+            "@ vk_ext_capability(4447)",
+            "uint8_t val;",
+            "@ vk_ext_capability(4428)",
         ),
     ),
     ExternalFixture(
@@ -524,6 +646,31 @@ EXTERNAL_FIXTURES = [
         ),
     ),
     ExternalFixture(
+        name="directx_shader_compiler_static_member_definition",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/static_member_var.hlsl",
+        code=textwrap.dedent("""
+            struct PSInput
+            {
+                static const uint Val;
+                uint Func() { return Val; }
+            };
+
+            static const uint PSInput::Val = 3;
+
+            uint PSMain(PSInput input) : SV_Target0
+            {
+                return input.Func();
+            }
+        """).strip(),
+        contains=(
+            "static const uint PSInput_Val = 3;",
+            "uint PSMain(PSInput input) @ gl_FragData[0]",
+            "return input.Func();",
+        ),
+    ),
+    ExternalFixture(
         name="directx_shader_compiler_native_16bit_scalar_types",
         repo=DIRECTX_SHADER_COMPILER_REPO,
         commit=DIRECTX_SHADER_COMPILER_COMMIT,
@@ -562,6 +709,27 @@ EXTERNAL_FIXTURES = [
             "return (a + b) + c;",
         ),
     ),
+    ExternalFixture(
+        name="directx_shader_compiler_matrix_comma_expression",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_MATRIX_COMMA_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/matrix/matrix_comma.hlsl",
+        code=textwrap.dedent("""
+            float4 vecret(float2x2 pmat : M, float4 pvec : V) : SV_Target {
+              return pmat , pvec;
+            }
+
+            export
+            float2x2 matret(float2x2 pmat : M, float4 pvec : V) {
+              return pmat;
+            }
+        """).strip(),
+        contains=(
+            "vec4 vecret(mat2 pmat @ M, vec4 pvec @ V) @ gl_FragColor",
+            "return pmat , pvec;",
+            "mat2 matret(mat2 pmat @ M, vec4 pvec @ V)",
+        ),
+    ),
     # Source repo: https://github.com/microsoft/DirectXShaderCompiler
     # Source commit: 8ed708842c1ccb24bd914eff03125c837a01be71
     # Source path: tools/clang/test/CodeGenSPIRV/constant.scalar.64bit.hlsl
@@ -597,6 +765,27 @@ EXTERNAL_FIXTURES = [
             "type uint16_t3 = u16vec3;",
             "@ numthreads(1, 1, 1)",
             "u16vec3 dims = u16vec3(gl_WorkGroupSize());",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_template_conversion_selector",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/convert.selector.hlsl",
+        code=textwrap.dedent("""
+            RWStructuredBuffer<SOURCE_TYPE4> source;
+            RWStructuredBuffer<TARGET_TYPE4> target;
+
+            [numthreads(64, 1, 1)]
+            void main() {
+              target[0] = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE4>(source[0]);
+              target[0].x = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE>(source[0].x);
+            }
+        """).strip(),
+        contains=(
+            "@ numthreads(64, 1, 1)",
+            "target[0] = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE4>(source[0]);",
+            "target[0].x = vk::util::ConversionSelector<SOURCE_TYPE, TARGET_TYPE>::Convert<TARGET_TYPE>(source[0].x);",
         ),
     ),
     ExternalFixture(
@@ -656,6 +845,46 @@ EXTERNAL_FIXTURES = [
             "StructuredBuffer<MyStruct> myStructBuff;",
             "vec4 temp1 = myStructBuff[0].v2.xxxx;",
             "vec4 temp2 = myConstBuff.v2.xxxx;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_anonymous_and_packed_struct_bitfields",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/struct/bitfields.hlsl",
+        code=textwrap.dedent("""
+            RWByteAddressBuffer BufferOut : register(u0);
+
+            struct foo {
+              int x : 8;
+              int : 8;
+              int y : 16;
+            };
+
+            struct P1 {
+              uint l_Packed;
+              uint k_Packed : 6,
+                i_Packed : 15,
+                j_Packed : 11;
+            };
+
+            int main(struct foo p : IN0, uint3 xyz : IN1) : OUT {
+              P1 packed;
+              packed.k_Packed = xyz.x;
+              packed.i_Packed = xyz.y;
+              packed.j_Packed = xyz.z;
+              BufferOut.Store(p.x, asuint(p.y));
+              return p.x + p.y + packed.i_Packed;
+            }
+        """).strip(),
+        contains=(
+            "struct foo {",
+            "int x;",
+            "int y;",
+            "uint k_Packed;",
+            "uint i_Packed;",
+            "uint j_Packed;",
+            "buffer_store(BufferOut, p.x, asuint(p.y));",
         ),
     ),
     ExternalFixture(
@@ -750,6 +979,85 @@ EXTERNAL_FIXTURES = [
         contains=(
             "uint x = uint(1);",
             "return vec4(component, component, component, component);",
+        ),
+    ),
+    # Source repo: https://github.com/microsoft/DirectXShaderCompiler
+    # Source commit: d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # Source path: tools/clang/test/HLSLFileCheck/hlsl/types/matrix/unsignedShortHandMatrixVector.hlsl
+    ExternalFixture(
+        name="directx_shader_compiler_unsigned_shorthand_matrix_vector_types",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/matrix/unsignedShortHandMatrixVector.hlsl",
+        code=textwrap.dedent("""
+            unsigned int2 a;
+            unsigned int4x4 b;
+            unsigned dword3x4 c;
+            unsigned min16int3 d;
+            unsigned int64_t2 e;
+
+            float4 main() : SV_Target
+            {
+              return a.x + b[1][0] + c[0][3] + d[2];
+            }
+        """).strip(),
+        contains=(
+            "uvec2 a;",
+            "uint4x4 b;",
+            "uint3x4 c;",
+            "u16vec3 d;",
+            "uint64_t2 e;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_global_const_array_initializer",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/vector/imm0.hlsl",
+        code=textwrap.dedent("""
+            float4 m = float4(4, 5, 6, 7);
+            const float2 m3[2] = {12, 13, 14, 15};
+
+            float4 main(float4 a : A) : SV_TARGET
+            {
+                return a + m + m3[0].xyxy + m3[1].xyxy;
+            }
+        """).strip(),
+        contains=(
+            "vec4 m = vec4(4, 5, 6, 7);",
+            "const vec2[2] m3 = {12, 13, 14, 15};",
+            "return ((a + m) + m3[0].xyxy) + m3[1].xyxy;",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_function_definitions",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_NAMESPACE_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/namespace.functions.hlsl",
+        code=textwrap.dedent("""
+            namespace A {
+              float3 AddGreen();
+
+              namespace B {
+                float3 AddBlue();
+              }
+            }
+
+            float4 main(float4 PosCS : SV_Position) : SV_Target
+            {
+              float3 blue = A::B::AddBlue();
+              float3 green = A::AddGreen();
+              return float4(blue + green, 1);
+            }
+
+            float3 A::B::AddBlue() { return float3(0, 0, 1); }
+            float3 A::AddGreen() { return float3(0, 1, 0); }
+        """).strip(),
+        contains=(
+            "vec3 blue = A_B_AddBlue();",
+            "vec3 green = A_AddGreen();",
+            "vec3 A_B_AddBlue()",
+            "vec3 A_AddGreen()",
         ),
     ),
     ExternalFixture(
@@ -1272,6 +1580,154 @@ EXTERNAL_FIXTURES = [
             "imageStore(output, did, FFX_DNSR_Shadows_IsShadowReciever(did) ? pow(mean, rtao_power) : 1);",
         ),
     ),
+    ExternalFixture(
+        name="directx_shader_compiler_struct_method_body_trailing_semicolon",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/rayquery_init_expr.hlsl",
+        code=textwrap.dedent("""
+            void Fun() {
+              RayQuery<0> RayQ;
+            }
+
+            struct SomeStruct {
+              void DummyMethod() {};
+            };
+
+            [numthreads(1, 1, 1)]
+            void main() {
+              SomeStruct Payload;
+              Payload.DummyMethod();
+              RayQuery<0> RayQ0;
+              RayQuery<0> RayQ1 = RayQuery<0>();
+              RayQuery<0> RayQ2 = RayQ0;
+              Fun();
+            }
+        """).strip(),
+        contains=(
+            "struct SomeStruct {",
+            "void Fun()",
+            "rayQuery RayQ1 = RayQuery<0>();",
+            "Payload.DummyMethod();",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_operator_call_definition",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/func.noidentifier.hlsl",
+        code=textwrap.dedent("""
+            struct S
+            {
+                void operator()();
+            };
+
+            void S::operator()()
+            {
+            }
+
+            [numthreads(8,8,1)]
+            void main(uint32_t3 gl_GlobalInvocationID : SV_DispatchThreadID)
+            {
+              S s;
+              s();
+            }
+        """).strip(),
+        contains=(
+            "void S_operator_call()",
+            "@ numthreads(8, 8, 1)",
+            "void main(uvec3 gl_GlobalInvocationID @ gl_GlobalInvocationID)",
+            "s();",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_scoped_switch_case_label",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_SWITCH_CASE_COMMIT,
+        path="tools/clang/test/CodeGenSPIRV/cf.switch.ifstmt.hlsl",
+        code=textwrap.dedent("""
+            void main()
+            {
+              int b;
+
+              switch (b) {
+                case 6: {
+                case 7:
+                  break; }
+                default:
+                  break;
+              }
+            }
+        """).strip(),
+        contains=(
+            "case 6:",
+            "case 7:",
+            "default:",
+        ),
+    ),
+    ExternalFixture(
+        name="unity_builtin_shaderlab_shadowcaster_unexpanded_statement_macros",
+        repo=UNITY_BUILT_IN_SHADERS_REPO,
+        commit=UNITY_BUILT_IN_SHADERS_COMMIT,
+        path="DefaultResourcesExtra/AlphaTest-VertexLit.shader",
+        code=textwrap.dedent("""
+            struct v2f {
+                V2F_SHADOW_CASTER;
+                float2 uv : TEXCOORD1;
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
+
+            float4 _MainTex_ST;
+
+            v2f vert(appdata_base v)
+            {
+                v2f o;
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                TRANSFER_SHADOW_CASTER_NORMALOFFSET(o)
+                o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);
+                return o;
+            }
+
+            float4 frag(v2f i) : SV_Target
+            {
+                SHADOW_CASTER_FRAGMENT(i)
+            }
+        """).strip(),
+        contains=(
+            "vec2 uv @ TexCoord1;",
+            "UNITY_SETUP_INSTANCE_ID(v);",
+            "o.uv = TRANSFORM_TEX(v.texcoord, _MainTex);",
+            "vec4 frag(v2f i) @ gl_FragColor",
+        ),
+    ),
+    ExternalFixture(
+        name="unity_builtin_cubeblur_unexpanded_unroll_statement_modifier",
+        repo=UNITY_BUILT_IN_SHADERS_REPO,
+        commit=UNITY_BUILT_IN_SHADERS_COMMIT,
+        path="DefaultResourcesExtra/Cubemaps/CubeBlur.shader",
+        code=textwrap.dedent("""
+            struct v2f {
+                half4 uvw : TEXCOORD0;
+            };
+
+            half4 frag_loop(v2f i) : SV_Target
+            {
+                half3 rgb = half3(0.0, 0.0, 0.0);
+                UNITY_UNROLL for (int ix = 0; ix < 2; ix++)
+                {
+                    rgb += i.uvw.rgb;
+                }
+                return half4(rgb, 1.0);
+            }
+        """).strip(),
+        contains=(
+            "f16vec4 uvw @ TexCoord0;",
+            "for (int ix = 0; ix < 2; ix++)",
+            "rgb += i.uvw.rgb;",
+            "return f16vec4(rgb, 1.0);",
+        ),
+    ),
 ]
 
 
@@ -1296,7 +1752,8 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(fixture.commit) == 40 for fixture in EXTERNAL_FIXTURES)
     assert all(
-        fixture.path.endswith((".hlsl", ".hlsli")) for fixture in EXTERNAL_FIXTURES
+        fixture.path.endswith((".hlsl", ".hlsli", ".shader"))
+        for fixture in EXTERNAL_FIXTURES
     )
 
 

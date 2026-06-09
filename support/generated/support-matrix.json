@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1007
+        "test_count": 1056
       },
       "translator_codegen": {
         "exists": true,
@@ -141,7 +141,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 176,
+        "unsupported_marker_count": 177,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1109
+        "test_count": 1149
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 491,
+        "unsupported_marker_count": 492,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 903
+        "test_count": 938
       },
       "translator_codegen": {
         "exists": true,
@@ -379,7 +379,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 34,
+        "unsupported_marker_count": 36,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -455,11 +455,11 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} {context} for SPIR-V {stage_name} stage; \""
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"Unsupported {semantic} return semantic for SPIR-V codegen; \""
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           }
         ]
       },
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 913
+        "test_count": 954
       },
       "translator_codegen": {
         "exists": true,
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 689
+        "test_count": 747
       },
       "translator_codegen": {
         "exists": true,
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 746
+        "test_count": 783
       },
       "translator_codegen": {
         "exists": true,
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 806
+        "test_count": 908
       },
       "translator_codegen": {
         "exists": true,
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 870
+        "test_count": 950
       },
       "translator_codegen": {
         "exists": true,
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 739
+        "test_count": 765
       },
       "translator_codegen": {
         "exists": true,

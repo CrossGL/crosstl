@@ -48,6 +48,44 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
+def spirv_cross_vector_shuffle_growth_assembly(iterations: int = 36) -> str:
+    """Reduced from SPIRV-Cross shaders/asm/frag/vector-shuffle-oom.asm.frag."""
+    lines = """
+; Reduced from SPIRV-Cross shaders/asm/frag/vector-shuffle-oom.asm.frag.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input_value %out_value
+OpExecutionMode %main OriginUpperLeft
+OpName %input_value "inputValue"
+OpName %out_value "outValue"
+OpDecorate %input_value Location 0
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%ptr_input_v4float = OpTypePointer Input %v4float
+%ptr_output_v4float = OpTypePointer Output %v4float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%base = OpConstantComposite %v4float %zero %one %zero %one
+%input_value = OpVariable %ptr_input_v4float Input
+%out_value = OpVariable %ptr_output_v4float Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%value_0 = OpLoad %v4float %input_value
+""".strip().splitlines()
+    previous = "%value_0"
+    for index in range(1, iterations + 1):
+        mixed = f"%mixed_{index}"
+        added = f"%added_{index}"
+        lines.append(f"{mixed} = OpVectorShuffle %v4float {previous} %base 4 5 6 3")
+        lines.append(f"{added} = OpFAdd %v4float {mixed} {previous}")
+        previous = added
+    lines.extend([f"OpStore %out_value {previous}", "OpReturn", "OpFunctionEnd"])
+    return "\n".join(lines)
+
+
 def test_parse_debug_printf_string_literal_argument_from_vulkan_samples():
     code = """
     #extension GL_EXT_debug_printf : enable
@@ -126,6 +164,28 @@ def test_parse_struct_instance_declarator_from_vulkan_compute_samples():
     assert ast.structs[0].name == "ImageData"
     assert ast.structs[0].members[0].vtype == "float"
     assert ast.structs[0].members[0].name == "avg[9]"
+
+
+def test_parse_precision_qualified_struct_members_from_glslang_spv_430():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/glslang
+    # Path: Test/spv.430.vert
+    code = """
+    struct S {
+        mediump float a;
+        highp uvec2 b;
+        highp vec3 c;
+    };
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert ast.structs[0].name == "S"
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("float", "a"),
+        ("uvec2", "b"),
+        ("vec3", "c"),
+    ]
 
 
 def test_parse_hlsl_attribute_and_semantic_declarations_from_vulkan_samples():
@@ -686,6 +746,37 @@ OpMemberDecorate %Data 0 Offset 0
 %data = OpVariable %ptr_data Uniform
 %main = OpFunction %void None %fn
 %label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_LEGACY_BUFFER_BLOCK_MEMBER_ACCESS_ASSEMBLY = """
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+OpName %bName "bName"
+OpMemberName %bName 0 "size"
+OpName %bInst "bInst"
+OpDecorate %bName BufferBlock
+OpMemberDecorate %bName 0 Offset 0
+OpDecorate %bInst DescriptorSet 0
+OpDecorate %bInst Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%int = OpTypeInt 32 1
+%bName = OpTypeStruct %int
+%_ptr_Uniform_bName = OpTypePointer Uniform %bName
+%bInst = OpVariable %_ptr_Uniform_bName Uniform
+%int_0 = OpConstant %int 0
+%int_1 = OpConstant %int 1
+%_ptr_Uniform_int = OpTypePointer Uniform %int
+%main = OpFunction %void None %fn
+%label = OpLabel
+%size_ptr = OpAccessChain %_ptr_Uniform_int %bInst %int_0
+%size = OpLoad %int %size_ptr
+%next = OpIAdd %int %size %int_1
+OpStore %size_ptr %next
 OpReturn
 OpFunctionEnd
 """
@@ -1396,6 +1487,18 @@ OpTypeForwardPointer %structptr UniformConstant
 %structptr = OpTypePointer UniformConstant %structt1
 """
 
+SPIRV_TOOLS_FORWARD_POINTER_TYPE_ONLY_ASSEMBLY = """
+; Reduced from Khronos SPIRV-Tools test/diff/diff_files/OpTypeForwardPointer_mismatching_type_dst.spvasm.
+OpCapability Kernel
+OpCapability Addresses
+OpCapability Linkage
+OpMemoryModel Logical OpenCL
+OpName %Aptr "Aptr"
+OpTypeForwardPointer %Aptr UniformConstant
+%uint = OpTypeInt 32 0
+%Aptr = OpTypePointer UniformConstant %uint
+"""
+
 SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY = """
 ; Reduced from KhronosGroup/SPIRV-Tools@96545708d0fb060ec6d1e67e85de593bcf24dd21
 ; test/diff/diff_files/spec_constant_array_size_src.spvasm.
@@ -2088,6 +2191,25 @@ def test_spirv_assembly_buffer_block_parse():
     assert layout.struct_fields == [("vec4", "value")]
     assert layout.qualifiers == [("set", "0"), ("binding", "1")]
     assert layout.spirv_storage_class == "Uniform"
+
+
+def test_spirv_assembly_legacy_buffer_block_member_access_parse():
+    tokens = tokenize_code(SPIRV_LEGACY_BUFFER_BLOCK_MEMBER_ACCESS_ASSEMBLY)
+    ast = parse_code(tokens)
+    layout = ast.global_variables[0]
+    assignment = ast.functions[0].body[0]
+
+    assert layout.layout_type == "BUFFER"
+    assert layout.struct_fields == [("int", "size")]
+    assert layout.spirv_storage_class == "Uniform"
+    assert isinstance(assignment.left, MemberAccessNode)
+    assert isinstance(assignment.left.object, ArrayAccessNode)
+    assert assignment.left.object.array.name == "bInst"
+    assert assignment.left.object.index == 0
+    assert assignment.left.member == "size"
+    assert isinstance(assignment.right, BinaryOpNode)
+    assert isinstance(assignment.right.left, MemberAccessNode)
+    assert assignment.right.left.member == "size"
 
 
 def test_spirv_assembly_readonly_buffer_block_parse():
@@ -2899,6 +3021,54 @@ def test_spirv_assembly_function_parameters_parse():
     ]
 
 
+def test_spirv_cross_vector_shuffle_growth_materializes_temporaries_parse():
+    tokens = tokenize_code(spirv_cross_vector_shuffle_growth_assembly())
+    ast = parse_code(tokens)
+
+    main = ast.functions[0]
+    temp_assignments = [
+        statement
+        for statement in main.body
+        if isinstance(statement, AssignmentNode)
+        and isinstance(statement.left, VariableNode)
+        and statement.left.name.startswith("added_")
+    ]
+
+    assert temp_assignments
+    assert temp_assignments[0].left.vtype == "vec4"
+    assert isinstance(main.body[-2], AssignmentNode)
+    assert isinstance(main.body[-2].right, VariableNode)
+    assert main.body[-2].right.name == temp_assignments[-1].left.name
+
+
+def test_spirv_assembly_empty_parameter_names_fall_back_to_ids():
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpName %helper "helper("
+    OpName %_ ""
+    OpName %__0 ""
+    %void = OpTypeVoid
+    %float = OpTypeFloat 32
+    %fn = OpTypeFunction %void %float %float
+    %helper = OpFunction %void None %fn
+    %_ = OpFunctionParameter %float
+    %__0 = OpFunctionParameter %float
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    function = ast.functions[0]
+
+    assert [(param.vtype, param.name, param.spirv_id) for param in function.params] == [
+        ("float", "_", "%_"),
+        ("float", "__0", "%__0"),
+    ]
+
+
 def test_spirv_assembly_pointer_function_parameter_parse():
     code = """
     OpCapability Shader
@@ -2937,6 +3107,21 @@ def test_spirv_assembly_type_only_module_is_rejected():
     tokens = tokenize_code(code)
     with pytest.raises(SyntaxError, match="only partially supported"):
         parse_code(tokens)
+
+
+def test_spirv_assembly_linkage_pointer_type_only_module_is_preserved():
+    tokens = tokenize_code(SPIRV_TOOLS_FORWARD_POINTER_TYPE_ONLY_ASSEMBLY)
+    ast = parse_code(tokens)
+
+    assert not ast.functions
+    assert not ast.structs
+    assert not ast.global_variables
+    assert ast.spirv_types["%Aptr"] == {
+        "kind": "pointer",
+        "storage_class": "UniformConstant",
+        "type_id": "%uint",
+    }
+    assert ast.spirv_names["%Aptr"] == "Aptr"
 
 
 def test_mod_parsing():

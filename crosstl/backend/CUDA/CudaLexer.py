@@ -70,6 +70,7 @@ TOKENS = tuple(
         ("INLINE", r"\b(?:inline|__inline__)\b"),
         ("CONST", r"\bconst\b"),
         ("VOLATILE", r"\b(?:volatile|__volatile__)\b"),
+        ("REGISTER", r"\bregister\b"),
         ("MUTABLE", r"\bmutable\b"),
         ("VIRTUAL", r"\bvirtual\b"),
         ("PUBLIC", r"\bpublic\b"),
@@ -269,6 +270,7 @@ KEYWORDS = {
     "__inline__": "INLINE",
     "const": "CONST",
     "volatile": "VOLATILE",
+    "register": "REGISTER",
     "mutable": "MUTABLE",
     "virtual": "VIRTUAL",
     "public": "PUBLIC",
@@ -355,6 +357,7 @@ class TokenType(Enum):
     INLINE = auto()
     CONST = auto()
     VOLATILE = auto()
+    REGISTER = auto()
     MUTABLE = auto()
     VIRTUAL = auto()
     PUBLIC = auto()
@@ -503,10 +506,16 @@ class CudaLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
+        else:
+            code = self._join_line_continuations(code)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
         self.reserved_keywords = KEYWORDS
+
+    @staticmethod
+    def _join_line_continuations(code: str) -> str:
+        return re.sub(r"\\(?:\r\n|\r|\n)", "", code)
 
     def tokenize(self) -> List[Tuple[str, str]]:
         return list(self.token_generator())

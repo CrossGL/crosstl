@@ -104,6 +104,50 @@ def test_one_row_column_matrix_aliases_from_dxc_matrix_syntax_tokenize_as_matric
     assert ("MATRIX", "int4x2") in tokens
 
 
+def test_preprocessed_include_strips_utf8_bom(tmp_path):
+    # Source shape: microsoft/DirectXShaderCompiler
+    # tools/clang/test/DXC/Inputs/bom-main-utf8.hlsl
+    include = tmp_path / "bom-inc-utf8.hlsli"
+    include.write_text("\ufefffloat4 includedColor;\n", encoding="utf-8")
+
+    tokens = HLSLLexer(
+        '#include "bom-inc-utf8.hlsli"\nfloat4 main() : SV_Target { return includedColor; }',
+        file_path=str(tmp_path / "main.hlsl"),
+        include_paths=[str(tmp_path)],
+    ).tokenize()
+
+    assert ("FVECTOR", "float4") in tokens
+    assert ("IDENTIFIER", "includedColor") in tokens
+
+
+def test_preprocessed_include_decodes_utf16_bom(tmp_path):
+    # Source shape: microsoft/DirectXShaderCompiler
+    # tools/clang/test/DXC/Inputs/bom-inc-utf16le.hlsli
+    include = tmp_path / "bom-inc-utf16le.hlsli"
+    include.write_text("float4 f_utf16le;\n", encoding="utf-16")
+
+    tokens = HLSLLexer(
+        '#include "bom-inc-utf16le.hlsli"\nfloat4 main() : SV_Target { return f_utf16le; }',
+        file_path=str(tmp_path / "main.hlsl"),
+        include_paths=[str(tmp_path)],
+    ).tokenize()
+
+    assert ("FVECTOR", "float4") in tokens
+    assert ("IDENTIFIER", "f_utf16le") in tokens
+
+
+def test_from_file_decodes_utf16_bom(tmp_path):
+    # Source shape: microsoft/DirectXShaderCompiler
+    # tools/clang/test/DXC/Inputs/bom-main-utf16le.hlsl
+    source = tmp_path / "bom-main-utf16le.hlsl"
+    source.write_text("float4 f_utf16le;\n", encoding="utf-16")
+
+    tokens = HLSLLexer.from_file(str(source)).tokenize()
+
+    assert ("FVECTOR", "float4") in tokens
+    assert ("IDENTIFIER", "f_utf16le") in tokens
+
+
 def test_control_flow_keywords_tokenization():
     code = """
     int ControlFlow(int a, int b) {

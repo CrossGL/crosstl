@@ -85,6 +85,7 @@ def test_struct_generic_member_codegen():
     assert "mat4 transform @ Position;" in generated_code
     assert "vec4 tint @ Color;" in generated_code
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_struct_method_codegen_preserves_method_body():
@@ -118,6 +119,27 @@ def test_function_parameter_convention_codegen_drops_mojo_conventions():
     assert "var a" not in generated_code
     assert "mut b" not in generated_code
     assert "self" not in generated_code
+
+
+def test_typed_out_self_parameter_codegen_drops_receiver_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/src/layout/layout_tensor.mojo LayoutTensor.__init__.
+    code = """
+    struct LayoutTensor:
+        @always_inline("builtin")
+        @implicit
+        def __init__(other: LayoutTensor, out self: type_of(other).Immut):
+            self.ptr = other.ptr
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'void __init__(LayoutTensor other) @ always_inline("builtin") @ implicit'
+        in generated_code
+    )
+    assert "type_of(other).Immut self" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_named_result_codegen_from_official_functions_docs():
@@ -179,6 +201,7 @@ def test_function_type_parameter_codegen_from_modular_gpu_reduction():
         in generated_code
     )
     assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_thin_function_type_parameter_codegen_from_official_parameter_docs():
@@ -202,6 +225,181 @@ def test_thin_function_type_parameter_codegen_from_official_parameter_docs():
     ) in generated_code
     assert "return compare(lhs, rhs);" in generated_code
     assert "Unhandled expression" not in generated_code
+
+
+def test_fn_function_type_alias_codegen_reparses_from_ksandvik_memset():
+    # Reduced from ksandvik/mojo-examples examples/memset.mojo.
+    code = """
+    alias memset_fn_type = fn (BufferPtrType, ValueType, Int) -> None
+
+    fn measure_time(func: memset_fn_type) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let memset_fn_type = def(BufferPtrType, ValueType, Int) -> None;" in (
+        generated_code
+    )
+    assert "let memset_fn_type = fn(" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_autotune_binding_arrow_codegen_reparses_from_ksandvik_memset():
+    # Reduced from ksandvik/mojo-examples examples/memset.mojo
+    # autotune_fork choice binding.
+    code = """
+    fn main():
+        autotune_fork[Int, 0, 4, 8, 16, 32 -> cur]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "autotune_fork[Int, 0, 4, 8, 16, cur = 32]();" in generated_code
+    assert "32->cur" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_indirect_call_codegen_reparses_from_modular_coroutine():
+    # Reduced from modular/modular commit
+    # 30d351c58441f196471c59211dad6e9ad91c1235,
+    # mojo/stdlib/std/builtin/coroutine.mojo _coro_resume_fn.
+    code = """
+    def _coro_get_resume_fn(handle: AnyCoroutine) -> def(AnyCoroutine) thin -> None:
+        return MLIR_Op_co_resume_type_def_AnyCoroutine_thin_None(handle)
+
+    def _coro_resume_fn(handle: AnyCoroutine):
+        _coro_get_resume_fn(handle)(handle)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Function _coro_get_resume_fn(AnyCoroutine handle)" in generated_code
+    assert "__mojo_indirect_call(_coro_get_resume_fn(handle), handle);" in (
+        generated_code
+    )
+    assert "def(AnyCoroutine) thin -> None _coro_get_resume_fn" not in generated_code
+    assert "_coro_get_resume_fn(handle)(handle);" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_function_type_with_raises_error_codegen_reparses_from_modular_cublaslt():
+    # Reduced from Modular max/kernels/src/_cublas/cublaslt.mojo.
+    code = """
+    fn register_callback(
+        callback: def(Result) thin raises Error -> UnsafePointer[Int8, ImmutAnyOrigin]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "def(Result) thin raises -> UnsafePointer[Int8, ImmutAnyOrigin] callback"
+        in generated_code
+    )
+    assert "raises Error" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_post_generic_member_type_parameter_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/src/nn/attention/gpu/nvidia/sm100/attention_utils.mojo
+    # STMatrixTMEM.store_async.
+    code = """
+    def store_async[
+        *, num_threads: Int
+    ](
+        src: STMatrixLayout[
+            Self.BM,
+            Self.BN,
+            num_threads=num_threads,
+            accum_dtype_size=Self.dtype_size,
+        ].TensorType[Self.dtype],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "STMatrixLayout_TensorType[" in generated_code
+    assert "].TensorType" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_post_generic_mlir_type_parameter_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # mojo/stdlib/std/builtin/variadics.mojo VariadicList.__init__.
+    code = """
+    def init(
+        value: Pointer[
+            _MLIR.POPArrayType[size, Self._EltPointerType._mlir_type],
+            container_origin,
+        ]._mlir_type,
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Pointer__mlir_type[" in generated_code
+    assert "]._mlir_type" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_inline_if_indexed_generic_type_argument_codegen_reparses_crossgl():
+    # Reduced from Modular max/kernels/src/layout/tile_layout.mojo
+    # _UnwrapSingleTuple.
+    code = """
+    alias _UnwrapSingleTuple[*element_types: CoordLike] = TypeList[
+        element_types[0]._ParamListType if element_types.size == 1
+        and element_types[0].is_tuple else element_types.values
+    ]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "TypeList[(element_types.size==1&&element_types_is_tuple[0] ? "
+        "element_types__ParamListType[0] : element_types.values)]()"
+    ) in generated_code
+    assert " if " not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mlir_bracket_literal_expression_codegen_reparses_crossgl():
+    # Reduced from Modular max/kernels/src/layout/tile_layout.mojo
+    # _TwoCoordLikePredicate.
+    code = """
+    comptime _TwoCoordLikePredicate = __mlir_type[
+        `!lit.generator<<"LHS": `,
+        +CoordLike,
+        `, "RHS": `,
+        +CoordLike,
+        `> `,
+        +Bool,
+        `>`,
+    ]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let _TwoCoordLikePredicate = MLIR_" in generated_code
+    assert "__mlir_type[" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_escaped_mlir_type_info_literal_codegen_reparses_crossgl():
+    code = """
+    struct Holder:
+        var value: __mlir_type.`!lit.type[\\`info]`
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "MLIR_lit_type_info value;" in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_variadic_and_reference_parameter_codegen_from_current_docs():
@@ -244,6 +442,51 @@ def test_variadic_keyword_parameter_codegen_from_current_docs():
     assert "Unhandled" not in generated_code
 
 
+def test_variadic_unpack_call_codegen_from_modular_layout_reparses_crossgl():
+    # Reduced from modularml/mojo max/kernels/src/layout/int_tuple.mojo.
+    code = """
+    def elements_size(*elements: IntTuple) -> Int:
+        return 0
+
+    def build(*elements: IntTuple):
+        var size = elements_size(*elements)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "elements_size(elements);" in generated_code
+    assert "(*elements)" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_variadic_keyword_unpack_call_codegen_reparses_crossgl():
+    code = """
+    def build(**kwargs: Int):
+        consume(**kwargs)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "consume(kwargs);" in generated_code
+    assert "**kwargs" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_heterogeneous_variadic_type_pack_codegen_from_current_docs():
+    code = """
+    def count_many_things[*ArgTypes: Intable](*args: *ArgTypes) -> Int:
+        return 0
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int count_many_things(ArgTypes args)" in generated_code
+    assert "*ArgTypes args" not in generated_code
+    assert "return 0;" in generated_code
+
+
 def test_function_parameter_separator_markers_codegen_drops_markers():
     code = """
     def kw_only_args(a1: Int, a2: Int, *, double: Bool) -> Int:
@@ -255,7 +498,7 @@ def test_function_parameter_separator_markers_codegen_drops_markers():
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "int kw_only_args(int a1, int a2, bool double)" in generated_code
+    assert "int kw_only_args(int a1, int a2, bool double_)" in generated_code
     assert "int positional_only_args(int a1, int a2, int b1)" in generated_code
     assert "*, double" not in generated_code
     assert "/, b1" not in generated_code
@@ -293,10 +536,26 @@ def test_default_keyword_parameter_name_codegen_from_modular_stdlib():
     assert (
         "SIMD[dtype, width] gather("
         "SIMD[DType.bool, width] mask = SIMD[DType.bool, width](fill = true), "
-        "SIMD[dtype, width] default = 0)"
+        "SIMD[dtype, width] default_ = 0)"
     ) in generated_code
-    assert "return default;" in generated_code
+    assert "return default_;" in generated_code
     assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_constant_keyword_parameter_name_codegen_reparses_crossgl():
+    # `constant` is a legal Mojo parameter name despite being a lexer keyword
+    # for top-level constant buffers.
+    code = """
+    def use_constant(constant: Int) -> Int:
+        return constant
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "int use_constant(int constant)" in generated_code
+    assert "return constant;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_ref_binding_declaration_codegen_from_official_variables_docs():
@@ -373,17 +632,22 @@ def test_comptime_expression_prefix_codegen_drops_mojo_marker():
     assert "tile_layout.size()" in generated_code
 
 
-def test_single_quoted_string_literal_codegen():
+def test_single_quoted_string_literal_codegen_reparses_crossgl():
     code = """
     fn message() -> String:
         let status: String = 'done'
+        print('Short-circuit "or" evaluation')
+        print('Name or \\'quit\\'')
         return status
     """
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "String status = 'done';" in generated_code
+    assert 'String status = "done";' in generated_code
+    assert 'print("Short-circuit \\"or\\" evaluation");' in generated_code
+    assert "print(\"Name or 'quit'\");" in generated_code
     assert "return status;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_triple_quoted_string_literal_codegen_from_mojo_reference():
@@ -417,12 +681,13 @@ def test_documented_numeric_literal_forms_codegen_from_mojo_reference():
     ast = parse_code(tokenize_code(code))
     generated_code = generate_code(ast)
 
-    assert "let grouped = 1_000_000;" in generated_code
-    assert "let relaxed = 1__000_;" in generated_code
+    assert "let grouped = 1000000;" in generated_code
+    assert "let relaxed = 1000;" in generated_code
     assert "let fraction_only = .5;" in generated_code
     assert "let trailing_point = 2.;" in generated_code
-    assert "let grouped_float = 1_000.000_5;" in generated_code
+    assert "let grouped_float = 1000.0005;" in generated_code
     assert "let exponent_only = 1E10;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_function_capturing_raises_effects_codegen_are_dropped():
@@ -602,6 +867,22 @@ def test_braced_set_and_initializer_list_codegen_from_current_mojo_docs():
     assert "Unhandled expression: BracedLiteralNode" not in generated_code
 
 
+def test_braced_type_initializer_suffix_codegen_reparses_crossgl():
+    # Reduced from ksandvik/mojo-examples examples/nbody.mojo Planet.__init__.
+    code = """
+    struct Planet:
+        var pos: Int
+
+    fn make_planet(pos: Int) -> Planet:
+        return Planet { pos: pos }
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "return Planet(pos = pos);" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_dotted_type_annotation_codegen_from_modular_tiled_matmul_example():
     code = """
     def tiled_matmul_kernel(matrix_c: TileTensor):
@@ -631,6 +912,182 @@ def test_mlir_backtick_type_codegen_from_modular_gpu_globals_reparses_crossgl():
     parse_crossgl(generated_code)
 
 
+def test_mlir_type_argument_codegen_from_modular_gather_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/test/nn/test_gather.mojo simd_width_of specialization.
+    code = """
+    def test_gather():
+        let simd_width = simd_width_of[__mlir_type.`!kgen.scalar<f32>`]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let simd_width = simd_width_of[MLIR_kgen_scalar_f32]();" in generated_code
+    assert "__mlir_type" not in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mlir_attr_type_argument_codegen_from_modular_builtins_reparses_crossgl():
+    # Reduced from modularml/mojo stdlib builtin literal and variadics helpers.
+    code = """
+    def convert(_value: IntLiteral[_]) -> FloatLiteral[
+        __mlir_attr[
+            `#pop<int_to_float_literal<`,
+            _value.value,
+            `>> : !pop.float_literal`,
+        ]
+    ]:
+        pass
+
+    def upcast(existing: TypeList[...]) -> TypeList[
+        Trait=Self.Trait,
+        __mlir_attr[
+            `#kgen.upcast<`,
+            existing.values,
+            `> : `,
+            _MLIR.KGENParamListType[Self.Trait],
+        ],
+    ]:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "FloatLiteral[MLIRAttr_pop_int_to_float_literal__value_value_pop_float_literal] "
+        "convert(IntLiteral[_] _value)"
+    ) in generated_code
+    assert (
+        "TypeList[Trait=Self.Trait, "
+        "MLIRAttr_kgen_upcast_existing_values__MLIR_KGENParamListType_Self_Trait] "
+        "upcast(TypeList[...] existing)"
+    ) in generated_code
+    assert "__mlir_attr" not in generated_code
+    assert "`" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_floor_divide_in_parameterized_type_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo max/kernels/src/linalg/matmul/cpu/default.mojo.
+    # Mojo floor division in a parameterized type must not emit CrossGL comments.
+    code = """
+    def _accumulate[
+        simd_size: Int, kernel_rows: Int, kernel_cols: Int
+    ](
+        c_local: _Accumulator[
+            _, kernel_rows, kernel_cols // simd_size, simd_size
+        ]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "_Accumulator[_, kernel_rows, kernel_cols / simd_size, simd_size]" in (
+        generated_code
+    )
+    assert "kernel_cols//simd_size" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_positional_marker_in_alias_generic_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo max/kernels/src/structured_kernels/smem_types.mojo.
+    code = """
+    alias eval[T: AnyType, //, val: T] = val
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let eval[T:AnyType, /, val:T] = val;" in generated_code
+    assert "eval[T:AnyType, //, val:T]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_complex_reference_origin_return_type_codegen_from_modular_reflection():
+    # Reduced from modular/modular commit 30d351c58441f196471c59211dad6e9ad91c1235,
+    # mojo/stdlib/std/builtin/variadics.mojo and std/reflection/reflect.mojo.
+    code = """
+    def __getitem__[self_origin: Origin](self, idx: Int) -> ref[origin_of(Self.origin, self_origin).unsafe_mut_cast[Self.elt_is_mutable]()] Self.element_type:
+        pass
+
+    def field_ref[idx: Int](s: Self.T) -> _field_types_of[Self.T]()[idx]:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Self.element_type __getitem__(int idx)" in generated_code
+    assert "_field_types_of[Self.T][idx] field_ref(Self.T s)" in generated_code
+    assert "ref[origin_of" not in generated_code
+    assert "_field_types_of[Self.T]()[idx]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_variadic_pack_type_argument_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo stdlib elementwise and tuple helpers.
+    code = """
+    struct Kernel:
+        var shape: Coord[*Self.shape_0_types]
+
+    struct Tuple:
+        def reverse(self) -> Tuple[*Self.element_types.reverse()]:
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "Coord[Self.shape_0_types] shape;" in generated_code
+    assert "Tuple[Self.element_types.reverse()] reverse()" in generated_code
+    assert "[*" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_variadic_pack_declaration_generic_codegen_reparses_crossgl():
+    # Reduced from modularml/mojo stdlib reflection trait aliases.
+    code = """
+    alias AllWritable[*Ts: AnyType] = Ts.all_satisfies[predicate]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "let AllWritable[Ts:AnyType] = Ts.all_satisfies[predicate]();" in (
+        generated_code
+    )
+    assert "AllWritable[*Ts:AnyType]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_parenthesized_return_type_codegen_reparses_crossgl():
+    # Reduced from Modular shared-memory helper signatures with grouped returns.
+    code = """
+    def ptr() -> (
+        UnsafePointer[
+            Int8, MutExternalOrigin, address_space=AddressSpace.SHARED
+        ]
+    ):
+        pass
+
+    def common_kernel_init() -> (
+        Tuple[
+            Int,
+            Int,
+            Bool,
+        ]
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "UnsafePointer[Int8, MutExternalOrigin, address_space=AddressSpace.SHARED] "
+        "ptr()"
+    ) in generated_code
+    assert "Tuple[Int, Int, Bool] common_kernel_init()" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_example():
     code = """
     def main():
@@ -646,6 +1103,78 @@ def test_adjacent_string_literals_in_call_codegen_from_modular_tiled_matmul_exam
         'print("Note: Expected formula is C[i,j] = (i+1) * 64 * (j+1)");'
         in generated_code
     )
+
+
+def test_adjacent_string_with_embedded_quotes_codegen_from_modular_reflection():
+    # Reduced from modular/modular commit 30d351c58441f196471c59211dad6e9ad91c1235,
+    # mojo/stdlib/test/reflection/test_type_info.mojo.
+    code = """
+    def main():
+        assert_equal(
+            name,
+            (
+                "test_type_info.Foo[SIMD[DType.float32, 4], "
+                '[1, 2, 3, 4] : SIMD[DType.float32, 4], True, None, {"hello\\\\0", 5}]'
+            ),
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert r"{\"hello\\0\", 5}" in generated_code
+    assert '{"hello\\0", 5}' not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_prefixed_adjacent_string_literals_in_call_codegen_from_modular_trace_gemv():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/benchmarks/gpu/nn/trace_gemv_partial_norm.mojo.
+    code = """
+    def main():
+        print(
+            t"{b},"
+            t"{Int(trace_host[base + 0])},"
+            t"{Int(trace_host[base + 1])}"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'print("{b},{Int(trace_host[base + 0])},{Int(trace_host[base + 1])}");'
+        in generated_code
+    )
+    assert 't"' not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_adjacent_string_after_binary_string_codegen_from_modular_topk_gpu_fi():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/test/gpu/nn/test_topk_gpu_fi.mojo.
+    code = """
+    def main():
+        raise Error(
+            "Sampled index "
+            + String(idx)
+            + " is NOT in the top-K set! This indicates a bug in the"
+            " sampling kernel."
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        '" is NOT in the top-K set! This indicates a bug in the sampling kernel."'
+        in generated_code
+    )
+    assert (
+        'raise(Error((("Sampled index " + String(idx)) + '
+        '" is NOT in the top-K set! This indicates a bug in the sampling kernel.")));'
+        in generated_code
+    )
+    parse_crossgl(generated_code)
 
 
 def test_identifier_tuple_declaration_and_assignment_codegen_from_layout_tensor_docs():
@@ -821,6 +1350,84 @@ def test_empty_index_access_codegen_from_layout_tensor_iterator_docs():
     assert "var tile = iter[];" in generated_code
 
 
+def test_empty_specialization_member_receiver_codegen_from_mxfp4_metadata_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # max/kernels/src/linalg/matmul/gpu/amd/mxfp4_moe_matmul_amd.mojo.
+    code = """
+    @__llvm_metadata(
+        MAX_THREADS_PER_BLOCK_METADATA=StaticTuple[Int32, 1](
+            Int32(MXFP4MoERoutedMatmul[].num_threads)
+        )
+    )
+    def kernel():
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "MXFP4MoERoutedMatmul.num_threads" in generated_code
+    assert "MXFP4MoERoutedMatmul[]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_empty_index_in_type_expression_codegen_from_async_context_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular-mojo-probe
+    # mojo/stdlib/std/runtime/asyncrt.mojo and std/iter/__init__.mojo.
+    code = """
+    def get_chain(
+        ctx: UnsafePointer[mut=True, _AsyncContext, _]
+    ) -> UnsafePointer[_Chain, origin_of(ctx[].chain)]:
+        pass
+
+    def peek(
+        self: Self
+    ) -> Optional[Pointer[Self.Element, ImmutOrigin(origin_of(self._next[]))]]:
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "origin_of(ctx.chain)" in generated_code
+    assert "origin_of(self._next)" in generated_code
+    assert "ctx[]" not in generated_code
+    assert "self._next[]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_type_like_and_member_empty_postfix_codegen_from_archive_sweep_reparses_crossgl():
+    code = """
+    def main(self: Self):
+        var base = NVIDIASharedMemoryBasePtr[]
+        var source = self.src[]
+        var tile = iter[]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var base = NVIDIASharedMemoryBasePtr;" in generated_code
+    assert "var source = self.src;" in generated_code
+    assert "var tile = iter[];" in generated_code
+    assert "NVIDIASharedMemoryBasePtr[]" not in generated_code
+    assert "self.src[]" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mlir_op_payload_specialization_codegen_from_coroutine_intrinsic_reparses_crossgl():
+    code = """
+    def _suspend_async():
+        __mlir_op.co_suspend["await_body".value]()
+        __mlir_op.`co.suspend`[_region="await_body".value]()
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "MLIR_Op_co_suspend_await_body_value();" in generated_code
+    assert "MLIR_Op_co_suspend_region_await_body_value();" in generated_code
+    assert "__mlir_op" not in generated_code
+    assert '["await_body".value]' not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
     # Reduced from https://github.com/modular/modular.git commit
     # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
@@ -837,6 +1444,24 @@ def test_slice_index_access_codegen_from_modular_stdlib_slice_tests():
     assert 'var new_slice = sliceable[1:"hello":4.0];' in generated_code
     assert "var reverse = s[2::(-1)];" in generated_code
     assert "var open_slice = s[::];" in generated_code
+
+
+def test_keyword_slice_index_codegen_from_modular_stdlib_reparses_crossgl():
+    # Reduced from Modular string/path stdlib byte-indexed slices.
+    code = """
+    def main():
+        var head = path_str[byte=i:]
+        var prefix = String(e)[byte=:expected_msg.byte_length()]
+        var suffix = self[byte=:-suffix.byte_length()]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "var head = path_str[i:];" in generated_code
+    assert "var prefix = String(e)[:expected_msg.byte_length()];" in generated_code
+    assert "var suffix = self[:(-suffix.byte_length())];" in generated_code
+    assert "byte=" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_try_except_codegen_from_layout_tensor_gpu_docs():
@@ -903,6 +1528,31 @@ def test_modular_trait_codegen_omits_abstract_contract_methods():
     assert "..." not in generated_code
 
 
+def test_extension_block_codegen_from_modular_gpu_kernels_reparses_crossgl():
+    # Reduced from Modular SM90 matmul and RDNA attention __extension blocks.
+    code = """
+    __extension HopperMatmulSM90Kernel:
+        @staticmethod
+        @always_inline
+        def run_persistent[
+            tile_shape: IndexList[2],
+        ](problem_shape: IndexList[3]) -> Int:
+            return 1
+
+    __extension AttentionRDNA:
+        def mha_decode(mut self, num_partitions: Int):
+            pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "struct HopperMatmulSM90Kernel" not in generated_code
+    assert "int run_persistent(IndexList[3] problem_shape)" in generated_code
+    assert "return 1;" in generated_code
+    assert "void mha_decode(int num_partitions)" in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_multiple_with_context_managers_codegen_from_mojo_gpu_puzzles():
     # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
     # 87de51ac93bea662eba6f09d19e8744e56161027,
@@ -958,6 +1608,22 @@ def test_postfix_transfer_marker_codegen_from_life_examples():
     assert "return grid;" in generated_code
     assert "glider^" not in generated_code
     assert "grid^" not in generated_code
+
+
+def test_postfix_transfer_marker_before_member_call_codegen_from_modular_primitives():
+    # Reduced from https://github.com/modular/modular.git commit
+    # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
+    # max/kernels/src/graph_compiler/builtin_primitives/primitives.mojo.
+    code = """
+    def make_buffer(buf: ByteBuffer, shape: Shape) -> MutByteBuffer:
+        return MutByteBuffer(buf^.take_ptr(), shape)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "return MutByteBuffer(buf.take_ptr(), shape);" in generated_code
+    assert "^.take_ptr" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_gpu_fundamentals_launch_keyword_tuple_args_codegen():
@@ -1054,11 +1720,13 @@ def test_not_in_membership_condition_codegen_from_mojo_gpu_puzzles_dispatch():
     generated_code = generate_code(ast)
 
     assert (
-        'if (((len(argv()) != 2) || (!(argv()[1] in ["--simple", "--block-boundary"]))))'
+        'if (((len(argv()) != 2) || (!contains(["--simple", "--block-boundary"], argv()[1]))))'
         in generated_code
     )
     assert " not in " not in generated_code
+    assert " in " not in generated_code
     assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_mojo_gpu_intro_vector_addition_host_buffer_codegen():
@@ -1157,7 +1825,7 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
     assert "let bin_width = (int(UInt8.MAX) + 1);" in generated_code
     assert "void execute(DeviceContext ctx) @ staticmethod" in generated_code
     assert (
-        "void kernel(UnsafePointer[Int64, MutAnyOrigin] output, "
+        "void kernel_(UnsafePointer[Int64, MutAnyOrigin] output, "
         "UnsafePointer[UInt8, MutAnyOrigin] input, int n) "
         "@ __llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA = "
         "StaticTuple[Int32, 1](int(block_dim)))"
@@ -1173,7 +1841,7 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
         in generated_code
     )
     assert (
-        "ctx.enqueue_function[kernel](output, input, n, block_dim = block_dim, "
+        "ctx.enqueue_function[kernel_](output, input, n, block_dim = block_dim, "
         "grid_dim = grid_dim);"
     ) in generated_code
     assert "Unhandled statement type: FunctionNode" not in generated_code
@@ -1312,6 +1980,29 @@ def test_keyword_style_runtime_assert_codegen_from_modular_packing_kernel():
     assert "comptime" not in generated_code
 
 
+def test_comptime_assert_parenthesized_or_condition_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/conv.mojo
+    # Conv.execute CUDA rank guard.
+    code = """
+    def execute():
+        comptime assert (input.rank == 4 and filter.rank == 4) or (
+            input.rank == 5 and filter.rank == 5
+        ), "only rank 4 or 5 tensor is supported on cuda gpu"
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "assert((((input.rank == 4) && (filter.rank == 4)) || "
+        "((input.rank == 5) && (filter.rank == 5))), "
+        '"only rank 4 or 5 tensor is supported on cuda gpu");'
+    ) in generated_code
+    assert "comptime" not in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     code = """
     def matmul_idiomatic_tiled[
@@ -1349,6 +2040,28 @@ def test_mojo_gpu_puzzles_async_shared_memory_copy_call_codegen():
     assert "Unhandled statement type: VectorConstructorNode" not in generated_code
 
 
+def test_generic_specialization_ellipsis_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/distributed.mojo
+    # vendor_ccl.allreduce specialization arguments.
+    code = """
+    def execute():
+        vendor_ccl.allreduce[
+            ngpus=num_devices,
+            output_lambda=output_lambda[output_index=index, ...],
+        ](in_tensors)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "vendor_ccl.allreduce[ngpus = num_devices, "
+        "output_lambda = output_lambda[output_index = index, ...]](in_tensors);"
+    ) in generated_code
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_floor_divide_assignment_codegen_from_mojo_gpu_puzzles_reparses_crossgl():
     # Reduced from https://github.com/modular/mojo-gpu-puzzles.git commit
     # 87de51ac93bea662eba6f09d19e8744e56161027,
@@ -1366,6 +2079,43 @@ def test_floor_divide_assignment_codegen_from_mojo_gpu_puzzles_reparses_crossgl(
     assert "stride /= 2;" in generated_code
     assert "//=" not in generated_code
     assert "TPB // 2" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_comptime_function_type_expression_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/kernels.mojo
+    # where a comptime declaration stores a thin function type.
+    code = """
+    def execute(payload: OpaquePointer):
+        comptime _HostFuncTy = def(OpaquePointer[MutAnyOrigin]) thin -> None
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "let _HostFuncTy = def(OpaquePointer[MutAnyOrigin]) thin -> None;"
+        in generated_code
+    )
+    assert "Unhandled expression" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_tuple_assignment_with_index_targets_codegen_reparses_crossgl():
+    # Reduced from /tmp/crossgl-modular
+    # max/kernels/src/graph_compiler/builtin_kernels/logprobs.mojo
+    # FixedHeightMinHeap.swap.
+    code = """
+    def swap(mut self, a: Int, b: Int) -> None:
+        self.k_array[a], self.k_array[b] = self.k_array[b], self.k_array[a]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "(self.k_array[a], self.k_array[b]) = " "(self.k_array[b], self.k_array[a]);"
+    ) in generated_code
+    assert "Unhandled expression" not in generated_code
     parse_crossgl(generated_code)
 
 
@@ -1425,6 +2175,7 @@ def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     assert "mat4 transform @ Position;" in generated_code
     assert "vec4 tint @ Color;" in generated_code
     assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_struct_conditional_trait_conformance_codegen_from_modular_docs():
@@ -1673,6 +2424,22 @@ def test_for_in_descending_range_codegen_uses_greater_than_condition():
     assert (
         "for (int j = 4; ((step > 0) ? (j < 0) : (j > 0)); j += step)" in generated_code
     )
+
+
+def test_for_in_negative_dynamic_step_range_codegen_reparses_crossgl():
+    # Reduced from modular/max/kernels structured_kernels/config.mojo.
+    code = """
+    fn main(step: Int):
+        for i in range(8, 0, -step):
+            sink(i)
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "for (int i = 8; (((-step) > 0) ? (i < 0) : (i > 0)); i += (-step))" in (
+        generated_code
+    )
+    parse_crossgl(generated_code)
 
 
 def test_for_in_target_conventions_codegen_from_modular_control_flow_docs():
@@ -1934,6 +2701,33 @@ def test_multiline_expression_layout_codegen_from_modular_examples():
     ) in generated_code
 
 
+def test_newline_indexed_call_continuation_codegen_from_modular_scatternd():
+    # Reduced from https://github.com/modular/mojo.git commit
+    # 30d351c58441f196471c59211dad6e9ad91c1235,
+    # max/kernels/test/gpu/examples/test_scatterND.mojo test_scatternd_gpu.
+    code = """
+    fn main():
+        _ = test_case[
+            DType.float32,
+            d0=4,
+        ]
+        (
+            data,
+            indices,
+            updates,
+            output_ref,
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "_ = test_case[DType.float32, d0 = 4]" "(data, indices, updates, output_ref);"
+    ) in generated_code
+    assert "Unhandled statement type: TupleNode" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_generic_function_signature_codegen():
     code = """
     fn build(
@@ -2088,6 +2882,9 @@ def test_assignment_ops_codegen():
         if input.in_position.y > 0.5:
             output.out_color *= 2.0
 
+        if input.in_position.y < 0.25:
+            output.out_color @= transform
+
         if input.in_position.z > 0.5:
             output.out_color /= 2.0
 
@@ -2099,6 +2896,7 @@ def test_assignment_ops_codegen():
         generated_code = generate_code(ast)
         print(generated_code)
         assert "+=" in generated_code or "-=" in generated_code
+        assert "output.out_color *= transform;" in generated_code
     except SyntaxError:
         pytest.fail("Assignment ops parsing or code generation not implemented.")
 
@@ -2454,7 +3252,7 @@ def test_struct_comptime_member_codegen_skips_metadata_field():
     generated_code = generate_code(ast)
 
     assert "struct Tensor" in generated_code
-    assert "DeviceBuffer[Self.dtype] buffer;" in generated_code
+    assert "DeviceBuffer[Self.dtype] buffer_;" in generated_code
     assert "void size;" not in generated_code
     assert "let size" not in generated_code
 
@@ -2992,6 +3790,34 @@ def test_multiline_parenthesized_inline_if_codegen_from_mojo_gpu_puzzles():
     assert "Unhandled expression" not in generated_code
 
 
+def test_inline_if_generic_type_argument_codegen_reparses_crossgl():
+    # Reduced from Modular max/kernels/src/comm/allreduce.mojo and
+    # max/kernels/src/comm/reducescatter.mojo parameter type arguments.
+    code = """
+    fn reduce[
+        dtype: DType,
+        in_layout: TensorLayout,
+        use_multimem: Bool = False,
+        ngpus: Int,
+    ](
+        src_tensors: InlineArray[
+            TileTensor[dtype, in_layout, ImmutAnyOrigin],
+            1 if use_multimem else ngpus,
+        ],
+    ):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "InlineArray[TileTensor[dtype, in_layout, ImmutAnyOrigin], "
+        "(use_multimem ? 1 : ngpus)] src_tensors"
+    ) in generated_code
+    assert "ifuse_multimemelse" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_import_codegen():
     code = """
     import math
@@ -3022,6 +3848,27 @@ def test_import_codegen():
         assert "math.exp(" not in generated_code
     except SyntaxError:
         pytest.fail("Import parsing or code generation not implemented.")
+
+
+def test_backtick_import_item_codegen_reparses_from_numojo_type_aliases():
+    # Reduced from Mojo-Numerics-and-Algorithms-group/NuMojo commit
+    # 785bae6c9e3d87f6a003afabdd2e7554891e9311,
+    # numojo/__init__.mojo top-level type alias re-exports.
+    code = """
+    from numojo.core.type_aliases import (
+        Shape,
+        `1j`,
+    )
+
+    fn identity(value: Int) -> Int:
+        return value
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "// from numojo.core.type_aliases import Shape, `1j`" in generated_code
+    assert "int identity(int value)" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_global_variable_codegen_preserves_typed_globals():
@@ -3056,6 +3903,33 @@ def test_global_variable_codegen_preserves_typed_globals():
     assert "SamplerState sampler @ group(0) @ binding(1);" in generated_code
     assert "sampler2D combined_texture @ group(2) @ binding(3);" in generated_code
     assert generated_code.index("float exposure;") < generated_code.index("void main")
+
+
+def test_initialized_global_attribute_codegen_reparses_crossgl():
+    # Reduced from Modular docs decorator examples where global constants carry
+    # decorators that become CrossGL attributes on initialized globals.
+    code = """
+    @deprecated("Ignore. Deprecation test.")
+    comptime pi = 3.141592
+
+    @doc_hidden
+    comptime INTERNAL_CONSTANT = 42
+
+    fn main():
+        print(pi)
+        print(INTERNAL_CONSTANT)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert '@ deprecated("Ignore. Deprecation test.") let pi = 3.141592;' in (
+        generated_code
+    )
+    assert "@ doc_hidden let INTERNAL_CONSTANT = 42;" in generated_code
+    assert "let pi @ deprecated" not in generated_code
+    assert "let INTERNAL_CONSTANT @ doc_hidden" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_explicit_none_return_codegen_maps_to_void():
@@ -3115,10 +3989,24 @@ def test_at_attribute_codegen():
         assert "int data @ Position;" in generated_code
         assert "// Compute Shader" in generated_code
         assert "compute {" in generated_code
-        assert "void kernel() {" in generated_code
+        assert "void kernel_() {" in generated_code
         assert "kernel()@ compute_shader" not in generated_code
     except SyntaxError:
         pytest.fail("Attribute parsing or code generation not implemented.")
+
+
+def test_reserved_attribute_name_codegen_reparses_crossgl():
+    code = """
+    @extern("nvshmemx_signal_op")
+    fn nvshmemx_signal_op(pe: Int):
+        pass
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert '@ extern_("nvshmemx_signal_op")' in generated_code
+    assert "@ extern(" not in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_bracket_attribute_codegen_uses_shader_stage():

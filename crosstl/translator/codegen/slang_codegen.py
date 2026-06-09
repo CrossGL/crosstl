@@ -56,6 +56,7 @@ from .array_utils import (
     get_array_size_from_node,
     split_array_type_suffix,
 )
+from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -245,6 +246,7 @@ class SlangCodeGen:
         self.identifier_aliases = {}
         self.slang_resource_register_cursors = {}
         self.slang_used_resource_registers = {}
+        self.slang_source_sampler_register_assignments = {}
         self.slang_vk_binding_cursors = {}
         self.slang_used_vk_bindings = {}
         self.slang_global_declaration_signatures = {}
@@ -276,7 +278,10 @@ class SlangCodeGen:
             "gl_FragCoord": "SV_Position",
             "gl_PointCoord": "SV_PointCoord",
             "gl_FrontFacing": "SV_IsFrontFace",
+            "gl_BaryCoordEXT": "SV_Barycentrics",
+            "gl_BaryCoordNoPerspEXT": "SV_Barycentrics",
             "gl_FragDepth": "SV_Depth",
+            "gl_FragStencilRefEXT": "SV_StencilRef",
             "gl_FragColor": "SV_Target",
             "gl_SampleID": "SV_SampleIndex",
             "gl_SampleMask": "SV_Coverage",
@@ -435,6 +440,7 @@ class SlangCodeGen:
             self.identifier_aliases = {}
             self.slang_resource_register_cursors = {}
             self.slang_used_resource_registers = {}
+            self.slang_source_sampler_register_assignments = {}
             self.slang_vk_binding_cursors = {}
             self.slang_used_vk_bindings = {}
             self.slang_global_declaration_signatures = {}
@@ -462,13 +468,19 @@ class SlangCodeGen:
             result += self.generate_enum_support_code()
 
             structs = getattr(ast, "structs", [])
+            leading_constants, struct_dependent_constants = (
+                partition_constants_by_struct_dependency(
+                    getattr(ast, "constants", []) or [], structs
+                )
+            )
+            result += self.generate_constants(ast, leading_constants)
             for struct in structs:
                 if isinstance(struct, EnumNode):
                     continue
                 struct_code = self.generate_struct(struct)
                 if struct_code:
                     result += struct_code + "\n\n"
-            result += self.generate_constants(ast)
+            result += self.generate_constants(ast, struct_dependent_constants)
             result += self.slang_struct_dependent_helper_marker()
 
             global_vars = getattr(ast, "global_variables", [])
@@ -1654,13 +1666,19 @@ class SlangCodeGen:
         result += self.generate_enum_support_code()
 
         structs = getattr(node, "structs", [])
+        leading_constants, struct_dependent_constants = (
+            partition_constants_by_struct_dependency(
+                getattr(node, "constants", []) or [], structs
+            )
+        )
+        result += self.generate_constants(node, leading_constants)
         for struct in structs:
             if isinstance(struct, EnumNode):
                 continue
             struct_code = self.generate_struct(struct)
             if struct_code:
                 result += struct_code + "\n\n"
-        result += self.generate_constants(node)
+        result += self.generate_constants(node, struct_dependent_constants)
         result += self.slang_struct_dependent_helper_marker()
 
         global_vars = getattr(node, "global_variables", [])
@@ -1722,10 +1740,12 @@ class SlangCodeGen:
         )
         return code
 
-    def generate_constants(self, ast):
+    def generate_constants(self, ast, constants=None):
         """Emit CrossGL compile-time constants as Slang static constants."""
         code = ""
-        for node in getattr(ast, "constants", []) or []:
+        for node in (
+            getattr(ast, "constants", []) or [] if constants is None else constants
+        ):
             name = getattr(node, "name", None)
             if not name:
                 continue
@@ -1735,10 +1755,10 @@ class SlangCodeGen:
             )
             self.register_variable_type(name, const_type_name, node)
             value_code = self.generate_constant_expression(getattr(node, "value", None))
-            code += (
-                f"static const {self.convert_type(const_type_name)} "
-                f"{name} = {value_code};\n"
+            declaration = format_c_style_array_declaration(
+                self.convert_type(const_type_name), name
             )
+            code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
 
@@ -3756,6 +3776,8 @@ class SlangCodeGen:
             "gl_localinvocationid",
             "gl_localinvocationindex",
             "gl_pointcoord",
+            "gl_barycoordext",
+            "gl_barycoordnoperspext",
             "gl_sampleid",
             "gl_samplemaskin",
             "gl_tesscoord",
@@ -3771,6 +3793,8 @@ class SlangCodeGen:
             return "position"
         if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
             return "depth"
+        if lower_name == "gl_fragstencilrefext" or mapped_upper == "SV_STENCILREF":
+            return "stencil_ref"
         if lower_name == "gl_samplemask" or mapped_upper == "SV_COVERAGE":
             return "coverage"
         if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
@@ -3847,7 +3871,9 @@ class SlangCodeGen:
                 "expected float type"
             )
 
-        if kind == "coverage" and not self.is_slang_uint_scalar_type(type_name):
+        if kind in {"coverage", "stencil_ref"} and not self.is_slang_uint_scalar_type(
+            type_name
+        ):
             raise ValueError(
                 f"Unsupported {semantic} {context} for Slang codegen; "
                 "expected uint type"
@@ -3881,6 +3907,7 @@ class SlangCodeGen:
             "color": {"fragment"},
             "coverage": {"fragment"},
             "depth": {"fragment"},
+            "stencil_ref": {"fragment"},
         }[kind]
         if shader_stage not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
@@ -3905,6 +3932,7 @@ class SlangCodeGen:
                 "SV_PRIMITIVEID": "uint",
                 "SV_COVERAGE": "uint",
                 "SV_SAMPLEINDEX": "uint",
+                "SV_BARYCENTRICS": "float3",
                 "SV_RENDERTARGETARRAYINDEX": "uint",
                 "SV_VIEWPORTARRAYINDEX": "uint",
             },
@@ -4472,6 +4500,8 @@ class SlangCodeGen:
                 return f"uvec{type_node.size}"
             if element_type == "bool":
                 return f"bvec{type_node.size}"
+            if element_type in {"i8", "u8", "i16", "u16"}:
+                return f"vec{type_node.size}<{element_type}>"
             return f"{element_type}{type_node.size}"
         return str(type_node)
 
@@ -4521,6 +4551,10 @@ class SlangCodeGen:
             if mapped and mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)
+        for mapped in self.slang_semantic_implied_interpolation_qualifiers(node):
+            if mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
 
         if not qualifiers:
             return ""
@@ -4540,6 +4574,10 @@ class SlangCodeGen:
             if mapped and mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)
+        for mapped in self.slang_semantic_implied_interpolation_qualifiers(node):
+            if mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
 
         if not qualifiers:
             return ""
@@ -4547,6 +4585,14 @@ class SlangCodeGen:
 
     def slang_interpolation_qualifier(self, qualifier):
         return self.SLANG_INTERPOLATION_QUALIFIER_MAP.get(str(qualifier).lower())
+
+    def slang_semantic_implied_interpolation_qualifiers(self, node):
+        semantic = self.semantic_from_node(node)
+        if semantic is None:
+            return []
+        if str(semantic).lower() == "gl_barycoordnoperspext":
+            return ["noperspective"]
+        return []
 
     def slang_interpolation_attribute_prefix(self, node):
         qualifiers = []
@@ -4875,6 +4921,16 @@ class SlangCodeGen:
             return register_space
         return 0
 
+    def slang_source_bound_sampler_uses_remappable_register(
+        self, register_prefix, explicit_binding, register_binding, resource_count
+    ):
+        return (
+            register_prefix == "s"
+            and explicit_binding is not None
+            and register_binding is None
+            and resource_count is not None
+        )
+
     def reserve_explicit_slang_resource_declarations(self, node):
         for declaration, type_name, forced_prefix in self.slang_resource_declarations(
             node
@@ -4938,6 +4994,40 @@ class SlangCodeGen:
             type_name, node, register_prefix or forced_register_prefix
         )
         space_key = self.slang_resource_register_space_key(explicit_set, register_space)
+        if self.slang_source_bound_sampler_uses_remappable_register(
+            prefix, explicit_binding, register_binding, resource_count
+        ):
+            descriptor_set = (
+                explicit_set if explicit_set is not None else register_space
+            )
+            descriptor_set = descriptor_set or 0
+            self.reserve_slang_vk_binding_range(
+                descriptor_set,
+                explicit_binding,
+                resource_count,
+                self.slang_resource_name(node),
+            )
+            assigned_binding = self.next_available_slang_resource_register(
+                prefix, space_key, resource_count, preferred=explicit_binding
+            )
+            if assigned_binding is None:
+                return
+            self.reserve_slang_resource_register_range(
+                prefix,
+                assigned_binding,
+                resource_count,
+                self.slang_resource_name(node),
+                space_key,
+            )
+            self.advance_slang_resource_register(
+                prefix, space_key, assigned_binding, resource_count
+            )
+            self.slang_source_sampler_register_assignments[id(node)] = (
+                assigned_binding,
+                space_key,
+            )
+            return
+
         if binding is not None and prefix is not None:
             self.reserve_slang_resource_register_range(
                 prefix,
@@ -4961,25 +5051,46 @@ class SlangCodeGen:
     def slang_resource_name(self, node):
         return getattr(node, "name", getattr(node, "variable_name", "<anonymous>"))
 
-    def next_available_slang_resource_register(self, register_prefix, space, count):
-        binding = self.slang_resource_register_cursors.get((register_prefix, space), 0)
+    def next_available_slang_resource_register(
+        self, register_prefix, space, count, preferred=None
+    ):
         ranges = self.slang_used_resource_registers.get((register_prefix, space), [])
-        while True:
-            end = None if count is None else binding + max(count, 1) - 1
-            conflict_end = None
-            for used_start, used_end, _used_name in ranges:
-                if not self.slang_resource_register_ranges_overlap(
-                    binding, end, used_start, used_end
-                ):
-                    continue
-                if used_end is None:
-                    return None
-                conflict_end = (
-                    used_end if conflict_end is None else max(conflict_end, used_end)
-                )
-            if conflict_end is None:
-                return binding
-            binding = conflict_end + 1
+        candidates = []
+        if preferred is not None:
+            candidates.append(preferred)
+        candidates.append(
+            self.slang_resource_register_cursors.get((register_prefix, space), 0)
+        )
+
+        for candidate in candidates:
+            binding = candidate
+            while True:
+                end = None if count is None else binding + max(count, 1) - 1
+                conflict_end = None
+                for used_start, used_end, _used_name in ranges:
+                    if not self.slang_resource_register_ranges_overlap(
+                        binding, end, used_start, used_end
+                    ):
+                        continue
+                    if used_end is None:
+                        return None
+                    conflict_end = (
+                        used_end
+                        if conflict_end is None
+                        else max(conflict_end, used_end)
+                    )
+                if conflict_end is None:
+                    return binding
+                binding = conflict_end + 1
+
+    def assigned_slang_source_sampler_register(self, node, space_key):
+        assignment = self.slang_source_sampler_register_assignments.get(id(node))
+        if assignment is None:
+            return None
+        binding, assignment_space = assignment
+        if assignment_space != space_key:
+            return None
+        return binding
 
     def next_available_slang_resource_register_space(
         self, register_prefix, start_space, count
@@ -4994,7 +5105,7 @@ class SlangCodeGen:
             space += 1
 
     def next_available_slang_vk_binding(self, descriptor_set, count, preferred=None):
-        count = 1 if count is None else max(count, 1)
+        count = 1
         ranges = self.slang_used_vk_bindings.get(descriptor_set, [])
         candidates = []
         if preferred is not None:
@@ -5034,7 +5145,7 @@ class SlangCodeGen:
         )
 
     def advance_slang_vk_binding(self, descriptor_set, start, count):
-        count = 1 if count is None else max(count, 1)
+        count = 1
         self.slang_vk_binding_cursors[descriptor_set] = max(
             self.slang_vk_binding_cursors.get(descriptor_set, 0),
             start + count,
@@ -5062,7 +5173,7 @@ class SlangCodeGen:
         ranges.append((start, end, name))
 
     def reserve_slang_vk_binding_range(self, descriptor_set, start, count, name):
-        count = 1 if count is None else max(count, 1)
+        count = 1
         end = start + count - 1
         ranges = self.slang_used_vk_bindings.setdefault(descriptor_set, [])
         for used_start, used_end, used_name in ranges:
@@ -5162,14 +5273,38 @@ class SlangCodeGen:
             descriptor_set, register_space
         )
         resource_count = self.slang_resource_array_count(node, type_name)
+        source_bound_sampler_register = (
+            self.slang_source_bound_sampler_uses_remappable_register(
+                register_prefix, explicit_binding, register_binding, resource_count
+            )
+        )
 
-        if register_binding is None and explicit_binding is not None:
+        assigned_register = None
+        if source_bound_sampler_register:
+            assigned_register = self.assigned_slang_source_sampler_register(
+                node, space_key
+            )
+            if assigned_register is not None:
+                register_binding = assigned_register
+                register_binding_expr = str(assigned_register)
+
+        if (
+            register_binding is None
+            and explicit_binding is not None
+            and not source_bound_sampler_register
+        ):
             register_binding = explicit_binding
             register_binding_expr = explicit_binding_expr
 
         if register_binding is None and register_binding_expr is None and auto_assign:
+            preferred_register_binding = (
+                explicit_binding if source_bound_sampler_register else None
+            )
             register_binding = self.next_available_slang_resource_register(
-                register_prefix, space_key, resource_count
+                register_prefix,
+                space_key,
+                resource_count,
+                preferred=preferred_register_binding,
             )
             if register_binding is None:
                 if descriptor_set is not None or descriptor_set_expr is not None:
@@ -10122,6 +10257,10 @@ class SlangCodeGen:
             "float16": "half",
             "f32": "float",
             "f64": "double",
+            "i8": "int8_t",
+            "u8": "uint8_t",
+            "i16": "int16_t",
+            "u16": "uint16_t",
             "i32": "int",
             "u32": "uint",
             "half": "half",
@@ -10140,6 +10279,18 @@ class SlangCodeGen:
             "vec2<f64>": "double2",
             "vec3<f64>": "double3",
             "vec4<f64>": "double4",
+            "vec2<i8>": "vector<int8_t, 2>",
+            "vec3<i8>": "vector<int8_t, 3>",
+            "vec4<i8>": "vector<int8_t, 4>",
+            "vec2<u8>": "vector<uint8_t, 2>",
+            "vec3<u8>": "vector<uint8_t, 3>",
+            "vec4<u8>": "vector<uint8_t, 4>",
+            "vec2<i16>": "vector<int16_t, 2>",
+            "vec3<i16>": "vector<int16_t, 3>",
+            "vec4<i16>": "vector<int16_t, 4>",
+            "vec2<u16>": "vector<uint16_t, 2>",
+            "vec3<u16>": "vector<uint16_t, 3>",
+            "vec4<u16>": "vector<uint16_t, 4>",
             "vec2<i32>": "int2",
             "vec3<i32>": "int3",
             "vec4<i32>": "int4",

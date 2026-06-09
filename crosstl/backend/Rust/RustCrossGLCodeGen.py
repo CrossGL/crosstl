@@ -13,7 +13,7 @@ RUST_NUMERIC_LITERAL_RE = re.compile(
     r"0[oO][0-7](?:_?[0-7])*|"
     r"\d(?:_?\d)*(?:(?:\.\d(?:_?\d)*)|\.(?![._A-Za-z0-9]))?"
     r"(?:[eE][+-]?\d(?:_?\d)*)?"
-    r")(?P<suffix>(?:[iu](?:8|16|32|64|128|size))|f(?:32|64))?$"
+    r")(?P<suffix>_?(?:(?:[iu](?:8|16|32|64|128|size))|f(?:32|64)))?$"
 )
 RUST_RAW_STRING_RE = re.compile(r'^r(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
 RUST_BYTE_RAW_STRING_RE = re.compile(r'^br(?P<hashes>#*)"(.*?)"(?P=hashes)$', re.DOTALL)
@@ -22,6 +22,10 @@ RUST_STRING_RE = re.compile(r'^"((?:[^"\\]|\\(.|\n))*)"$', re.DOTALL)
 RUST_BYTE_STRING_RE = re.compile(r'^b"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_C_STRING_RE = re.compile(r'^c"((?:[^"\\]|\\.)*)"$', re.DOTALL)
 RUST_BYTE_CHAR_RE = re.compile(r"^b'((?:[^'\\]|\\.)*)'$", re.DOTALL)
+RUST_CHAR_RE = re.compile(
+    r"^'(\\x[0-9a-fA-F]{2}|\\u\{[0-9a-fA-F_]{1,6}\}|[^'\\]|\\.)'$",
+    re.DOTALL,
+)
 
 TRANSPARENT_BLOCK_NODE_TYPES = (AsyncBlockNode, UnsafeBlockNode, ConstBlockNode)
 BLOCK_EXPRESSION_NODE_TYPES = (BlockNode,) + TRANSPARENT_BLOCK_NODE_TYPES
@@ -36,6 +40,14 @@ CROSSGL_RESERVED_IDENTIFIERS = set(CROSSGL_KEYWORDS) | {"true", "false"}
 class RustToCrossGLConverter:
     """Serialize Rust backend AST nodes back into CrossGL source."""
 
+    GLOBAL_INITIALIZER_MACROS = {
+        "concat",
+        "env",
+        "include_bytes",
+        "include_str",
+        "option_env",
+    }
+    SOURCE_VALUE_MACROS = GLOBAL_INITIALIZER_MACROS | {"include_wgsl"}
     SCALAR_ZERO_ARG_METHOD_MAP = {
         "abs": "abs",
         "floor": "floor",
@@ -216,6 +228,7 @@ class RustToCrossGLConverter:
         self.type_map = {
             # Rust primitive types to CrossGL
             "()": "void",
+            "!": "void",
             "f32": "float",
             "f64": "double",
             "i32": "int",
@@ -733,7 +746,9 @@ class RustToCrossGLConverter:
         self.function_return_types = {}
         self.function_type_signatures = {}
         self.impl_method_signatures = {}
-        self.value_type_scopes = []
+        self.impl_receiver_method_names = set()
+        self.impl_associated_function_names = set()
+        self.value_type_scopes = [{}]
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
         self.local_function_item_counter = 0
@@ -741,6 +756,7 @@ class RustToCrossGLConverter:
         self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
+        self.reparseable_macro_expression_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
         self.local_callable_scopes = []
@@ -803,7 +819,11 @@ class RustToCrossGLConverter:
         self.function_return_types = self.collect_function_return_types(ast)
         self.function_type_signatures = self.collect_function_type_signatures(ast)
         self.impl_method_signatures = self.collect_impl_method_signatures(ast)
-        self.value_type_scopes = []
+        (
+            self.impl_receiver_method_names,
+            self.impl_associated_function_names,
+        ) = self.collect_impl_method_name_sets()
+        self.value_type_scopes = [{}]
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
         self.local_function_item_counter = 0
@@ -811,6 +831,7 @@ class RustToCrossGLConverter:
         self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
+        self.reparseable_macro_expression_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
         self.local_callable_scopes = []
@@ -832,17 +853,19 @@ class RustToCrossGLConverter:
 
         for global_var in ast.global_variables:
             if isinstance(global_var, ConstNode):
-                declarator = self.format_typed_declarator(
+                self.add_value_type(global_var.name, global_var.vtype)
+                declarator = self.format_global_declarator(
                     global_var.vtype, global_var.name
                 )
-                value = self.generate_expression(global_var.value)
+                value = self.generate_global_initializer(global_var.value)
                 code += f"    const {declarator} = {value};\n"
             elif isinstance(global_var, StaticNode):
+                self.add_value_type(global_var.name, global_var.vtype)
                 mutability = "mut " if global_var.is_mutable else ""
-                declarator = self.format_typed_declarator(
+                declarator = self.format_global_declarator(
                     global_var.vtype, global_var.name
                 )
-                value = self.generate_expression(global_var.value)
+                value = self.generate_global_initializer(global_var.value)
                 code += f"    static {mutability}{declarator} = {value};\n"
 
         for struct in ast.structs:
@@ -1185,6 +1208,19 @@ class RustToCrossGLConverter:
                     }
         return signatures_by_type
 
+    def collect_impl_method_name_sets(self):
+        receiver_methods = set()
+        associated_functions = set()
+
+        for signature in self.impl_method_signatures.values():
+            for method_name, method in signature["methods"].items():
+                if self.method_has_self_parameter(method):
+                    receiver_methods.add(method_name)
+                else:
+                    associated_functions.add(method_name)
+
+        return receiver_methods, associated_functions
+
     def collect_struct_member_types(self, ast):
         member_types = {}
         for struct in getattr(ast, "structs", []):
@@ -1255,6 +1291,8 @@ class RustToCrossGLConverter:
 
         type_name = self.strip_reference_type(type_name)
         if type_name == "Self" and struct_name:
+            if struct_name == "()":
+                return "Unit"
             return struct_name
         return type_name
 
@@ -1267,11 +1305,16 @@ class RustToCrossGLConverter:
         )
         if byte_addressable_type is not None:
             return byte_addressable_type
+        tuple_type = self.map_tuple_type(type_name)
+        if tuple_type is not None:
+            return tuple_type
         return self.normalize_receiver_type(type_name, struct_name)
 
     def infer_value_type(self, expression):
         if isinstance(expression, StructInitializationNode):
             return expression.struct_name
+        if isinstance(expression, LabeledBlockNode):
+            return self.infer_block_expression_value_type(expression.body)
         if isinstance(expression, BinaryOpNode):
             return self.infer_binary_expression_value_type(expression)
         if isinstance(expression, FunctionCallNode):
@@ -1580,10 +1623,23 @@ class RustToCrossGLConverter:
         if not isinstance(function_name, str):
             return function_name, []
 
+        function_name = self.normalize_associated_type_path(function_name)
         generic = self.parse_generic_type(function_name)
         if generic is None:
             return function_name, []
         return generic
+
+    def format_function_type_arguments(self, function_name, type_args):
+        if not type_args:
+            return function_name
+
+        normalized_args = [
+            self.normalize_unmapped_generic_argument(arg) for arg in type_args
+        ]
+        normalized_args = [arg for arg in normalized_args if arg]
+        if not normalized_args:
+            return function_name
+        return f"{function_name}<{', '.join(normalized_args)}>"
 
     def lookup_user_function_signature(self, function_name):
         if not isinstance(function_name, str):
@@ -2015,6 +2071,18 @@ class RustToCrossGLConverter:
             return member_name
 
         field_name = self.tuple_field_member_name(member_name)
+        tuple_elements = self.split_tuple_type(receiver_type)
+        if tuple_elements is not None and int(member_name) < len(tuple_elements):
+            return field_name
+
+        generic = self.parse_generic_type(receiver_type)
+        if (
+            generic is not None
+            and generic[0] == "Tuple"
+            and int(member_name) < len(generic[1])
+        ):
+            return field_name
+
         if self.lookup_struct_member_type(receiver_type, field_name) is None:
             return member_name
         return field_name
@@ -2194,8 +2262,8 @@ class RustToCrossGLConverter:
         if getattr(alias, "generics", None) or not getattr(alias, "alias_type", None):
             return ""
 
-        declarator = self.format_typed_declarator(alias.alias_type, alias.name)
-        return f"    typedef {declarator};\n"
+        alias_type = self.map_type(alias.alias_type)
+        return f"    typedef {alias.name} = {alias_type};\n"
 
     def generate_function(self, func, indent=1, struct_name=None):
         """Render one Rust function node as a CrossGL function."""
@@ -2211,7 +2279,7 @@ class RustToCrossGLConverter:
         display_return_type = self.normalize_receiver_type(
             func.return_type, struct_name
         )
-        return_type = self.map_type(display_return_type)
+        return_type = self.map_function_return_type(display_return_type)
 
         if struct_name:
             func_name = f"{self.impl_function_prefix(struct_name)}_{func.name}"
@@ -2232,9 +2300,15 @@ class RustToCrossGLConverter:
                 indent=indent + 1,
                 allow_implicit_final_return=True,
             )
+            pattern_binding_code = self.generate_function_parameter_pattern_bindings(
+                func.params,
+                name_aliases,
+                indent + 1,
+            )
             helper_code = "".join(self.current_closure_helpers)
             code += helper_code
             code += f"{indent_str}{return_type} {func_name}({params_str}) {{\n"
+            code += pattern_binding_code
             code += body_code
             code += f"{indent_str}}}\n\n"
         finally:
@@ -2250,7 +2324,14 @@ class RustToCrossGLConverter:
     def impl_function_prefix(self, struct_name):
         generic = self.parse_generic_type(struct_name)
         type_name = generic[0] if generic is not None else struct_name
-        return self.type_lookup_names(type_name)[-1]
+        type_name = self.strip_reference_type(type_name)
+        if type_name == "()":
+            return "Unit"
+        prefix = self.type_lookup_names(type_name)[-1]
+        prefix = re.sub(r"[^A-Za-z0-9_]+", "_", prefix).strip("_") or "Type"
+        if prefix[0].isdigit():
+            prefix = f"_{prefix}"
+        return prefix
 
     def generate_shader_stage_function(self, func, shader_type):
         """Render a Rust shader attribute as a named CrossGL stage entry."""
@@ -2259,7 +2340,7 @@ class RustToCrossGLConverter:
             func.params,
             extra_forbidden=local_binding_names,
         )
-        return_type = self.map_type(func.return_type)
+        return_type = self.map_function_return_type(func.return_type)
         entry_point_name = self.get_entry_point_name_from_attributes(func.attributes)
         stage_name = self.crossgl_identifier(entry_point_name or func.name)
         numthreads = self.get_numthreads_from_attributes(func.attributes)
@@ -2284,6 +2365,11 @@ class RustToCrossGLConverter:
                 indent=3,
                 allow_implicit_final_return=True,
             )
+            pattern_binding_code = self.generate_function_parameter_pattern_bindings(
+                func.params,
+                name_aliases,
+                3,
+            )
             helper_code = "".join(self.current_closure_helpers)
         finally:
             self.current_function_return_type = previous_return_type
@@ -2296,9 +2382,23 @@ class RustToCrossGLConverter:
         code = helper_code
         code += f"    {stage_header} {{\n"
         code += f"        {return_type} main({params_str}){numthreads_suffix} {{\n"
+        code += pattern_binding_code
         code += body_code
         code += "        }\n"
         code += "    }\n\n"
+        return code
+
+    def generate_function_parameter_pattern_bindings(
+        self, params, name_aliases, indent
+    ):
+        code = ""
+        for param in params:
+            pattern = getattr(param, "pattern", None)
+            if pattern is None:
+                continue
+
+            subject = name_aliases.get(param.name, param.name)
+            code += self.generate_match_pattern_bindings(subject, pattern, indent)
         return code
 
     def function_returns_value(self):
@@ -2437,7 +2537,8 @@ class RustToCrossGLConverter:
                         code += prelude
                         code += f"{indent_str}return {value};\n"
                     elif stmt.value:
-                        code += f"{indent_str}return {self.generate_expression(stmt.value)};\n"
+                        value = self.generate_reparseable_expression(stmt.value)
+                        code += f"{indent_str}return {value};\n"
                     else:
                         code += f"{indent_str}return;\n"
                 elif isinstance(stmt, IfNode):
@@ -2556,6 +2657,10 @@ class RustToCrossGLConverter:
 
         if isinstance(stmt.value, LoopNode):
             return self.generate_loop_expression_let(stmt, indent, loop_contexts)
+        if isinstance(stmt.value, LabeledBlockNode):
+            return self.generate_labeled_block_expression_let(
+                stmt, indent, loop_contexts
+            )
         if self.is_block_expression_node(stmt.value):
             return self.generate_block_expression_let(stmt, indent, loop_contexts)
         if isinstance(stmt.value, IfNode):
@@ -2596,10 +2701,7 @@ class RustToCrossGLConverter:
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
                 self.add_value_type(target_name, inferred_type)
-            mutability = "mut " if stmt.is_mutable else ""
-            return (
-                prelude + f"{indent_str}let {mutability}{target_name} = {value_str};\n"
-            )
+            return prelude + f"{indent_str}let {target_name} = {value_str};\n"
 
         if isinstance(stmt.value, ClosureNode):
             helper_name = self.try_generate_closure_helper(
@@ -2609,8 +2711,7 @@ class RustToCrossGLConverter:
             if helper_name is not None:
                 target_name = self.declare_local_alias(stmt.name)
                 self.add_local_callable(stmt.name, target_name)
-                mutability = "mut " if stmt.is_mutable else ""
-                return f"{indent_str}let {mutability}{target_name} = {helper_name};\n"
+                return f"{indent_str}let {target_name} = {helper_name};\n"
 
         if stmt.vtype:
             type_str = self.format_typed_declarator(stmt.vtype, stmt.name)
@@ -2618,7 +2719,7 @@ class RustToCrossGLConverter:
             type_str = ""
 
         if stmt.value:
-            value_str = self.generate_expression(stmt.value)
+            value_str = self.generate_reparseable_expression(stmt.value)
             target_name = self.declare_local_alias(stmt.name)
             if isinstance(stmt.value, ClosureNode):
                 self.add_local_callable(stmt.name, target_name)
@@ -2629,8 +2730,7 @@ class RustToCrossGLConverter:
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
                 self.add_value_type(target_name, inferred_type)
-            mutability = "mut " if stmt.is_mutable else ""
-            return f"{indent_str}let {mutability}{target_name} = {value_str};\n"
+            return f"{indent_str}let {target_name} = {value_str};\n"
         else:
             target_name = self.declare_local_alias(stmt.name)
             if stmt.vtype:
@@ -2829,8 +2929,8 @@ class RustToCrossGLConverter:
         if not isinstance(stmt.value, TupleNode):
             if stmt.value is None:
                 return ""
-            return self.generate_discarded_expression(
-                stmt.value,
+            return self.generate_tuple_pattern_expression_let(
+                stmt,
                 indent,
                 loop_contexts,
             )
@@ -2846,6 +2946,33 @@ class RustToCrossGLConverter:
             loop_contexts,
             type_elements,
         )
+
+    def generate_tuple_pattern_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        subject_name = self.next_match_tuple_name()
+        code = f"{indent_str}auto {subject_name};\n"
+        code += self.generate_expression_result(
+            stmt.value,
+            indent,
+            subject_name,
+            loop_contexts,
+        )
+
+        type_elements = self.get_tuple_pattern_type_elements(
+            stmt.vtype,
+            len(stmt.name.elements),
+        )
+
+        for index, pattern_element in enumerate(stmt.name.elements):
+            type_element = type_elements[index] if type_elements is not None else None
+            code += self.generate_pattern_binding(
+                pattern_element,
+                self.generate_tuple_element_accessor(subject_name, index),
+                indent,
+                loop_contexts,
+                type_element,
+            )
+        return code
 
     def generate_tuple_pattern_bindings(
         self, pattern, value, indent, loop_contexts=None, type_elements=None
@@ -2900,14 +3027,37 @@ class RustToCrossGLConverter:
                     indent,
                     loop_contexts,
                 )
-            return self.generate_expression_result(
+            return self.generate_auto_pattern_binding(
+                pattern,
                 value,
                 indent,
-                pattern,
                 loop_contexts,
             )
 
         return self.generate_discarded_expression(value, indent, loop_contexts)
+
+    def generate_auto_pattern_binding(self, name, value, indent, loop_contexts=None):
+        indent_str = "    " * indent
+
+        if isinstance(
+            value,
+            (
+                LoopNode,
+                IfNode,
+                MatchNode,
+            )
+            + BLOCK_EXPRESSION_NODE_TYPES,
+        ) or self.expression_contains_try(value):
+            code = f"{indent_str}auto {name};\n"
+            code += self.generate_expression_result(
+                value,
+                indent,
+                name,
+                loop_contexts,
+            )
+            return code
+
+        return f"{indent_str}auto {name} = {self.generate_expression(value)};\n"
 
     def get_tuple_pattern_type_elements(self, type_name, expected_count):
         elements = self.split_tuple_type(type_name)
@@ -3000,6 +3150,35 @@ class RustToCrossGLConverter:
             result_target=self.return_result_target,
             loop_contexts=loop_contexts,
         )
+
+    def generate_labeled_block_expression_let(self, stmt, indent, loop_contexts=None):
+        indent_str = "    " * indent
+        code = ""
+        target_name = self.declare_local_alias(stmt.name)
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(target_name, inferred_type)
+
+        if stmt.vtype:
+            code += (
+                f"{indent_str}"
+                f"{self.format_typed_declarator(stmt.vtype, target_name)};\n"
+            )
+        elif inferred_type:
+            code += (
+                f"{indent_str}"
+                f"{self.format_typed_declarator(inferred_type, target_name)};\n"
+            )
+        else:
+            code += f"{indent_str}auto {target_name};\n"
+
+        code += self.generate_labeled_block_expression_result(
+            stmt.value,
+            indent,
+            target_name,
+            loop_contexts,
+        )
+        return code
 
     def generate_block_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
@@ -3517,11 +3696,71 @@ class RustToCrossGLConverter:
         finally:
             self.pop_local_callable_scope()
 
+    def generate_labeled_block_expression_result(
+        self, node, indent, result_target, loop_contexts=None
+    ):
+        block_node = self.get_block_expression_node(node.body)
+        indent_str = "    " * indent
+        nested_contexts = self.extend_loop_contexts(
+            loop_contexts,
+            node,
+            result_target=result_target,
+        )
+        loop_context = nested_contexts[-1]
+
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_labeled_control_declarations(loop_context, indent)
+            code += f"{indent_str}while (true) {{\n"
+            code += self.generate_function_body(
+                block_node.statements,
+                indent + 1,
+                nested_contexts,
+            )
+
+            expression = self.get_block_expression(block_node)
+            if expression is not None:
+                code += self.generate_expression_result(
+                    expression,
+                    indent + 1,
+                    result_target,
+                    nested_contexts,
+                )
+                if not self.branch_guarantees_control_transfer(expression):
+                    code += f"{indent_str}    break;\n"
+            elif not self.branch_guarantees_control_transfer(block_node):
+                code += f"{indent_str}    break;\n"
+
+            code += f"{indent_str}}}\n"
+            return code
+        finally:
+            self.pop_local_callable_scope()
+
     def generate_expression_result(
         self, expression, indent, result_target, loop_contexts=None
     ):
         indent_str = "    " * indent
 
+        if isinstance(expression, ReturnNode):
+            if expression.value is None:
+                return f"{indent_str}return;\n"
+            return self.generate_expression_result(
+                expression.value,
+                indent,
+                self.return_result_target,
+                loop_contexts,
+            )
+        if isinstance(expression, BreakNode):
+            return self.generate_break_statement(expression, indent, loop_contexts)
+        if isinstance(expression, ContinueNode):
+            return self.generate_continue_statement(expression, indent, loop_contexts)
+        if isinstance(expression, LabeledBlockNode):
+            return self.generate_labeled_block_expression_result(
+                expression,
+                indent,
+                result_target,
+                loop_contexts,
+            )
         if isinstance(expression, LoopNode):
             return self.generate_loop(
                 expression,
@@ -3593,7 +3832,10 @@ class RustToCrossGLConverter:
                 return prelude + f"{indent_str}{value};\n"
             return prelude
 
-        value = self.generate_expression(expression)
+        if result_target is self.return_result_target or result_target:
+            value = self.generate_reparseable_expression(expression)
+        else:
+            value = self.generate_expression(expression)
         if result_target is self.return_result_target:
             return f"{indent_str}return {value};\n"
         if result_target:
@@ -4029,6 +4271,12 @@ class RustToCrossGLConverter:
             )
             if primitive_bitcast_call is not None:
                 return args_code, primitive_bitcast_call
+            unresolved_associated_call = self.format_unresolved_associated_call(
+                expression.name,
+                args,
+            )
+            if unresolved_associated_call is not None:
+                return args_code, unresolved_associated_call
             return args_code, f"{self.map_function(expression.name)}({', '.join(args)})"
 
         name_code, name = self.generate_try_expression(
@@ -4230,6 +4478,62 @@ class RustToCrossGLConverter:
             return f"{obj}.{method_name}"
 
         return None
+
+    def method_call_may_need_special_format(self, method_name, arg_nodes):
+        if not isinstance(method_name, str):
+            return False
+
+        base_method_name, _ = self.split_function_type_arguments(method_name)
+        arg_count = len(arg_nodes)
+
+        if base_method_name in self.impl_receiver_method_names:
+            return True
+        if self.is_resource_method_name(base_method_name):
+            return True
+        if base_method_name in {
+            "load",
+            "load_unchecked",
+            "store",
+            "store_unchecked",
+            "to_bits",
+            "len",
+            "recip",
+            "is_multiple_of",
+            "extend",
+            "truncate",
+            "length",
+            "length_recip",
+            "length_squared",
+            "normalize",
+            "normalize_or_zero",
+            "dot",
+            "cross",
+            "dot_into_vec",
+            "distance",
+            "distance_squared",
+            "reflect",
+            "refract",
+            "perp_dot",
+        }:
+            return True
+        if base_method_name in self.RUST_GPU_DERIVATIVE_METHOD_MAP:
+            return True
+        if base_method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
+            return True
+        if base_method_name in self.SCALAR_ONE_ARG_METHOD_MAP:
+            return True
+        if base_method_name in self.SCALAR_TWO_ARG_METHOD_MAP:
+            return True
+        if base_method_name in {"max_element", "min_element"}:
+            return True
+        if base_method_name in {"map", "filter", "for_each", "any", "all"}:
+            return arg_count == 1 and isinstance(arg_nodes[0], ClosureNode)
+        if base_method_name == "fold":
+            return arg_count == 2 and isinstance(arg_nodes[1], ClosureNode)
+        if arg_count == 0 and self.is_swizzle_member(base_method_name):
+            return True
+
+        return False
 
     def format_rust_gpu_byte_addressable_buffer_call(
         self,
@@ -4606,6 +4910,59 @@ class RustToCrossGLConverter:
             return None
         return f"{bitcast_info['from_bits']}({args[0]})"
 
+    def format_unresolved_associated_call(self, function_name, args):
+        parsed = self.parse_top_level_associated_function_path(function_name)
+        if parsed is None:
+            return None
+
+        type_name, method_name, method_type_args = parsed
+        if not method_name:
+            return None
+        if "<" not in type_name:
+            return None
+
+        prefix_parts = [self.impl_function_prefix(type_name), method_name]
+        if method_type_args:
+            prefix_parts.extend(
+                self.impl_function_prefix(arg) for arg in method_type_args
+            )
+        function_identifier = self.crossgl_identifier("_".join(prefix_parts))
+        return f"{function_identifier}({', '.join(args)})"
+
+    def parse_top_level_associated_function_path(self, function_name):
+        if not isinstance(function_name, str) or "::" not in function_name:
+            return None
+
+        function_name = self.normalize_associated_type_path(function_name)
+        depth = 0
+        split_index = -1
+        pairs = {"<": ">", "(": ")", "[": "]", "{": "}"}
+        openers = set(pairs)
+        closers = {close: open_ for open_, close in pairs.items()}
+
+        for index, char in enumerate(function_name):
+            if char in openers:
+                depth += 1
+            elif char in closers:
+                depth = max(0, depth - 1)
+            elif (
+                char == ":"
+                and depth == 0
+                and index + 1 < len(function_name)
+                and function_name[index + 1] == ":"
+            ):
+                split_index = index
+
+        if split_index < 0:
+            return None
+
+        type_name = function_name[:split_index]
+        method_name = function_name[split_index + 2 :]
+        method_name, method_type_args = self.split_function_type_arguments(method_name)
+        if not type_name or not method_name:
+            return None
+        return type_name, method_name, method_type_args
+
     def infer_primitive_float_bitcast_associated_return_type(
         self,
         function_name,
@@ -4660,6 +5017,10 @@ class RustToCrossGLConverter:
         return None
 
     def lookup_impl_method_receiver_match(self, obj, method_name):
+        base_method_name, _ = self.split_function_type_arguments(method_name)
+        if base_method_name not in self.impl_receiver_method_names:
+            return None
+
         receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
             return None
@@ -4695,6 +5056,9 @@ class RustToCrossGLConverter:
             return None
 
         type_name, method_name, method_type_args = parsed
+        if method_name not in self.impl_associated_function_names:
+            return None
+
         for signature in self.impl_method_signatures.values():
             method = signature["methods"].get(method_name)
             if method is None:
@@ -5048,7 +5412,8 @@ class RustToCrossGLConverter:
             code += field_code
             fields.append(f"{field_name}: {field_value}")
 
-        return code, f"{expression.struct_name} {{ {', '.join(fields)} }}"
+        struct_name = self.format_struct_initialization_name(expression.struct_name)
+        return code, f"{struct_name} {{ {', '.join(fields)} }}"
 
     def generate_try_block_expression(self, try_block):
         previous_return_type = self.current_function_return_type
@@ -5257,7 +5622,7 @@ class RustToCrossGLConverter:
 
     def generate_assignment(self, node):
         left = self.generate_expression(node.left)
-        right = self.generate_expression(node.right)
+        right = self.generate_reparseable_expression(node.right)
         return f"{left} {node.operator} {right}"
 
     def generate_if_statement(self, node, indent, loop_contexts=None):
@@ -6071,7 +6436,7 @@ class RustToCrossGLConverter:
             return self.generate_match_if_chain(
                 node,
                 indent,
-                self.generate_scoped_function_body,
+                self.generate_match_statement_branch,
                 loop_contexts,
             )
 
@@ -6094,7 +6459,7 @@ class RustToCrossGLConverter:
 
         for arm in node.arms:
             code += self.generate_match_case_label(arm.pattern, indent + 1)
-            code += self.generate_scoped_function_body(
+            code += self.generate_match_statement_branch(
                 arm.body,
                 indent + 2,
                 arm_loop_contexts,
@@ -6109,6 +6474,11 @@ class RustToCrossGLConverter:
             indent,
         )
         return code
+
+    def generate_match_statement_branch(self, body, indent, loop_contexts=None):
+        if isinstance(body, list):
+            return self.generate_scoped_function_body(body, indent, loop_contexts)
+        return self.generate_result_branch(body, indent, None, loop_contexts)
 
     def generate_match_case_label(self, pattern, indent):
         indent_str = "    " * indent
@@ -7249,6 +7619,8 @@ class RustToCrossGLConverter:
             return self.generate_expression(subject)
         if isinstance(subject, ArrayNode):
             return self.generate_expression(subject)
+        if not isinstance(subject, str):
+            return self.generate_expression(subject)
         return str(subject)
 
     def generate_tuple_element_accessor(self, subject, index):
@@ -7343,6 +7715,8 @@ class RustToCrossGLConverter:
             return self.branch_guarantees_control_transfer(
                 self.get_block_expression(block_node)
             )
+        if isinstance(body, LabeledBlockNode):
+            return self.branch_guarantees_control_transfer(body.body)
         if isinstance(body, IfNode):
             if body.else_body is None:
                 return False
@@ -7397,6 +7771,12 @@ class RustToCrossGLConverter:
             if nested_loop_depth != 0:
                 return False
             return node.label is None or node.label == current_label
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_current_loop_break_in_switch(
+                node.body,
+                current_label,
+                nested_loop_depth + 1,
+            )
         if isinstance(node, LoopNode):
             return self.contains_current_loop_break_in_switch(
                 node.body,
@@ -7621,6 +8001,13 @@ class RustToCrossGLConverter:
             return self.generate_discarded_block_expression(
                 expression,
                 indent,
+                loop_contexts,
+            )
+        if isinstance(expression, LabeledBlockNode):
+            return self.generate_labeled_block_expression_result(
+                expression,
+                indent,
+                None,
                 loop_contexts,
             )
         if isinstance(expression, LoopNode):
@@ -7904,6 +8291,12 @@ class RustToCrossGLConverter:
             )
         if isinstance(node, (BreakNode, ContinueNode)):
             return node.label == label and nested_loop_depth > 0
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_labeled_control_target(
+                node.body,
+                label,
+                nested_loop_depth + 1,
+            )
         if isinstance(node, LoopNode):
             return self.contains_labeled_control_target(
                 node.body,
@@ -8053,6 +8446,8 @@ class RustToCrossGLConverter:
             return not self.match_requires_if_chain(node) or any(
                 self.contains_switch_match(arm.body) for arm in node.arms
             )
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_switch_match(node.body)
         if self.is_block_expression_node(node):
             block_node = self.get_block_expression_node(node)
             return self.contains_switch_match(
@@ -8079,6 +8474,8 @@ class RustToCrossGLConverter:
             )
         if isinstance(node, (BreakNode, ContinueNode)):
             return node.label == label
+        if isinstance(node, LabeledBlockNode):
+            return self.contains_labeled_control_reference(node.body, label)
         if isinstance(node, LoopNode):
             return self.contains_labeled_control_reference(node.body, label)
         if isinstance(node, WhileNode):
@@ -8136,7 +8533,10 @@ class RustToCrossGLConverter:
         return contexts[-1]["result_target"]
 
     def is_inline_result_expression(self, expression):
-        if isinstance(expression, (LoopNode, IfNode, MatchNode, AssignmentNode)):
+        if isinstance(
+            expression,
+            (LoopNode, LabeledBlockNode, IfNode, MatchNode, AssignmentNode),
+        ):
             return True
 
         if self.is_block_expression_node(expression):
@@ -8406,7 +8806,8 @@ class RustToCrossGLConverter:
                 )
                 code += field_code
                 fields.append(f"{field_name}: {value}")
-            return code, f"{expression.struct_name} {{ {', '.join(fields)} }}"
+            struct_name = self.format_struct_initialization_name(expression.struct_name)
+            return code, f"{struct_name} {{ {', '.join(fields)} }}"
 
         return "", self.generate_expression(expression)
 
@@ -8637,6 +9038,11 @@ class RustToCrossGLConverter:
 
             if isinstance(expr.name, str) and expr.name.endswith("!"):
                 func_name = self.map_function(expr.name)
+                if (
+                    self.reparseable_macro_expression_depth
+                    and not self.should_preserve_value_macro_bang(func_name)
+                ):
+                    func_name = func_name[:-1]
                 args = ", ".join(self.generate_macro_argument(arg) for arg in expr.args)
                 return f"{func_name}({args})"
 
@@ -8665,6 +9071,12 @@ class RustToCrossGLConverter:
                 )
                 if expression_call is not None:
                     return expression_call
+                unresolved_associated_call = self.format_unresolved_associated_call(
+                    expr.name,
+                    arg_values,
+                )
+                if unresolved_associated_call is not None:
+                    return unresolved_associated_call
                 func_name = self.map_function(expr.name)
                 args = ", ".join(arg_values)
             else:
@@ -8694,7 +9106,10 @@ class RustToCrossGLConverter:
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)
             return f"({condition} ? {true_expr} : {false_expr})"
-        elif isinstance(expr, (LoopNode, IfNode, MatchNode, AssignmentNode)):
+        elif isinstance(
+            expr,
+            (LoopNode, LabeledBlockNode, IfNode, MatchNode, AssignmentNode),
+        ):
             return self.generate_inline_result_expression(expr)
         elif self.is_block_expression_node(expr):
             return self.generate_inline_block_expression(expr)
@@ -8744,7 +9159,8 @@ class RustToCrossGLConverter:
                 f"{field_name}: {self.generate_expression(field_value)}"
                 for field_name, field_value in expr.fields
             )
-            return f"{expr.struct_name} {{ {fields} }}"
+            struct_name = self.format_struct_initialization_name(expr.struct_name)
+            return f"{struct_name} {{ {fields} }}"
         elif isinstance(expr, (int, float, bool)):
             return str(expr).lower() if isinstance(expr, bool) else str(expr)
         else:
@@ -8755,6 +9171,52 @@ class RustToCrossGLConverter:
             return self.normalize_macro_body(arg)
         return self.generate_expression(arg)
 
+    def format_struct_initialization_name(self, struct_name):
+        if struct_name == "Self":
+            return struct_name
+        return self.map_type(struct_name)
+
+    def generate_global_initializer(self, value):
+        if self.is_reparseable_global_macro(value):
+            return self.generate_reparseable_global_macro(value)
+        return self.generate_reparseable_expression(value)
+
+    def generate_reparseable_expression(self, expr):
+        self.reparseable_macro_expression_depth += 1
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.reparseable_macro_expression_depth -= 1
+
+    def should_preserve_value_macro_bang(self, func_name):
+        if not isinstance(func_name, str) or not func_name.endswith("!"):
+            return False
+
+        base_name = func_name[:-1].rsplit("::", 1)[-1]
+        return base_name in self.SOURCE_VALUE_MACROS
+
+    def is_reparseable_global_macro(self, value):
+        if not isinstance(value, FunctionCallNode) or not isinstance(value.name, str):
+            return False
+
+        name = value.name[:-1] if value.name.endswith("!") else value.name
+        return name.rsplit("::", 1)[-1] in self.GLOBAL_INITIALIZER_MACROS
+
+    def generate_reparseable_global_macro(self, value):
+        name = self.map_function(value.name)
+        if isinstance(name, str) and name.endswith("!"):
+            name = name[:-1]
+
+        args = ", ".join(
+            self.generate_reparseable_global_macro_argument(arg) for arg in value.args
+        )
+        return f"{name}({args})"
+
+    def generate_reparseable_global_macro_argument(self, arg):
+        if isinstance(arg, str):
+            return self.normalize_reparseable_macro_body(arg)
+        return self.generate_global_initializer(arg)
+
     def format_cast_expression(self, target_type, expression):
         if target_type == "_":
             return expression
@@ -8762,10 +9224,18 @@ class RustToCrossGLConverter:
         mapped_type = self.map_type(target_type)
         if mapped_type == "_":
             return expression
-        return f"({mapped_type}){expression}"
+        return f"{mapped_type}({expression})"
 
     def normalize_macro_body(self, body):
         return body.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+
+    def normalize_reparseable_macro_body(self, body):
+        body = self.normalize_macro_body(body)
+        return re.sub(
+            r"\b([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)!\s*(?=[({\[])",
+            r"\1",
+            body,
+        )
 
     def generate_inline_result_expression(self, expression):
         value_name = self.next_inline_expression_value_name()
@@ -9274,6 +9744,8 @@ class RustToCrossGLConverter:
             self.pop_local_callable_scope()
             self.pop_value_type_scope()
         if not params:
+            if isinstance(body, str) and not body.strip().startswith("{"):
+                return f"lambda({{ return {body}; }})"
             return f"lambda({body})"
         return f"lambda({params}, {body})"
 
@@ -9483,7 +9955,15 @@ class RustToCrossGLConverter:
         )
 
     def compact_generated_block(self, code):
-        return " ".join(line.strip() for line in code.splitlines() if line.strip())
+        lines = []
+        for line in code.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("//"):
+                stripped = f"/* {stripped[2:].strip()} */"
+            lines.append(stripped)
+        return " ".join(lines)
 
     def generate_matches_inline_condition(self, matches_node):
         condition = self.generate_match_pattern_condition(
@@ -9530,7 +10010,18 @@ class RustToCrossGLConverter:
         if byte_char:
             return self.normalize_byte_char_literal(byte_char.group(1))
 
+        char = RUST_CHAR_RE.match(value)
+        if char:
+            return self.normalize_char_literal(char.group(1))
+
         return self.normalize_numeric_literal(value)
+
+    def normalize_char_literal(self, body):
+        if body.startswith("\\x"):
+            return str(int(body[2:], 16))
+        if body.startswith("\\u{") and body.endswith("}"):
+            return str(int(body[3:-1].replace("_", ""), 16))
+        return f"'{body}'"
 
     def normalize_numeric_literal(self, value):
         match = RUST_NUMERIC_LITERAL_RE.match(value)
@@ -9589,6 +10080,9 @@ class RustToCrossGLConverter:
             return None
 
         method_name = expr.name.member
+        if not self.method_call_may_need_special_format(method_name, expr.args):
+            return None
+
         obj = self.generate_expression(expr.name.object)
         receiver_type = self.infer_value_type(expr.name.object)
 
@@ -9671,6 +10165,10 @@ class RustToCrossGLConverter:
         if not rust_type:
             return "void"
 
+        higher_ranked_type = self.strip_higher_ranked_type(rust_type)
+        if higher_ranked_type != rust_type:
+            return self.map_type(higher_ranked_type)
+
         lifetime_stripped_type = self.strip_lifetime_type_syntax(rust_type)
         if lifetime_stripped_type != rust_type:
             return self.map_type(lifetime_stripped_type)
@@ -9679,9 +10177,25 @@ class RustToCrossGLConverter:
         if referenced_type != rust_type:
             return self.map_type(referenced_type)
 
+        raw_pointer_type = self.strip_raw_pointer_type(rust_type)
+        if raw_pointer_type != rust_type:
+            return f"ptr<{self.map_type(raw_pointer_type)}>"
+
+        tuple_type = self.map_tuple_type(rust_type)
+        if tuple_type is not None:
+            return tuple_type
+
         trait_object_type = self.strip_trait_object_type(rust_type)
         if trait_object_type != rust_type:
             return self.map_type(trait_object_type)
+
+        function_pointer_type = self.map_function_pointer_type(rust_type)
+        if function_pointer_type is not None:
+            return function_pointer_type
+
+        callable_type = self.map_callable_trait_type(rust_type)
+        if callable_type is not None:
+            return callable_type
 
         expanded_type = self.resolve_imported_module_path(rust_type)
         if expanded_type != rust_type:
@@ -9712,7 +10226,61 @@ class RustToCrossGLConverter:
         if crossgl_type is not None:
             return crossgl_type
 
+        generic_type = self.format_unmapped_generic_type(rust_type)
+        if generic_type is not None:
+            return generic_type
+
         return rust_type
+
+    def map_function_return_type(self, rust_type):
+        tuple_type = self.map_tuple_type(rust_type)
+        if tuple_type is not None:
+            return tuple_type
+        return self.map_type(rust_type)
+
+    def map_tuple_type(self, rust_type):
+        tuple_elements = self.split_tuple_type(rust_type)
+        if tuple_elements is None:
+            return None
+        if not tuple_elements:
+            return "void"
+        mapped_elements = [self.map_type(element) for element in tuple_elements]
+        return f"Tuple<{', '.join(mapped_elements)}>"
+
+    def map_callable_trait_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+
+        stripped = rust_type.strip()
+        match = re.match(r"^(Fn(?:Mut|Once)?)(?:\((.*)\))?(?:\s*->\s*(.+))?$", stripped)
+        if not match:
+            return None
+
+        trait_name, params, return_type = match.groups()
+        parts = [trait_name]
+        if params:
+            for param in self.split_generic_arguments(params):
+                parts.append(self.map_type(param))
+        if return_type:
+            parts.append("to")
+            parts.append(self.map_type(return_type))
+        elif params is not None:
+            parts.append("to")
+            parts.append("void")
+
+        sanitized = re.sub(r"[^A-Za-z0-9_]+", "_", "_".join(parts)).strip("_")
+        if not sanitized:
+            return trait_name
+        if sanitized[0].isdigit():
+            sanitized = f"_{sanitized}"
+        return sanitized
+
+    def map_function_pointer_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return None
+        if re.match(r"^fn\s*\(", rust_type.strip()):
+            return "auto"
+        return None
 
     def format_unmapped_crossgl_type(self, rust_type):
         if not isinstance(rust_type, str) or "::" not in rust_type:
@@ -9728,6 +10296,36 @@ class RustToCrossGLConverter:
             )
 
         return self.crossgl_type_path_identifier(rust_type)
+
+    def format_unmapped_generic_type(self, rust_type):
+        generic = self.parse_generic_type(rust_type)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        normalized_args = [
+            self.normalize_unmapped_generic_argument(arg) for arg in args
+        ]
+        if normalized_args == args:
+            return None
+        return f"{base_name}<{', '.join(normalized_args)}>"
+
+    def normalize_unmapped_generic_argument(self, arg):
+        normalized = self.normalize_lifetime_generic_argument(arg)
+        raw_pointer_type = self.strip_raw_pointer_type(normalized)
+        if raw_pointer_type != normalized:
+            return f"ptr<{self.map_type(raw_pointer_type)}>"
+        return normalized
+
+    def strip_raw_pointer_type(self, rust_type):
+        if not isinstance(rust_type, str):
+            return rust_type
+
+        match = re.match(r"^\*(?:const|mut)\s*(.+)$", rust_type)
+        if match:
+            return match.group(1).strip()
+
+        return rust_type
 
     def crossgl_type_path_identifier(self, type_name):
         return self.crossgl_identifier(type_name.replace("::", "_"))
@@ -10217,10 +10815,22 @@ class RustToCrossGLConverter:
         if not generics or len(generics) != len(args):
             return None
 
+        if self.alias_target_base_matches(alias, base_name):
+            return None
+
         substituted = self.substitute_type_parameters(alias.alias_type, generics, args)
         if substituted == rust_type:
             return None
         return self.map_type(substituted)
+
+    def alias_target_base_matches(self, alias, base_name):
+        target = getattr(alias, "alias_type", None)
+        target_generic = self.parse_generic_type(target)
+        if target_generic is None:
+            return target == base_name
+
+        target_base, _ = target_generic
+        return target_base == base_name
 
     def type_lookup_names(self, type_name):
         names = [type_name]
@@ -10268,6 +10878,25 @@ class RustToCrossGLConverter:
             args.append(arg)
         return args
 
+    def strip_higher_ranked_type(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+
+        stripped = type_name.strip()
+        if not stripped.startswith("for<"):
+            return type_name
+
+        depth = 0
+        for index, char in enumerate(stripped[3:], start=3):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+                if depth == 0:
+                    return stripped[index + 1 :].strip()
+
+        return type_name
+
     def strip_lifetime_type_syntax(self, type_name):
         if not isinstance(type_name, str) or "'" not in type_name:
             return type_name
@@ -10282,6 +10911,7 @@ class RustToCrossGLConverter:
                     changed = True
                     continue
                 stripped_arg = self.strip_lifetime_type_syntax(arg)
+                stripped_arg = self.normalize_lifetime_generic_argument(stripped_arg)
                 changed = changed or stripped_arg != arg
                 stripped_args.append(stripped_arg)
 
@@ -10291,6 +10921,88 @@ class RustToCrossGLConverter:
                 return f"{base_name}<{', '.join(stripped_args)}>"
 
         return self.strip_reference_lifetime(type_name)
+
+    def normalize_lifetime_generic_argument(self, type_name):
+        """Make lifetime-bearing generic args parseable after lifetime erasure."""
+        if not isinstance(type_name, str):
+            return type_name
+
+        normalized = self.strip_reference_lifetime(type_name.strip())
+        if self.is_lifetime_type_argument(normalized):
+            return ""
+
+        previous = None
+        while normalized != previous:
+            previous = normalized
+            normalized = self.strip_reference_type(normalized)
+
+        trait_object_type = self.strip_trait_object_type(normalized)
+        if trait_object_type != normalized:
+            return self.normalize_lifetime_generic_argument(trait_object_type)
+
+        array_parts = self.split_array_type(normalized)
+        if array_parts is not None:
+            base_type, array_suffix = array_parts
+            normalized_base = self.normalize_lifetime_generic_argument(base_type)
+            return f"{normalized_base}{array_suffix}"
+
+        array_type = self.normalize_rust_array_generic_argument(normalized)
+        if array_type is not None:
+            return array_type
+
+        tuple_elements = self.split_tuple_type(normalized)
+        if tuple_elements is not None:
+            if not tuple_elements:
+                return "void"
+            elements = [
+                self.normalize_lifetime_generic_argument(element)
+                for element in tuple_elements
+            ]
+            return f"Tuple<{', '.join(elements)}>"
+
+        generic = self.parse_generic_type(normalized)
+        if generic is None:
+            return normalized
+
+        base_name, args = generic
+        normalized_args = []
+        for arg in args:
+            if self.is_lifetime_type_argument(arg):
+                continue
+            normalized_arg = self.normalize_lifetime_generic_argument(arg)
+            if normalized_arg:
+                normalized_args.append(normalized_arg)
+        if not normalized_args:
+            return base_name
+        return f"{base_name}<{', '.join(normalized_args)}>"
+
+    def normalize_rust_array_generic_argument(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+
+        text = type_name.strip()
+        if not (text.startswith("[") and text.endswith("]")):
+            return None
+
+        inner = text[1:-1].strip()
+        if not inner:
+            return None
+
+        element_type, size = self.split_rust_array_generic_inner(inner)
+        normalized_element = self.normalize_lifetime_generic_argument(element_type)
+        suffix = f"[{size.strip()}]" if size is not None and size.strip() else "[]"
+        return f"{normalized_element}{suffix}"
+
+    def split_rust_array_generic_inner(self, inner):
+        depth = 0
+        for index, char in enumerate(inner):
+            if char == ";" and depth == 0:
+                return inner[:index].strip(), inner[index + 1 :].strip()
+            if char in "<[(":
+                depth += 1
+            elif char in ">])":
+                depth = max(0, depth - 1)
+        return inner.strip(), None
 
     def is_lifetime_type_argument(self, type_name):
         return bool(re.fullmatch(r"'[A-Za-z_][A-Za-z0-9_]*", type_name.strip()))
@@ -10342,10 +11054,12 @@ class RustToCrossGLConverter:
         return not (text[index].isalnum() or text[index] == "_")
 
     def strip_reference_type(self, type_name):
-        if type_name.startswith("&mut "):
-            return type_name[5:].strip()
-        if type_name.startswith("&"):
-            return type_name[1:].strip()
+        match = re.match(r"^&\s*mut\s*(.+)$", type_name)
+        if match:
+            return match.group(1).strip()
+        match = re.match(r"^&\s*(.+)$", type_name)
+        if match:
+            return match.group(1).strip()
         return type_name
 
     def strip_trait_object_type(self, type_name):
@@ -10405,11 +11119,26 @@ class RustToCrossGLConverter:
         if not type_name or "[" not in type_name:
             return None
 
-        base_type = type_name.split("[", 1)[0]
+        array_index = self.find_top_level_array_suffix(type_name)
+        if array_index is None:
+            return None
+
+        base_type = type_name[:array_index]
         array_suffix = type_name[len(base_type) :]
         if not base_type or not array_suffix:
             return None
         return base_type, array_suffix
+
+    def find_top_level_array_suffix(self, type_name):
+        depth = 0
+        for index, char in enumerate(type_name):
+            if char == "[" and depth == 0:
+                return index
+            if char in "<([":
+                depth += 1
+            elif char in ">)]":
+                depth = max(0, depth - 1)
+        return None
 
     def format_typed_declarator(self, type_name, name):
         mapped_type = self.map_type(type_name)
@@ -10418,6 +11147,26 @@ class RustToCrossGLConverter:
             base_type, array_suffix = array_parts
             return f"{base_type} {name}{array_suffix}"
         return f"{mapped_type} {name}"
+
+    def format_global_declarator(self, type_name, name):
+        mapped_type = self.map_global_declaration_type(type_name)
+        array_parts = self.split_array_type(mapped_type)
+        if array_parts:
+            base_type, array_suffix = array_parts
+            return f"{base_type} {name}{array_suffix}"
+        return f"{mapped_type} {name}"
+
+    def map_global_declaration_type(self, type_name):
+        mapped_type = self.map_type(type_name)
+        array_parts = self.split_array_type(mapped_type)
+        if not array_parts:
+            return mapped_type
+
+        base_type, array_suffix = array_parts
+        tuple_type = self.map_tuple_type(base_type)
+        if tuple_type is None:
+            return mapped_type
+        return f"{tuple_type}{array_suffix}"
 
     def expand_repeated_array_literal(self, element, size):
         try:
@@ -10435,6 +11184,8 @@ class RustToCrossGLConverter:
         stripped_func, type_args = self.split_function_type_arguments(rust_func)
         if type_args and self.lookup_user_function_signature(stripped_func) is not None:
             rust_func = stripped_func
+        else:
+            rust_func = self.format_function_type_arguments(stripped_func, type_args)
 
         local_callable = self.lookup_local_callable_name(stripped_func)
         if local_callable is not None:
@@ -10449,6 +11200,8 @@ class RustToCrossGLConverter:
             return current_module_function
 
         mapped = self.function_map.get(rust_func)
+        if mapped is None and type_args:
+            mapped = self.function_map.get(stripped_func)
         if mapped is not None:
             return mapped
 
@@ -10791,12 +11544,12 @@ class RustToCrossGLConverter:
         return f"// use {node.path}\n"
 
     def visit_ConstNode(self, node):
-        type_str = self.map_type(node.vtype)
-        value = self.generate_expression(node.value)
-        return f"const {type_str} {node.name} = {value};\n"
+        declarator = self.format_global_declarator(node.vtype, node.name)
+        value = self.generate_global_initializer(node.value)
+        return f"const {declarator} = {value};\n"
 
     def visit_StaticNode(self, node):
         mutability = "mut " if node.is_mutable else ""
-        type_str = self.map_type(node.vtype)
-        value = self.generate_expression(node.value)
-        return f"static {mutability}{type_str} {node.name} = {value};\n"
+        declarator = self.format_global_declarator(node.vtype, node.name)
+        value = self.generate_global_initializer(node.value)
+        return f"static {mutability}{declarator} = {value};\n"

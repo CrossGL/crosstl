@@ -124,6 +124,22 @@ def test_directx_compute_rootsignature_attribute_is_not_return_semantic():
     assert "allMemoryBarrier();" not in generated_code
 
 
+def test_hlsl_stencil_ref_return_semantic_codegen():
+    shader = """
+    shader StencilOut {
+        fragment {
+            uint main() @ gl_FragStencilRefEXT {
+                return 7;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint PSMain(): SV_StencilRef" in generated_code
+    assert "gl_FragStencilRefEXT" not in generated_code
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {
@@ -900,6 +916,92 @@ def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
         assert invalid_token not in generated_code
 
 
+def test_hlsl_generic_vector_constructors_emit_hlsl_names():
+    shader = """
+    shader GenericVectorAliasSmoke {
+        vec2<f16> halfPair(vec2<f16> input) {
+            vec2<f16> inc = vec2<f16>(1.0, 2.0);
+            return input + inc;
+        }
+
+        vec2<f64> precisePair(vec2<f64> input) {
+            vec2<f64> inc = vec2<f64>(1.0, 2.0);
+            return input + inc;
+        }
+
+        vec2<i8> signedBytes(vec2<i8> input) {
+            vec2<i8> inc = vec2<i8>(1, 2);
+            return input + inc;
+        }
+
+        vec4<u8> unsignedBytes(vec4<u8> input) {
+            vec4<u8> inc = vec4<u8>(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+
+        vec3<i16> signedShorts(vec3<i16> input) {
+            vec3<i16> inc = vec3<i16>(1, 2, 3);
+            return input + inc;
+        }
+
+        vec2<u16> unsignedShorts(vec2<u16> input) {
+            vec2<u16> inc = vec2<u16>(1u, 2u);
+            return input + inc;
+        }
+
+        vec3<i32> signedInts(vec3<i32> input) {
+            vec3<i32> inc = vec3<i32>(1, 2, 3);
+            return input + inc;
+        }
+
+        vec4<u32> unsignedInts(vec4<u32> input) {
+            vec4<u32> inc = vec4<u32>(1u, 2u, 3u, 4u);
+            return input + inc;
+        }
+
+        vec2<bool> flags(vec2<bool> input) {
+            vec2<bool> inc = vec2<bool>(true, false);
+            return input;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "half2 halfPair(half2 input)" in generated_code
+    assert "half2 inc = half2(1.0, 2.0);" in generated_code
+    assert "double2 precisePair(double2 input)" in generated_code
+    assert "double2 inc = double2(1.0, 2.0);" in generated_code
+    assert "int2 signedBytes(int2 input)" in generated_code
+    assert "int2 inc = int2(1, 2);" in generated_code
+    assert "uint4 unsignedBytes(uint4 input)" in generated_code
+    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "min16int3 signedShorts(min16int3 input)" in generated_code
+    assert "min16int3 inc = min16int3(1, 2, 3);" in generated_code
+    assert "min16uint2 unsignedShorts(min16uint2 input)" in generated_code
+    assert "min16uint2 inc = min16uint2(1u, 2u);" in generated_code
+    assert "int3 signedInts(int3 input)" in generated_code
+    assert "int3 inc = int3(1, 2, 3);" in generated_code
+    assert "uint4 unsignedInts(uint4 input)" in generated_code
+    assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
+    assert "bool2 flags(bool2 input)" in generated_code
+    assert "bool2 inc = bool2(true, false);" in generated_code
+
+    for invalid_token in (
+        "f162",
+        "i82",
+        "u84",
+        "i163",
+        "u162",
+        "i323",
+        "u324",
+        "vec2<",
+        "vec3<",
+        "vec4<",
+    ):
+        assert invalid_token not in generated_code
+
+
 def test_hlsl_packed_vector_aliases_map_to_standard_hlsl_vectors():
     shader = """
     shader PackedVectorAliasSmoke {
@@ -1459,6 +1561,119 @@ def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixt
     assert "maskImage[pixel] = (mask2D).x" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_hlsl_explicit_scalar_image_formats_allow_vector_fixture_contexts():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/StorageImageExplicitFormatShader.cgl.
+    shader = """
+    shader StorageImageExplicitFormatShader {
+        compute {
+            layout(local_size_x = 2, local_size_y = 2, local_size_z = 1) in;
+            layout(set = 0, binding = 0, format = r32f) readonly uniform image2D readColor;
+            layout(set = 0, binding = 1, format = r32i) readonly uniform iimage2D readLabel;
+            layout(set = 0, binding = 2, format = r32ui) readonly uniform uimage2D readMask;
+            layout(set = 0, binding = 3, format = r32ui) writeonly uniform uimage2D writeMask;
+
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(readColor, pixel);
+                ivec4 label = imageLoad(readLabel, pixel);
+                uvec4 mask = imageLoad(readMask, pixel);
+                imageStore(writeMask, pixel, mask);
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWTexture2D<float> readColor : register(u0);" in generated_code
+    assert "RWTexture2D<int> readLabel : register(u1);" in generated_code
+    assert "RWTexture2D<uint> readMask : register(u2);" in generated_code
+    assert "RWTexture2D<uint> writeMask : register(u3);" in generated_code
+    assert "float4 color = ((float4)(readColor[pixel]));" in generated_code
+    assert "int4 label = ((int4)(readLabel[pixel]));" in generated_code
+    assert "uint4 mask = ((uint4)(readMask[pixel]));" in generated_code
+    assert "writeMask[pixel] = (mask).x" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_hlsl_integer_texture_lod_resources_from_compiler_fixtures():
+    # Reduced from CrossGL-Compiler
+    # tests/fixtures/VulkanIntegerTextureSamplerLodShader.cgl and
+    # tests/fixtures/VulkanIntegerTextureArraySamplerLodShader.cgl.
+    shader = """
+    shader VulkanIntegerTextureSamplerLodShader {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer ivec4* values;
+            layout(set = 0, binding = 1) buffer uvec4* masks;
+            layout(set = 0, binding = 2) uniform isampler2D labelMap;
+            layout(set = 0, binding = 3) uniform usamplerCube maskMap;
+            layout(set = 0, binding = 4) uniform isampler2DArray labelAtlas;
+            layout(set = 0, binding = 5) uniform usamplerCubeArray maskCubes;
+            layout(set = 0, binding = 6) sampler labelSampler;
+            layout(set = 0, binding = 7) sampler maskSampler;
+
+            void main() {
+                ivec4 label = textureLod(
+                    labelMap,
+                    labelSampler,
+                    vec2(0.5, 0.5),
+                    0.0
+                );
+                uvec4 mask = textureLod(
+                    maskMap,
+                    maskSampler,
+                    vec3(0.0, 1.0, 0.0),
+                    0.0
+                );
+                ivec4 arrayLabel = textureLod(
+                    labelAtlas,
+                    labelSampler,
+                    vec3(0.5, 0.5, 1.0),
+                    0.0
+                );
+                uvec4 arrayMask = textureLod(
+                    maskCubes,
+                    maskSampler,
+                    vec4(0.0, 1.0, 0.0, 2.0),
+                    0.0
+                );
+                values[0] = label + arrayLabel;
+                masks[0] = mask + arrayMask;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "Texture2D<int4> labelMap : register(t2);" in generated_code
+    assert "TextureCube<uint4> maskMap : register(t3);" in generated_code
+    assert "Texture2DArray<int4> labelAtlas : register(t4);" in generated_code
+    assert "TextureCubeArray<uint4> maskCubes : register(t5);" in generated_code
+    assert "SamplerState labelSampler : register(s6);" in generated_code
+    assert "SamplerState maskSampler : register(s7);" in generated_code
+    assert (
+        "int4 label = labelMap.SampleLevel(labelSampler, " "float2(0.5, 0.5), 0.0);"
+    ) in generated_code
+    assert (
+        "uint4 mask = maskMap.SampleLevel(maskSampler, " "float3(0.0, 1.0, 0.0), 0.0);"
+    ) in generated_code
+    assert (
+        "int4 arrayLabel = labelAtlas.SampleLevel(labelSampler, "
+        "float3(0.5, 0.5, 1.0), 0.0);"
+    ) in generated_code
+    assert (
+        "uint4 arrayMask = maskCubes.SampleLevel(maskSampler, "
+        "float4(0.0, 1.0, 0.0, 2.0), 0.0);"
+    ) in generated_code
+    assert "textureLod(" not in generated_code
 
 
 def test_hlsl_cbuffer_mixed_member_types():
@@ -3822,6 +4037,91 @@ def test_hlsl_generic_binding_overlap_raises_within_uav_namespace():
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_directx_layout_descriptor_array_binding_overlap_relocates_registers():
+    code = """
+    shader VulkanDynamicDescriptorArrayIndexShader {
+        struct Particle {
+            vec3 position;
+            float mass;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer Particle* particles[2];
+            layout(set = 0, binding = 1) buffer int* descriptors;
+            layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+            layout(set = 0, binding = 5) sampler linearSamplers[2];
+
+            void main() {
+                int descriptor = descriptors[0];
+                vec2 uv = particles[descriptor][0].position.xy;
+                vec4 color = textureLod(
+                    colorMaps[descriptor],
+                    linearSamplers[descriptor],
+                    uv,
+                    0.25
+                );
+                float mass = particles[descriptor][0].mass;
+                particles[descriptor][1].mass = mass + color.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWStructuredBuffer<Particle> particles[2] : register(u0);" in generated_code
+    assert "RWStructuredBuffer<int> descriptors : register(u2);" in generated_code
+    assert "Texture2D colorMaps[2] : register(t2);" in generated_code
+    assert "SamplerState linearSamplers[2] : register(s5);" in generated_code
+    assert "int descriptor = descriptors[0];" in generated_code
+    assert "float2 uv = particles[descriptor][0].position.xy;" in generated_code
+    assert "particles[descriptor][1].mass = (mass + color.x);" in generated_code
+
+
+def test_directx_layout_nonuniform_descriptor_array_overlap_relocates_registers():
+    code = """
+    shader VulkanNonUniformDescriptorArrayIndexShader {
+        struct Particle {
+            vec3 position;
+            float mass;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            layout(set = 0, binding = 0) buffer Particle* particles[2];
+            layout(set = 0, binding = 1) buffer int* descriptors;
+            layout(set = 0, binding = 2) uniform sampler2D colorMaps[2];
+            layout(set = 0, binding = 5) sampler linearSamplers[2];
+
+            void main() {
+                int descriptor = descriptors[0];
+                vec2 uv = particles[nonuniform(descriptor)][0].position.xy;
+                vec4 color = textureLod(
+                    colorMaps[nonuniform(descriptor)],
+                    linearSamplers[nonuniform(descriptor)],
+                    uv,
+                    0.25
+                );
+                float mass = particles[nonuniform(descriptor)][0].mass;
+                particles[nonuniform(descriptor)][1].mass = mass + color.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWStructuredBuffer<Particle> particles[2] : register(u0);" in generated_code
+    assert "RWStructuredBuffer<int> descriptors : register(u2);" in generated_code
+    assert "Texture2D colorMaps[2] : register(t2);" in generated_code
+    assert "SamplerState linearSamplers[2] : register(s5);" in generated_code
+    assert "NonUniformResourceIndex(descriptor)" in generated_code
+    assert "nonuniform(descriptor)" not in generated_code
+
+
 def test_hlsl_auto_registers_skip_later_explicit_global_bindings():
     code = """
     shader LateExplicitBindings {
@@ -4450,6 +4750,27 @@ def test_hlsl_gl_builtin_input_semantics_use_canonical_system_values():
     assert "gl_SampleMaskIn" not in generated
 
 
+def test_hlsl_barycentric_builtin_inputs_use_sv_barycentrics():
+    code = """
+    shader BarycentricInputs {
+        fragment {
+            vec4 main(
+                vec3 bary @ gl_BaryCoordEXT,
+                vec3 affineBary @ gl_BaryCoordNoPerspEXT
+            ) @ gl_FragColor {
+                return vec4(bary + affineBary, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float3 bary : SV_Barycentrics" in generated
+    assert "noperspective float3 affineBary : SV_Barycentrics" in generated
+    assert "gl_BaryCoord" not in generated
+
+
 def test_hlsl_point_size_uses_legacy_psize_semantic():
     code = """
     shader PointSizeOutput {
@@ -4656,6 +4977,26 @@ def test_hlsl_cbuffer_binding_attributes_drive_registers():
     assert "cbuffer Material : register(b4)" in generated_code
     assert "cbuffer AutoBlock : register(b5)" in generated_code
     assert "MatrixType(" not in generated_code
+
+
+def test_hlsl_cbuffer_member_layout_attributes_roundtrip():
+    code = """
+    shader CBufferLayoutMetadata {
+        cbuffer Material @register(b0) {
+            @ row_major
+            @ packoffset(c0)
+            mat4 transform;
+            @ packoffset(c4.x)
+            float roughness;
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Material : register(b0)" in generated_code
+    assert "row_major float4x4 transform : packoffset(c0);" in generated_code
+    assert "float roughness : packoffset(c4.x);" in generated_code
 
 
 def test_hlsl_cbuffer_register_overlap_raises():
@@ -4957,6 +5298,27 @@ def test_for_statement_preserves_declaration_initializers():
     assert "for (fixed; (fixed < 0); )" not in generated_code
     assert "BreakNode(" not in generated_code
     assert "ContinueNode(" not in generated_code
+
+
+def test_for_statement_preserves_multiple_declaration_initializers_and_updates():
+    shader = """
+    shader LoopMultiDeclaratorInitializers {
+        float4 helper() {
+            int sum = 0;
+            for (int i = 0, j = 3; i < j; ++i, --j) {
+                sum += i + j;
+            }
+            return float4(sum, 0, 0, 1);
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "for (int i = 0, j = 3; (i < j); ++i, --j)" in generated_code
+    assert "sum += (i + j);" in generated_code
+    assert "return float4(sum, 0, 0, 1);" in generated_code
+    assert "int j = 3" not in generated_code
 
 
 def test_loop_statement_lowers_to_while_true():
@@ -23594,13 +23956,21 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match="DirectX sampler\\(s\\) used for both regular sampling and shadow comparison: sharedSampler",
-    ):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(regular_diagnostic_shader), "fragment"
-        )
+    regular_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(regular_diagnostic_shader), "fragment"
+    )
+    assert "SamplerState sharedSampler : register(s0);" in regular_code
+    assert (
+        "SamplerComparisonState sharedSampler_cglComparison : register(s0);"
+        in regular_code
+    )
+    assert "cubeMap.Sample(sharedSampler, input.cubeProj.xyz / input.cubeProj.w)" in (
+        regular_code
+    )
+    assert (
+        "shadowMap.SampleCmp(sharedSampler_cglComparison, input.uv, input.depth)"
+        in regular_code
+    )
 
     with pytest.raises(
         ValueError,
@@ -23610,13 +23980,19 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
             crosstl.translator.parse(parameter_diagnostic_shader), "fragment"
         )
 
-    with pytest.raises(
-        ValueError,
-        match="DirectX sampler\\(s\\) used for both regular sampling and shadow comparison: sharedSampler",
-    ):
-        HLSLCodeGen().generate_stage(
-            crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
-        )
+    comparison_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
+    )
+    assert "SamplerState sharedSampler : register(s0);" in comparison_code
+    assert (
+        "SamplerComparisonState sharedSampler_cglComparison : register(s0);"
+        in comparison_code
+    )
+    assert (
+        "cubeShadow.SampleCmp(sharedSampler_cglComparison, "
+        "input.cubeProj.xyz / input.cubeProj.w, input.depth)" in comparison_code
+    )
+    assert "colorMap.Sample(sharedSampler, input.uv)" in comparison_code
 
 
 def test_directx_unsupported_projected_cube_array_diagnostic_keeps_sampler_role():
@@ -27302,7 +27678,7 @@ def test_directx_mixed_explicit_and_implicit_texture_sampling_keeps_synthetic_sa
     assert "colorMap.Sample(colorMapSampler, uv)" in generated_code
 
 
-def test_directx_rejects_global_sampler_used_for_regular_and_shadow_compare():
+def test_directx_global_sampler_used_for_regular_and_shadow_compare_emits_alias():
     shader = """
     shader MixedSamplerUse {
         sampler2D colorMap;
@@ -27329,14 +27705,62 @@ def test_directx_rejects_global_sampler_used_for_regular_and_shadow_compare():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "DirectX sampler\\(s\\) used for both regular sampling and "
-            "shadow comparison: sharedSampler"
-        ),
-    ):
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerState sharedSampler : register(s0);" in generated_code
+    assert (
+        "SamplerComparisonState sharedSampler_cglComparison : register(s0);"
+        in generated_code
+    )
+    assert "colorMap.Sample(sharedSampler, input.uv)" in generated_code
+    assert (
+        "shadowMap.SampleCmp(sharedSampler_cglComparison, input.uv, input.depth)"
+        in generated_code
+    )
+
+
+def test_directx_global_sampler_array_mixed_roles_emit_comparison_alias_array():
+    shader = """
+    shader MixedSamplerArrayUse {
+        const int SAMPLER_COUNT = 2;
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler sharedSamplers[SAMPLER_COUNT];
+
+        struct FSInput {
+            vec2 uv;
+            float depth;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 color = texture(colorMap, sharedSamplers[0], input.uv);
+                float shadow = textureCompare(
+                    shadowMap,
+                    sharedSamplers[1],
+                    input.uv,
+                    input.depth
+                );
+                return color * shadow;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "SamplerState sharedSamplers[SAMPLER_COUNT] : register(s0);" in (
+        generated_code
+    )
+    assert (
+        "SamplerComparisonState sharedSamplers_cglComparison[SAMPLER_COUNT] "
+        ": register(s0);" in generated_code
+    )
+    assert "colorMap.Sample(sharedSamplers[0], input.uv)" in generated_code
+    assert (
+        "shadowMap.SampleCmp(sharedSamplers_cglComparison[1], input.uv, input.depth)"
+        in generated_code
+    )
 
 
 def test_directx_rejects_sampler_parameter_used_for_regular_and_shadow_compare():

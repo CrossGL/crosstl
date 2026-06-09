@@ -33,6 +33,13 @@ class HipToCrossGLConverter:
         r")"
         r"[fFdDlLuU]*$"
     )
+    CPP_INTEGER_LITERAL = re.compile(
+        r"^(?P<body>"
+        r"0[xX][0-9a-fA-F](?:'?[0-9a-fA-F])*"
+        r"|0[bB][01](?:'?[01])*"
+        r"|\d(?:'?\d)*"
+        r")(?P<suffix>[uUlL]*)$"
+    )
 
     HIP_RUNTIME_ERROR_WRAPPER_NAMES = {
         "CHECK_HIP",
@@ -258,7 +265,44 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"in"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in"}
+    CPP_OPERATOR_FUNCTION_NAME_PARTS = {
+        "+": "plus",
+        "-": "minus",
+        "*": "mul",
+        "/": "div",
+        "%": "mod",
+        "&": "bit_and",
+        "|": "bit_or",
+        "^": "bit_xor",
+        "~": "bit_not",
+        "!": "not",
+        "=": "assign",
+        "<": "lt",
+        ">": "gt",
+        "+=": "plus_assign",
+        "-=": "minus_assign",
+        "*=": "mul_assign",
+        "/=": "div_assign",
+        "%=": "mod_assign",
+        "&=": "bit_and_assign",
+        "|=": "bit_or_assign",
+        "^=": "bit_xor_assign",
+        "==": "eq",
+        "!=": "ne",
+        "<=": "le",
+        ">=": "ge",
+        "&&": "logical_and",
+        "||": "logical_or",
+        "<<": "shift_left",
+        ">>": "shift_right",
+        "<<=": "shift_left_assign",
+        ">>=": "shift_right_assign",
+        "++": "increment",
+        "--": "decrement",
+        "[]": "index",
+        "()": "call",
+    }
     CPP_SCALAR_TYPE_ALIASES = {
         **{
             f"std::{name}": name
@@ -364,9 +408,15 @@ class HipToCrossGLConverter:
             return str(node)
 
     def normalize_cpp_numeric_literal(self, value):
-        if "'" not in value:
-            return value
-        if self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
+        integer_literal = self.CPP_INTEGER_LITERAL.match(value)
+        if integer_literal:
+            body = integer_literal.group("body").replace("'", "")
+            suffix = integer_literal.group("suffix").lower()
+            if "u" in suffix:
+                return f"{body}u"
+            return body
+
+        if "'" in value and self.CPP_NUMERIC_LITERAL_WITH_SEPARATOR.match(value):
             return value.replace("'", "")
         return value
 
@@ -1002,6 +1052,30 @@ class HipToCrossGLConverter:
             return f"{name}_"
         return name
 
+    def format_crossgl_array_extent(self, size):
+        size = str(size).strip()
+        if not size:
+            return size
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xX][0-9A-Fa-f]+|\d+)[uU]?", size):
+            return size
+        replacements = {
+            "*": "_mul_",
+            "/": "_div_",
+            "%": "_mod_",
+            "+": "_plus_",
+            "-": "_minus_",
+        }
+        extent = size
+        for operator, word in replacements.items():
+            extent = extent.replace(operator, word)
+        extent = re.sub(r"[^A-Za-z0-9_]+", "_", extent).strip("_")
+        extent = re.sub(r"_+", "_", extent)
+        if not extent:
+            extent = "expr"
+        if extent[0].isdigit():
+            extent = f"hip_array_extent_{extent}"
+        return self.sanitize_identifier_name(extent)
+
     def sanitize_qualified_variable_name(self, name):
         if not isinstance(name, str) or "::" not in name:
             return None
@@ -1023,6 +1097,47 @@ class HipToCrossGLConverter:
         if output_name[0].isdigit():
             output_name = f"_{output_name}"
         return self.sanitize_identifier_name(output_name)
+
+    def format_function_declaration_name(self, name):
+        operator_name = self.format_cpp_operator_function_name(name)
+        if operator_name is not None:
+            return operator_name
+        if self.is_simple_identifier(name):
+            return self.sanitize_identifier_name(name)
+        if not isinstance(name, str) or "::" not in name:
+            return name
+
+        normalized_name = name.replace("::~", "::destructor_")
+        return self.sanitize_qualified_variable_name(normalized_name) or name
+
+    def format_cpp_operator_function_name(self, name):
+        if not isinstance(name, str):
+            return None
+
+        normalized_name = name.replace("::~", "::destructor_")
+        parts = normalized_name.split("::")
+        raw_operator = parts[-1]
+        if not raw_operator.startswith("operator"):
+            return None
+
+        operator = raw_operator[len("operator") :]
+        if not operator:
+            return None
+
+        suffix = self.CPP_OPERATOR_FUNCTION_NAME_PARTS.get(operator)
+        if suffix is None:
+            suffix = re.sub(r"[^A-Za-z0-9_]+", "_", operator).strip("_")
+            suffix = re.sub(r"_+", "_", suffix)
+        if not suffix:
+            return None
+
+        parts[-1] = f"operator_{suffix}"
+        return self.sanitize_qualified_variable_name("::".join(parts)) or parts[-1]
+
+    def format_function_call_name(self, name):
+        if self.is_user_defined_function(name):
+            return self.format_function_declaration_name(name)
+        return name
 
     def strip_cpp_template_arguments(self, text):
         stripped = []
@@ -4398,12 +4513,12 @@ class HipToCrossGLConverter:
             params = []
 
             if hasattr(node, "params") and node.params:
-                for param in node.params:
+                for index, param in enumerate(node.params):
                     param_name = (
                         param.get("name", "param")
                         if isinstance(param, dict)
                         else getattr(param, "name", "param")
-                    )
+                    ) or f"_param{index}"
                     raw_type = (
                         param.get("type", "int")
                         if isinstance(param, dict)
@@ -4418,7 +4533,8 @@ class HipToCrossGLConverter:
                     params.append(f"{param_type} {output_name}")
 
             param_str = ", ".join(params)
-            self.emit(f"{return_type} {node.name}({param_str}) {{")
+            function_name = self.format_function_declaration_name(node.name)
+            self.emit(f"{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()
@@ -4484,13 +4600,14 @@ class HipToCrossGLConverter:
         self.push_identifier_name_scope()
         try:
             if hasattr(kernel, "params") and kernel.params:
-                for param in kernel.params:
+                for index, param in enumerate(kernel.params):
                     if isinstance(param, dict):
                         raw_type = param.get("type", "int")
                         param_name = param.get("name", "param")
                     else:
                         raw_type = getattr(param, "vtype", "int")
                         param_name = getattr(param, "name", "param")
+                    param_name = param_name or f"_param{index}"
 
                     if "*" in raw_type:
                         element_type = self.convert_hip_pointer_element_type(raw_type)
@@ -4709,7 +4826,7 @@ class HipToCrossGLConverter:
                 "shared memory size"
             )
         if node.size is not None:
-            size = self.visit(node.size)
+            size = self.format_crossgl_array_extent(self.visit(node.size))
             self.emit(f"var<workgroup> {output_name}: array<{var_type}, {size}>;")
         else:
             self.emit(f"var<workgroup> {output_name}: {var_type};")
@@ -4987,12 +5104,16 @@ class HipToCrossGLConverter:
         if unique_ptr_init is not None:
             return unique_ptr_init
 
+        numeric_limits_call = self.format_std_numeric_limits_call(func_name, args)
+        if numeric_limits_call is not None:
+            return numeric_limits_call
+
         hip_intrinsic = self.format_hip_intrinsic_call(func_name, args)
         if hip_intrinsic is not None:
             return hip_intrinsic
 
         if self.is_user_defined_function(func_name):
-            return f"{func_name}({args_str})"
+            return f"{self.format_function_call_name(func_name)}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -5023,6 +5144,58 @@ class HipToCrossGLConverter:
         # Convert HIP built-in functions
         crossgl_func = self.convert_hip_builtin_function(func_name)
         return f"{crossgl_func}({args_str})"
+
+    def format_std_numeric_limits_call(self, function_name, args):
+        parsed = self.parse_cpp_template_static_member(function_name)
+        if parsed is None:
+            return None
+
+        base_name, template_args, member_name = parsed
+        if base_name not in {"std::numeric_limits", "cuda::std::numeric_limits"}:
+            return None
+        if len(template_args) != 1 or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*", member_name
+        ):
+            return None
+
+        value_type = self.convert_hip_type_to_crossgl(template_args[0])
+        args_str = ", ".join(args)
+        return f"numeric_limits_{member_name}<{value_type}>({args_str})"
+
+    def parse_cpp_template_static_member(self, text):
+        if not isinstance(text, str):
+            return None
+
+        normalized = text[2:] if text.startswith("::") else text
+        scope_index = self.find_last_scope_operator_outside_templates(normalized)
+        if scope_index is None:
+            return None
+
+        template_name = normalized[:scope_index]
+        member_name = normalized[scope_index + 2 :]
+        if not member_name:
+            return None
+
+        base_name, template_args = self.parse_cpp_template(template_name)
+        if not template_args:
+            return None
+        return base_name, template_args, member_name
+
+    def find_last_scope_operator_outside_templates(self, text):
+        depth = 0
+        last_scope = None
+        index = 0
+        while index + 1 < len(text):
+            char = text[index]
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth = max(0, depth - 1)
+            elif char == ":" and text[index + 1] == ":" and depth == 0:
+                last_scope = index
+                index += 1
+            index += 1
+        return last_scope
 
     def format_hip_intrinsic_call(self, function_name, args):
         fp16_intrinsic = self.format_hip_fp16_intrinsic_call(function_name, args)
@@ -6436,7 +6609,86 @@ class HipToCrossGLConverter:
             alias_type = node.alias_type
         else:
             alias_type = self.convert_hip_type_to_crossgl(node.alias_type)
+        if self.indent_level == 0:
+            alias_type = self.normalize_top_level_type_alias(alias_type)
         self.emit(f"typedef {alias_type} {node.name};")
+
+    def normalize_top_level_type_alias(self, alias_type):
+        """Keep C++ trait aliases reparsable by CrossGL's top-level typedef parser."""
+        member_alias = self.convert_type_member_alias(alias_type)
+        if member_alias is not None:
+            return member_alias
+
+        template_alias = self.convert_reparsable_std_template_alias(alias_type)
+        if template_alias is not None:
+            return template_alias
+
+        return alias_type
+
+    def convert_type_member_alias(self, alias_type):
+        parsed = self.parse_cpp_template_member_type(alias_type)
+        if parsed is None:
+            return None
+
+        base_name, template_args = parsed
+        if not base_name.startswith("std::"):
+            return None
+
+        alias_base = f"{base_name.rsplit('::', 1)[-1]}_t"
+        converted_args = [
+            self.convert_top_level_alias_template_arg(arg) for arg in template_args
+        ]
+        return f"{alias_base}<{', '.join(converted_args)}>"
+
+    def convert_reparsable_std_template_alias(self, alias_type):
+        base_name, template_args = self.parse_cpp_template(alias_type)
+        if not template_args or not base_name.startswith("std::"):
+            return None
+
+        alias_base = base_name.rsplit("::", 1)[-1]
+        converted_args = [
+            self.convert_top_level_alias_template_arg(arg) for arg in template_args
+        ]
+        return f"{alias_base}<{', '.join(converted_args)}>"
+
+    def convert_top_level_alias_template_arg(self, arg):
+        member_alias = self.convert_type_member_alias(arg)
+        if member_alias is not None:
+            return member_alias
+
+        template_alias = self.convert_reparsable_std_template_alias(arg)
+        if template_alias is not None:
+            return template_alias
+
+        return self.convert_hip_type_to_crossgl(arg)
+
+    def parse_cpp_template_member_type(self, text):
+        if not isinstance(text, str):
+            return None
+
+        text = text.strip()
+        start = text.find("<")
+        if start == -1:
+            return None
+
+        depth = 0
+        end = None
+        for index in range(start, len(text)):
+            char = text[index]
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+
+        if end is None or text[end + 1 :].strip() != "::type":
+            return None
+
+        base_name = text[:start].strip()
+        template_args = self.split_cpp_template_args(text[start + 1 : end])
+        return base_name, template_args
 
     def visit_MemberAccessNode(self, node):
         if self.suppress_device_property_member_access == 0:
@@ -6869,7 +7121,9 @@ class HipToCrossGLConverter:
 
         for size in reversed(dimensions):
             if size:
-                mapped_type = f"array<{mapped_type}, {size}>"
+                mapped_type = (
+                    f"array<{mapped_type}, {self.format_crossgl_array_extent(size)}>"
+                )
             else:
                 mapped_type = f"array<{mapped_type}>"
 
@@ -6884,6 +7138,7 @@ class HipToCrossGLConverter:
             hip_type = str(hip_type)
 
         hip_type = self.strip_type_qualifiers(hip_type)
+        hip_type = self.strip_variadic_type_marker(hip_type)
         hip_type = self.strip_union_type_keyword(hip_type)
         hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
         cooperative_group_type = self.convert_cooperative_group_type(hip_type)
@@ -6899,6 +7154,8 @@ class HipToCrossGLConverter:
             "short": "i16",
             "unsigned short": "u16",
             "int": "i32",
+            "signed": "i32",
+            "unsigned": "u32",
             "signed int": "i32",
             "uint": "u32",
             "unsigned int": "u32",
@@ -6908,6 +7165,7 @@ class HipToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "long long unsigned int": "u64",
             "__int64": "i64",
             "signed __int64": "i64",
             "unsigned __int64": "u64",
@@ -6947,6 +7205,10 @@ class HipToCrossGLConverter:
         unique_ptr_type = self.convert_unique_ptr_type(hip_type)
         if unique_ptr_type is not None:
             return unique_ptr_type
+
+        std_container_type = self.convert_std_container_type(hip_type)
+        if std_container_type is not None:
+            return std_container_type
 
         resource_type = self.convert_hip_resource_type(hip_type)
         if resource_type is not None:
@@ -6992,6 +7254,17 @@ class HipToCrossGLConverter:
         target_type, _ = self.unwrap_array_template_type(template_args[0])
         return f"ptr<{self.convert_hip_type_to_crossgl(target_type)}>"
 
+    def convert_std_container_type(self, hip_type):
+        base_name, template_args = self.parse_cpp_template(hip_type)
+        if self.is_std_vector_base_name(base_name) and template_args:
+            element_type = self.convert_hip_type_to_crossgl(template_args[0])
+            return f"array<{element_type}>"
+        if self.is_std_array_base_name(base_name) and len(template_args) >= 2:
+            element_type = self.convert_hip_type_to_crossgl(template_args[0])
+            size = self.format_crossgl_array_extent(template_args[1])
+            return f"array<{element_type}, {size}>"
+        return None
+
     def is_unique_ptr_type_name(self, type_name):
         type_name = self.strip_type_qualifiers(type_name)
         type_name = self.resolve_type_alias(type_name)
@@ -7003,6 +7276,12 @@ class HipToCrossGLConverter:
 
     def is_std_unique_ptr_base_name(self, base_name):
         return base_name in {"unique_ptr", "std::unique_ptr"}
+
+    def is_std_vector_base_name(self, base_name):
+        return base_name in {"vector", "std::vector"}
+
+    def is_std_array_base_name(self, base_name):
+        return base_name in {"array", "std::array"}
 
     def is_std_make_unique_base_name(self, base_name):
         return base_name in {"make_unique", "std::make_unique"}
@@ -7078,6 +7357,7 @@ class HipToCrossGLConverter:
 
     def convert_hip_pointer_type(self, hip_type):
         base_type, pointer_depth = self.split_pointer_declarators(hip_type)
+        base_type = self.strip_function_pointer_parameter_list(base_type)
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
 
         for _ in range(pointer_depth):
@@ -7087,6 +7367,7 @@ class HipToCrossGLConverter:
 
     def convert_hip_pointer_element_type(self, hip_type):
         base_type, pointer_depth = self.split_pointer_declarators(hip_type)
+        base_type = self.strip_function_pointer_parameter_list(base_type)
         mapped_type = self.convert_hip_type_to_crossgl(base_type)
 
         for _ in range(max(0, pointer_depth - 1)):
@@ -7094,11 +7375,18 @@ class HipToCrossGLConverter:
 
         return mapped_type
 
+    def strip_function_pointer_parameter_list(self, type_name):
+        """Keep imported C++ function-pointer types reparsable in CrossGL."""
+        return re.sub(r"\s*\(\s*\)\s*$", "", str(type_name)).strip()
+
     def strip_type_qualifiers(self, type_name):
         qualifiers = {"const", "volatile", "__restrict__", "restrict", "&", "&&"}
         return " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )
+
+    def strip_variadic_type_marker(self, type_name):
+        return " ".join(part for part in str(type_name).split() if part != "...")
 
     def convert_hip_array_type(self, hip_type, type_mapping):
         base_type = hip_type.split("[", 1)[0].strip()
@@ -7117,7 +7405,9 @@ class HipToCrossGLConverter:
             mapped_type = self.convert_hip_type_to_crossgl(base_type)
         for size in reversed(dimensions):
             if size:
-                mapped_type = f"array<{mapped_type}, {size}>"
+                mapped_type = (
+                    f"array<{mapped_type}, {self.format_crossgl_array_extent(size)}>"
+                )
             else:
                 mapped_type = f"array<{mapped_type}>"
 

@@ -68,6 +68,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_enum_struct_variant_fields,
@@ -631,6 +632,7 @@ class MetalCodeGen:
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
+        self.metal_resource_binding_indices_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.cbuffer_variables = []
@@ -753,11 +755,20 @@ class MetalCodeGen:
             "signed long": "int64_t",
             "unsigned long": "uint64_t",
             "ulong": "uint64_t",
+            "f16": "half",
+            "f32": "float",
+            "f64": "double",
             "float": "float",
             "half": "half",
             "float16": "half",
             "min16float": "half",
             "min10float": "half",
+            "i8": "int",
+            "u8": "uint",
+            "i16": "int",
+            "u16": "uint",
+            "i32": "int",
+            "u32": "uint",
             "str": "int",
             "char": "int",
             "signed char": "int",
@@ -787,6 +798,36 @@ class MetalCodeGen:
             "vec2": "float2",
             "vec3": "float3",
             "vec4": "float4",
+            "vec2<f16>": "half2",
+            "vec3<f16>": "half3",
+            "vec4<f16>": "half4",
+            "vec2<f32>": "float2",
+            "vec3<f32>": "float3",
+            "vec4<f32>": "float4",
+            "vec2<f64>": "double2",
+            "vec3<f64>": "double3",
+            "vec4<f64>": "double4",
+            "vec2<i8>": "int2",
+            "vec3<i8>": "int3",
+            "vec4<i8>": "int4",
+            "vec2<u8>": "uint2",
+            "vec3<u8>": "uint3",
+            "vec4<u8>": "uint4",
+            "vec2<i16>": "int2",
+            "vec3<i16>": "int3",
+            "vec4<i16>": "int4",
+            "vec2<u16>": "uint2",
+            "vec3<u16>": "uint3",
+            "vec4<u16>": "uint4",
+            "vec2<i32>": "int2",
+            "vec3<i32>": "int3",
+            "vec4<i32>": "int4",
+            "vec2<u32>": "uint2",
+            "vec3<u32>": "uint3",
+            "vec4<u32>": "uint4",
+            "vec2<bool>": "bool2",
+            "vec3<bool>": "bool3",
+            "vec4<bool>": "bool4",
             "ivec2": "int2",
             "ivec3": "int3",
             "ivec4": "int4",
@@ -892,6 +933,24 @@ class MetalCodeGen:
             "sampler2DArrayShadow": "depth2d_array<float>",
             "samplerCubeShadow": "depthcube<float>",
             "samplerCubeArrayShadow": "depthcube_array<float>",
+            "isampler1D": "texture1d<int>",
+            "isampler1DArray": "texture1d_array<int>",
+            "isampler2D": "texture2d<int>",
+            "isampler3D": "texture3d<int>",
+            "isamplerCube": "texturecube<int>",
+            "isampler2DArray": "texture2d_array<int>",
+            "isamplerCubeArray": "texturecube_array<int>",
+            "isampler2DMS": "texture2d_ms<int>",
+            "isampler2DMSArray": "texture2d_ms_array<int>",
+            "usampler1D": "texture1d<uint>",
+            "usampler1DArray": "texture1d_array<uint>",
+            "usampler2D": "texture2d<uint>",
+            "usampler3D": "texture3d<uint>",
+            "usamplerCube": "texturecube<uint>",
+            "usampler2DArray": "texture2d_array<uint>",
+            "usamplerCubeArray": "texturecube_array<uint>",
+            "usampler2DMS": "texture2d_ms<uint>",
+            "usampler2DMSArray": "texture2d_ms_array<uint>",
             "accelerationStructureEXT": "instance_acceleration_structure",
             "RaytracingAccelerationStructure": "instance_acceleration_structure",
             "AccelerationStructure": "instance_acceleration_structure",
@@ -1048,6 +1107,7 @@ class MetalCodeGen:
             "gl_FragColor6": "[[color(6)]]",
             "gl_FragColor7": "[[color(7)]]",
             "gl_FragDepth": "depth(any)",
+            "gl_FragStencilRefEXT": "stencil_ref",
             "SV_TARGET": "color(0)",
             "SV_TARGET0": "color(0)",
             "SV_TARGET1": "color(1)",
@@ -1070,6 +1130,8 @@ class MetalCodeGen:
             "SV_Depth": "depth(any)",
             # Additional Metal-specific attributes
             "gl_FragCoord": "position",
+            "gl_BaryCoordEXT": "barycentric_coord",
+            "gl_BaryCoordNoPerspEXT": "barycentric_coord",
             "gl_FrontFacing": "is_front_facing",
             "gl_PointCoord": "point_coord",
             "gl_SampleID": "sample_id",
@@ -1134,6 +1196,7 @@ class MetalCodeGen:
         self.structured_buffer_length_variables = []
         self.structured_buffer_counter_variables = []
         self.metal_buffer_resource_variables = []
+        self.metal_resource_binding_indices_by_id = {}
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_value_global_types = {}
         self.glsl_buffer_block_variables = []
@@ -1548,8 +1611,16 @@ class MetalCodeGen:
             self.generic_enum_struct_definitions,
             qualifier=self.metal_unused_declaration_qualifier("constant"),
         )
-        code += self.generate_constants(ast)
+        leading_constants, struct_dependent_constants = (
+            partition_constants_by_struct_dependency(
+                getattr(ast, "constants", []) or [], structs
+            )
+        )
+        code += self.generate_constants(ast, leading_constants)
         code += self.generate_metal_struct_declarations(structs)
+        code += self.generate_constants(
+            ast, struct_dependent_constants, include_function_constants=False
+        )
         code += self.generate_metal_stage_io_array_helpers()
         code += self.generate_metal_enum_constructor_functions(
             self.struct_payload_enums
@@ -1562,9 +1633,16 @@ class MetalCodeGen:
         sampler_register = 0
         buffer_register = 0
         used_resource_bindings = {}
-        buffer_register = self.reserve_cbuffer_bindings(used_resource_bindings)
+        source_resource_bindings = {}
+        self.pre_reserve_cbuffer_bindings(
+            used_resource_bindings, source_resource_bindings
+        )
         self.reserve_explicit_global_resource_bindings(
-            global_vars, used_resource_bindings
+            global_vars, used_resource_bindings, source_resource_bindings
+        )
+        buffer_register = self.reserve_cbuffer_bindings(
+            used_resource_bindings,
+            source_resource_bindings,
         )
         for i, node in enumerate(global_vars):
             resource_count = 1
@@ -1614,13 +1692,15 @@ class MetalCodeGen:
                 declaration = self.format_metal_argument_buffer_global(
                     node, vtype, var_name
                 )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 code += declaration
                 buffer_register = max(buffer_register, binding + resource_count)
@@ -1638,13 +1718,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 self.glsl_buffer_block_variables.append(
                     (node, binding, lowered_block, array_size)
@@ -1682,13 +1764,15 @@ class MetalCodeGen:
                         buffer_register,
                         binding_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     binding_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 self.metal_buffer_resource_variables.append(
                     (node, binding, vtype, array_size, metal_buffer_address_space)
@@ -1707,13 +1791,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 mapped_type = self.map_resource_type_with_format(vtype, node)
                 if array_size is not None:
@@ -1744,13 +1830,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 if array_size is not None:
                     self.unsupported_metal_ray_function_table_array_variables[
@@ -1779,13 +1867,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 if array_size is not None:
                     self.unsupported_metal_ray_function_table_array_variables[
@@ -1814,13 +1904,15 @@ class MetalCodeGen:
                         buffer_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "buffer",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    buffer_register,
                 )
                 self.structured_buffer_variables.append(
                     (node, binding, vtype, array_size)
@@ -1886,6 +1978,24 @@ class MetalCodeGen:
                 "sampler2DArrayShadow",
                 "samplerCubeShadow",
                 "samplerCubeArrayShadow",
+                "isampler1D",
+                "isampler1DArray",
+                "isampler2D",
+                "isampler3D",
+                "isamplerCube",
+                "isampler2DArray",
+                "isamplerCubeArray",
+                "isampler2DMS",
+                "isampler2DMSArray",
+                "usampler1D",
+                "usampler1DArray",
+                "usampler2D",
+                "usampler3D",
+                "usamplerCube",
+                "usampler2DArray",
+                "usamplerCubeArray",
+                "usampler2DMS",
+                "usampler2DMSArray",
                 "iimage1D",
                 "iimage1DArray",
                 "iimage2D",
@@ -1920,13 +2030,15 @@ class MetalCodeGen:
                         texture_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "texture",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    texture_register,
                 )
                 self.texture_variables.append((node, binding, mapped_type, array_size))
                 self.texture_variable_types[node.name] = mapped_type
@@ -1951,13 +2063,15 @@ class MetalCodeGen:
                         sampler_register,
                         resource_count,
                     )
-                self.reserve_resource_binding_range(
+                binding = self.reserve_or_remap_resource_binding(
                     used_resource_bindings,
-                    "Metal",
+                    source_resource_bindings,
                     "sampler",
                     binding,
                     resource_count,
                     var_name,
+                    node,
+                    sampler_register,
                 )
                 self.sampler_variables.append((node, binding, array_size))
                 sampler_register = max(sampler_register, binding + resource_count)
@@ -2097,9 +2211,11 @@ class MetalCodeGen:
             return None
         return line
 
-    def generate_constants(self, ast):
+    def generate_constants(self, ast, constants=None, include_function_constants=True):
         code = ""
-        for node in getattr(ast, "constants", []) or []:
+        for node in (
+            getattr(ast, "constants", []) or [] if constants is None else constants
+        ):
             name = getattr(node, "name", None)
             if not name:
                 continue
@@ -2114,6 +2230,9 @@ class MetalCodeGen:
                 f"{self.metal_unused_declaration_qualifier('constant')} "
                 f"{declaration} = {value_code};\n"
             )
+
+        if not include_function_constants:
+            return f"{code}\n" if code else ""
 
         used_function_constant_ids = {}
         for node in getattr(ast, "global_variables", []) or []:
@@ -2364,7 +2483,18 @@ class MetalCodeGen:
             interpolation = self.metal_interpolation_attribute_name(attr)
             if interpolation is not None:
                 return f" [[{interpolation}]]"
+        implied = self.metal_semantic_implied_interpolation_attribute(node)
+        if implied is not None:
+            return f" [[{implied}]]"
         return ""
+
+    def metal_semantic_implied_interpolation_attribute(self, node):
+        semantic = self.semantic_from_node(node)
+        if semantic is None:
+            return None
+        if str(semantic).lower() == "gl_barycoordnoperspext":
+            return "center_no_perspective"
+        return None
 
     def format_struct_resource_array_member(self, member):
         name = getattr(member, "name", None)
@@ -4241,6 +4371,13 @@ class MetalCodeGen:
             expected_type = self.struct_member_builtin_semantic_type(metal_semantic)
             if expected_type is None:
                 continue
+            if expected_type == "invalid":
+                struct_name = getattr(struct_node, "name", "<anonymous>")
+                member_name = getattr(member, "name", "<anonymous>")
+                raise ValueError(
+                    f"Metal struct '{struct_name}' semantic '{semantic}' maps to "
+                    f"'{metal_semantic}' and is not supported"
+                )
             actual_type = self.map_type(self.struct_member_raw_type(member))
             if actual_type != expected_type:
                 struct_name = getattr(struct_node, "name", "<anonymous>")
@@ -4264,6 +4401,8 @@ class MetalCodeGen:
             "sample_id": "uint",
             "sample_mask": "uint",
         }
+        if metal_semantic == "stencil_ref":
+            return "invalid"
         if metal_semantic is None:
             return None
         if metal_semantic.startswith("color("):
@@ -4313,6 +4452,8 @@ class MetalCodeGen:
             return False
         semantic = str(semantic)
         if semantic == "gl_FragDepth":
+            return True
+        if semantic == "gl_FragStencilRefEXT":
             return True
         if metal_semantic == "sample_mask":
             return True
@@ -4395,10 +4536,14 @@ class MetalCodeGen:
             return
 
         semantic_text = str(semantic)
-        is_fragment_output = semantic_text == "gl_FragDepth" or bool(
-            metal_semantic and metal_semantic.startswith("color(")
-        )
-        is_fragment_output = is_fragment_output or metal_semantic == "sample_mask"
+        is_fragment_output = semantic_text in {
+            "gl_FragDepth",
+            "gl_FragStencilRefEXT",
+        } or bool(metal_semantic and metal_semantic.startswith("color("))
+        is_fragment_output = is_fragment_output or metal_semantic in {
+            "sample_mask",
+            "stencil_ref",
+        }
         is_vertex_output = semantic_text == "gl_Position"
 
         if stage_name == "vertex" and is_fragment_output:
@@ -4441,6 +4586,8 @@ class MetalCodeGen:
             "gl_FragDepth": "float",
             "gl_SampleMask": "uint",
         }
+        if semantic == "gl_FragStencilRefEXT" or metal_semantic == "stencil_ref":
+            return "invalid"
         if semantic in output_types:
             return output_types[semantic]
         if metal_semantic and metal_semantic.startswith("color("):
@@ -5597,7 +5744,13 @@ class MetalCodeGen:
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
         }
-        for address_space in ("constant", "device", "threadgroup", "thread"):
+        for address_space in (
+            "constant",
+            "device",
+            "threadgroup_imageblock",
+            "threadgroup",
+            "thread",
+        ):
             if address_space in qualifiers:
                 return f"{address_space} "
         if qualifiers & {"const", "readonly"}:
@@ -5650,6 +5803,8 @@ class MetalCodeGen:
                 ):
                     const_prefix = "const "
                 return f"{const_prefix}{address_space} "
+        if "threadgroup_imageblock" in qualifiers | attributes:
+            return "threadgroup_imageblock "
         if (qualifiers | attributes) & {"shared", "groupshared", "threadgroup"}:
             return "threadgroup "
         if self.is_metal_atomic_value_type(self.local_variable_declared_type(node)):
@@ -6320,7 +6475,13 @@ class MetalCodeGen:
                 "min16float",
                 "min10float",
                 "double",
+                "f16",
+                "f32",
+                "f64",
                 "int",
+                "i8",
+                "i16",
+                "i32",
                 "char",
                 "signed char",
                 "int8",
@@ -6336,6 +6497,9 @@ class MetalCodeGen:
                 "min16int",
                 "min12int",
                 "uint",
+                "u8",
+                "u16",
+                "u32",
                 "uchar",
                 "unsigned char",
                 "uint8",
@@ -6357,6 +6521,36 @@ class MetalCodeGen:
                 "vec2",
                 "vec3",
                 "vec4",
+                "vec2<f16>",
+                "vec3<f16>",
+                "vec4<f16>",
+                "vec2<f32>",
+                "vec3<f32>",
+                "vec4<f32>",
+                "vec2<f64>",
+                "vec3<f64>",
+                "vec4<f64>",
+                "vec2<i8>",
+                "vec3<i8>",
+                "vec4<i8>",
+                "vec2<u8>",
+                "vec3<u8>",
+                "vec4<u8>",
+                "vec2<i16>",
+                "vec3<i16>",
+                "vec4<i16>",
+                "vec2<u16>",
+                "vec3<u16>",
+                "vec4<u16>",
+                "vec2<i32>",
+                "vec3<i32>",
+                "vec4<i32>",
+                "vec2<u32>",
+                "vec3<u32>",
+                "vec4<u32>",
+                "vec2<bool>",
+                "vec3<bool>",
+                "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
@@ -7494,7 +7688,13 @@ class MetalCodeGen:
                 "min16float",
                 "min10float",
                 "double",
+                "f16",
+                "f32",
+                "f64",
                 "int",
+                "i8",
+                "i16",
+                "i32",
                 "char",
                 "signed char",
                 "int8",
@@ -7510,6 +7710,9 @@ class MetalCodeGen:
                 "min16int",
                 "min12int",
                 "uint",
+                "u8",
+                "u16",
+                "u32",
                 "uchar",
                 "unsigned char",
                 "uint8",
@@ -7531,6 +7734,36 @@ class MetalCodeGen:
                 "vec2",
                 "vec3",
                 "vec4",
+                "vec2<f16>",
+                "vec3<f16>",
+                "vec4<f16>",
+                "vec2<f32>",
+                "vec3<f32>",
+                "vec4<f32>",
+                "vec2<f64>",
+                "vec3<f64>",
+                "vec4<f64>",
+                "vec2<i8>",
+                "vec3<i8>",
+                "vec4<i8>",
+                "vec2<u8>",
+                "vec3<u8>",
+                "vec4<u8>",
+                "vec2<i16>",
+                "vec3<i16>",
+                "vec4<i16>",
+                "vec2<u16>",
+                "vec3<u16>",
+                "vec4<u16>",
+                "vec2<i32>",
+                "vec3<i32>",
+                "vec4<i32>",
+                "vec2<u32>",
+                "vec3<u32>",
+                "vec4<u32>",
+                "vec2<bool>",
+                "vec3<bool>",
+                "vec4<bool>",
                 "ivec2",
                 "ivec3",
                 "ivec4",
@@ -10560,6 +10793,24 @@ class MetalCodeGen:
                 "sampler2DArrayShadow",
                 "samplerCubeShadow",
                 "samplerCubeArrayShadow",
+                "isampler1D",
+                "isampler1DArray",
+                "isampler2D",
+                "isampler3D",
+                "isamplerCube",
+                "isampler2DArray",
+                "isamplerCubeArray",
+                "isampler2DMS",
+                "isampler2DMSArray",
+                "usampler1D",
+                "usampler1DArray",
+                "usampler2D",
+                "usampler3D",
+                "usamplerCube",
+                "usampler2DArray",
+                "usamplerCubeArray",
+                "usampler2DMS",
+                "usampler2DMSArray",
                 "iimage1D",
                 "iimage1DArray",
                 "iimage2D",
@@ -11208,6 +11459,8 @@ class MetalCodeGen:
             address_spaces.append("ray_data")
         if qualifiers & {"device", "global", "storage"}:
             address_spaces.append("device")
+        if "threadgroup_imageblock" in qualifiers:
+            address_spaces.append("threadgroup_imageblock")
         if qualifiers & {"threadgroup", "workgroup", "shared", "groupshared"}:
             address_spaces.append("threadgroup")
         if qualifiers & {"thread", "function", "local", "private"}:
@@ -15757,6 +16010,58 @@ class MetalCodeGen:
                 return binding
         return None
 
+    def explicit_resource_set_index(self, node):
+        if not hasattr(node, "attributes"):
+            return None
+
+        selected_set = None
+        selected_description = None
+        node_name = self.resource_node_name(node, "<anonymous>")
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            arguments = getattr(attr, "arguments", []) or []
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in {"set", "space"}:
+                source = (
+                    self.attribute_value_to_string(arguments[0]) if arguments else None
+                )
+                set_index = (
+                    self.binding_index_value(arguments[0], ("set", "space"))
+                    if len(arguments) == 1
+                    else None
+                )
+                description = (
+                    f"{attr_name} {source if source is not None else '<missing>'}"
+                )
+            elif attr_name == "register" and len(arguments) > 1:
+                source = self.attribute_value_to_string(arguments[1])
+                set_index = self.binding_index_value(arguments[1], ("space", "set"))
+                description = (
+                    f"register space {source if source is not None else '<missing>'}"
+                )
+            else:
+                continue
+
+            if set_index is None:
+                raise ValueError(
+                    "Invalid Metal resource binding metadata for "
+                    f"'{node_name}': {description} must resolve to a concrete "
+                    "integer set"
+                )
+            if selected_set is None:
+                selected_set = set_index
+                selected_description = description
+                continue
+            if selected_set != set_index:
+                raise ValueError(
+                    "Conflicting Metal resource binding metadata for "
+                    f"'{node_name}': {selected_description} differs from "
+                    f"{description}"
+                )
+        return selected_set
+
     def semantic_from_node(self, node):
         if hasattr(node, "semantic"):
             return node.semantic
@@ -15768,6 +16073,7 @@ class MetalCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
                 or self.is_metal_address_space_attribute(attr)
                 or self.is_metal_struct_member_abi_attribute(attr)
@@ -15860,6 +16166,7 @@ class MetalCodeGen:
                 or self.is_resource_binding_attribute(attr)
                 or is_resource_access_attribute(attr)
                 or self.is_resource_memory_attribute(attr)
+                or self.is_metal_texture_element_attribute(attr)
                 or self.is_glsl_buffer_block_attribute(attr)
             ):
                 continue
@@ -15893,9 +16200,10 @@ class MetalCodeGen:
             if node is not None
             else None
         )
-        component_type = self.scalar_image_format_components().get(
-            explicit_format
-        ) or self.vector_image_format_components().get(explicit_format)
+        component_type = self.metal_texture_element_attribute_type(node) or (
+            self.scalar_image_format_components().get(explicit_format)
+            or self.vector_image_format_components().get(explicit_format)
+        )
         texture_types = {
             "image1D": "texture1d",
             "iimage1D": "texture1d",
@@ -15932,6 +16240,19 @@ class MetalCodeGen:
                 access = "read"
             return f"{texture_type}<{component_type}, access::{access}>"
         return self.map_type(vtype)
+
+    def is_metal_texture_element_attribute(self, attr):
+        return str(getattr(attr, "name", "")).lower() in {
+            "metal_texture_element_half",
+        }
+
+    def metal_texture_element_attribute_type(self, node):
+        if node is None:
+            return None
+        for attr in getattr(node, "attributes", []) or []:
+            if self.is_metal_texture_element_attribute(attr):
+                return "half"
+        return None
 
     def default_image_component_type(self, vtype):
         base_type = self.resource_base_type(vtype)
@@ -16882,6 +17203,15 @@ class MetalCodeGen:
             vtype = "float"
         return vtype, resource_count
 
+    def resource_node_name(self, node, default=None):
+        if node is None:
+            return default
+        return getattr(
+            node,
+            "name",
+            getattr(node, "variable_name", getattr(node, "type_name", default)),
+        )
+
     def global_resource_binding_metadata(self, node):
         var_name = getattr(node, "name", getattr(node, "variable_name", None))
         if not var_name:
@@ -16895,6 +17225,11 @@ class MetalCodeGen:
             prefixes = ("b", "u", "t")
         elif self.is_glsl_buffer_block_variable(node, vtype):
             return None
+        elif self.metal_buffer_resource_address_space(node, vtype) is not None:
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
+            resource_count = self.metal_buffer_resource_binding_count(node)
         elif self.is_structured_buffer_type(vtype):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
@@ -16927,20 +17262,30 @@ class MetalCodeGen:
             return None
         return namespace, binding, resource_count, var_name
 
-    def reserve_explicit_global_resource_bindings(self, global_vars, used_bindings):
+    def reserve_explicit_global_resource_bindings(
+        self, global_vars, used_bindings, source_bindings
+    ):
+        metadata_items = []
         for node in global_vars:
             metadata = self.global_resource_binding_metadata(node)
             if metadata is None:
                 continue
-            namespace, binding, resource_count, var_name = metadata
-            self.reserve_resource_binding_range(
-                used_bindings,
-                "Metal",
-                namespace,
-                binding,
-                resource_count,
-                var_name,
-            )
+            metadata_items.append((node, metadata))
+
+        for descriptor_set in (None, 0):
+            for node, metadata in metadata_items:
+                if self.explicit_resource_set_index(node) != descriptor_set:
+                    continue
+                namespace, binding, resource_count, var_name = metadata
+                self.pre_reserve_explicit_resource_binding(
+                    used_bindings,
+                    source_bindings,
+                    namespace,
+                    binding,
+                    resource_count,
+                    var_name,
+                    node,
+                )
 
     def next_available_resource_binding(
         self, used_bindings, namespace, binding_index, count
@@ -16961,22 +17306,27 @@ class MetalCodeGen:
                 return binding_index
             binding_index = conflict_end + 1
 
-    def reserve_cbuffer_bindings(self, used_bindings):
-        buffer_index = 0
+    def pre_reserve_cbuffer_bindings(self, used_bindings, source_bindings):
         for cbuffer in self.cbuffer_variables:
+            if self.explicit_resource_set_index(cbuffer) is not None:
+                continue
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
             )
             if binding is None:
                 continue
-            self.reserve_resource_binding_range(
+            self.pre_reserve_explicit_resource_binding(
                 used_bindings,
-                "Metal",
+                source_bindings,
                 "buffer",
                 binding,
                 1,
                 getattr(cbuffer, "name", "<anonymous>"),
+                cbuffer,
             )
+
+    def reserve_cbuffer_bindings(self, used_bindings, source_bindings):
+        buffer_index = 0
         for cbuffer in self.cbuffer_variables:
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
@@ -16988,17 +17338,153 @@ class MetalCodeGen:
                     buffer_index,
                     1,
                 )
-            self.reserve_resource_binding_range(
+            binding = self.reserve_or_remap_resource_binding(
                 used_bindings,
-                "Metal",
+                source_bindings,
                 "buffer",
                 binding,
                 1,
                 getattr(cbuffer, "name", "<anonymous>"),
+                cbuffer,
+                buffer_index,
             )
             self.cbuffer_binding_indices[id(cbuffer)] = binding
             buffer_index = max(buffer_index, binding + 1)
         return buffer_index
+
+    def pre_reserve_explicit_resource_binding(
+        self, used_bindings, source_bindings, namespace, binding, count, name, node
+    ):
+        if binding is None:
+            return None
+        descriptor_set = self.explicit_resource_set_index(node)
+        if descriptor_set not in (None, 0):
+            return None
+        if descriptor_set == 0:
+            self.reserve_source_resource_binding_range(
+                source_bindings,
+                namespace,
+                descriptor_set,
+                binding,
+                1,
+                name,
+            )
+            target_binding = self.next_available_resource_binding(
+                used_bindings,
+                namespace,
+                binding,
+                count,
+            )
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                namespace,
+                target_binding,
+                count,
+                name,
+            )
+            self.metal_resource_binding_indices_by_id[id(node)] = target_binding
+            return target_binding
+        self.reserve_resource_binding_range(
+            used_bindings,
+            "Metal",
+            namespace,
+            binding,
+            count,
+            name,
+        )
+        self.metal_resource_binding_indices_by_id[id(node)] = binding
+        return binding
+
+    def reserve_or_remap_resource_binding(
+        self,
+        used_bindings,
+        source_bindings,
+        namespace,
+        binding,
+        count,
+        name,
+        node,
+        cursor,
+    ):
+        cached = self.metal_resource_binding_indices_by_id.get(id(node))
+        if cached is not None:
+            self.reserve_resource_binding_range(
+                used_bindings,
+                "Metal",
+                namespace,
+                cached,
+                count,
+                name,
+            )
+            return cached
+
+        requested_binding = binding
+        descriptor_set = self.explicit_resource_set_index(node)
+        if binding is None:
+            binding = self.next_available_resource_binding(
+                used_bindings,
+                namespace,
+                cursor,
+                count,
+            )
+
+        if descriptor_set is not None:
+            if requested_binding is not None:
+                self.reserve_source_resource_binding_range(
+                    source_bindings,
+                    namespace,
+                    descriptor_set,
+                    requested_binding,
+                    1,
+                    name,
+                )
+            target_cursor = 0 if descriptor_set != 0 else binding
+            target_binding = self.next_available_resource_binding(
+                used_bindings,
+                namespace,
+                target_cursor,
+                count,
+            )
+        else:
+            target_binding = binding
+
+        self.reserve_resource_binding_range(
+            used_bindings,
+            "Metal",
+            namespace,
+            target_binding,
+            count,
+            name,
+        )
+        self.metal_resource_binding_indices_by_id[id(node)] = target_binding
+        return target_binding
+
+    def reserve_source_resource_binding_range(
+        self, source_bindings, namespace, descriptor_set, start, count, name
+    ):
+        count = max(count or 1, 1)
+        end = start + count - 1
+        key = (namespace, descriptor_set)
+        ranges = source_bindings.setdefault(key, [])
+        for used_start, used_end, used_name in ranges:
+            if start <= used_end and used_start <= end:
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting Metal source resource binding for '{name}': "
+                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, start, end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.source_resource_binding_range_label(namespace, descriptor_set, used_start, used_end)}"
+                )
+        ranges.append((start, end, name))
+
+    def source_resource_binding_range_label(
+        self, namespace, descriptor_set, start, end
+    ):
+        if start == end:
+            return f"set {descriptor_set} {namespace}({start})"
+        return f"set {descriptor_set} {namespace}({start}-{end})"
 
     def reserve_resource_binding_range(
         self, used_bindings, target, namespace, start, count, name
@@ -18027,20 +18513,24 @@ class MetalCodeGen:
         return explicit_image_format(member, self.attribute_value_to_string)
 
     def is_array_texture_resource(self, texture_type):
-        return texture_type in {
-            "texture1d_array<float>",
-            "texture2d_array<float>",
-            "depth2d_array<float>",
-            "texturecube_array<float>",
-            "depthcube_array<float>",
-        }
+        texture_type = self.resource_base_type(texture_type)
+        if self.is_storage_image_resource(texture_type):
+            return False
+        return texture_type.startswith(
+            (
+                "texture1d_array<",
+                "texture2d_array<",
+                "depth2d_array<",
+                "texturecube_array<",
+                "depthcube_array<",
+            )
+        )
 
     def is_multisample_texture_resource(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        return texture_type in {
-            "texture2d_ms<float>",
-            "texture2d_ms_array<float>",
-        }
+        if self.is_storage_image_resource(texture_type):
+            return False
+        return texture_type.startswith(("texture2d_ms<", "texture2d_ms_array<"))
 
     def is_multisample_storage_image_resource(self, texture_type):
         texture_type = self.storage_image_access_agnostic_type(texture_type)
@@ -18076,11 +18566,12 @@ class MetalCodeGen:
         return coord_xyz, layer
 
     def texture_coordinate_parts(self, texture_type, coord):
-        if texture_type == "texture1d_array<float>":
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith("texture1d_array<"):
             coord_x = self.vector_component(coord, "x")
             layer = f"uint({self.vector_component(coord, 'y')})"
             return coord_x, layer
-        if texture_type in {"texturecube_array<float>", "depthcube_array<float>"}:
+        if texture_type.startswith(("texturecube_array<", "depthcube_array<")):
             return self.cube_array_texture_coordinate_parts(coord)
         return self.array_texture_coordinate_parts(coord)
 
@@ -18092,42 +18583,42 @@ class MetalCodeGen:
         return coord
 
     def texture_gradient_options(self, texture_type, ddx, ddy):
-        if texture_type in {
-            "texturecube<float>",
-            "depthcube<float>",
-            "texturecube_array<float>",
-            "depthcube_array<float>",
-        }:
+        texture_type = self.resource_base_type(texture_type)
+        if texture_type.startswith(
+            ("texturecube<", "depthcube<", "texturecube_array<", "depthcube_array<")
+        ):
             return f"gradientcube({ddx}, {ddy})"
-        if texture_type == "texture3d<float>":
+        if texture_type.startswith("texture3d<"):
             return f"gradient3d({ddx}, {ddy})"
         return f"gradient2d({ddx}, {ddy})"
 
     def texture_sampling_capabilities(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
-        gather_offset_types = {"texture2d<float>", "texture2d_array<float>"}
-        sample_offset_types = {
-            "texture2d<float>",
-            "texture2d_array<float>",
-            "texture3d<float>",
-        }
-        depth_offset_types = {"depth2d<float>", "depth2d_array<float>"}
+        is_sampled_texture = not self.is_storage_image_resource(texture_type)
+        is_texture2d = is_sampled_texture and texture_type.startswith("texture2d<")
+        is_texture2d_array = is_sampled_texture and texture_type.startswith(
+            "texture2d_array<"
+        )
+        is_texture3d = is_sampled_texture and texture_type.startswith("texture3d<")
+        is_texturecube = is_sampled_texture and texture_type.startswith("texturecube<")
+        is_texturecube_array = is_sampled_texture and texture_type.startswith(
+            "texturecube_array<"
+        )
+        is_depth2d = texture_type.startswith("depth2d<")
+        is_depth2d_array = texture_type.startswith("depth2d_array<")
         return {
             "texture_type": texture_type,
             "gather": (
-                texture_type
-                in {
-                    "texture2d<float>",
-                    "texture2d_array<float>",
-                    "texturecube<float>",
-                    "texturecube_array<float>",
-                }
+                is_texture2d
+                or is_texture2d_array
+                or is_texturecube
+                or is_texturecube_array
             ),
-            "gather_offset": texture_type in gather_offset_types,
-            "sample_offset": texture_type in sample_offset_types,
-            "projected_offset": texture_type in sample_offset_types,
-            "compare_offset": texture_type in depth_offset_types,
-            "gather_compare_offset": texture_type in depth_offset_types,
+            "gather_offset": is_texture2d or is_texture2d_array,
+            "sample_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "projected_offset": is_texture2d or is_texture2d_array or is_texture3d,
+            "compare_offset": is_depth2d or is_depth2d_array,
+            "gather_compare_offset": is_depth2d or is_depth2d_array,
         }
 
     def texture_gather_supports_offset(self, texture_type):
@@ -19418,10 +19909,27 @@ class MetalCodeGen:
             ),
         )
 
+    def image_format_allows_native_vector_context(self, image_format):
+        return image_format in {"r32f", "r32i", "r32ui"}
+
+    def image_format_context_channel_count_allowed(
+        self, image_format, format_channels, context_channels
+    ):
+        if format_channels == context_channels:
+            return True
+        if not self.image_format_allows_native_vector_context(image_format):
+            return False
+        return format_channels == 1 and context_channels in {1, 4}
+
     def validate_image_store_value_shape(self, image_type, image_format, value_arg):
         expected_channels = self.image_store_channel_count(image_type, image_format)
+        value_channels = self.expression_component_count(value_arg)
+        if self.image_format_context_channel_count_allowed(
+            image_format, expected_channels, value_channels
+        ):
+            return
         value_channels = image_store_value_shape_mismatch(
-            expected_channels, self.expression_component_count(value_arg)
+            expected_channels, value_channels
         )
         if value_channels is None:
             return
@@ -19470,6 +19978,10 @@ class MetalCodeGen:
             )
         expected_channels = self.expected_component_count()
         loaded_channels = self.image_load_channel_count(image_type, image_format)
+        if self.image_format_context_channel_count_allowed(
+            image_format, loaded_channels, expected_channels
+        ):
+            return
         expected_channels = image_load_result_shape_mismatch(
             loaded_channels,
             expected_channels,
@@ -20036,6 +20548,18 @@ class MetalCodeGen:
                     return f"uint{size}"
                 elif element_type == "bool":
                     return f"bool{size}"
+                elif element_type in {
+                    "f16",
+                    "f32",
+                    "f64",
+                    "i8",
+                    "u8",
+                    "i16",
+                    "u16",
+                    "i32",
+                    "u32",
+                }:
+                    return f"vec{size}<{element_type}>"
                 else:
                     return f"{element_type}{size}"
         else:

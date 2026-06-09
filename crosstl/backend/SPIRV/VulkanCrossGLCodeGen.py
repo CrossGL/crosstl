@@ -32,6 +32,18 @@ from .VulkanAst import (
 class VulkanToCrossGLConverter:
     """Serialize Vulkan backend AST nodes back into CrossGL source."""
 
+    RAY_STORAGE_QUALIFIER_ATTRIBUTES = {
+        "callabledataext": "callableDataEXT",
+        "callabledatainext": "callableDataInEXT",
+        "hitattributeext": "hitAttributeEXT",
+        "raypayloadext": "rayPayloadEXT",
+        "raypayloadinext": "rayPayloadInEXT",
+    }
+    MESH_STORAGE_QUALIFIER_ATTRIBUTES = {
+        "taskpayloadsharedext": "taskPayloadSharedEXT",
+        "taskpayloadsharednv": "taskPayloadSharedNV",
+    }
+
     def __init__(self):
         self.type_map = {
             "void": "void",
@@ -171,13 +183,32 @@ class VulkanToCrossGLConverter:
         self.indentation = 0
         self.code = []
         self.flattened_uniform_block_instances = {}
+        self.storage_buffer_type_names = {}
+        self.storage_buffer_name_signatures = {}
+        self.emitted_storage_buffer_type_names = set()
+        self.used_global_declaration_names = set()
+        self.non_renamable_global_declaration_names = set()
+        self.renamed_spirv_global_names = {}
+        self.spirv_module_shader_stages = set()
 
     def get_indent(self):
         return "    " * self.indentation
 
     def generate(self, ast):
         self.flattened_uniform_block_instances = {}
+        self.storage_buffer_type_names = {}
+        self.storage_buffer_name_signatures = self.initial_type_name_signatures(ast)
+        self.emitted_storage_buffer_type_names = set(
+            self.storage_buffer_name_signatures
+        )
+        self.used_global_declaration_names = set(self.storage_buffer_name_signatures)
+        self.non_renamable_global_declaration_names = (
+            self.collect_non_renamable_global_declaration_names(ast)
+        )
+        self.renamed_spirv_global_names = {}
+        self.spirv_module_shader_stages = self.collect_spirv_module_shader_stages(ast)
         code = "shader main {\n"
+        stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
             node
             for node in getattr(ast, "global_variables", [])
@@ -195,6 +226,8 @@ class VulkanToCrossGLConverter:
 
         for node in top_level_nodes:
             if isinstance(node, LayoutNode):
+                if self.is_spirv_stage_interface_layout(node):
+                    continue
                 if self.is_compute_layout(node) or self.is_fragment_execution_layout(
                     node
                 ):
@@ -205,9 +238,9 @@ class VulkanToCrossGLConverter:
             elif isinstance(node, UniformNode):
                 code += self.generate_uniform(node)
             elif isinstance(node, VariableNode):
-                code += f"    {self.map_type(self.variable_type(node))} {node.name};\n"
+                code += f"    {self.generate_global_variable_declaration(node)};\n"
             elif isinstance(node, AssignmentNode):
-                code += f"    {self.generate_assignment(node)};\n"
+                code += f"    {self.generate_global_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
                 shader_stage = self.function_shader_stage(node)
                 if shader_stage is not None or node.name == "main":
@@ -224,11 +257,17 @@ class VulkanToCrossGLConverter:
                         )
                         for layout in stage_compute_layouts:
                             code += self.generate_compute_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "vertex":
                         code += "    // Vertex Shader\n"
                         code += "    vertex {\n"
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "fragment":
@@ -239,6 +278,9 @@ class VulkanToCrossGLConverter:
                             + self.spirv_fragment_execution_layouts(node)
                         ):
                             code += self.generate_fragment_execution_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     elif shader_stage == "geometry":
@@ -246,6 +288,33 @@ class VulkanToCrossGLConverter:
                         code += "    geometry {\n"
                         for layout in self.spirv_geometry_execution_layouts(node):
                             code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
+                    elif shader_stage == "tessellation_control":
+                        code += "    // Tessellation Control Shader\n"
+                        code += "    tessellation_control {\n"
+                        for layout in self.spirv_tessellation_control_execution_layouts(
+                            node
+                        ):
+                            code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
+                        code += self.generate_function(node)
+                        code += "    }\n\n"
+                    elif shader_stage == "tessellation_evaluation":
+                        code += "    // Tessellation Evaluation Shader\n"
+                        code += "    tessellation_evaluation {\n"
+                        for (
+                            layout
+                        ) in self.spirv_tessellation_evaluation_execution_layouts(node):
+                            code += self.generate_stage_layout(layout)
+                        code += self.generate_stage_interface_layouts(
+                            node, stage_interface_layouts
+                        )
                         code += self.generate_function(node)
                         code += "    }\n\n"
                     else:
@@ -255,6 +324,92 @@ class VulkanToCrossGLConverter:
 
         code += "}\n"
         return code
+
+    def spirv_stage_interface_layouts(self, ast):
+        layouts = [
+            node
+            for node in getattr(ast, "global_variables", []) or []
+            if self.is_spirv_stage_interface_layout(node)
+        ]
+        if not layouts:
+            return {}
+
+        by_interface_id = {}
+        for layout in layouts:
+            by_interface_id.setdefault(
+                self.spirv_interface_layout_id(layout), []
+            ).append(layout)
+
+        stage_layouts = {}
+        for function in getattr(ast, "functions", []) or []:
+            interface_ids = []
+            for entry_point in getattr(function, "spirv_entry_points", []) or []:
+                interface_ids.extend(entry_point.get("interface_ids", []) or [])
+            if not interface_ids:
+                entry_point = getattr(function, "spirv_entry_point", None)
+                interface_ids.extend((entry_point or {}).get("interface_ids", []) or [])
+            if not interface_ids:
+                continue
+
+            seen = set()
+            for interface_id in interface_ids:
+                for layout in by_interface_id.get(interface_id, []):
+                    layout_key = id(layout)
+                    if layout_key in seen:
+                        continue
+                    seen.add(layout_key)
+                    stage_layouts.setdefault(id(function), []).append(layout)
+
+        return stage_layouts
+
+    def is_spirv_stage_interface_layout(self, node):
+        if not isinstance(node, LayoutNode):
+            return False
+        if (node.layout_type or "").lower() not in {"in", "out"}:
+            return False
+        return getattr(node, "spirv_id", None) is not None
+
+    def spirv_interface_layout_id(self, node):
+        return str(getattr(node, "spirv_id", "")).split(".", 1)[0]
+
+    def generate_stage_interface_layouts(self, function, stage_interface_layouts):
+        code = ""
+        for layout in stage_interface_layouts.get(id(function), []):
+            code += self.indent_generated_layout(
+                self.generate_layout(
+                    layout,
+                    suppressed_interface_qualifiers=(
+                        self.suppressed_stage_interface_qualifiers(function, layout)
+                    ),
+                )
+            )
+        return code
+
+    def suppressed_stage_interface_qualifiers(self, function, layout):
+        layout_type = (getattr(layout, "layout_type", None) or "").lower()
+        if layout_type != "in" or self.function_shader_stage(function) != "geometry":
+            return set()
+        if not self.spirv_module_shader_stages.intersection(
+            {"vertex", "tessellation_control", "tessellation_evaluation"}
+        ):
+            return set()
+        if "[" not in str(getattr(layout, "variable_name", "")):
+            return set()
+        return {"location", "component", "index"}
+
+    def collect_spirv_module_shader_stages(self, ast):
+        return {
+            stage
+            for function in getattr(ast, "functions", []) or []
+            for stage in [self.function_shader_stage(function)]
+            if stage is not None
+        }
+
+    def indent_generated_layout(self, layout_code):
+        return "".join(
+            f"    {line}" if line.strip() else line
+            for line in layout_code.splitlines(keepends=True)
+        )
 
     def is_compute_layout(self, node):
         if not isinstance(node, LayoutNode):
@@ -276,6 +431,8 @@ class VulkanToCrossGLConverter:
             "Vertex": "vertex",
             "Fragment": "fragment",
             "Geometry": "geometry",
+            "TessellationControl": "tessellation_control",
+            "TessellationEvaluation": "tessellation_evaluation",
             "GLCompute": "compute",
         }.get(execution_model)
 
@@ -367,6 +524,40 @@ class VulkanToCrossGLConverter:
             layouts.append(LayoutNode(output_qualifiers, layout_type="out"))
         return layouts
 
+    def spirv_tessellation_control_execution_layouts(self, node):
+        qualifiers = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mode_name = mode.get("mode")
+            operands = mode.get("operands", [])
+            if mode_name == "OutputVertices" and operands:
+                qualifiers.append(("vertices", operands[0]))
+
+        if not qualifiers:
+            return []
+        return [LayoutNode(qualifiers, layout_type="out")]
+
+    def spirv_tessellation_evaluation_execution_layouts(self, node):
+        modes = {
+            "Triangles": "triangles",
+            "Quads": "quads",
+            "Isolines": "isolines",
+            "SpacingEqual": "equal_spacing",
+            "SpacingFractionalEven": "fractional_even_spacing",
+            "SpacingFractionalOdd": "fractional_odd_spacing",
+            "VertexOrderCw": "cw",
+            "VertexOrderCcw": "ccw",
+            "PointMode": "point_mode",
+        }
+        qualifiers = []
+        for mode in getattr(node, "spirv_execution_modes", []) or []:
+            mapped_name = modes.get(mode.get("mode"))
+            if mapped_name is not None:
+                qualifiers.append((mapped_name, None))
+
+        if not qualifiers:
+            return []
+        return [LayoutNode(qualifiers, layout_type="in")]
+
     def is_fragment_execution_layout(self, node):
         if not isinstance(node, LayoutNode):
             return False
@@ -419,7 +610,114 @@ class VulkanToCrossGLConverter:
     def assignment_right(self, node):
         return getattr(node, "right", getattr(node, "value", None))
 
-    def generate_layout(self, node):
+    def initial_type_name_signatures(self, ast):
+        signatures = {}
+        for struct in getattr(ast, "structs", []) or []:
+            struct_name = getattr(struct, "name", None)
+            if not struct_name:
+                continue
+            signatures.setdefault(struct_name, self.struct_signature(struct))
+        return signatures
+
+    def struct_signature(self, struct):
+        signature = []
+        for member in getattr(struct, "members", []) or []:
+            if isinstance(member, VariableNode):
+                signature.append((str(self.variable_type(member)), str(member.name)))
+            elif isinstance(member, AssignmentNode):
+                lhs = self.assignment_left(member)
+                if isinstance(lhs, VariableNode):
+                    signature.append((str(self.variable_type(lhs)), str(lhs.name)))
+        return tuple(signature)
+
+    def declaration_base_name(self, name):
+        return str(name or "").split("[", 1)[0]
+
+    def declaration_array_suffix(self, name):
+        text = str(name or "")
+        bracket_index = text.find("[")
+        return "" if bracket_index < 0 else text[bracket_index:]
+
+    def reserve_global_declaration_name(self, name):
+        base_name = self.declaration_base_name(name)
+        if base_name:
+            self.used_global_declaration_names.add(base_name)
+
+    def unique_global_declaration_name(self, preferred_name, suffix_source):
+        preferred_name = self.declaration_base_name(preferred_name)
+        if not preferred_name:
+            preferred_name = "Declaration"
+        if preferred_name not in self.used_global_declaration_names:
+            self.used_global_declaration_names.add(preferred_name)
+            return preferred_name
+
+        suffix = self.storage_buffer_type_suffix(suffix_source)
+        candidate = f"{preferred_name}_{suffix}"
+        counter = 2
+        while candidate in self.used_global_declaration_names:
+            candidate = f"{preferred_name}_{suffix}_{counter}"
+            counter += 1
+        self.used_global_declaration_names.add(candidate)
+        return candidate
+
+    def unique_global_variable_name(self, preferred_name, suffix_source):
+        unique_base = self.unique_global_declaration_name(
+            self.declaration_base_name(preferred_name), suffix_source
+        )
+        return f"{unique_base}{self.declaration_array_suffix(preferred_name)}"
+
+    def collect_non_renamable_global_declaration_names(self, ast):
+        names = set()
+        for node in getattr(ast, "global_variables", []) or []:
+            if isinstance(node, LayoutNode):
+                if self.is_flattened_uniform_block_layout(node):
+                    continue
+                names.add(self.layout_declaration_base_name(node))
+            elif isinstance(node, UniformNode):
+                names.add(self.declaration_base_name(node.name))
+        return {name for name in names if name}
+
+    def layout_declaration_base_name(self, node):
+        if getattr(node, "variable_name", None):
+            return self.declaration_base_name(node.variable_name)
+        declaration = getattr(node, "declaration", None)
+        if isinstance(declaration, AssignmentNode):
+            declaration = self.assignment_left(declaration)
+        if isinstance(declaration, VariableNode):
+            return self.declaration_base_name(declaration.name)
+        return None
+
+    def is_flattened_uniform_block_layout(self, node):
+        layout_type = (getattr(node, "layout_type", None) or "").lower()
+        return layout_type == "uniform" and bool(getattr(node, "struct_fields", None))
+
+    def generate_global_variable_declaration(self, node, extra_attributes=None):
+        original_name = node.name
+        generated_name = self.unique_global_variable_name(
+            original_name, getattr(node, "spirv_id", original_name)
+        )
+        self.record_spirv_global_name(node, generated_name)
+        return self.generate_variable_declaration(
+            node, extra_attributes=extra_attributes, override_name=generated_name
+        )
+
+    def generate_global_assignment(self, node):
+        lhs_node = self.assignment_left(node)
+        if isinstance(lhs_node, VariableNode) and self.variable_type(lhs_node):
+            rhs = self.generate_expression(self.assignment_right(node))
+            operator = getattr(node, "operator", "=")
+            lhs = self.generate_global_variable_declaration(lhs_node)
+            return f"{lhs} {operator} {rhs}"
+        return self.generate_assignment(node)
+
+    def record_spirv_global_name(self, node, generated_name):
+        spirv_id = getattr(node, "spirv_id", None)
+        if spirv_id and generated_name != node.name:
+            self.renamed_spirv_global_names[spirv_id] = self.declaration_base_name(
+                generated_name
+            )
+
+    def generate_layout(self, node, suppressed_interface_qualifiers=None):
         code = ""
         if (getattr(node, "layout_type", None) or "").lower() == "const":
             return self.generate_specialization_constant_layout(node)
@@ -428,21 +726,32 @@ class VulkanToCrossGLConverter:
 
         if layout_type == "uniform":
             if node.struct_fields:
-                block_name = node.block_name or node.variable_name or "UniformBuffer"
-                self.record_flattened_uniform_block_instance(node)
+                block_name = self.unique_global_declaration_name(
+                    node.block_name or node.variable_name or "UniformBuffer",
+                    node.variable_name or node.spirv_id or "block",
+                )
+                field_aliases = self.flattened_uniform_block_field_aliases(node)
+                self.record_flattened_uniform_block_instance(node, field_aliases)
                 attributes = self.uniform_block_attribute_suffix(node)
                 code += f"    cbuffer {block_name}{attributes} {{\n"
                 for field_type, field_name in node.struct_fields:
-                    code += f"        {self.map_type(field_type)} {field_name};\n"
+                    generated_field_name = self.flattened_uniform_block_field_name(
+                        field_name, field_aliases
+                    )
+                    code += (
+                        f"        {self.map_type(field_type)} "
+                        f"{generated_field_name};\n"
+                    )
                 code += "    }\n\n"
             else:
                 code += (
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
                     f"{self.uniform_resource_attribute_suffix(node)};\n"
                 )
+                self.reserve_global_declaration_name(node.variable_name)
         elif layout_type == "buffer":
             if node.struct_fields:
-                block_name = node.block_name or node.variable_name or "StorageBuffer"
+                block_name = self.storage_buffer_block_type_name(node)
                 variable_name = (
                     node.variable_name or block_name[0].lower() + block_name[1:]
                 )
@@ -452,22 +761,75 @@ class VulkanToCrossGLConverter:
                     else "RWStructuredBuffer"
                 )
                 attributes = self.uniform_block_attribute_suffix(node)
-                code += f"    struct {block_name} {{\n"
-                for field_type, field_name in node.struct_fields:
-                    code += f"        {self.map_type(field_type)} {field_name};\n"
-                code += "    };\n\n"
+                if block_name not in self.emitted_storage_buffer_type_names:
+                    code += f"    struct {block_name} {{\n"
+                    for field_type, field_name in node.struct_fields:
+                        code += f"        {self.map_type(field_type)} {field_name};\n"
+                    code += "    };\n\n"
+                    self.emitted_storage_buffer_type_names.add(block_name)
                 code += (
                     f"    {buffer_type}<{block_name}> {variable_name}"
                     f"{attributes};\n\n"
                 )
+                self.reserve_global_declaration_name(variable_name)
         elif layout_type == "in" or layout_type == "out":
             if node.data_type and node.variable_name:
                 code += (
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
-                    f"{self.interface_layout_attribute_suffix(node)};\n"
+                    f"{self.interface_layout_attribute_suffix(node, suppressed_interface_qualifiers)};\n"
                 )
+                self.reserve_global_declaration_name(node.variable_name)
+        elif self.is_ray_storage_layout(node):
+            code += (
+                f"    {self.map_type(node.data_type)} {node.variable_name}"
+                f"{self.ray_storage_layout_attribute_suffix(node)};\n"
+            )
+            self.reserve_global_declaration_name(node.variable_name)
 
         return code
+
+    def storage_buffer_block_type_name(self, node):
+        base_name = node.block_name or node.variable_name or "StorageBuffer"
+        signature = tuple(
+            (str(field_type), str(field_name))
+            for field_type, field_name in getattr(node, "struct_fields", []) or []
+        )
+        key = (base_name, signature)
+        if key in self.storage_buffer_type_names:
+            return self.storage_buffer_type_names[key]
+
+        existing_signature = self.storage_buffer_name_signatures.get(base_name)
+        if (
+            existing_signature is None
+            and base_name not in self.used_global_declaration_names
+        ) or existing_signature == signature:
+            type_name = base_name
+        else:
+            suffix_source = node.variable_name or str(
+                len(self.storage_buffer_type_names)
+            )
+            suffix = self.storage_buffer_type_suffix(suffix_source)
+            type_name = f"{base_name}_{suffix}"
+            counter = 2
+            while type_name in self.used_global_declaration_names or (
+                type_name in self.storage_buffer_name_signatures
+                and self.storage_buffer_name_signatures[type_name] != signature
+            ):
+                type_name = f"{base_name}_{suffix}_{counter}"
+                counter += 1
+
+        self.storage_buffer_type_names[key] = type_name
+        self.storage_buffer_name_signatures[type_name] = signature
+        self.used_global_declaration_names.add(type_name)
+        return type_name
+
+    def storage_buffer_type_suffix(self, raw_value):
+        suffix = str(raw_value or "").split("[", 1)[0]
+        suffix = "".join(
+            char if char.isalnum() or char == "_" else "_" for char in suffix
+        )
+        suffix = suffix.strip("_")
+        return suffix or "block"
 
     def is_specialization_constant_layout(self, node):
         if (getattr(node, "layout_type", None) or "").lower() != "const":
@@ -525,7 +887,8 @@ class VulkanToCrossGLConverter:
         return ""
 
     def storage_image_layout_attribute_suffix(self, node):
-        if not self.is_storage_image_type(getattr(node, "data_type", None)):
+        data_type = getattr(node, "data_type", None)
+        if not self.is_storage_image_type(data_type):
             return ""
 
         attributes = []
@@ -538,7 +901,10 @@ class VulkanToCrossGLConverter:
                 descriptor_set = value
             elif qualifier_name == "binding" and value is not None:
                 binding = value
-            elif qualifier_name in self.supported_image_formats():
+            elif (
+                qualifier_name in self.supported_image_formats()
+                and not self.is_storage_image_buffer_type(data_type)
+            ):
                 image_format = qualifier_name
 
         declaration_attributes = []
@@ -605,6 +971,9 @@ class VulkanToCrossGLConverter:
             ("image", "iimage", "uimage")
         )
 
+    def is_storage_image_buffer_type(self, type_name):
+        return isinstance(type_name, str) and type_name.endswith("imageBuffer")
+
     def supported_image_formats(self):
         return {
             "r8",
@@ -645,14 +1014,19 @@ class VulkanToCrossGLConverter:
             "rgba32ui",
         }
 
-    def interface_layout_attribute_suffix(self, node):
+    def interface_layout_attribute_suffix(self, node, suppressed_qualifiers=None):
         layout_type = node.layout_type.lower() if node.layout_type else ""
         if layout_type not in {"in", "out"}:
             return ""
 
+        suppressed_qualifiers = {
+            str(qualifier).lower() for qualifier in suppressed_qualifiers or set()
+        }
         attributes = ["@input" if layout_type == "in" else "@output"]
         for name, value in getattr(node, "qualifiers", []) or []:
             qualifier_name = str(name).lower()
+            if qualifier_name in suppressed_qualifiers:
+                continue
             if (
                 qualifier_name in {"location", "component", "index"}
                 and value is not None
@@ -745,20 +1119,62 @@ class VulkanToCrossGLConverter:
             return f"@{mapped_name}"
         return f"@builtin({str(builtin_name).lower()})"
 
-    def record_flattened_uniform_block_instance(self, node):
+    def flattened_uniform_block_field_aliases(self, node):
+        aliases = {}
+        for _field_type, field_name in node.struct_fields:
+            field_base = self.declaration_base_name(field_name)
+            generated_base = self.unique_flattened_uniform_block_field_name(
+                node, field_base
+            )
+            aliases[field_base] = generated_base
+        return aliases
+
+    def unique_flattened_uniform_block_field_name(self, node, field_name):
+        if not field_name:
+            return field_name
+
+        reserved_names = (
+            self.used_global_declaration_names
+            | self.non_renamable_global_declaration_names
+        )
+        if not getattr(node, "variable_name", None) or field_name not in reserved_names:
+            self.reserve_global_declaration_name(field_name)
+            return field_name
+
+        instance_name = self.declaration_base_name(node.variable_name)
+        alias_base = self.storage_buffer_type_suffix(f"{instance_name}_{field_name}")
+        alias = alias_base
+        counter = 2
+        while alias in reserved_names:
+            alias = f"{alias_base}_{counter}"
+            counter += 1
+        self.reserve_global_declaration_name(alias)
+        return alias
+
+    def flattened_uniform_block_field_name(self, field_name, field_aliases):
+        field_base = self.declaration_base_name(field_name)
+        generated_base = field_aliases.get(field_base, field_base)
+        return f"{generated_base}{self.declaration_array_suffix(field_name)}"
+
+    def record_flattened_uniform_block_instance(self, node, field_aliases=None):
         if not node.variable_name:
             return
         instance_name = str(node.variable_name).split("[", 1)[0]
         if not instance_name:
             return
-        self.flattened_uniform_block_instances[instance_name] = {
-            str(field_name).split("[", 1)[0] for _, field_name in node.struct_fields
-        }
+        if field_aliases is None:
+            field_aliases = {
+                str(field_name).split("[", 1)[0]: str(field_name).split("[", 1)[0]
+                for _, field_name in node.struct_fields
+            }
+        self.flattened_uniform_block_instances[instance_name] = field_aliases
 
     def generate_uniform(self, node):
+        self.reserve_global_declaration_name(node.name)
         return f"    {self.map_type(node.vtype)} {node.name};\n"
 
     def generate_struct(self, node):
+        self.reserve_global_declaration_name(node.name)
         code = f"    struct {node.name} {{\n"
         for member in node.members:
             if isinstance(member, VariableNode):
@@ -779,15 +1195,33 @@ class VulkanToCrossGLConverter:
             self.generate_function_parameter(param)
             for param in self.function_params(node)
         )
-        code += f"    {return_type} {node.name}({params}) {{\n"
+        attributes = self.function_attribute_suffix(node)
+        code += f"    {return_type} {node.name}({params}){attributes} {{\n"
         code += self.generate_function_body(node.body, indent=indent + 1)
         code += "    }\n\n"
         return code
 
+    def function_attribute_suffix(self, node):
+        """Return CrossGL attributes needed to preserve stage entry identity."""
+        if self.function_shader_stage(node) is not None and node.name != "main":
+            return " @stage_entry"
+        return ""
+
     def generate_function_parameter(self, node):
+        type_name, ray_attributes = self.ray_storage_qualified_type_parts(
+            self.variable_type(node)
+        )
+        qualifier_attributes = [
+            attribute
+            for qualifier in getattr(node, "qualifiers", []) or []
+            if (attribute := self.storage_qualifier_attribute(qualifier)) is not None
+        ]
+        attributes = self.ray_storage_attribute_suffix(
+            [*qualifier_attributes, *ray_attributes]
+        )
         return (
             f"{self.parameter_qualifier_prefix(node)}"
-            f"{self.map_type(self.variable_type(node))} {node.name}"
+            f"{self.map_type(type_name)} {node.name}{attributes}"
         )
 
     def parameter_qualifier_prefix(self, node):
@@ -806,7 +1240,7 @@ class VulkanToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, VariableNode):
-                code += f"{self.map_type(self.variable_type(stmt))} {stmt.name};\n"
+                code += f"{self.generate_variable_declaration(stmt)};\n"
             elif isinstance(stmt, AssignmentNode):
                 code += self.generate_assignment(stmt) + ";\n"
             elif isinstance(stmt, BinaryOpNode):
@@ -848,11 +1282,82 @@ class VulkanToCrossGLConverter:
         operator = getattr(node, "operator", "=")
 
         if isinstance(lhs_node, VariableNode) and self.variable_type(lhs_node):
-            lhs = f"{self.map_type(self.variable_type(lhs_node))} {lhs_node.name}"
+            lhs = self.generate_variable_declaration(lhs_node)
         else:
             lhs = self.generate_expression(lhs_node)
 
         return f"{lhs} {operator} {rhs}"
+
+    def generate_variable_declaration(
+        self, node, extra_attributes=None, override_name=None
+    ):
+        type_name, ray_attributes = self.ray_storage_qualified_type_parts(
+            self.variable_type(node)
+        )
+        attributes = self.ray_storage_attribute_suffix(
+            [*ray_attributes, *(extra_attributes or [])]
+        )
+        return f"{self.map_type(type_name)} {override_name or node.name}{attributes}"
+
+    def ray_storage_qualified_type_parts(self, type_name):
+        parts = str(type_name or "").split()
+        if not parts:
+            return type_name, []
+
+        remaining_parts = []
+        attributes = []
+        for part in parts:
+            attribute = self.storage_qualifier_attribute(part)
+            if attribute is None:
+                remaining_parts.append(part)
+            else:
+                attributes.append(attribute)
+
+        if not attributes:
+            return type_name, []
+        return " ".join(remaining_parts), attributes
+
+    def is_ray_storage_layout(self, node):
+        if not isinstance(node, LayoutNode):
+            return False
+        if not getattr(node, "data_type", None) or not getattr(
+            node, "variable_name", None
+        ):
+            return False
+        return any(
+            self.ray_storage_attribute(qualifier) is not None
+            for qualifier in getattr(node, "declaration_qualifiers", []) or []
+        )
+
+    def ray_storage_layout_attribute_suffix(self, node):
+        attributes = []
+        for name, value in getattr(node, "qualifiers", []) or []:
+            qualifier_name = str(name).lower()
+            if (
+                qualifier_name in {"location", "component", "index"}
+                and value is not None
+            ):
+                attributes.append(f"{qualifier_name}({value})")
+        attributes.extend(
+            attribute
+            for qualifier in getattr(node, "declaration_qualifiers", []) or []
+            if (attribute := self.ray_storage_attribute(qualifier)) is not None
+        )
+        return self.ray_storage_attribute_suffix(attributes)
+
+    def ray_storage_attribute_suffix(self, attributes):
+        if not attributes:
+            return ""
+        return f" {' '.join(f'@{attribute}' for attribute in attributes)}"
+
+    def ray_storage_attribute(self, qualifier):
+        return self.RAY_STORAGE_QUALIFIER_ATTRIBUTES.get(str(qualifier).lower())
+
+    def storage_qualifier_attribute(self, qualifier):
+        qualifier_name = str(qualifier).lower()
+        return self.RAY_STORAGE_QUALIFIER_ATTRIBUTES.get(
+            qualifier_name
+        ) or self.MESH_STORAGE_QUALIFIER_ATTRIBUTES.get(qualifier_name)
 
     def generate_expression(self, expr):
         """Render a Vulkan backend expression node as CrossGL syntax."""
@@ -861,7 +1366,7 @@ class VulkanToCrossGLConverter:
         elif isinstance(expr, int) or isinstance(expr, float):
             return str(expr)
         elif isinstance(expr, VariableNode):
-            return f"{expr.name}"
+            return self.generated_variable_expression_name(expr)
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif isinstance(expr, BinaryOpNode):
@@ -924,6 +1429,12 @@ class VulkanToCrossGLConverter:
             return f"({rendered})"
         return rendered
 
+    def generated_variable_expression_name(self, expr):
+        spirv_id = getattr(expr, "spirv_id", None)
+        if spirv_id in self.renamed_spirv_global_names:
+            return self.renamed_spirv_global_names[spirv_id]
+        return expr.name
+
     def expression_base_name(self, expr):
         if isinstance(expr, str):
             return expr
@@ -936,7 +1447,11 @@ class VulkanToCrossGLConverter:
         if instance_name is None:
             return None
         fields = self.flattened_uniform_block_instances.get(instance_name)
-        if fields is None or expr.member not in fields:
+        if fields is None:
+            return None
+        if isinstance(fields, dict):
+            return fields.get(expr.member)
+        if expr.member not in fields:
             return None
         return expr.member
 

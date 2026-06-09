@@ -151,6 +151,7 @@ KEYWORDS = {
     "__include": "INCLUDE",
     "__generic": "GENERIC",
     "extension": "EXTENSION",
+    "__extension": "EXTENSION",
     "typedef": "TYPEDEF",
     "typealias": "TYPEALIAS",
     "associatedtype": "ASSOCIATEDTYPE",
@@ -236,13 +237,13 @@ class SlangLexer:
     ) -> "SlangLexer":
         """Create a lexer instance from a Slang source file."""
         del chunk_size
-        with open(filepath, encoding="utf-8") as f:
-            return cls(
-                f.read(),
-                preprocess=preprocess,
-                include_paths=include_paths,
-                defines=defines,
-                strict_preprocessor=strict_preprocessor,
-                max_expansion_depth=max_expansion_depth,
-                file_path=filepath,
-            )
+        code = SlangPreprocessor()._read_source_file(filepath)
+        return cls(
+            code,
+            preprocess=preprocess,
+            include_paths=include_paths,
+            defines=defines,
+            strict_preprocessor=strict_preprocessor,
+            max_expansion_depth=max_expansion_depth,
+            file_path=filepath,
+        )

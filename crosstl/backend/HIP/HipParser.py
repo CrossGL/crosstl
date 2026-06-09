@@ -1,5 +1,6 @@
 """HIP Parser for converting HIP tokens to AST"""
 
+import re
 from typing import List
 
 from .HipAst import (
@@ -96,6 +97,7 @@ class HipParser:
         "STATIC",
         "EXTERN",
         "CONSTEXPR",
+        "INLINE",
     }
     TYPE_PREFIX_TOKENS = {"TYPENAME"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}
@@ -193,6 +195,27 @@ class HipParser:
         "consteval",
         "noexcept",
         "__noexcept",
+    }
+    CATCH_TEST_BLOCK_MACRO_NAMES = {
+        "HIP_TEST_CASE",
+        "HIP_TEMPLATE_TEST_CASE",
+        "TEST_CASE",
+        "TEMPLATE_LIST_TEST_CASE",
+        "TEMPLATE_PRODUCT_TEST_CASE",
+        "TEMPLATE_TEST_CASE",
+        "TEMPLATE_TEST_CASE_SIG",
+    }
+    CATCH_NESTED_BLOCK_MACRO_NAMES = {
+        "AND_THEN",
+        "AND_WHEN",
+        "DYNAMIC_SECTION",
+        "GIVEN",
+        "SECTION",
+        "THEN",
+        "WHEN",
+    }
+    STANDALONE_STATEMENT_MACRO_NAMES = {
+        "CHECK_IMAGE_SUPPORT",
     }
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
@@ -701,6 +724,160 @@ class HipParser:
             is_dynamic_shared_memory=True,
         )
 
+    def is_catch_test_block_macro(self):
+        if self.block_depth != 0:
+            return False
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.CATCH_TEST_BLOCK_MACRO_NAMES
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        index = self.skip_balanced_group_at_pos(index, "LPAREN", "RPAREN")
+        if index is None:
+            return False
+        index = self.skip_newlines_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type == "LBRACE"
+
+    def parse_catch_test_block_macro(self):
+        macro_name = self.consume("IDENTIFIER").value
+        args = self.consume_raw_macro_arguments()
+        self.skip_newlines()
+        body = self.parse_block()
+        test_name = self.catch_test_function_name(macro_name, args)
+        return FunctionNode("void", test_name, [], body, qualifiers=[macro_name])
+
+    def is_catch_nested_block_macro(self):
+        if self.block_depth == 0:
+            return False
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.CATCH_NESTED_BLOCK_MACRO_NAMES
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        index = self.skip_balanced_group_at_pos(index, "LPAREN", "RPAREN")
+        if index is None:
+            return False
+        index = self.skip_newlines_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type == "LBRACE"
+
+    def parse_catch_nested_block_macro(self):
+        self.consume("IDENTIFIER")
+        self.consume_raw_macro_arguments()
+        self.skip_newlines()
+        return self.parse_block()
+
+    def is_standalone_statement_macro(self):
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.STANDALONE_STATEMENT_MACRO_NAMES
+        ):
+            return False
+
+        next_index = self.pos + 1
+        return next_index >= len(self.tokens) or self.tokens[next_index].type in {
+            "NEWLINE",
+            "SEMICOLON",
+            "RBRACE",
+        }
+
+    def parse_standalone_statement_macro(self):
+        self.advance()
+        self.skip_newlines()
+        if self.match("SEMICOLON"):
+            self.advance()
+        return None
+
+    def consume_raw_macro_arguments(self):
+        self.consume("LPAREN")
+        args = [[]]
+        depth = 1
+
+        while self.current_token and depth > 0:
+            token = self.current_token
+
+            if token.type == "LPAREN":
+                depth += 1
+                args[-1].append(token)
+                self.advance()
+                continue
+
+            if token.type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.advance()
+                    break
+                args[-1].append(token)
+                self.advance()
+                continue
+
+            if token.type == "COMMA" and depth == 1:
+                args.append([])
+                self.advance()
+                continue
+
+            args[-1].append(token)
+            self.advance()
+
+        if depth != 0:
+            self.error("Unterminated macro argument list")
+
+        return args
+
+    def catch_test_function_name(self, macro_name, args):
+        if args and args[0]:
+            raw_name = self.macro_argument_text(args[0])
+        else:
+            raw_name = macro_name.lower()
+
+        raw_name = raw_name.strip()
+        if (
+            len(raw_name) >= 2
+            and raw_name[0] == raw_name[-1]
+            and raw_name[0]
+            in {
+                '"',
+                "'",
+            }
+        ):
+            raw_name = raw_name[1:-1]
+
+        name = re.sub(r"[^A-Za-z0-9_]+", "_", raw_name).strip("_")
+        if not name:
+            name = macro_name.lower()
+        if name[0].isdigit():
+            name = f"test_{name}"
+        return name
+
+    def macro_argument_text(self, tokens):
+        return " ".join(token.value for token in tokens if token.type != "NEWLINE")
+
+    def skip_balanced_group_at_pos(self, index, open_type, close_type):
+        if index >= len(self.tokens) or self.tokens[index].type != open_type:
+            return None
+
+        depth = 0
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == open_type:
+                depth += 1
+            elif token_type == close_type:
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+
+        return None
+
     def parse_flat_builtin_node(self):
         token = self.current_token
         builtin_name = self.FLAT_BUILTIN_TOKEN_MAP[token.type]
@@ -879,14 +1056,24 @@ class HipParser:
             if self.match("SEMICOLON"):
                 self.advance()
             return ContinueNode()
+        if self.match("GOTO"):
+            return self.parse_goto_statement()
         if self.match("SYNCTHREADS", "SYNCWARP"):
             return self.parse_sync_statement()
         if self.match("ASM"):
             return self.parse_asm_statement()
         if self.is_hip_dynamic_shared_macro():
             return self.parse_hip_dynamic_shared_macro()
+        if self.is_catch_test_block_macro():
+            return self.parse_catch_test_block_macro()
+        if self.is_catch_nested_block_macro():
+            return self.parse_catch_nested_block_macro()
+        if self.is_standalone_statement_macro():
+            return self.parse_standalone_statement_macro()
         if self.match("LBRACE"):
             return self.parse_block()
+        if self.is_label_statement_start():
+            return self.parse_label_statement()
         if self.is_identifier_value("throw"):
             return self.parse_throw_statement()
         if self.is_identifier_value("delete"):
@@ -914,6 +1101,8 @@ class HipParser:
             return self.parse_explicit_template_instantiation()
 
         self.parse_template_suffix()
+        self.skip_newlines()
+        self.skip_requires_clause()
         self.skip_newlines()
         self.skip_cpp_attributes()
 
@@ -1032,19 +1221,43 @@ class HipParser:
         if allow_prefix:
             alias_type = self.parse_declarator_prefix(alias_type)
 
+        function_pointer_name = self.parse_function_pointer_parameter_declarator()
+        if function_pointer_name is not None:
+            alias_type += " (*)"
+            self.type_aliases.add(function_pointer_name)
+            return TypeAliasNode(alias_type, function_pointer_name)
+
         name = self.consume("IDENTIFIER").value
+        self.skip_newlines()
+        if self.match("LPAREN"):
+            self.consume_function_type_parameter_list()
+            self.type_aliases.add(name)
+            return TypeAliasNode(alias_type, name)
+
         alias_type += self.parse_array_suffix()
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
 
+    def consume_function_type_parameter_list(self):
+        self.consume("LPAREN")
+        self.parse_parameter_list()
+        self.consume("RPAREN")
+
     def parse_typedef_struct_alias(self):
         self.consume("STRUCT")
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
+        self.skip_newlines()
 
         tag_name = None
         if self.match("IDENTIFIER"):
             tag_name = self.current_token.value
             self.advance()
 
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        self.parse_type_attribute_prefixes()
         self.skip_newlines()
         if not self.match("LBRACE"):
             alias = self.parse_type_alias_declarator(
@@ -1058,18 +1271,43 @@ class HipParser:
         members = self.parse_struct_members(tag_name)
         self.consume("RBRACE")
 
-        alias_name = tag_name
+        alias_base_type = f"struct {tag_name}" if tag_name else "struct <anonymous>"
+        aliases = []
         self.skip_newlines()
-        if self.match("IDENTIFIER"):
-            alias_name = self.current_token.value
+        while self.current_token and not self.match("SEMICOLON"):
+            aliases.append(
+                self.parse_type_alias_declarator(alias_base_type, allow_prefix=True)
+            )
+            self.skip_newlines()
+            if not self.match("COMMA"):
+                break
             self.advance()
+            self.skip_newlines()
+
+        alias_name = aliases[0].name if aliases else tag_name
         if not alias_name:
             self.error("Expected typedef struct alias name")
 
         if self.match("SEMICOLON"):
             self.advance()
         self.type_aliases.add(alias_name)
-        return StructNode(alias_name, members)
+
+        extra_aliases = []
+        for alias in aliases[1:]:
+            alias.alias_type = self.replace_typedef_record_base_type(
+                alias.alias_type, alias_base_type, alias_name
+            )
+            extra_aliases.append(alias)
+
+        struct_node = StructNode(alias_name, members)
+        return [struct_node, *extra_aliases] if extra_aliases else struct_node
+
+    def replace_typedef_record_base_type(self, alias_type, original_base, alias_name):
+        if not isinstance(alias_type, str):
+            return alias_type
+        if alias_type.startswith(original_base):
+            return alias_name + alias_type[len(original_base) :]
+        return alias_type
 
     def parse_typedef_enum_alias(self):
         self.consume("ENUM")
@@ -1269,6 +1507,31 @@ class HipParser:
         if self.match("SEMICOLON"):
             self.advance()
         return DeleteNode(expression, is_array)
+
+    def is_label_statement_start(self):
+        return self.match("IDENTIFIER") and self.peek() and self.peek().type == "COLON"
+
+    def parse_label_statement(self):
+        self.consume("IDENTIFIER")
+        self.consume("COLON")
+        self.skip_newlines()
+
+        if not self.current_token or self.match("RBRACE"):
+            return None
+        return self.parse_statement()
+
+    def parse_goto_statement(self):
+        self.consume("GOTO")
+
+        if self.is_declarator_name_token():
+            self.advance()
+        else:
+            while self.current_token and not self.match("SEMICOLON", "RBRACE"):
+                self.advance()
+
+        if self.match("SEMICOLON"):
+            self.advance()
+        return None
 
     def parse_throw_statement(self):
         self.advance()
@@ -1590,7 +1853,18 @@ class HipParser:
                 if self.match("LPAREN"):
                     self.skip_balanced_parentheses()
                 continue
+            if self.match("IDENTIFIER") and self.current_token.value == "requires":
+                self.skip_requires_clause()
+                continue
             break
+
+    def skip_requires_clause(self):
+        if not (self.match("IDENTIFIER") and self.current_token.value == "requires"):
+            return
+        self.advance()
+        self.skip_newlines()
+        if self.match("LPAREN"):
+            self.skip_balanced_parentheses()
 
     def skip_balanced_parentheses(self):
         if not self.match("LPAREN"):
@@ -2193,6 +2467,7 @@ class HipParser:
         type_prefixes = []
         saw_integral_sign = False
 
+        self.skip_newlines()
         self.skip_cpp_attributes()
         self.parse_type_attribute_prefixes()
 
@@ -2215,6 +2490,7 @@ class HipParser:
 
         self.pos = saved_pos
         self.current_token = saved_token
+        self.skip_newlines()
         self.skip_cpp_attributes()
         self.parse_type_attribute_prefixes()
         base_type = self.parse_type()
@@ -2560,7 +2836,15 @@ class HipParser:
         if token_type == "LONG" and self.match("LONG"):
             type_name += " long"
             self.advance()
-        if token_type == "LONG" and self.match("INT"):
+            if self.match("SIGNED", "UNSIGNED"):
+                type_name += f" {self.current_token.value}"
+                self.advance()
+                if self.match("INT"):
+                    type_name += " int"
+                    self.advance()
+            elif self.match("INT"):
+                self.advance()
+        elif token_type == "LONG" and self.match("INT"):
             self.advance()
 
         if self.match("LT"):
@@ -2815,7 +3099,7 @@ class HipParser:
                     else init_declarations[0]
                 )
             else:
-                init = self.parse_expression()
+                init = self.parse_for_update_expression()
         self.consume("SEMICOLON")
         self.skip_newlines()
 
@@ -3156,8 +3440,21 @@ class HipParser:
             return True
         return False
 
-    def parse_expression(self):
-        return self.parse_assignment_expression()
+    def parse_expression(self, allow_comma=False):
+        expr = self.parse_assignment_expression()
+        if not allow_comma:
+            return expr
+
+        self.skip_newlines()
+        while self.match("COMMA"):
+            op = self.current_token.value
+            self.advance()
+            self.skip_newlines()
+            right = self.parse_assignment_expression()
+            expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
+
+        return expr
 
     def parse_assignment_expression(self):
         left = self.parse_ternary_expression()
@@ -3461,6 +3758,8 @@ class HipParser:
                 self.advance()
             if token_type == "LONG" and self.match("LONG"):
                 self.advance()
+            if token_type == "LONG" and self.match("INT"):
+                self.advance()
 
             while self.match("ASTERISK", "STAR"):
                 self.advance()
@@ -3565,7 +3864,7 @@ class HipParser:
         while depth > 0:
             token_type = self.current_token.type
             token_value = self.current_token.value
-            if token_type == "LT":
+            if token_type == "LT" and self.is_nested_template_lt_at_pos(self.pos):
                 depth += 1
                 parts.append(token_value)
                 self.consume("LT")
@@ -3595,6 +3894,30 @@ class HipParser:
                 self.consume(token_type)
 
         return f"<{self.format_template_parts(parts)}>"
+
+    def is_nested_template_lt_at_pos(self, index):
+        previous_index = index - 1
+        while previous_index >= 0 and self.tokens[previous_index].type == "NEWLINE":
+            previous_index -= 1
+
+        if previous_index < 0:
+            return True
+
+        previous_type = self.tokens[previous_index].type
+        previous_value = self.tokens[previous_index].value
+        if previous_type == "IDENTIFIER" and previous_value == "sizeof":
+            return False
+        return previous_type in {
+            "IDENTIFIER",
+            *self.BUILTIN_TYPE_TOKENS,
+            *self.VECTOR_TYPE_TOKENS,
+            *self.RESOURCE_TYPE_TOKENS,
+            *self.ELABORATED_TYPE_TOKENS,
+            "TYPENAME",
+            "GT",
+            "RSHIFT",
+            "KERNEL_LAUNCH_END",
+        }
 
     def format_template_parts(self, parts):
         formatted = []
@@ -3805,7 +4128,9 @@ class HipParser:
         elif self.match("LPAREN"):
             if self.is_cast_expression():
                 self.consume("LPAREN")
+                self.skip_newlines()
                 target_type = self.parse_type()
+                self.skip_newlines()
                 self.consume("RPAREN")
                 self.skip_newlines()
                 expr = self.parse_unary_expression()
@@ -3813,7 +4138,7 @@ class HipParser:
 
             self.consume("LPAREN")
             self.skip_newlines()
-            expr = self.parse_expression()
+            expr = self.parse_expression(allow_comma=True)
             self.consume("RPAREN")
             return expr
         elif self.match("LBRACE"):
@@ -4336,7 +4661,8 @@ class HipParser:
             type_end is not None
             and type_end + 1 < len(self.tokens)
             and self.tokens[type_end].type == "RPAREN"
-            and self.tokens[type_end + 1].type in {"COMMA", "RPAREN", "SEMICOLON"}
+            and self.tokens[type_end + 1].type
+            in {"COLON", "COMMA", "RPAREN", "SEMICOLON"}
         ):
             return False
         if self.is_unknown_identifier_cast_followed_by_ambiguous_unary(
@@ -4370,11 +4696,14 @@ class HipParser:
 
     def is_cast_type_sequence(self, start, end):
         index = start
+        saw_integral_sign = False
         while index < end and self.tokens[index].type in self.TYPE_QUALIFIER_TOKENS:
+            if self.tokens[index].type in {"SIGNED", "UNSIGNED"}:
+                saw_integral_sign = True
             index += 1
 
         if index >= end:
-            return False
+            return saw_integral_sign
 
         token = self.tokens[index]
         if token.type in self.ELABORATED_TYPE_TOKENS:
@@ -4407,7 +4736,10 @@ class HipParser:
 
         while True:
             self.skip_newlines()
-            arg = self.parse_expression()
+            if self.is_type_argument():
+                arg = self.parse_type()
+            else:
+                arg = self.parse_expression()
             args.append(arg)
             self.skip_newlines()
 
@@ -4417,6 +4749,39 @@ class HipParser:
                 break
 
         return args
+
+    def is_type_argument(self):
+        if not self.is_type_argument_start_at_pos(self.pos):
+            return False
+
+        type_end = self.skip_type_at_pos(self.pos)
+        if type_end is None:
+            return False
+
+        type_end = self.skip_newlines_at_pos(type_end)
+        return type_end < len(self.tokens) and self.tokens[type_end].type in {
+            "COMMA",
+            "RPAREN",
+        }
+
+    def is_type_argument_start_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_cpp_attributes_at_pos(index)
+
+        while index < len(self.tokens) and self.tokens[index].type in {
+            *self.TYPE_PREFIX_TOKENS,
+            *self.TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+
+        index = self.skip_cpp_attributes_at_pos(index)
+        if index >= len(self.tokens):
+            return False
+
+        token = self.tokens[index]
+        if self.is_type_token(token, allow_identifier=False):
+            return True
+        return token.type == "IDENTIFIER" and self.is_identifier_type_name(token.value)
 
     def is_function_declaration(self) -> bool:
         # Simple heuristic: type followed by identifier followed by (
@@ -4745,7 +5110,15 @@ class HipParser:
                 if index is None:
                     return None
             if type_token == "LONG" and index < len(self.tokens):
+                saw_long_long = False
                 if self.tokens[index].type == "LONG":
+                    index += 1
+                    saw_long_long = True
+                if (
+                    saw_long_long
+                    and index < len(self.tokens)
+                    and self.tokens[index].type in {"SIGNED", "UNSIGNED"}
+                ):
                     index += 1
                 if index < len(self.tokens) and self.tokens[index].type == "INT":
                     index += 1
@@ -4887,6 +5260,17 @@ class HipParser:
         if token_type in {"ASTERISK", "STAR", *self.TYPE_REFERENCE_TOKENS}:
             return True
 
+        if token_type in {
+            "SEMICOLON",
+            "ASSIGN",
+            "LBRACKET",
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+            "RPAREN",
+        }:
+            return True
+
         if token_type != "IDENTIFIER":
             return False
 
@@ -4903,6 +5287,7 @@ class HipParser:
             "LPAREN",
             "LBRACE",
             "COMMA",
+            "RPAREN",
         }
 
     def is_hip_opaque_handle_type(self, type_name):
@@ -4964,7 +5349,9 @@ class HipParser:
 
         while index < len(self.tokens):
             token_type = self.tokens[index].type
-            if token_type == "LT":
+            if token_type == "LT" and (
+                depth == 0 or self.is_nested_template_lt_at_pos(index)
+            ):
                 depth += 1
             elif token_type == "GT":
                 depth -= 1
