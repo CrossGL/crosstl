@@ -131,6 +131,7 @@ class CudaParser:
         "XOR_EQUALS",
         "EQUAL",
         "NOT_EQUAL",
+        "SPACESHIP",
         "LESS_EQUAL",
         "GREATER_EQUAL",
         "LOGICAL_AND",

@@ -7388,6 +7388,27 @@ def test_escaped_newline_string_literal_codegen_reparseable_from_asm_macro():
         pytest.fail(f"Escaped newline string literal conversion failed: {e}")
 
 
+def test_rust_gpu_turbofish_prefix_string_literal_codegen_reparse():
+    # Reduced from Rust-GPU/rust-gpu commit
+    # a27c0363d391a54de1feb9ee6864ad9dff72d243,
+    # crates/rustc_codegen_spirv/src/codegen_cx/declare.rs
+    # Arguments::new::<...> symbol parsing.
+    code = """
+    fn parse_symbol(demangled_symbol_name: SymbolName) {
+        let generics = demangled_symbol_name
+            .strip_prefix("::<")
+            .and_then(|s| s.strip_suffix(">"));
+        consume(generics);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert 'strip_prefix("::<")' in result
+    assert 'strip_suffix(">")' in result
+    crosstl.translator.parse(result)
+
+
 def test_rust_cuda_tuple_return_match_codegen_reparse_from_atomic_ordering():
     # Reduced from Rust-GPU/Rust-CUDA crates/cuda_std/src/atomic.rs.
     code = """

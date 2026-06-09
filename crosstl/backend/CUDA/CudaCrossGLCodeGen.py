@@ -487,6 +487,7 @@ class CudaToCrossGLConverter:
         operator_mapping = {
             "==": "equal",
             "!=": "not_equal",
+            "<=>": "three_way",
             "<": "less",
             ">": "greater",
             "<=": "less_equal",

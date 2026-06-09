@@ -232,6 +232,7 @@ class SlangParser:
                 interfaces.append(self.parse_interface())
             elif (
                 declaration_token == "STRUCT"
+                or self.is_class_declaration_start()
                 or self.is_generic_prefixed_struct_declaration_start()
             ):
                 structs.append(self.parse_struct())
@@ -738,8 +739,23 @@ class SlangParser:
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
-        return (
-            current_pos < len(self.tokens) and self.tokens[current_pos][0] == "STRUCT"
+        return current_pos < len(
+            self.tokens
+        ) and self.is_struct_like_declaration_token_at(current_pos)
+
+    def is_class_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return current_pos < len(self.tokens) and self.tokens[current_pos] == (
+            "IDENTIFIER",
+            "class",
+        )
+
+    def is_struct_like_declaration_token_at(self, index):
+        return index < len(self.tokens) and (
+            self.tokens[index][0] == "STRUCT"
+            or self.tokens[index] == ("IDENTIFIER", "class")
         )
 
     def parse_qualifiers(self):
@@ -1579,7 +1595,11 @@ class SlangParser:
         qualifiers, prefix_generic_parameters, prefix_generic_constraints = (
             self.parse_typedef_prefixes()
         )
-        self.eat("STRUCT")
+        is_class = self.current_token == ("IDENTIFIER", "class")
+        if is_class:
+            self.eat("IDENTIFIER")
+        else:
+            self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         generic_parameters = prefix_generic_parameters
@@ -1601,6 +1621,7 @@ class SlangParser:
             node.generic_constraints = generic_constraints
             node.conformances = conformances
             node.qualifiers = qualifiers
+            node.is_class = is_class
             node.is_forward_declaration = True
             return node
 
@@ -1640,6 +1661,7 @@ class SlangParser:
                 continue
             if (
                 declaration_token == "STRUCT"
+                or self.is_class_declaration_start()
                 or self.is_generic_prefixed_struct_declaration_start()
             ):
                 structs.append(self.parse_struct())
@@ -1695,6 +1717,7 @@ class SlangParser:
         node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
+        node.is_class = is_class
         node.is_forward_declaration = False
         return node
 

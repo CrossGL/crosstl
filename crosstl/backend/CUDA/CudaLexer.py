@@ -178,6 +178,7 @@ TOKENS = tuple(
         ("XOR_EQUALS", r"\^="),
         ("LOGICAL_AND", r"&&"),
         ("LOGICAL_OR", r"\|\|"),
+        ("SPACESHIP", r"<=>"),
         ("EQUAL", r"=="),
         ("NOT_EQUAL", r"!="),
         ("LESS_EQUAL", r"<="),

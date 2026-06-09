@@ -5421,6 +5421,9 @@ class RustToCrossGLConverter:
             return None
 
         value = self.normalize_associated_type_path(value)
+        if "::" not in value:
+            return None
+
         direct = self.associated_consts.get(value)
         if direct is not None:
             return direct

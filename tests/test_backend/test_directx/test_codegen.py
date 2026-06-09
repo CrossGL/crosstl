@@ -1712,6 +1712,34 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
     parse_crossgl(output)
 
 
+def test_codegen_dependent_scoped_template_call_from_dxc_udt_validation():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/4771-udt-parameter-validation.hlsl
+    hlsl = textwrap.dedent("""
+        template<typename T>
+        struct Leg {
+            static T zero() {
+                return (T)0;
+            }
+        };
+
+        template<class Animal>
+        typename Animal::LegType getLegs(Animal A) {
+          return A.Legs + Leg<typename Animal::LegType>::zero();
+        }
+
+        struct Pup {
+          using LegType = int;
+          LegType Legs;
+        };
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "Animal_LegType getLegs(Animal A)" in output
+    assert "return A.Legs + Leg<typename Animal::LegType>::zero();" in output
+
+
 def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     # microsoft/DirectXShaderCompiler
     # tools/clang/test/CodeGenDXIL/hlsl/objects/HitObject/hitobject-array-byval.hlsl

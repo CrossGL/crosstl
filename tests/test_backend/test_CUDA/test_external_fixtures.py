@@ -108,6 +108,11 @@ EXTERNAL_SAMPLES = [
         "paths": ["c/parallel/src/jit_templates/traits.h"],
     },
     {
+        "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "17869e1d46314036843a9ff9a0cb726de560e94e",
+        "paths": ["libcudacxx/include/cuda/std/__utility/pair.h"],
+    },
+    {
         "repo": "https://github.com/NVIDIA/cutlass",
         "commit": "2599f2975b06a67d5ee25e4a7292afeda1475c9b",
         "paths": [
@@ -276,6 +281,35 @@ def test_current_cccl_function_try_block_main_parses_and_codegen_reparse():
     assert isinstance(ast.functions[0].body[1], ReturnNode)
     assert "i32 main()" in crossgl
     assert "Kernel launch: vectorAdd<<<1, 1>>>()" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_three_way_operator_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2>
+    _CCCL_API constexpr int operator<=>(const pair<_T1, _T2>& __x,
+                                        const pair<_T1, _T2>& __y)
+    {
+      return compare(__x.first, __y.first);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    function = ast.functions[0]
+    assert function.name == "operator<=>"
+    assert function.qualifiers == ["_CCCL_API", "constexpr"]
+    assert [(param.vtype, param.name) for param in function.params] == [
+        ("const pair<_T1, _T2> &", "__x"),
+        ("const pair<_T1, _T2> &", "__y"),
+    ]
+    assert "i32 operator_three_way(pair<_T1, _T2> __x, pair<_T1, _T2> __y)" in crossgl
+    assert "i32 operator<=>" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 

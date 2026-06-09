@@ -1509,7 +1509,7 @@ class GLSLParser:
     def is_hlsl_cbuffer_block_start(self):
         return (
             self.current_token[0] == "IDENTIFIER"
-            and str(self.current_token[1]).lower() == "cbuffer"
+            and str(self.current_token[1]).lower() in {"cbuffer", "tbuffer"}
             and self.peek_non_newline()[0] == "IDENTIFIER"
         )
 
@@ -1671,14 +1671,22 @@ class GLSLParser:
         self.eat("COLON")
         self.skip_newlines()
         parts = []
-        while self.current_token[0] not in (
-            "COMMA",
-            "SEMICOLON",
-            "RPAREN",
-            "LBRACE",
-            "NEWLINE",
-            "EOF",
-        ):
+        depth = 0
+        while True:
+            if self.current_token[0] == "EOF":
+                break
+            if depth == 0 and self.current_token[0] in (
+                "COMMA",
+                "SEMICOLON",
+                "RPAREN",
+                "LBRACE",
+                "NEWLINE",
+            ):
+                break
+            if self.current_token[0] == "LPAREN":
+                depth += 1
+            elif self.current_token[0] == "RPAREN" and depth > 0:
+                depth -= 1
             parts.append(str(self.current_token[1]))
             self.advance()
         return " ".join(parts).strip()

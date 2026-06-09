@@ -1229,6 +1229,7 @@ class VulkanParser:
             and not self.spirv_assembly_has_linkage_metadata_surface(
                 capabilities, types, extended_instruction_imports
             )
+            and not self.spirv_assembly_has_entry_point_metadata_surface(entry_points)
         ):
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
@@ -1274,6 +1275,9 @@ class VulkanParser:
         if "Linkage" not in capabilities:
             return False
         return bool(types or extended_instruction_imports)
+
+    def spirv_assembly_has_entry_point_metadata_surface(self, entry_points):
+        return bool(entry_points)
 
     def spirv_assembly_functions(
         self,

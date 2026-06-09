@@ -290,6 +290,7 @@ class HipToCrossGLConverter:
         "^=": "bit_xor_assign",
         "==": "eq",
         "!=": "ne",
+        "<=>": "three_way",
         "<=": "le",
         ">=": "ge",
         "&&": "logical_and",

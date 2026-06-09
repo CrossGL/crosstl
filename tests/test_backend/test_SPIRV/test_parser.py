@@ -2993,6 +2993,66 @@ def test_spirv_assembly_execution_mode_metadata_is_preserved():
     assert function.spirv_execution_modes == ast.spirv_execution_modes["%main"]
 
 
+def test_spirv_assembly_entry_point_metadata_only_module_is_preserved():
+    # Reduced from CrossGL-Compiler runtime/examples/fixtures/
+    # source-free-vulkan-native.cglb/backend/vulkan/
+    # SourceFreeVulkanRuntimeExample.spvasm.
+    code = """
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint GLCompute %source_free_vulkan_main "source_free_vulkan_main"
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.spirv_assembly is True
+    assert ast.global_variables == []
+    assert ast.structs == []
+    assert ast.functions == []
+    assert ast.spirv_entry_points == [
+        {
+            "execution_model": "GLCompute",
+            "id": "%source_free_vulkan_main",
+            "name": "source_free_vulkan_main",
+            "interface_ids": [],
+        }
+    ]
+
+
+def test_spirv_assembly_fake_disassembly_entry_point_metadata_only_module_is_preserved():
+    # Reduced from CrossGL-Compiler build/test-vulkan-package-inspect-
+    # disassembly-emitted.cglb/backend/vulkan/
+    # StorageBufferComputeShader.disassembly.spvasm.
+    code = """
+    OpEntryPoint GLCompute %compute_main "main" %resource_values
+    OpExecutionMode %compute_main LocalSize 1 1 1
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    assert ast.spirv_assembly is True
+    assert ast.global_variables == []
+    assert ast.structs == []
+    assert ast.functions == []
+    assert ast.spirv_entry_points == [
+        {
+            "execution_model": "GLCompute",
+            "id": "%compute_main",
+            "name": "main",
+            "interface_ids": ["%resource_values"],
+        }
+    ]
+    assert ast.spirv_execution_modes["%compute_main"] == [
+        {
+            "opcode": "OpExecutionMode",
+            "mode": "LocalSize",
+            "operands": ["1", "1", "1"],
+        }
+    ]
+
+
 def test_spirv_assembly_function_parameters_parse():
     code = """
     OpCapability Shader

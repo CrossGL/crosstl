@@ -506,6 +506,36 @@ def test_struct_init_method_parsing_from_shader_toy_sample():
     assert isinstance(constructor.body[0], AssignmentNode)
 
 
+def test_class_declaration_parsing_from_slang_cpu_program():
+    # Source: shader-slang/slang@142e00d9342eccf0613ed1b18d81cb003c5d6f09
+    # tests/cpu-program/class.slang
+    code = """
+    class MyClass
+    {
+        int intMember;
+        __init()
+        {
+            intMember = 0;
+        }
+        int method()
+        {
+            return intMember;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    cls = ast.structs[0]
+
+    assert cls.name == "MyClass"
+    assert cls.is_class is True
+    assert [(member.vtype, member.name) for member in cls.members] == [
+        ("int", "intMember")
+    ]
+    assert [method.name for method in cls.methods] == ["__init", "method"]
+
+
 def test_core_meta_generic_extension_constructor_constraints_parse():
     # Reduced from shader-slang/slang@564ac9f050d6569efd773e2f74e7d067a4e54baa
     # source/slang/core.meta.slang generic vector conversion constructors.

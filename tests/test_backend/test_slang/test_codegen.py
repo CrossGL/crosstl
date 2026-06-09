@@ -44,6 +44,39 @@ def test_struct_codegen():
         pytest.fail("Struct parsing or code generation not implemented.")
 
 
+def test_class_declaration_codegen_from_slang_cpu_program():
+    # Source: shader-slang/slang@142e00d9342eccf0613ed1b18d81cb003c5d6f09
+    # tests/cpu-program/class.slang
+    code = """
+    class MyClass
+    {
+        int intMember;
+        __init()
+        {
+            intMember = 0;
+        }
+        int method()
+        {
+            return intMember;
+        }
+    }
+
+    int main()
+    {
+        return 0;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "struct MyClass" in generated_code
+    assert "int intMember;" in generated_code
+    assert "int main()" in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_import_and_include_paths_codegen():
     code = """
     import MyApp.Shadowing;

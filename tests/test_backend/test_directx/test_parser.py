@@ -1902,6 +1902,35 @@ def test_parse_dependent_typename_scoped_template_return_from_dxc_sfinae():
     assert wrapper.members[-1].name == "val"
 
 
+def test_parse_dependent_scoped_template_call_from_dxc_udt_validation():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/4771-udt-parameter-validation.hlsl
+    ast = parse_code("""
+    template<typename T>
+    struct Leg {
+        static T zero() {
+            return (T)0;
+        }
+    };
+
+    template<class Animal>
+    typename Animal::LegType getLegs(Animal A) {
+      return A.Legs + Leg<typename Animal::LegType>::zero();
+    }
+
+    struct Pup {
+      using LegType = int;
+      LegType Legs;
+    };
+    """)
+
+    function = ast.functions[0]
+    returned = function.body[0].value
+
+    assert function.return_type == "Animal::LegType"
+    assert returned.right.name == "Leg<typename Animal::LegType>::zero"
+
+
 def test_parse_variable_template_id_expressions_from_dxc_var_template():
     # Source: microsoft/DirectXShaderCompiler@main
     # tools/clang/test/CodeGenSPIRV/var.template.hlsl

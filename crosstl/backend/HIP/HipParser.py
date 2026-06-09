@@ -99,6 +99,7 @@ class HipParser:
         "THRUST_RUNTIME_FUNCTION",
         "VX_CALLBACK",
         "WINAPI",
+        "consteval",
     }
     KERNEL_FUNCTION_SPECIFIER_VALUES = {"__global__", "ROCWMMA_KERNEL"}
     DECLARATION_QUALIFIER_TOKENS = {
@@ -181,6 +182,7 @@ class HipParser:
         "XOR_ASSIGN",
         "EQ",
         "NE",
+        "SPACESHIP",
         "LE",
         "GE",
         "AND",

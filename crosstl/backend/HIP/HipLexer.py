@@ -193,6 +193,7 @@ TOKENS = tuple(
         ("XOR_ASSIGN", r"\^="),
         ("AND", r"&&"),
         ("OR", r"\|\|"),
+        ("SPACESHIP", r"<=>"),
         ("EQ", r"=="),
         ("NE", r"!="),
         ("LE", r"<="),

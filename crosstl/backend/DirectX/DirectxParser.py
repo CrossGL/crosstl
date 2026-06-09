@@ -3568,10 +3568,20 @@ class HLSLParser:
                         if idx + 1 < len(self.tokens)
                         else ("EOF", "")
                     )
-                    return next_token[0] == "LPAREN" or (
-                        saw_top_level_comma
-                        and next_token[0]
-                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    return (
+                        next_token[0] == "LPAREN"
+                        or self.token_at_is_double_colon(idx + 1)
+                        or (
+                            saw_top_level_comma
+                            and next_token[0]
+                            in {
+                                "SEMICOLON",
+                                "COMMA",
+                                "RPAREN",
+                                "RBRACKET",
+                                "COLON",
+                            }
+                        )
                     )
             elif token_type == "SHIFT_RIGHT" and depth > 1:
                 depth -= 2
@@ -3581,10 +3591,20 @@ class HLSLParser:
                         if idx + 1 < len(self.tokens)
                         else ("EOF", "")
                     )
-                    return next_token[0] == "LPAREN" or (
-                        saw_top_level_comma
-                        and next_token[0]
-                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    return (
+                        next_token[0] == "LPAREN"
+                        or self.token_at_is_double_colon(idx + 1)
+                        or (
+                            saw_top_level_comma
+                            and next_token[0]
+                            in {
+                                "SEMICOLON",
+                                "COMMA",
+                                "RPAREN",
+                                "RBRACKET",
+                                "COLON",
+                            }
+                        )
                     )
             elif depth == 1 and token_type == "COMMA":
                 saw_top_level_comma = True

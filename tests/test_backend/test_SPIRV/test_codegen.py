@@ -8378,6 +8378,29 @@ def test_naga_linkage_metadata_only_assembly_codegen_reparse():
     assert generated_code == "shader main {\n}\n"
 
 
+def test_entry_point_metadata_only_assembly_codegen_reparse():
+    # Reduced from CrossGL-Compiler build/test-vulkan-package-inspect-
+    # disassembly-emitted.cglb/backend/vulkan/
+    # StorageBufferComputeShader.disassembly.spvasm.
+    code = """
+    OpEntryPoint GLCompute %compute_main "main" %resource_values
+    OpExecutionMode %compute_main LocalSize 1 1 1
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert ast.spirv_entry_points[0]["id"] == "%compute_main"
+    assert ast.spirv_execution_modes["%compute_main"][0]["operands"] == [
+        "1",
+        "1",
+        "1",
+    ]
+    assert generated_code == "shader main {\n}\n"
+
+
 def test_naga_empty_global_name_fallback_identifier_codegen_reparse():
     tokens = tokenize_code(SPIRV_NAGA_EMPTY_GLOBAL_NAME_ASSEMBLY)
     ast = parse_code(tokens)

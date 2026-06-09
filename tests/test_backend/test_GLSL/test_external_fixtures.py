@@ -2670,6 +2670,38 @@ def test_codegen_glslang_cbuffer_register_fixture_snippets():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_glslang_hlsl_tbuffer_packoffset_fixture_snippets():
+    # Source: KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/hlsl.buffer.frag
+    code = textwrap.dedent("""
+        tbuffer buf2 : register(t8) {
+            float4 v4 : packoffset(c1);
+            int i4 : packoffset(c3);
+        };
+
+        float4 main() : SV_Target {
+            return v4 + float4(i4);
+        }
+    """).strip()
+
+    ast = parse_glsl(code, "fragment")
+    block = next(struct for struct in ast.structs if struct.name == "buf2")
+
+    assert getattr(block, "hlsl_cbuffer", False) is True
+    assert block.interface_layout == {"binding": "8"}
+    assert [member.semantic for member in block.members] == [
+        "packoffset ( c1 )",
+        "packoffset ( c3 )",
+    ]
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "cbuffer buf2 @binding(8) {" in crossgl
+    assert "vec4 v4;" in crossgl
+    assert "int i4;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_glslang_register_autoassign_resource_fixture_snippets():
     fixture = next(
         item

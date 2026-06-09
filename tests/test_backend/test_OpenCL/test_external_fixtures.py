@@ -132,6 +132,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "include/opencl-c.h",
     },
+    "pocl_opencl_c_atomic_scalar_aliases": {
+        "url": "https://github.com/pocl/pocl",
+        "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
+        "path": "include/opencl-c.h",
+    },
     "pocl_build_program_feature_error": {
         "url": "https://github.com/pocl/pocl",
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
@@ -926,6 +931,44 @@ def test_external_pocl_opencl_c_sync_builtin_declarations_parse():
     assert ast.statements[4].name == "use_barrier"
     assert ast.statements[4].body[0].sync_type == "barrier"
     assert ast.statements[4].body[1].sync_type == "mem_fence"
+
+
+def test_external_pocl_opencl_c_atomic_scalar_aliases_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["pocl_opencl_c_atomic_scalar_aliases"]
+    assert source_info["commit"] == "d11f27f3ba667456466cd935dacaf69e5cbf2598"
+    assert source_info["path"] == "include/opencl-c.h"
+
+    source = """
+    void __attribute__((overloadable)) atomic_init(volatile global atomic_int *p,
+                                                  int val);
+    uint __attribute__((overloadable)) atomic_fetch_add(
+        volatile global atomic_uint *p, uint val);
+    uintptr_t __attribute__((overloadable)) atomic_fetch_sub(
+        volatile global atomic_uintptr_t *p, ptrdiff_t val);
+
+    kernel void atomic_alias_probe(global atomic_uint *counter,
+                                   global atomic_float *weights,
+                                   global uint *out) {
+        uint old = atomic_fetch_add(counter, 1u);
+        out[0] = old + sizeof(atomic_uint) + sizeof(*counter) + sizeof(*weights);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [stmt.name for stmt in ast.statements[:3]] == [
+        "atomic_init",
+        "atomic_fetch_add",
+        "atomic_fetch_sub",
+    ]
+    assert "ptr<i32> p" in crossgl
+    assert "ptr<u32> p" in crossgl
+    assert "ptr<u64> p" in crossgl
+    assert "counter: array<u32>" in crossgl
+    assert "weights: array<f32>" in crossgl
+    assert "sizeof" not in crossgl
+    assert "atomic_uint" not in crossgl
+    assert "atomic_float" not in crossgl
 
 
 def test_external_pocl_feature_gated_error_codegen_reparse():

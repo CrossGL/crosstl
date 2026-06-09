@@ -125,6 +125,16 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
         "paths": ["clang/test/SemaCUDA/amdgpu-attrs.cu"],
     },
+    "llvm_cuda_consteval": {
+        "url": "https://github.com/llvm/llvm-project",
+        "commit": "146abed5cd072a27c4240c7cf53b764571e62462",
+        "paths": ["clang/test/SemaCUDA/consteval-func.cu"],
+    },
+    "cccl": {
+        "url": "https://github.com/NVIDIA/cccl",
+        "commit": "17869e1d46314036843a9ff9a0cb726de560e94e",
+        "paths": ["libcudacxx/include/cuda/std/__utility/pair.h"],
+    },
     "hip_kittens": {
         "url": "https://github.com/HazyResearch/HipKittens",
         "commit": "cd090ae98ee4e7b8d3d5291fc62cfd716aecb946",
@@ -1549,6 +1559,59 @@ def test_external_llvm_amdgpu_attribute_before_global_codegen_reparse():
     assert "fn flat_work_group_size_32_64(" in crossgl
     assert "out[gl_LocalInvocationID.x] = 1.0f;" in crossgl
     assert "__attribute__" not in crossgl
+
+
+def test_external_llvm_cuda_consteval_device_function_hip_codegen_reparse():
+    # Upstream:
+    # repo: https://github.com/llvm/llvm-project
+    # commit: 146abed5cd072a27c4240c7cf53b764571e62462
+    # path: clang/test/SemaCUDA/consteval-func.cu
+    source = """
+    __device__ consteval int f() { return 0; }
+    int main() { return f(); }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    function_signatures = [
+        (function.name, function.return_type, function.qualifiers)
+        for function in ast.statements
+    ]
+    assert function_signatures == [
+        ("f", "int", ["__device__", "consteval"]),
+        ("main", "int", []),
+    ]
+    assert "i32 f()" in crossgl
+    assert "i32 main()" in crossgl
+    assert "return f();" in crossgl
+    assert "consteval" not in crossgl
+
+
+def test_external_cccl_three_way_operator_hip_codegen_reparse():
+    # Reduced after macro expansion from:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 17869e1d46314036843a9ff9a0cb726de560e94e
+    # path: libcudacxx/include/cuda/std/__utility/pair.h
+    source = """
+    template <class _T1, class _T2>
+    __host__ __device__ int operator<=>(const pair<_T1, _T2>& __x,
+                                        const pair<_T1, _T2>& __y)
+    {
+      return compare(__x.first, __y.first);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    function = ast.statements[0]
+    assert function.name == "operator<=>"
+    assert function.qualifiers == ["__host__", "__device__"]
+    assert function.params == [
+        {"type": "const pair<_T1, _T2> &", "name": "__x"},
+        {"type": "const pair<_T1, _T2> &", "name": "__y"},
+    ]
+    assert "i32 operator_three_way(pair<_T1, _T2> __x, pair<_T1, _T2> __y)" in crossgl
+    assert "i32 operator<=>" not in crossgl
 
 
 def test_external_rocm_dynamic_shared_extern_crossgl_reparse():
