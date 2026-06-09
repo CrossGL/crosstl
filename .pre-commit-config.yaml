@@ -52,7 +52,7 @@ repos:
           - --markdown-linebreak-ext=rst
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.15
+    rev: v0.15.16
     hooks:
       - id: ruff-check
         name: ruff critical Python checks
