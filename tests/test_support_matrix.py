@@ -1690,6 +1690,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "direct validation report artifact target, artifact source backend, "
             "artifact variant"
         ) in backend_support["notes"]
+        assert "source-report-hash metadata" in backend_support["notes"]
         assert "closed standalone validation-report field set" in (
             backend_support["notes"]
         )
@@ -1880,9 +1881,10 @@ def test_project_validation_hooks_document_migration_contract_checks():
             "validate-project JSON, text, and SARIF summaries"
             in backend_support["notes"]
         )
-        assert "validation report schema/kind/generated-at metadata" in (
-            backend_support["notes"]
-        )
+        assert (
+            "validation report schema/kind/generated-at and source-report-hash "
+            "metadata"
+        ) in backend_support["notes"]
         assert "direct validation report artifact target" in backend_support["notes"]
         assert "artifact source backend" in backend_support["notes"]
         assert "toolchain run status" in backend_support["notes"]

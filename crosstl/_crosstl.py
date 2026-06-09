@@ -654,6 +654,23 @@ def _format_payload_generated_at(payload, label):
     return f"{label}: {generated_at}"
 
 
+def _format_payload_hash(payload, field_name, label):
+    if not isinstance(payload, Mapping):
+        return None
+
+    hash_payload = payload.get(field_name)
+    if not isinstance(hash_payload, Mapping):
+        return None
+
+    hash_preview = _format_hash_preview(
+        hash_payload.get("algorithm"),
+        hash_payload.get("value"),
+    )
+    if not hash_preview:
+        return None
+    return f"{label}: {hash_preview}"
+
+
 def _format_project_validation_report(payload):
     counts = payload.get("diagnosticCounts", {})
     counts = counts if isinstance(counts, Mapping) else {}
@@ -662,6 +679,7 @@ def _format_project_validation_report(payload):
         _format_payload_schema_version(payload, "Validation schema version"),
         _format_payload_kind(payload, "Validation kind"),
         _format_payload_generated_at(payload, "Validation generated at"),
+        _format_payload_hash(payload, "sourceReportHash", "Source report hash"),
     ):
         if header_line:
             lines.append(header_line)
@@ -922,6 +940,19 @@ def _sarif_string_list(value):
     return [item for item in value if isinstance(item, str)]
 
 
+def _sarif_hash_payload(value):
+    if not isinstance(value, Mapping):
+        return None
+
+    algorithm = value.get("algorithm")
+    digest = value.get("value")
+    if not isinstance(algorithm, str) or not algorithm:
+        return None
+    if not isinstance(digest, str) or not digest:
+        return None
+    return {"algorithm": algorithm, "value": digest}
+
+
 def _add_sarif_project_properties(properties, project):
     if not isinstance(project, Mapping):
         return
@@ -956,6 +987,10 @@ def _sarif_invocation_properties(payload):
     source_report = payload.get("sourceReport")
     if isinstance(source_report, str) and source_report:
         properties["sourceReport"] = source_report
+
+    source_report_hash = _sarif_hash_payload(payload.get("sourceReportHash"))
+    if source_report_hash is not None:
+        properties["sourceReportHash"] = source_report_hash
 
     schema_version = payload.get("schemaVersion")
     if _sarif_non_negative_int(schema_version):

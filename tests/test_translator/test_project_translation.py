@@ -8716,6 +8716,7 @@ def test_validate_project_report_emits_closed_validation_report_schema(tmp_path)
     assert payload["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     assert payload["kind"] == project_pipeline.VALIDATION_REPORT_KIND
     assert payload["sourceReport"] == str(report_path)
+    assert payload["sourceReportHash"] == project_pipeline._source_hash(report_path)
     assert isinstance(payload["generatedAt"], int)
     assert payload["project"]["root"] == str(repo)
     assert payload["project"]["targets"] == ["cgl"]
@@ -18935,8 +18936,14 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     )
 
     payload = json.loads(result.stdout)
+    source_report_hash = project_pipeline._source_hash(report_path)
+    source_report_hash_preview = crosstl_cli._format_hash_preview(
+        source_report_hash["algorithm"],
+        source_report_hash["value"],
+    )
     assert result.returncode == 1
     assert payload["success"] is False
+    assert payload["sourceReportHash"] == source_report_hash
     assert payload["diagnosticsByCode"] == {"project.validate.failed-artifact": 1}
     assert payload["diagnosticsByTarget"] == {"not-a-backend": 1}
     assert payload["diagnosticsBySourceBackend"] == {}
@@ -18988,6 +18995,7 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     ]
     assert len(validation_generated_lines) == 1
     assert int(validation_generated_lines[0].split(": ", 1)[1]) >= 0
+    assert f"Source report hash: {source_report_hash_preview}" in text_result.stdout
     assert f"Project root: {report_path.parent}" in text_result.stdout
     assert "Output directory: out" in text_result.stdout
     assert "Project targets: not-a-backend" in text_result.stdout
@@ -19033,6 +19041,7 @@ def test_project_cli_validate_project_reports_failed_artifacts(tmp_path):
     assert run["invocations"][0]["executionSuccessful"] is False
     invocation_properties = run["invocations"][0]["properties"]
     assert invocation_properties["sourceReport"] == str(report_path)
+    assert invocation_properties["sourceReportHash"] == source_report_hash
     assert (
         invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     )
@@ -19173,7 +19182,9 @@ def test_project_cli_validate_project_sarif_reports_generated_diagnostics(tmp_pa
     assert run["tool"]["driver"]["name"] == "CrossTL project validation"
     assert run["invocations"][0]["executionSuccessful"] is False
     invocation_properties = run["invocations"][0]["properties"]
+    source_report_hash = project_pipeline._source_hash(report_path)
     assert invocation_properties["sourceReport"] == str(report_path)
+    assert invocation_properties["sourceReportHash"] == source_report_hash
     assert (
         invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
     )

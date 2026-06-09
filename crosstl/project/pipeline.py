@@ -342,6 +342,7 @@ VALIDATION_REPORT_FIELDS = frozenset(
         "schemaVersion",
         "kind",
         "sourceReport",
+        "sourceReportHash",
         "generatedAt",
         "success",
         "project",
@@ -810,6 +811,13 @@ def _internal_exclude_patterns(config: ProjectConfig) -> tuple[str, ...]:
 def _source_hash(path: Path) -> dict[str, str]:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return {"algorithm": "sha256", "value": digest}
+
+
+def _optional_source_hash(path: Path) -> dict[str, str] | None:
+    try:
+        return _source_hash(path)
+    except OSError:
+        return None
 
 
 def _hash_matches_report(
@@ -7845,6 +7853,7 @@ def _validation_report_payload(
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "kind": VALIDATION_REPORT_KIND,
         "sourceReport": str(path),
+        "sourceReportHash": _optional_source_hash(path),
         "generatedAt": int(time.time()),
         "success": not any(
             diagnostic.get("severity") == "error" for diagnostic in diagnostics
