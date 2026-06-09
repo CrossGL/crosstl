@@ -11559,7 +11559,9 @@ def _toolchain_run_contract_reasons(
             )
 
     check_kind = run.get("checkKind")
-    if "checkKind" in run:
+    if require_closed_fields and "checkKind" not in run:
+        reasons.append(f"{prefix}.checkKind must be recorded")
+    elif "checkKind" in run:
         if check_kind not in VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS:
             allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
             reasons.append(f"{prefix}.checkKind must be one of {allowed}")

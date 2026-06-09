@@ -7062,6 +7062,7 @@ def test_validate_project_report_rejects_noncanonical_full_report_targets(tmp_pa
             "target": "OpenGL",
             "path": validation_artifact["path"],
             "command": ["glslangValidator", "--stdin"],
+            "checkKind": "artifact",
             "returncode": 0,
             "status": "ok",
             "stdout": "",
@@ -12579,6 +12580,43 @@ def test_validate_project_report_rejects_validation_source_backend_omissions(
         "validation.toolchainRuns[0].sourceBackend must be recorded when "
         "report.artifacts[0].sourceBackend is recorded"
     ) in diagnostic["message"]
+
+
+def test_validate_project_report_rejects_toolchain_runs_without_check_kind_in_full_report(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out", validate=True)
+    payload = report.to_json()
+    validation_artifact = payload["validation"]["artifacts"][0]
+    payload["validation"]["toolchainRuns"] = [
+        {
+            "source": validation_artifact["source"],
+            "target": validation_artifact["target"],
+            "path": validation_artifact["path"],
+            "sourceBackend": validation_artifact["sourceBackend"],
+            "command": ["crosstl-validate"],
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+        }
+    ]
+    report_path = repo / "out" / "missing-toolchain-run-check-kind-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    assert validation["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "validation.toolchainRuns[0].checkKind must be recorded"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_validation_summary_missing_artifact_checks(
@@ -20932,7 +20970,7 @@ def test_project_cli_inspect_report_text_includes_validation_variant_rollups(
     assert (
         "- simple.cgl -> cgl (variant: release) at "
         "out/cgl/release/simple.cgl: validation failed "
-        "(generated hash: mismatch; generated size: mismatch; "
+        "(source backend: cgl; generated hash: mismatch; generated size: mismatch; "
         "source map: not-checked)"
     ) in result.stdout
     assert "Artifact provenance samples:" in result.stdout
@@ -22185,8 +22223,8 @@ def test_project_cli_inspect_report_text_includes_validation_hash_rollups(tmp_pa
     assert "Validation source remaps: ok=1" in result.stdout
     assert (
         "- simple.cgl -> cgl at out/cgl/simple.cgl: "
-        "validation failed (generated hash: mismatch; generated size: mismatch; "
-        "source map: not-checked)"
+        "validation failed (source backend: cgl; generated hash: mismatch; "
+        "generated size: mismatch; source map: not-checked)"
     ) in result.stdout
     assert "project.validate.generated-hash-mismatch" in result.stdout
 

@@ -688,7 +688,8 @@ Project reports are JSON documents with:
   metadata, toolchain-run tool rollups, and a closed standalone validation-report
   field set,
   failed-artifact text with
-  non-OK hash, source-size, generated-size, source-map, and source-remap statuses, bounded
+  source-backend context plus non-OK hash, source-size, generated-size,
+  source-map, and source-remap statuses, bounded
   validation artifact and validation toolchain-run inspection samples, source-root and
   include-directory status record and count consistency checks, config hash
   shape and current-file checks, unit source hash and byte-size shape and

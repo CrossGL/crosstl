@@ -3489,6 +3489,9 @@ def _format_project_report_inspection(payload):
                 description = f"{description}: {artifact.get('error')}"
             else:
                 validation_details = []
+                source_backend = artifact.get("sourceBackend")
+                if isinstance(source_backend, str) and source_backend:
+                    validation_details.append(f"source backend: {source_backend}")
                 for field_name, label in (
                     ("sourceHashStatus", "source hash"),
                     ("sourceSizeStatus", "source size"),
