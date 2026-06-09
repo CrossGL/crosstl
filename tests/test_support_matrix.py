@@ -215,11 +215,20 @@ def test_project_report_inspection_is_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_includes_scan_only_artifact_matrix"
         ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_marks_source_map_validation_"
+            "failures"
+        ) in backend_support["evidence"]
         assert "JSON, text, and SARIF summaries" in backend_support["notes"]
         assert (
             "source-map count, source-map artifact samples, source-remap artifact "
-            "samples with sidecar hash metadata, and provenance rollups"
+            "samples with sidecar hash metadata, failed validation metadata in "
+            "JSON and text samples, and provenance rollups"
         ) in backend_support["notes"]
+        assert "failed validation metadata in JSON and text samples" in (
+            backend_support["notes"]
+        )
         assert (
             "report-or-translation-artifact-derived metadata source, does not "
             "derive artifact-matrix gaps for scan-only reports, plus sampled "
@@ -1366,8 +1375,14 @@ def test_project_source_provenance_documents_source_map_mapping_checks():
         assert (
             "bounded source-map and source-remap artifact inspection samples "
             "with source/generated span, mapping-count, source hash and byte-size "
-            "metadata, and sidecar hash plus byte-size metadata and custom limits"
+            "metadata, sidecar hash plus byte-size metadata, failed validation "
+            "status metadata, and custom limits"
         ) in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_inspect_report_text_marks_source_map_validation_"
+            "failures"
+        ) in backend_support["evidence"]
         assert (
             "text inspection derives file-level source-map counts from total "
             "and fine-grained source-map totals and reports aggregate "

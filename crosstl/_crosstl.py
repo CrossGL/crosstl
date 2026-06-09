@@ -1317,6 +1317,26 @@ def _format_source_map_span_preview(span):
     )
 
 
+def _append_artifact_validation_details(details, artifact):
+    validation_status = artifact.get("validationStatus")
+    if isinstance(validation_status, str) and validation_status:
+        details.append(f"validation={validation_status}")
+    exists = artifact.get("exists")
+    if isinstance(exists, bool):
+        details.append(f"exists={'true' if exists else 'false'}")
+    for field_name, label in (
+        ("sourceHashStatus", "sourceHashStatus"),
+        ("sourceSizeStatus", "sourceSizeStatus"),
+        ("generatedHashStatus", "generatedHashStatus"),
+        ("generatedSizeStatus", "generatedSizeStatus"),
+        ("sourceMapStatus", "sourceMapStatus"),
+        ("sourceRemapStatus", "sourceRemapStatus"),
+    ):
+        value = artifact.get(field_name)
+        if isinstance(value, str) and value:
+            details.append(f"{label}={value}")
+
+
 def _format_source_map_artifact_line(artifact):
     if not isinstance(artifact, Mapping):
         return None
@@ -1367,6 +1387,7 @@ def _format_source_map_artifact_line(artifact):
     )
     if source_hash_preview:
         details.append(f"sourceHash={source_hash_preview}")
+    _append_artifact_validation_details(details, artifact)
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {generated}{suffix}"
@@ -1455,6 +1476,7 @@ def _format_source_remap_artifact_line(artifact):
     )
     if hash_preview:
         details.append(f"hash={hash_preview}")
+    _append_artifact_validation_details(details, artifact)
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {remap_path} -> {generated}{suffix}"
@@ -1532,30 +1554,7 @@ def _format_artifact_provenance_line(artifact):
     ):
         size_label = "byte" if generated_size == 1 else "bytes"
         details.append(f"generatedSize={generated_size} {size_label}")
-    validation_status = artifact.get("validationStatus")
-    if isinstance(validation_status, str) and validation_status:
-        details.append(f"validation={validation_status}")
-    exists = artifact.get("exists")
-    if isinstance(exists, bool):
-        details.append(f"exists={'true' if exists else 'false'}")
-    source_hash_status = artifact.get("sourceHashStatus")
-    if isinstance(source_hash_status, str) and source_hash_status:
-        details.append(f"sourceHashStatus={source_hash_status}")
-    source_size_status = artifact.get("sourceSizeStatus")
-    if isinstance(source_size_status, str) and source_size_status:
-        details.append(f"sourceSizeStatus={source_size_status}")
-    generated_hash_status = artifact.get("generatedHashStatus")
-    if isinstance(generated_hash_status, str) and generated_hash_status:
-        details.append(f"generatedHashStatus={generated_hash_status}")
-    generated_size_status = artifact.get("generatedSizeStatus")
-    if isinstance(generated_size_status, str) and generated_size_status:
-        details.append(f"generatedSizeStatus={generated_size_status}")
-    source_map_status = artifact.get("sourceMapStatus")
-    if isinstance(source_map_status, str) and source_map_status:
-        details.append(f"sourceMapStatus={source_map_status}")
-    source_remap_status = artifact.get("sourceRemapStatus")
-    if isinstance(source_remap_status, str) and source_remap_status:
-        details.append(f"sourceRemapStatus={source_remap_status}")
+    _append_artifact_validation_details(details, artifact)
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {path}{suffix}"

@@ -14676,6 +14676,53 @@ def test_inspect_project_report_marks_source_map_samples_with_validation_status(
         assert sample["sourceRemapStatus"] == "invalid"
 
 
+def test_project_cli_inspect_report_text_marks_source_map_validation_failures(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    payload = report.to_json()
+    source_remap_path = repo / payload["artifacts"][0]["sourceRemap"]["path"]
+    source_remap_path.write_text("{}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    source_map_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("- simple.cgl -> out/cgl/simple.cgl ")
+        and "granularity=line" in line
+    )
+    source_remap_line = next(
+        line
+        for line in result.stdout.splitlines()
+        if line.startswith("- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl ")
+    )
+    for line in (source_map_line, source_remap_line):
+        assert "validation=failed" in line
+        assert "sourceMapStatus=ok" in line
+        assert "sourceRemapStatus=invalid" in line
+
+
 def test_validate_project_report_rejects_source_remap_content_mismatches(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
