@@ -1519,12 +1519,7 @@ def _format_source_map_artifact_line(artifact):
     generated_span = _format_source_map_span_preview(artifact.get("generatedSpan"))
     if generated_span:
         details.append(f"generatedSpan={generated_span}")
-    source_hash_preview = _format_hash_preview(
-        artifact.get("sourceHashAlgorithm"),
-        artifact.get("sourceHash"),
-    )
-    if source_hash_preview:
-        details.append(f"sourceHash={source_hash_preview}")
+    _append_source_artifact_metadata(details, artifact)
     _append_generated_artifact_metadata(details, artifact)
     _append_artifact_validation_details(details, artifact)
 
@@ -1565,6 +1560,25 @@ def _format_hash_preview(algorithm, value):
     return f"{prefix}{value[:12]}{suffix}"
 
 
+def _format_byte_size(value):
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        size_label = "byte" if value == 1 else "bytes"
+        return f"{value} {size_label}"
+    return None
+
+
+def _append_source_artifact_metadata(details, artifact):
+    source_hash_preview = _format_hash_preview(
+        artifact.get("sourceHashAlgorithm"),
+        artifact.get("sourceHash"),
+    )
+    if source_hash_preview:
+        details.append(f"sourceHash={source_hash_preview}")
+    source_size = _format_byte_size(artifact.get("sourceSizeBytes"))
+    if source_size:
+        details.append(f"sourceSize={source_size}")
+
+
 def _append_generated_artifact_metadata(details, artifact):
     generated_hash_preview = _format_hash_preview(
         artifact.get("generatedHashAlgorithm"),
@@ -1572,14 +1586,9 @@ def _append_generated_artifact_metadata(details, artifact):
     )
     if generated_hash_preview:
         details.append(f"generatedHash={generated_hash_preview}")
-    generated_size = artifact.get("generatedSizeBytes")
-    if (
-        isinstance(generated_size, int)
-        and not isinstance(generated_size, bool)
-        and generated_size >= 0
-    ):
-        size_label = "byte" if generated_size == 1 else "bytes"
-        details.append(f"generatedSize={generated_size} {size_label}")
+    generated_size = _format_byte_size(artifact.get("generatedSizeBytes"))
+    if generated_size:
+        details.append(f"generatedSize={generated_size}")
 
 
 def _format_source_remap_artifact_line(artifact):
@@ -1620,12 +1629,7 @@ def _format_source_remap_artifact_line(artifact):
         and mapping_count >= 0
     ):
         details.append(f"mappings={mapping_count}")
-    source_hash_preview = _format_hash_preview(
-        artifact.get("sourceHashAlgorithm"),
-        artifact.get("sourceHash"),
-    )
-    if source_hash_preview:
-        details.append(f"sourceHash={source_hash_preview}")
+    _append_source_artifact_metadata(details, artifact)
     _append_generated_artifact_metadata(details, artifact)
     hash_preview = _format_hash_preview(
         artifact.get("sourceRemapHashAlgorithm"),
@@ -1633,6 +1637,9 @@ def _format_source_remap_artifact_line(artifact):
     )
     if hash_preview:
         details.append(f"hash={hash_preview}")
+    source_remap_size = _format_byte_size(artifact.get("sourceRemapSizeBytes"))
+    if source_remap_size:
+        details.append(f"sourceRemapSize={source_remap_size}")
     _append_artifact_validation_details(details, artifact)
 
     suffix = f" ({', '.join(details)})" if details else ""
@@ -1691,12 +1698,7 @@ def _format_artifact_provenance_line(artifact):
     intermediate = artifact.get("intermediate")
     if isinstance(intermediate, str) and intermediate:
         details.append(f"intermediate={intermediate}")
-    source_hash_preview = _format_hash_preview(
-        artifact.get("sourceHashAlgorithm"),
-        artifact.get("sourceHash"),
-    )
-    if source_hash_preview:
-        details.append(f"sourceHash={source_hash_preview}")
+    _append_source_artifact_metadata(details, artifact)
     _append_generated_artifact_metadata(details, artifact)
     _append_artifact_validation_details(details, artifact)
 

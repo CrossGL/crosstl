@@ -7350,6 +7350,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
         "(sourceBackend=cgl, target=opengl, "
         "pipeline=single-file-translate, intermediate=none, "
         f"sourceHash={direct_source_hash_preview}, "
+        f"sourceSize={direct_source_size} bytes, "
         f"generatedHash={direct_generated_hash_preview}, "
         f"generatedSize={direct_generated_size} bytes)"
     ) in result.stdout
@@ -7367,6 +7368,7 @@ def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance(
         "(sourceBackend=rust, target=opengl, "
         "pipeline=single-file-translate, intermediate=crossgl, "
         f"sourceHash={bridged_source_hash_preview}, "
+        f"sourceSize={bridged_source_size} bytes, "
         f"generatedHash={bridged_generated_hash_preview}, "
         f"generatedSize={bridged_generated_size} bytes)"
     ) in result.stdout
@@ -21267,6 +21269,7 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     )
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     source_hash_preview = f"{source_hash['algorithm']}:{source_hash['value'][:12]}..."
+    source_size = (repo / "simple.cgl").stat().st_size
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
     generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     generated_hash_preview = (
@@ -21288,7 +21291,8 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         f"(sourceBackend=cgl, target=cgl, granularity=line, "
         f"mappings={line_mapping_count}, sourceSpan={source_span_preview}, "
         f"generatedSpan={generated_span_preview}, "
-        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview}, "
+        f"sourceHash={source_hash_preview}, sourceSize={source_size} bytes, "
+        f"generatedHash={generated_hash_preview}, "
         f"generatedSize={generated_size} bytes)"
     ) in result.stdout
     assert "Source remap artifacts:" in result.stdout
@@ -21298,12 +21302,17 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     source_remap_hash_preview = (
         f"{source_remap_hash['algorithm']}:{source_remap_hash['value'][:12]}..."
     )
+    source_remap_size = (
+        (repo / "out" / "cgl" / "simple.source-remap.json").stat().st_size
+    )
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, granularity=line, "
         f"mappings={line_mapping_count}, sourceHash={source_hash_preview}, "
+        f"sourceSize={source_size} bytes, "
         f"generatedHash={generated_hash_preview}, "
-        f"generatedSize={generated_size} bytes, hash={source_remap_hash_preview})"
+        f"generatedSize={generated_size} bytes, hash={source_remap_hash_preview}, "
+        f"sourceRemapSize={source_remap_size} bytes)"
     ) in result.stdout
     assert "Artifact provenance by pipeline: single-file-translate=1" in result.stdout
     assert "Artifact provenance by intermediate: none=1" in result.stdout
@@ -21316,7 +21325,8 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
         "- simple.cgl -> out/cgl/simple.cgl "
         "(sourceBackend=cgl, target=cgl, "
         "pipeline=single-file-translate, intermediate=none, "
-        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview}, "
+        f"sourceHash={source_hash_preview}, sourceSize={source_size} bytes, "
+        f"generatedHash={generated_hash_preview}, "
         f"generatedSize={generated_size} bytes)"
     ) in result.stdout
     assert "Validation artifact samples:" in result.stdout
@@ -21367,8 +21377,12 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
     source_remap_hash_preview = (
         f"{source_remap_hash['algorithm']}:{source_remap_hash['value'][:12]}..."
     )
+    source_remap_size = (
+        (repo / "out" / "cgl" / "simple.source-remap.json").stat().st_size
+    )
     source_hash = project_pipeline._source_hash(repo / "simple.cgl")
     source_hash_preview = f"{source_hash['algorithm']}:{source_hash['value'][:12]}..."
+    source_size = (repo / "simple.cgl").stat().st_size
     generated_hash = project_pipeline._source_hash(repo / "out" / "cgl" / "simple.cgl")
     generated_size = (repo / "out" / "cgl" / "simple.cgl").stat().st_size
     generated_hash_preview = (
@@ -21391,15 +21405,18 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
         f"granularity=line, mappings={line_mapping_count}, "
         f"sourceSpan={source_span_preview}, "
         f"generatedSpan={generated_span_preview}, "
-        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview}, "
+        f"sourceHash={source_hash_preview}, sourceSize={source_size} bytes, "
+        f"generatedHash={generated_hash_preview}, "
         f"generatedSize={generated_size} bytes)"
     ) in result.stdout
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, sourceRemapTarget=opengl, "
         f"granularity=line, mappings={line_mapping_count}, "
-        f"sourceHash={source_hash_preview}, generatedHash={generated_hash_preview}, "
-        f"generatedSize={generated_size} bytes, hash={source_remap_hash_preview})"
+        f"sourceHash={source_hash_preview}, sourceSize={source_size} bytes, "
+        f"generatedHash={generated_hash_preview}, "
+        f"generatedSize={generated_size} bytes, hash={source_remap_hash_preview}, "
+        f"sourceRemapSize={source_remap_size} bytes)"
     ) in result.stdout
 
 
