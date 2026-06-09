@@ -28,6 +28,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "6b9f98ff90facc35306a0ba643dfecb59a870156",
     },
+    "shader-slang/slang-main-2026-06-09-dyn-interface": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "1fc15d23f67005325103a888a175a96ba1782ac2",
+    },
     "shader-slang/slang-main-2026-06-08-anonymous-struct": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
@@ -1315,6 +1319,30 @@ EXTERNAL_FIXTURES = [
             "__subscript",
             "operator[]",
         ],
+    },
+    {
+        "id": "slang_2026_dyn_interface_parameter_codegen_reparse",
+        "repo": "shader-slang/slang-main-2026-06-09-dyn-interface",
+        "path": "tests/compute/interface-qualifiers/lang-2026-implicit-some.slang",
+        "source": (
+            """
+            interface IFoo
+            {
+                int get();
+            }
+
+            int callFooDyn(dyn IFoo x)
+            {
+                return x.get();
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "int callFooDyn(IFoo x)",
+            "return x.get();",
+        ],
+        "not_contains": ["dyn IFoo"],
     },
     {
         "id": "slang_hlsl_intrinsic_mul_matrix_vector",

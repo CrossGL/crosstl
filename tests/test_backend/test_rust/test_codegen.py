@@ -10102,6 +10102,36 @@ def test_local_unsafe_extern_block_codegen_reparse_from_rust_cuda_thread_intrins
     crosstl.translator.parse(result)
 
 
+def test_rust_cuda_nested_unsafe_extern_callback_and_array_result_reparse():
+    # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
+    # 103a8d56935c4e0885ff7c3d25402319df1a8e00,
+    # crates/blastoff/src/context.rs and crates/cudnn-sys/build/cudnn_sdk.rs.
+    code = """
+    struct CublasContext;
+    struct CudnnSdk;
+
+    impl CublasContext {
+        fn set_logger_callback(callback: Option<unsafe extern "C" fn(*const c_char)>) {
+            cublas_sys::cublasSetLoggerCallback(callback).to_result().unwrap();
+        }
+    }
+
+    impl CudnnSdk {
+        fn parse_cudnn_version(header_content: &str) -> Result<[u32; 3], Box<error::Error>> {
+            Ok([1, 2, 3])
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "void CublasContext_set_logger_callback(Option<auto> callback)" in result
+    assert "unsafe extern" not in result
+    assert "Result<uint[3], Box<error_Error>> CudnnSdk_parse_cudnn_version" in result
+    assert "Result<[u32;3]" not in result
+    crosstl.translator.parse(result)
+
+
 def test_associated_type_projection_alias_codegen_reparse_from_rust_cuda_gpu_rand():
     # Reduced from https://github.com/Rust-GPU/Rust-CUDA commit
     # 103a8d56935c4e0885ff7c3d25402319df1a8e00,

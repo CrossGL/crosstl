@@ -38,6 +38,7 @@ class SlangParser:
         "pervertex",
         "row_major",
         "column_major",
+        "dyn",
         "MATRIX_LAYOUT",
         "__prefix",
         "__postfix",

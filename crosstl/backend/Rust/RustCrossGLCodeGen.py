@@ -10197,6 +10197,10 @@ class RustToCrossGLConverter:
         if callable_type is not None:
             return callable_type
 
+        rust_array_type = self.normalize_rust_array_generic_argument(rust_type)
+        if rust_array_type is not None:
+            return self.map_type(rust_array_type)
+
         expanded_type = self.resolve_imported_module_path(rust_type)
         if expanded_type != rust_type:
             return self.map_type(expanded_type)
@@ -10278,7 +10282,10 @@ class RustToCrossGLConverter:
     def map_function_pointer_type(self, rust_type):
         if not isinstance(rust_type, str):
             return None
-        if re.match(r"^fn\s*\(", rust_type.strip()):
+        if re.match(
+            r"^(?:unsafe\s+)?(?:extern(?:\s*\"[^\"]+\")?\s*)?fn\s*\(",
+            rust_type.strip(),
+        ):
             return "auto"
         return None
 
@@ -10312,6 +10319,10 @@ class RustToCrossGLConverter:
 
     def normalize_unmapped_generic_argument(self, arg):
         normalized = self.normalize_lifetime_generic_argument(arg)
+        function_pointer_type = self.map_function_pointer_type(normalized)
+        if function_pointer_type is not None:
+            return function_pointer_type
+
         raw_pointer_type = self.strip_raw_pointer_type(normalized)
         if raw_pointer_type != normalized:
             return f"ptr<{self.map_type(raw_pointer_type)}>"
