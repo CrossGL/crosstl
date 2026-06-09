@@ -830,6 +830,10 @@ def _size_mismatch_context(expected: int, actual: int) -> str:
     return f"expected {expected} bytes, actual {actual} bytes"
 
 
+def _value_mismatch_context(expected: Any, actual: Any) -> str:
+    return f"expected {expected}, actual {actual}"
+
+
 def _source_frontend_supports_lexer_keyword(source_backend: str, keyword: str) -> bool:
     register_default_sources()
     discover_backend_plugins()
@@ -9452,7 +9456,10 @@ def _current_include_dependency_contract_reasons(
 
     reasons = []
     if status != expected_status:
-        reasons.append(f"{prefix}.status must match current include resolution")
+        reasons.append(
+            f"{prefix}.status must match current include resolution "
+            f"({_value_mismatch_context(status, expected_status)})"
+        )
 
     resolved_from_define = dependency.get("resolvedFromDefine")
     if _is_non_empty_string(resolved_from_define):
@@ -9477,9 +9484,15 @@ def _current_include_dependency_contract_reasons(
         return reasons
 
     if dependency.get("resolvedPath") != expected_path:
-        reasons.append(f"{prefix}.resolvedPath must match current include resolution")
+        reasons.append(
+            f"{prefix}.resolvedPath must match current include resolution "
+            f"({_value_mismatch_context(dependency.get('resolvedPath'), expected_path)})"
+        )
     if dependency.get("resolvedFrom") != expected_from:
-        reasons.append(f"{prefix}.resolvedFrom must match current include resolution")
+        reasons.append(
+            f"{prefix}.resolvedFrom must match current include resolution "
+            f"({_value_mismatch_context(dependency.get('resolvedFrom'), expected_from)})"
+        )
     resolved_hash = dependency.get("resolvedHash")
     include_path = (root_path / expected_path).resolve()
     if not _hash_contract_reasons(f"{prefix}.resolvedHash", resolved_hash):

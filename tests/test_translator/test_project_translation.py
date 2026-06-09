@@ -3101,6 +3101,7 @@ def test_validate_project_report_rejects_stale_include_dependency_resolution(
         "units[0].includeDependencies[0].status must match current include resolution"
         in diagnostic["message"]
     )
+    assert "(expected resolved, actual missing)" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_stale_include_dependency_hashes(
@@ -3250,9 +3251,14 @@ def test_validate_project_report_rejects_include_dependency_resolution_mismatche
         "include resolution"
     ) in diagnostic["message"]
     assert (
+        "(expected includes/shared.inc, actual shaders/local.inc)"
+        in diagnostic["message"]
+    )
+    assert (
         "units[0].includeDependencies[0].resolvedFrom must match current "
         "include resolution"
     ) in diagnostic["message"]
+    assert "(expected include-dir, actual source)" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_stale_define_include_dependencies(
