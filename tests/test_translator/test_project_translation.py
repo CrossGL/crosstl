@@ -21914,6 +21914,17 @@ def test_project_cli_inspect_report_sarif_reports_diagnostics(tmp_path):
     )
     assert invocation_properties["sourceReportKind"] == project_pipeline.REPORT_KIND
     assert isinstance(invocation_properties["sourceReportGeneratedAt"], int)
+    assert invocation_properties["projectRoot"] == str(repo.resolve())
+    assert invocation_properties["projectOutputDir"] == str(
+        (repo / "crosstl-out").resolve()
+    )
+    assert invocation_properties["projectTargets"] == ["not-a-backend"]
+    assert invocation_properties["projectSourceRoots"] == ["."]
+    assert invocation_properties["projectIncludePatterns"] == []
+    assert ".git/**" in invocation_properties["projectExcludePatterns"]
+    assert invocation_properties["projectIncludeDirs"] == []
+    assert invocation_properties["projectSelectedVariants"] == []
+    assert "projectConfig" not in invocation_properties
     assert run["tool"]["driver"]["rules"] == [
         {
             "id": "project.config.unsupported-target",

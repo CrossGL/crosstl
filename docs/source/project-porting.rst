@@ -288,7 +288,10 @@ remain present with ``available: false`` until their source report data exists.
 Migration action inspection is bounded and records truncation counts for large
 reports.
 ``--format sarif`` emits the inspection diagnostics as SARIF for
-code-scanning workflows. SARIF locations include line and column metadata and
+code-scanning workflows. SARIF invocation properties include the source report
+path, report identity metadata, project root, output directory, configured
+targets, source roots, include/exclude patterns, include directories, and
+selected variants. SARIF locations include line and column metadata and
 positive-length character spans when diagnostics carry source offsets.
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a

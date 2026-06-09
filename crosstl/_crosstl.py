@@ -906,6 +906,40 @@ def _sarif_non_negative_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _sarif_string_list(value):
+    if not isinstance(value, list):
+        return None
+    return [item for item in value if isinstance(item, str)]
+
+
+def _add_sarif_project_properties(properties, project):
+    if not isinstance(project, Mapping):
+        return
+
+    string_fields = {
+        "root": "projectRoot",
+        "outputDir": "projectOutputDir",
+        "config": "projectConfig",
+    }
+    for source_name, property_name in string_fields.items():
+        value = project.get(source_name)
+        if isinstance(value, str) and value:
+            properties[property_name] = value
+
+    list_fields = {
+        "targets": "projectTargets",
+        "sourceRoots": "projectSourceRoots",
+        "includePatterns": "projectIncludePatterns",
+        "excludePatterns": "projectExcludePatterns",
+        "includeDirs": "projectIncludeDirs",
+        "selectedVariants": "projectSelectedVariants",
+    }
+    for source_name, property_name in list_fields.items():
+        values = _sarif_string_list(project.get(source_name))
+        if values is not None:
+            properties[property_name] = values
+
+
 def _sarif_invocation_properties(payload):
     properties = {}
 
@@ -938,6 +972,8 @@ def _sarif_invocation_properties(payload):
         source_generated_at = report.get("generatedAt")
         if _sarif_non_negative_int(source_generated_at):
             properties["sourceReportGeneratedAt"] = source_generated_at
+
+        _add_sarif_project_properties(properties, report.get("project"))
 
     return properties
 
