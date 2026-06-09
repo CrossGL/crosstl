@@ -18738,7 +18738,8 @@ def test_project_cli_inspect_report_text_includes_source_map_counts(tmp_path):
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, granularity=line, "
-        f"sourceHash={source_hash_preview}, hash={source_remap_hash_preview})"
+        f"mappings={line_mapping_count}, sourceHash={source_hash_preview}, "
+        f"hash={source_remap_hash_preview})"
     ) in result.stdout
     assert "Artifact provenance by pipeline: single-file-translate=1" in result.stdout
     assert "Artifact provenance by intermediate: none=1" in result.stdout
@@ -18829,8 +18830,8 @@ def test_project_cli_inspect_report_text_includes_source_map_target_mismatches(
     assert (
         "- out/cgl/simple.source-remap.json -> out/cgl/simple.cgl "
         f"(sourceBackend=cgl, target=cgl, sourceRemapTarget=opengl, "
-        f"granularity=line, sourceHash={source_hash_preview}, "
-        f"hash={source_remap_hash_preview})"
+        f"granularity=line, mappings={line_mapping_count}, "
+        f"sourceHash={source_hash_preview}, hash={source_remap_hash_preview})"
     ) in result.stdout
 
 
