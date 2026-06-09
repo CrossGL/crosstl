@@ -12991,9 +12991,11 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         "project.outputDir target/variant directory"
                     )
                 elif Path(path).suffix.lower() != _artifact_target_extension(target):
+                    expected_extension = _artifact_target_extension(target)
                     reasons.append(
                         f"artifacts[{index}].path suffix must match "
-                        f"artifacts[{index}].target"
+                        f"artifacts[{index}].target "
+                        f"({_value_mismatch_context(expected_extension, Path(path).suffix.lower())})"
                     )
                 elif _is_non_empty_string(source) and _is_report_identity_path(source):
                     expected_relative = Path(source.replace("\\", "/")).with_suffix(
@@ -13004,7 +13006,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         reasons.append(
                             f"artifacts[{index}].path must match "
                             "project.outputDir target/variant directory plus "
-                            f"artifacts[{index}].source"
+                            f"artifacts[{index}].source "
+                            f"({_value_mismatch_context(_relpath(expected_path, root_path), path)})"
                         )
             source_backend = artifact.get("sourceBackend")
             if has_summary or "sourceBackend" in artifact:
@@ -13024,7 +13027,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     if source_backend != declared_unit.get("sourceBackend"):
                         reasons.append(
                             f"artifacts[{index}].sourceBackend must match "
-                            f"units[{unit_index}].sourceBackend"
+                            f"units[{unit_index}].sourceBackend "
+                            f"({_value_mismatch_context(declared_unit.get('sourceBackend'), source_backend)})"
                         )
             status = artifact.get("status")
             if isinstance(status, str) and status not in {"translated", "failed"}:

@@ -6649,6 +6649,7 @@ def test_validate_project_report_rejects_artifacts_with_mismatched_source_backen
         "artifacts[0].sourceBackend must match units[0].sourceBackend"
         in diagnostic["message"]
     )
+    assert "(expected cgl, actual directx)" in diagnostic["message"]
 
 
 @pytest.mark.parametrize(
@@ -13806,6 +13807,7 @@ def test_validate_project_report_rejects_artifact_path_suffix_mismatches(
     assert "artifacts[0].path suffix must match artifacts[0].target" in (
         diagnostic["message"]
     )
+    assert "(expected .glsl, actual .hlsl)" in diagnostic["message"]
 
 
 def test_validate_project_report_rejects_artifact_path_source_layout_mismatches(
@@ -13842,6 +13844,10 @@ def test_validate_project_report_rejects_artifact_path_source_layout_mismatches(
         "artifacts[0].path must match project.outputDir target/variant "
         "directory plus artifacts[0].source"
     ) in diagnostic["message"]
+    assert (
+        "(expected out/cgl/shaders/simple.cgl, actual out/cgl/renamed.cgl)"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_artifacts_with_escaped_output_paths(tmp_path):
