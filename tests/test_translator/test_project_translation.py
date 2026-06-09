@@ -7308,6 +7308,122 @@ def test_translate_project_records_external_corpus_manifest_summary(tmp_path):
     }
 
 
+def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
+    support_manifest = json.loads(
+        (ROOT / "support" / "external-corpus.json").read_text(encoding="utf-8")
+    )
+    manifest_entry = next(
+        entry
+        for entry in support_manifest["entries"]
+        if entry["id"] == "slang-default-parameter"
+    )
+    repo = tmp_path / "repo"
+    source_path = repo / manifest_entry["path"]
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        textwrap.dedent("""
+            RWStructuredBuffer<int> outputBuffer;
+
+            int helper(int val, int a = 16)
+            {
+                return val + a;
+            }
+
+            int test(int val)
+            {
+                return helper(val) + helper(val, 256);
+            }
+
+            [numthreads(4, 1, 1)]
+            void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+            {
+                outputBuffer[dispatchThreadID.x] = test((int)dispatchThreadID.x);
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "Pinned Slang project fixture",
+                "entries": [manifest_entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["tests"]
+            targets = ["cgl"]
+            output_dir = "out"
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifact = payload["artifacts"][0]
+    translated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["diagnosticCounts"] == {
+        "note": 0,
+        "warning": 0,
+        "error": 0,
+    }
+    assert payload["summary"]["unitsBySourceBackend"] == {"slang": 1}
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "slang": {"artifactCount": 1, "translatedCount": 1, "failedCount": 0}
+    }
+    assert artifact["source"] == manifest_entry["path"]
+    assert artifact["sourceBackend"] == "slang"
+    assert artifact["target"] == "cgl"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == "out/cgl/tests/compute/default-parameter.cgl"
+    assert "int helper(int val, int a)" in translated
+    assert "return helper(val) + helper(val, 256);" in translated
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"] == {
+        "manifestEntryCount": 1,
+        "validEntryCount": 1,
+        "invalidEntryCount": 0,
+        "entryCount": 1,
+        "presentCount": 1,
+        "missingCount": 0,
+        "discoveredUnitCount": 1,
+        "undiscoveredPresentCount": 0,
+        "entriesBySourceBackend": {"slang": 1},
+        "entriesByTarget": {"cgl": 1},
+        "artifactsByTarget": {
+            "cgl": {
+                "artifactCount": 1,
+                "translatedCount": 1,
+                "failedCount": 0,
+            }
+        },
+    }
+    assert external_corpus["entries"] == [
+        {
+            **manifest_entry,
+            "present": True,
+            "discovered": True,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    ]
+
+
 def test_translate_project_defaults_external_corpus_source_backend_from_discovered_unit(
     tmp_path,
 ):

@@ -1913,6 +1913,10 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         assert "retained repository, commit, and source URL provenance metadata" in (
             backend_support["notes"]
         )
+        assert (
+            "pinned Slang reduced fixture participates in a manifest-backed "
+            "project translation run"
+        ) in backend_support["notes"]
         assert "configurable inspection sample limits" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1929,6 +1933,10 @@ def test_project_external_corpus_coverage_documents_entry_consistency_checks():
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_translate_project_skips_invalid_external_corpus_provenance"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_translate_project_runs_pinned_slang_external_corpus_fixture"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
