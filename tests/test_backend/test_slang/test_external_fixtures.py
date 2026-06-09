@@ -100,6 +100,14 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/neural-shading-s25",
         "commit": "9daf14df2cb4d665c706c76b4b9641a49a117610",
     },
+    "shader-slang/slangpy": {
+        "url": "https://github.com/shader-slang/slangpy",
+        "commit": "d1c765ea0430c055a14463c2e2446e3decad97df",
+    },
+    "shader-slang/slang-torch": {
+        "url": "https://github.com/shader-slang/slang-torch",
+        "commit": "e936b1df49cbb9b3ef23d570455622d5ed67332f",
+    },
     "NVIDIAGameWorks/Falcor": {
         "url": "https://github.com/NVIDIAGameWorks/Falcor",
         "commit": "eb540f6748774680ce0039aaf3ac9279266ec521",
@@ -1914,6 +1922,41 @@ EXTERNAL_FIXTURES = [
         ],
     },
     {
+        "id": "slangpy_glsl_extension_spirv_asm_target_switch",
+        "repo": "shader-slang/slangpy",
+        "path": "slangpy/slang/atomics.slang",
+        "source": (
+            """
+            extension vector<half, 2>
+            {
+                __glsl_extension(GL_EXT_shader_explicit_arithmetic_types)
+                uint asuint(vector<half, 2> a)
+                {
+                    __target_switch
+                    {
+                    case glsl:
+                        __intrinsic_asm "packFloat2x16";
+                    case spirv:
+                        return spirv_asm { result:$$uint = OpBitcast $a;};
+                    default:
+                        return 1u;
+                    }
+                }
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "uint asuint(half2 a)",
+            "return 1u;",
+        ],
+        "not_contains": [
+            "__glsl_extension",
+            "spirv_asm",
+            "$$uint",
+        ],
+    },
+    {
         "id": "neural_shading_hex_float_literal_codegen_reparse",
         "repo": "shader-slang/neural-shading-s25",
         "path": "network/step_01_basicnetwork.slang",
@@ -2398,3 +2441,19 @@ def test_core_meta_generic_vector_conversion_constructor_parse():
     ] == [("ToType", "implicit", "FromType")]
     assert extension.methods[0].is_declaration is True
     assert extension.methods[1].is_declaration is False
+
+
+def test_slang_torch_factor_placeholder_template_is_out_of_scope():
+    # Source: shader-slang/slang-torch tests/multiply_template.slang at
+    # e936b1df49cbb9b3ef23d570455622d5ed67332f.  The repository's tests
+    # replace %FACTOR% before passing the file to Slang, so the raw template
+    # is not valid Slang source.
+    source = """
+        float computeOutputValue(TensorView<float> A, uint2 loc)
+        {
+            return A[loc] * %FACTOR%;
+        }
+    """
+
+    with pytest.raises(SyntaxError, match="Unexpected token in expression: MOD"):
+        parse_slang(source)

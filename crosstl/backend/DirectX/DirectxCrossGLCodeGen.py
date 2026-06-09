@@ -3868,6 +3868,33 @@ class HLSLToCrossGLConverter:
             return f"({rendered})"
         return rendered
 
+    def binary_operator_text(self, op):
+        return op.value if hasattr(op, "value") else str(op)
+
+    def generate_flat_long_binary_expression(self, expr, is_main=False):
+        op = self.binary_operator_text(expr.op)
+        if op != "+":
+            return None
+
+        parts = []
+        current = expr
+        while (
+            isinstance(current, BinaryOpNode)
+            and self.binary_operator_text(current.op) == op
+        ):
+            parts.append(current.right)
+            current = current.left
+
+        parts.append(current)
+        if len(parts) < 16:
+            return None
+
+        rendered_parts = []
+        for part in reversed(parts):
+            rendered = self.generate_expression(part, is_main)
+            rendered_parts.append(self.maybe_parenthesize(part, rendered))
+        return f" {op} ".join(rendered_parts)
+
     def generate_for_loop(self, node, indent, is_main):
         def render_initializer(initializer, include_type=True):
             if isinstance(initializer, VariableNode):
@@ -3990,6 +4017,9 @@ class HLSLToCrossGLConverter:
         elif isinstance(expr, VariableNode):
             return self.render_identifier(expr.name)
         elif isinstance(expr, BinaryOpNode):
+            flat_expression = self.generate_flat_long_binary_expression(expr, is_main)
+            if flat_expression is not None:
+                return flat_expression
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
             left = self.maybe_parenthesize(expr.left, left)

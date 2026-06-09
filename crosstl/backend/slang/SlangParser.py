@@ -54,6 +54,7 @@ class SlangParser:
         "TreatAsDifferentiable",
         "__FunctionInterface",
         "__builtin_requirement",
+        "__glsl_extension",
         "__implicit_conversion",
         "__intrinsic_op",
         "__magic_type",

@@ -75,6 +75,31 @@ def test_preprocessor_unknown_directive_is_filtered():
     assert "value" in values
 
 
+def test_block_commented_directives_from_libretro_pal_are_ignored():
+    values = token_values("""
+        float beforeComment;
+
+        /*#ifndef PARAMETER_UNIFORM
+        float disabledUniformPath;
+        #endif*/
+
+        // A quoted line comment used to confuse block-comment scanning: "literal"
+        /*#else
+        #define HIDDEN_BRANCH 1
+        #ifdef HIDDEN_BRANCH
+        float hiddenBranch;
+        #endif
+        #endif*/
+
+        float afterComment;
+    """)
+
+    assert "beforeComment" in values
+    assert "afterComment" in values
+    assert "disabledUniformPath" not in values
+    assert "hiddenBranch" not in values
+
+
 def test_multiline_function_macro_preserves_line_comment_boundaries():
     values = token_values("""
         #define saturate(c) clamp(c, 0., 1.)

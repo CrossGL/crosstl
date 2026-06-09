@@ -2607,6 +2607,7 @@ class CudaParser:
         return_type = self.parse_trailing_return_type(return_type)
         self.skip_post_function_qualifiers()
         return_type = self.parse_trailing_return_type(return_type)
+        self.skip_post_function_qualifiers()
         body = None
         if self.is_identifier_value("try"):
             body = self.parse_try_statement()
@@ -2661,8 +2662,38 @@ class CudaParser:
 
     def skip_requires_clause(self):
         self.eat("IDENTIFIER")
-        if self.current_token[0] == "LPAREN":
-            self.skip_balanced_parentheses()
+        paren_depth = 0
+        bracket_depth = 0
+        template_depth = 0
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if (
+                paren_depth == 0
+                and bracket_depth == 0
+                and template_depth == 0
+                and (
+                    token_type in {"LBRACE", "SEMICOLON"}
+                    or (token_type == "IDENTIFIER" and token_value == "try")
+                )
+            ):
+                break
+
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LESS_THAN":
+                template_depth += 1
+            elif token_type == "GREATER_THAN" and template_depth > 0:
+                template_depth -= 1
+            elif token_type == "SHIFT_RIGHT" and template_depth > 0:
+                template_depth = max(0, template_depth - 2)
+
+            self.eat(token_type)
 
     def parse_function_attribute(self):
         attribute_name = self.current_token[1]
@@ -4261,6 +4292,7 @@ class CudaParser:
                         "SEMICOLON",
                         "LOGICAL_AND",
                         "LOGICAL_OR",
+                        "QUESTION",
                     }
             elif token_type == "SHIFT_RIGHT":
                 depth -= 2
@@ -4282,6 +4314,7 @@ class CudaParser:
                         "SEMICOLON",
                         "LOGICAL_AND",
                         "LOGICAL_OR",
+                        "QUESTION",
                     }
                 if depth < 0:
                     return False
@@ -4305,6 +4338,7 @@ class CudaParser:
                         "SEMICOLON",
                         "LOGICAL_AND",
                         "LOGICAL_OR",
+                        "QUESTION",
                     }
                 if depth < 0:
                     return False

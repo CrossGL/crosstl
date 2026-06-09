@@ -2684,7 +2684,12 @@ class RustParser:
             return "false"
 
         if self.current_token[0] in self.match_pattern_path_tokens():
-            if self.peek_token_type() in {"LPAREN", "DOUBLE_COLON", "LBRACE"}:
+            if self.peek_token_type() in {
+                "LPAREN",
+                "DOUBLE_COLON",
+                "LBRACE",
+                "EXCLAMATION",
+            }:
                 return self.parse_match_path_or_call()
 
             pattern = self.current_token[1]
@@ -2789,6 +2794,8 @@ class RustParser:
         self.eat(self.current_token[0])
         path = self.parse_path_expression(first_segment)
 
+        if self.current_token[0] == "EXCLAMATION":
+            return self.parse_match_macro_pattern(path)
         if self.current_token[0] == "LPAREN":
             return FunctionCallNode(path, self.parse_match_pattern_arguments())
         if self.current_token[0] == "LBRACE":
@@ -2807,12 +2814,33 @@ class RustParser:
         self.eat(self.current_token[0])
         path = self.parse_path_expression(first_segment)
 
+        if self.current_token[0] == "EXCLAMATION":
+            return self.parse_match_macro_pattern(f"::{path}")
         if self.current_token[0] == "LPAREN":
             return FunctionCallNode(path, self.parse_match_pattern_arguments())
         if self.current_token[0] == "LBRACE":
             return self.parse_match_struct_pattern(path)
 
         return path
+
+    def parse_match_macro_pattern(self, path):
+        self.eat("EXCLAMATION")
+
+        if self.current_token[0] == "LPAREN":
+            node = FunctionCallNode(f"{path}!", self.parse_match_pattern_arguments())
+            node.macro_delimiter = "LPAREN"
+            return node
+
+        if self.current_token[0] in {"LBRACE", "LBRACKET"}:
+            delimiter = self.current_token[0]
+            body = self.collect_delimited_macro_body()
+            node = FunctionCallNode(f"{path}!", [body] if body else [])
+            node.macro_delimiter = delimiter
+            return node
+
+        raise SyntaxError(
+            f"Expected macro pattern delimiter, got {self.current_token[0]}"
+        )
 
     def parse_match_pattern_arguments(self):
         self.eat("LPAREN")

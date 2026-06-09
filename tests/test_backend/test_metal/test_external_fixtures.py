@@ -62,6 +62,8 @@ IMGUI_REPO = "https://github.com/ocornut/imgui"
 IMGUI_COMMIT = "7950c96f0e86b761607a34601f19e90afa825bd6"
 METALPETAL_REPO = "https://github.com/MetalPetal/MetalPetal"
 METALPETAL_COMMIT = "f9b78897bd4214bb097f352a1bde0a4f4a1e2ddb"
+WEBKIT_REPO = "https://github.com/WebKit/WebKit"
+WEBKIT_COMMIT = "7f16a4cd45bf6fe4c1b0bcdddec0b1bdee6859c1"
 BLENDER_REPO = "https://github.com/blender/blender"
 BLENDER_COMMIT = "2d196d20b93a9f6e596e6d451c5e845d84f21c89"
 BLENDER_STRING_COMMIT = "e5fc656cdab0e682296f8dd024b942b548e788f4"
@@ -2186,6 +2188,73 @@ EXTERNAL_FIXTURES = [
                 v.uv.y = float(row) / targetFrameSize.y;
                 v.opacity = 1.0 - (p.life / 1000.0);
                 return v;
+            }
+        """
+        ),
+    },
+    {
+        "name": "webkit_skia_interface_block_trailing_globals",
+        "repo_url": WEBKIT_REPO,
+        "commit": WEBKIT_COMMIT,
+        "source_path": (
+            "Source/ThirdParty/skia/tests/sksl/shared/InterfaceBlockInoutArray.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "InterfaceBlockIn[3] i;",
+            "thread InterfaceBlockOut[3] o;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <simd/simd.h>
+            using namespace metal;
+
+            struct Inputs {
+            };
+            struct Outputs {
+                half4 sk_FragColor [[color(0)]];
+            };
+            struct InterfaceBlockIn {
+                int x;
+            } i[3];
+            thread struct InterfaceBlockOut {
+                int x;
+            } o[3];
+            struct Globals {
+                constant InterfaceBlockIn* i;
+                constant InterfaceBlockOut* o;
+            };
+        """
+        ),
+    },
+    {
+        "name": "webkit_skia_restrict_local_identifier",
+        "repo_url": WEBKIT_REPO,
+        "commit": WEBKIT_COMMIT,
+        "source_path": (
+            "Source/ThirdParty/skia/tests/sksl/shared/ReservedInGLSLButAllowedInSkSL.metal"
+        ),
+        "roundtrip": True,
+        "contains": [
+            "f16vec4 restrict = _uniforms.colorGreen;",
+            "return restrict * shared;",
+        ],
+        "source": (
+            """
+            #include <metal_stdlib>
+            #include <simd/simd.h>
+            using namespace metal;
+
+            struct Uniforms {
+                half4 colorGreen;
+            };
+
+            fragment half4 fragmentMain(
+                constant Uniforms& _uniforms [[buffer(0)]]) {
+                half4 restrict = _uniforms.colorGreen;
+                half4 shared = _uniforms.colorGreen;
+                return restrict * shared;
             }
         """
         ),

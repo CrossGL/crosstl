@@ -130,7 +130,7 @@ RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
-KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL"}
+KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL", "RESTRICT"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
 OPERATOR_OVERLOAD_TOKENS = {
@@ -383,6 +383,7 @@ class MetalParser:
                 union = self.parse_union()
                 if union is not None:
                     structs.append(union)
+                    global_variables.extend(getattr(union, "trailing_declarations", []))
             elif self.is_bare_macro_invocation():
                 self.skip_bare_macro_invocation()
             elif self.is_top_level_expression_statement_start():
@@ -402,10 +403,16 @@ class MetalParser:
                     struct = self.parse_struct()
                     if struct is not None:
                         structs.append(struct)
+                        global_variables.extend(
+                            getattr(struct, "trailing_declarations", [])
+                        )
             elif self.current_token[0] == "CLASS":
                 class_node = self.parse_class()
                 if class_node is not None:
                     structs.append(class_node)
+                    global_variables.extend(
+                        getattr(class_node, "trailing_declarations", [])
+                    )
             elif self.current_token[0] == "ALIGNAS":
                 alignas_specs = self.parse_alignas_specifiers()
                 if self.current_token[0] in {"STRUCT", "CLASS"}:
@@ -416,6 +423,9 @@ class MetalParser:
                     )
                     if struct is not None:
                         structs.append(struct)
+                        global_variables.extend(
+                            getattr(struct, "trailing_declarations", [])
+                        )
                 else:
                     self.add_global_declaration(
                         global_variables,
@@ -439,6 +449,13 @@ class MetalParser:
                 self.skip_decltype_template_instantiation_declaration()
             elif self.is_top_level_parameter_fragment_start():
                 self.parse_top_level_parameter_fragment()
+            elif self.is_qualified_aggregate_declaration_start():
+                aggregate = self.parse_qualified_aggregate_declaration()
+                if aggregate is not None:
+                    structs.append(aggregate)
+                    global_variables.extend(
+                        getattr(aggregate, "trailing_declarations", [])
+                    )
             elif self.current_token[0] == "CONSTANT":
                 if self.is_constant_buffer():
                     constants.append(self.parse_constant_buffer())
@@ -601,6 +618,63 @@ class MetalParser:
             and idx + 1 < len(self.tokens)
             and self.tokens[idx + 1][0] in {"IDENTIFIER", "LBRACE"}
         )
+
+    def is_qualified_aggregate_declaration_start(self):
+        idx = self.pos
+        saw_qualifier = False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            saw_qualifier = True
+            idx += 1
+        if not saw_qualifier or idx >= len(self.tokens):
+            return False
+        if self.tokens[idx][0] in {"STRUCT", "CLASS"}:
+            idx += 1
+            idx = self.skip_alignas_specifier_tokens_at(idx)
+            if idx >= len(self.tokens) or not self.is_name_token_at(idx):
+                return False
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_template_argument_list_at(idx)
+            idx = self.skip_alignas_specifier_tokens_at(idx)
+            return idx < len(self.tokens) and self.tokens[idx][0] in {
+                "LBRACE",
+                "COLON",
+            }
+        return (
+            self.tokens[idx] == ("IDENTIFIER", "union")
+            and idx + 2 < len(self.tokens)
+            and self.is_name_token_at(idx + 1)
+            and self.tokens[idx + 2][0] == "LBRACE"
+        )
+
+    def parse_qualified_aggregate_declaration(self):
+        qualifiers = []
+        while self.is_type_qualifier_start():
+            qualifiers.extend(self.parse_type_qualifier())
+
+        if self.current_token[0] == "STRUCT":
+            aggregate = self.parse_struct()
+        elif self.current_token[0] == "CLASS":
+            aggregate = self.parse_class()
+        elif self.is_union_declaration_start():
+            aggregate = self.parse_union()
+        else:
+            raise SyntaxError(
+                f"Expected aggregate declaration, got {self.current_token[0]}"
+            )
+
+        for declaration in getattr(aggregate, "trailing_declarations", []) or []:
+            var_node = (
+                declaration.left
+                if isinstance(declaration, AssignmentNode)
+                and isinstance(declaration.left, VariableNode)
+                else declaration
+            )
+            if isinstance(var_node, VariableNode):
+                var_node.qualifiers = list(qualifiers) + list(
+                    getattr(var_node, "qualifiers", []) or []
+                )
+        return aggregate
 
     def parse_template_declaration(self):
         template_parameters = self.parse_template_prefix()
@@ -1589,11 +1663,11 @@ class MetalParser:
             self.eat(self.current_token[0])
 
         pointer_suffix = ""
-        while self.is_type_qualifier_start() or self.current_token[0] in [
+        while self.is_post_type_qualifier_start() or self.current_token[0] in [
             "MULTIPLY",
             "BITWISE_AND",
         ]:
-            if self.is_type_qualifier_start():
+            if self.is_post_type_qualifier_start():
                 qualifiers.extend(self.parse_type_qualifier())
                 continue
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
@@ -1604,6 +1678,20 @@ class MetalParser:
             self.eat("ELLIPSIS")
 
         return base_type + pointer_suffix, qualifiers
+
+    def is_post_type_qualifier_start(self):
+        if not self.is_type_qualifier_start():
+            return False
+        if self.current_token[0] == "RESTRICT" and self.peek(1)[0] in {
+            "SEMICOLON",
+            "COMMA",
+            "EQUALS",
+            "LPAREN",
+            "LBRACE",
+            "LBRACKET",
+        }:
+            return False
+        return True
 
     def skip_signed_type_prefix_at(self, idx):
         if (
@@ -1865,13 +1953,14 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
-
         struct_node = StructNode(name, members)
         struct_node.attributes = struct_attributes
         struct_node.alignas = alignas_specs
         struct_node.base_types = base_types
+        self.eat("RBRACE")
+        struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
+            name
+        )
         return struct_node
 
     def parse_class(self, pre_alignas=None):
@@ -1902,14 +1991,15 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
-
         class_node = StructNode(name, members)
         class_node.attributes = class_attributes
         class_node.alignas = alignas_specs
         class_node.base_types = base_types
         class_node.aggregate_kind = "class"
+        self.eat("RBRACE")
+        class_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
+            name
+        )
         return class_node
 
     def parse_struct_base_clause(self):
@@ -1964,12 +2054,49 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
-
         union_node = StructNode(name, members)
         union_node.aggregate_kind = "union"
+        self.eat("RBRACE")
+        union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
+            name
+        )
         return union_node
+
+    def parse_trailing_aggregate_declarations(self, aggregate_type):
+        declarations = []
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return declarations
+
+        while True:
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            decl_type = self.apply_declarator_type_suffix(aggregate_type, type_suffix)
+            attributes = self.parse_attributes()
+            var_node = VariableNode(decl_type, name, attributes=attributes)
+            var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
+            self.register_local_variable_name(name)
+
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                declarations.append(AssignmentNode(var_node, self.parse_expression()))
+            elif self.current_token[0] == "LPAREN":
+                args = self.parse_parenthesized_arguments()
+                declarations.append(
+                    AssignmentNode(var_node, VectorConstructorNode(decl_type, args))
+                )
+            elif self.current_token[0] == "LBRACE":
+                declarations.append(
+                    AssignmentNode(var_node, self.parse_initializer_list())
+                )
+            else:
+                declarations.append(var_node)
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            self.eat("SEMICOLON")
+            return declarations
 
     def parse_struct_members(self):
         members = []

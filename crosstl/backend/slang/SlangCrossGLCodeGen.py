@@ -547,7 +547,12 @@ class SlangToCrossGLConverter:
             for exp in getattr(ast, "exports", [])
             if isinstance(getattr(exp, "item", None), FunctionNode)
         ]
-        functions = [*getattr(ast, "functions", []), *exported_functions]
+        extension_methods = self.collect_lowerable_extension_methods(ast)
+        functions = [
+            *getattr(ast, "functions", []),
+            *extension_methods,
+            *exported_functions,
+        ]
         local_structs = self.collect_function_local_structs(functions)
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
@@ -609,7 +614,7 @@ class SlangToCrossGLConverter:
             code += "    // Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
-        for func in ast.functions:
+        for func in [*ast.functions, *extension_methods]:
             qualifier = self.effective_function_qualifier(func)
             if qualifier == "vertex":
                 code += "    vertex {\n"
@@ -645,13 +650,16 @@ class SlangToCrossGLConverter:
 
         for extension in getattr(ast, "extensions", []) or []:
             conformances = getattr(extension, "conformances", []) or []
-            suffix = f" : {', '.join(conformances)}" if conformances else ""
-            constructs.append(f"extension {extension.extended_type}{suffix}")
+            if not self.is_lowerable_extension(extension):
+                suffix = f" : {', '.join(conformances)}" if conformances else ""
+                constructs.append(f"extension {extension.extended_type}{suffix}")
             constructs.extend(
                 self.format_typedef_generic_constraints(
                     getattr(extension, "typedefs", [])
                 )
             )
+            for method in getattr(extension, "methods", []) or []:
+                constructs.extend(self.format_function_generic_constraints(method))
 
         for function in getattr(ast, "functions", []) or []:
             constructs.extend(self.format_function_generic_constraints(function))
@@ -700,6 +708,27 @@ class SlangToCrossGLConverter:
                 f"{constraint.parameter} {relation} {constraint.constraint_type}"
             )
         return constraints
+
+    def collect_lowerable_extension_methods(self, ast):
+        methods = []
+        for extension in getattr(ast, "extensions", []) or []:
+            if not self.is_lowerable_extension(extension):
+                continue
+            for method in getattr(extension, "methods", []) or []:
+                if getattr(method, "is_declaration", False):
+                    continue
+                if getattr(method, "generic_constraints", None):
+                    continue
+                methods.append(method)
+        return methods
+
+    def is_lowerable_extension(self, extension):
+        return not (
+            getattr(extension, "conformances", None)
+            or getattr(extension, "typedefs", None)
+            or getattr(extension, "generic_parameters", None)
+            or getattr(extension, "generic_constraints", None)
+        )
 
     def is_erased_generic_constraint(self, constraint):
         relation = getattr(constraint, "relation", ":")
@@ -1784,6 +1813,7 @@ class SlangToCrossGLConverter:
 
         vector_prefixes = {
             "float": "vec",
+            "half": "half",
             "int": "ivec",
             "uint": "uvec",
             "bool": "bvec",

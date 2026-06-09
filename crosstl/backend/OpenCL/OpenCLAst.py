@@ -33,3 +33,14 @@ class OpenCLMacroBlockNode(ASTNode):
 
     def __repr__(self):
         return f"OpenCLMacroBlockNode(name={self.name}, args={self.args})"
+
+
+class OpenCLBlockLiteralNode(ASTNode):
+    """Unsupported OpenCL C block literal captured as an inert expression."""
+
+    def __init__(self, params=None, body=""):
+        self.params = params or []
+        self.body = body
+
+    def __repr__(self):
+        return f"OpenCLBlockLiteralNode(params={self.params}, body={self.body!r})"

@@ -7,10 +7,13 @@ from crosstl.backend.HIP.HipAst import (
     FunctionCallNode,
     FunctionNode,
     KernelNode,
+    TypeAliasNode,
+    VariableNode,
 )
 from crosstl.backend.HIP.HipParser import HipParser
 
 from .OpenCLAst import (
+    OpenCLBlockLiteralNode,
     OpenCLMacroBlockNode,
     OpenCLProgramNode,
     OpenCLStatementExpressionNode,
@@ -382,11 +385,188 @@ class OpenCLParser(HipParser):
             base_type = self.parse_declarator_prefix(base_type)
         self.skip_newlines()
         self.parse_type_attribute_prefixes()
+        block_declarator = self.parse_opencl_block_pointer_declarator()
+        if block_declarator is not None:
+            name, parameter_suffix = block_declarator
+            self.skip_declarator_attribute_suffixes()
+            self.skip_newlines()
+            value = self.parse_variable_initializer(base_type)
+            return VariableNode(
+                self.opencl_block_type_name(base_type, parameter_suffix),
+                name,
+                value,
+                list(qualifiers),
+                is_extern_shared_memory=self.is_extern_shared_memory(qualifiers),
+                is_dynamic_shared_memory=False,
+            )
         return super().parse_variable_declarator(
             base_type, qualifiers, allow_prefix=False
         )
 
+    def is_variable_declaration(self) -> bool:
+        if super().is_variable_declaration():
+            return True
+
+        index = self.pos
+        while index < len(self.tokens) and self.tokens[index].type in {
+            *self.DECLARATION_QUALIFIER_TOKENS,
+            *self.TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+
+        index = self.skip_cpp_attributes_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
+        index = self.skip_type_at_pos(index)
+        if index is None:
+            return False
+
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_opencl_block_pointer_declarator_at_pos(index)
+        if index is None:
+            return False
+
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
+        index = self.skip_newlines_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type in {
+            "SEMICOLON",
+            "ASSIGN",
+            "COMMA",
+        }
+
+    def parse_type_alias_declarator(self, base_type, allow_prefix):
+        alias_type = base_type
+        if allow_prefix:
+            alias_type = self.parse_declarator_prefix(alias_type)
+
+        block_declarator = self.parse_opencl_block_pointer_declarator()
+        if block_declarator is not None:
+            name, parameter_suffix = block_declarator
+            self.type_aliases.add(name)
+            return TypeAliasNode(
+                self.opencl_block_type_name(alias_type, parameter_suffix), name
+            )
+
+        return super().parse_type_alias_declarator(alias_type, allow_prefix=False)
+
+    def is_function_pointer_parameter_start_at_pos(self, index):
+        if super().is_function_pointer_parameter_start_at_pos(index):
+            return True
+
+        type_end = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
+        return (
+            type_end is not None
+            and self.skip_opencl_block_pointer_declarator_at_pos(type_end) is not None
+        )
+
+    def is_plausible_function_parameter_at_pos(self, index):
+        if super().is_plausible_function_parameter_at_pos(index):
+            return True
+
+        type_end = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
+        if type_end is None:
+            return False
+
+        index = self.skip_opencl_block_pointer_declarator_at_pos(type_end)
+        if index is None:
+            return False
+
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_cpp_attributes_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type in {
+            "COMMA",
+            "RPAREN",
+            "ASSIGN",
+        }
+
+    def parse_opencl_block_pointer_declarator(self):
+        if not self.is_opencl_block_pointer_declarator():
+            return None
+
+        self.consume("LPAREN")
+        self.skip_newlines()
+        self.consume("XOR")
+        self.skip_newlines()
+
+        while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
+            self.advance()
+            self.skip_newlines()
+
+        name = ""
+        if self.is_declarator_name_token():
+            name = self.current_token.value
+            self.advance()
+            self.skip_newlines()
+
+        while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
+            self.advance()
+            self.skip_newlines()
+
+        self.consume("RPAREN")
+        self.skip_newlines()
+
+        parameter_suffix = ""
+        if self.match("LPAREN"):
+            parameter_suffix = self.format_opencl_block_parameter_suffix(
+                self.consume_balanced_token_values("LPAREN", "RPAREN")
+            )
+
+        return name, parameter_suffix
+
+    def is_opencl_block_pointer_declarator(self):
+        if not self.match("LPAREN"):
+            return False
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        return index < len(self.tokens) and self.tokens[index].type == "XOR"
+
+    def skip_opencl_block_pointer_declarator_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return None
+
+        index = self.skip_newlines_at_pos(index + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "XOR":
+            return None
+
+        index = self.skip_newlines_at_pos(index + 1)
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
+        ):
+            index = self.skip_newlines_at_pos(index + 1)
+
+        if self.is_declarator_name_token_at(index):
+            index = self.skip_newlines_at_pos(index + 1)
+
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
+        ):
+            index = self.skip_newlines_at_pos(index + 1)
+
+        if index >= len(self.tokens) or self.tokens[index].type != "RPAREN":
+            return None
+
+        index = self.skip_newlines_at_pos(index + 1)
+        if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
+            index = self.skip_balanced_tokens_at_pos(index, "LPAREN", "RPAREN")
+
+        return index
+
+    def format_opencl_block_parameter_suffix(self, values):
+        text = " ".join(value for value in values if value != "\n")
+        return re.sub(r"\s+", " ", text).strip()
+
+    def opencl_block_type_name(self, base_type, parameter_suffix=""):
+        suffix = f" {parameter_suffix}" if parameter_suffix else ""
+        return f"__opencl_block {base_type}{suffix}".strip()
+
     def parse_function_pointer_parameter_declarator(self):
+        block_declarator = self.parse_opencl_block_pointer_declarator()
+        if block_declarator is not None:
+            name, _parameter_suffix = block_declarator
+            return name
+
         if not (
             self.match("LPAREN")
             and self.peek()
@@ -462,7 +642,32 @@ class OpenCLParser(HipParser):
             return self.parse_opencl_statement_expression()
         if self.is_opencl_vector_constructor_cast():
             return self.parse_opencl_vector_constructor_cast()
+        if self.match("XOR"):
+            return self.parse_opencl_block_literal()
         return super().parse_primary_expression()
+
+    def parse_opencl_block_literal(self):
+        self.consume("XOR")
+        self.skip_newlines()
+
+        params = []
+        if self.match("LPAREN"):
+            self.consume("LPAREN")
+            params = self.parse_parameter_list()
+            self.consume("RPAREN")
+            self.skip_newlines()
+
+        if not self.match("LBRACE"):
+            self.error("Expected block literal body")
+
+        body = self.format_opencl_block_body(
+            self.consume_balanced_token_values("LBRACE", "RBRACE")
+        )
+        return OpenCLBlockLiteralNode(params, body)
+
+    def format_opencl_block_body(self, values):
+        text = " ".join(value for value in values if value != "\n")
+        return re.sub(r"\s+", " ", text).strip()
 
     def is_opencl_statement_expression_start(self):
         if not self.match("LPAREN"):

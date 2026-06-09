@@ -13,7 +13,7 @@ from crosstl.backend.HIP.HipAst import (
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
-from .OpenCLAst import OpenCLProgramNode
+from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLProgramNode
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -249,6 +249,9 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         suffix = f"({args})" if args else "()"
         self.emit(f"// OpenCL macro block: {node.name}{suffix}")
 
+    def visit_OpenCLBlockLiteralNode(self, node):
+        return "0 /* unsupported OpenCL block literal */"
+
     def visit_StructNode(self, node):
         original_name = getattr(node, "name", None)
         if original_name:
@@ -407,11 +410,35 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             super().visit_SyncNode(node)
 
     def visit_VariableNode(self, node):
+        if self.is_opencl_block_declaration(node):
+            self.emit(f"// unsupported OpenCL block declaration: {node.name}")
+            return
         if self.is_host_embedded_source_string(node):
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
         self.register_opencl_sizeof_symbol(node)
         super().visit_VariableNode(node)
+
+    def visit_TypeAliasNode(self, node):
+        if self.is_opencl_block_type(getattr(node, "alias_type", "")):
+            self.register_type_alias(node.name, node.alias_type)
+            self.emit(f"// unsupported OpenCL block typedef: {node.name}")
+            return
+        return super().visit_TypeAliasNode(node)
+
+    def is_opencl_block_declaration(self, node):
+        if self.is_opencl_block_type(getattr(node, "vtype", "")):
+            return True
+        return isinstance(getattr(node, "value", None), OpenCLBlockLiteralNode)
+
+    def is_opencl_block_type(self, type_name):
+        if not type_name:
+            return False
+        text = str(type_name).strip()
+        if text.startswith("__opencl_block"):
+            return True
+        resolved = self.resolve_type_alias(text)
+        return isinstance(resolved, str) and resolved.startswith("__opencl_block")
 
     def is_host_embedded_source_string(self, node):
         if self.indent_level != 0:
@@ -647,8 +674,12 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             return "void"
         if not isinstance(hip_type, str):
             hip_type = str(hip_type)
+        if self.is_opencl_block_type(hip_type):
+            return "i32"
         normalized = self.strip_type_qualifiers(hip_type)
         normalized = self.resolve_opencl_type_alias_chain(normalized)
+        if self.is_opencl_block_type(normalized):
+            return "i32"
         if normalized in self.OPENCL_VECTOR_TYPE_MAPPING:
             return self.OPENCL_VECTOR_TYPE_MAPPING[normalized]
         if normalized in self.OPENCL_SCALAR_TYPE_MAPPING:

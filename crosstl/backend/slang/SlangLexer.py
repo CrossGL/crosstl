@@ -95,6 +95,7 @@ TOKENS = tuple(
         ("BITWISE_OR", r"\|"),
         ("BITWISE_XOR", r"\^"),
         ("DOT", r"\."),
+        ("DOLLAR", r"\$"),
         ("MULTIPLY", r"\*"),
         ("DIVIDE", r"/"),
         ("PLUS", r"\+"),

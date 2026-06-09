@@ -214,11 +214,25 @@ class HipParser:
         "THEN",
         "WHEN",
     }
+    GTEST_TEST_BLOCK_MACRO_NAMES = {
+        "TEST",
+        "TEST_F",
+        "TEST_P",
+        "TYPED_TEST",
+        "TYPED_TEST_P",
+    }
+    CATCH_TEST_BLOCK_MACRO_NAMES |= GTEST_TEST_BLOCK_MACRO_NAMES
     BARE_NESTED_BLOCK_MACRO_NAMES = {
         "HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY",
     }
     STANDALONE_STATEMENT_MACRO_NAMES = {
         "CHECK_IMAGE_SUPPORT",
+    }
+    OPTIONAL_SEMICOLON_MACRO_NAMES = {
+        "INSTANTIATE_TESTS",
+        "INSTANTIATE_TEST_CATEGORIES",
+        "INSTANTIATE_TEST_CASE_P",
+        "INSTANTIATE_TEST_SUITE_P",
     }
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
@@ -854,7 +868,9 @@ class HipParser:
         return args
 
     def catch_test_function_name(self, macro_name, args):
-        if args and args[0]:
+        if macro_name in self.GTEST_TEST_BLOCK_MACRO_NAMES and len(args) >= 2:
+            raw_name = "_".join(self.macro_argument_text(arg) for arg in args[:2])
+        elif args and args[0]:
             raw_name = self.macro_argument_text(args[0])
         else:
             raw_name = macro_name.lower()
@@ -3445,18 +3461,26 @@ class HipParser:
         return expr
 
     def is_optional_semicolon_macro_statement(self, expr):
-        if not self.is_expression_statement_boundary():
-            return False
         if not isinstance(expr, FunctionCallNode):
             return False
         name = expr.name
-        return (
+        is_macro_call = (
             isinstance(name, str)
-            and name.isupper()
+            and (name.isupper() or name in self.OPTIONAL_SEMICOLON_MACRO_NAMES)
             and any(char.isalpha() for char in name)
+        )
+        if not is_macro_call:
+            return False
+        if self.is_expression_statement_boundary():
+            return True
+        return name in self.OPTIONAL_SEMICOLON_MACRO_NAMES and (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.OPTIONAL_SEMICOLON_MACRO_NAMES
         )
 
     def is_expression_statement_boundary(self):
+        if not self.current_token:
+            return True
         if self.match("NEWLINE", "RBRACE"):
             return True
         if self.pos > 0 and self.tokens[self.pos - 1].type == "NEWLINE":

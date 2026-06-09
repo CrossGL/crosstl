@@ -204,6 +204,8 @@ class OpenCLLexer:
 
             if token_type == "IDENTIFIER" and text in self.reserved_keywords:
                 token_type = self.reserved_keywords[text]
+            elif token_type == "PRIVATE" and text == "private":
+                token_type = "__MANAGED__"
 
             if token_type not in SKIP_TOKENS:
                 value = NORMALIZED_VALUES.get(token_type, text)

@@ -1773,3 +1773,36 @@ def test_codegen_external_directx_fixture_to_parseable_crossgl(fixture):
     for expected in fixture.contains:
         assert expected in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_dxc_cbuffer_long_member_sum_reparse_regression():
+    # Reduced from microsoft/DirectXShaderCompiler
+    # d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652,
+    # tools/clang/test/HLSLFileCheck/hlsl/objects/CbufferLegacy/cbufferInt16-struct.hlsl.
+    code = textwrap.dedent("""
+        struct Foo {
+          int16_t h1;
+          int3 f3;
+          int16_t2 h2;
+          int3 f3_1;
+          int2 f2;
+          int16_t4 h4;
+          int16_t2 h2_1;
+          int16_t3 h3;
+        };
+
+        ConstantBuffer<Foo> f : register(b0);
+
+        int4 main() : SV_Target {
+          return f.h1 + f.f3.x + f.h2.x + f.h2.y + f.f3_1.z
+            + f.f2.x + f.h4.x + f.h4.y + f.h4.z + f.h4.w
+            + f.h2_1.x + f.h2_1.y + f.h3.x + f.h3.y + f.h3.z
+            + f.h1 + f.f3.y + f.f3.z + f.h2.x + f.h2.y;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert parse_crossgl(crossgl) is not None
+    assert "return f.h1 + f.f3.x + f.h2.x" in crossgl
+    assert "(((((((((" not in crossgl

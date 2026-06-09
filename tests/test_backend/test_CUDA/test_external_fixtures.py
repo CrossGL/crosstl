@@ -83,6 +83,14 @@ EXTERNAL_SAMPLES = [
     },
     {
         "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "3632bcc762ab095c0f3221d7f019fb14c0c1e18b",
+        "paths": [
+            "cub/cub/device/dispatch/kernels/kernel_transform.cuh",
+            "thrust/thrust/detail/type_traits.h",
+        ],
+    },
+    {
+        "repo": "https://github.com/NVIDIA/cccl",
         "commit": "5ea5d42567693aad8c0e5d6316155ecc612fdc71",
         "paths": ["thrust/examples/uninitialized_vector.cu"],
     },
@@ -3266,4 +3274,52 @@ def test_cccl_jit_traits_requires_expression_condition_codegen_reparse():
     assert body[0].condition == "true"
     assert "if (true)" in crossgl
     assert "Traits::template special" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_cub_trailing_requires_after_return_type_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 3632bcc762ab095c0f3221d7f019fb14c0c1e18b
+    # path: cub/cub/device/dispatch/kernels/kernel_transform.cuh
+    source = """
+    template <class PolicySelector>
+    __launch_bounds__(128)
+    __global__ auto transform_kernel(int* out) noexcept -> void
+      requires transform_policy_selector<PolicySelector>
+    {
+      out[threadIdx.x] = 1;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.kernels[0].name == "transform_kernel"
+    assert ast.kernels[0].return_type == "void"
+    assert "fn transform_kernel" in crossgl
+    assert "requires transform_policy_selector" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_thrust_variable_template_ternary_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 3632bcc762ab095c0f3221d7f019fb14c0c1e18b
+    # path: thrust/thrust/detail/type_traits.h
+    source = """
+    template <typename T>
+    inline constexpr bool is_proxy_reference_v = false;
+
+    __device__ int proxy_score() {
+      return is_proxy_reference_v<int> ? 1 : 0;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.global_variables[0].name == "is_proxy_reference_v"
+    assert ast.functions[0].body[0].value.condition == "is_proxy_reference_v<int>"
+    assert "return (is_proxy_reference_v<int> ? 1 : 0);" in crossgl
     assert_crossgl_reparse(crossgl)

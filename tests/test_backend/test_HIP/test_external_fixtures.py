@@ -107,6 +107,19 @@ EXTERNAL_FIXTURE_SOURCES = {
             "catch/unit/cooperativeGrps/hipCGThreadBlockTileTypeShfl_old.cc",
         ],
     },
+    "hipblas": {
+        "url": "https://github.com/ROCm/hipBLAS",
+        "commit": "23b26a0093345264e7387481cbe01d1e1ae55fda",
+        "paths": ["clients/gtest/blas3/gemm_gtest.cpp"],
+    },
+    "rocblas": {
+        "url": "https://github.com/ROCm/rocBLAS",
+        "commit": "defce200a69e5346eeadd7ac1e199238758add61",
+        "paths": [
+            "clients/common/blas3/common_gemm.cpp",
+            "clients/common/common_helpers.hpp",
+        ],
+    },
     "llvm_project": {
         "url": "https://github.com/llvm/llvm-project",
         "commit": "3b5b5c1ec4a3095ab096dd780e84d7ab81f3d7ff",
@@ -139,6 +152,67 @@ def assert_crossgl_reparses(source):
 def generate_hip_from_crossgl(source):
     crossgl_ast = CrossGLParser(CrossGLLexer(source).tokens).parse()
     return HipCodeGen().generate(crossgl_ast)
+
+
+def test_external_hipblas_gtest_parameterized_block_macro_codegen_reparse():
+    # Reduced from ROCm/hipBLAS@23b26a0093345264e7387481cbe01d1e1ae55fda,
+    # clients/gtest/blas3/gemm_gtest.cpp.
+    source = """
+    using gemm = gemm_template<gemm_testing, GEMM>;
+    TEST_P(gemm, blas3)
+    {
+        CATCH_SIGNALS_AND_EXCEPTIONS_AS_FAILURES(
+            hipblas_simple_dispatch<gemm_testing>(GetParam()));
+    }
+    INSTANTIATE_TEST_CATEGORIES(gemm);
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    alias = ast.statements[0]
+    test_case = ast.statements[1]
+    instantiate = ast.statements[2]
+
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "gemm"
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "gemm_blas3"
+    assert test_case.qualifiers == ["TEST_P"]
+    assert isinstance(test_case.body[0], FunctionCallNode)
+    assert test_case.body[0].name == "CATCH_SIGNALS_AND_EXCEPTIONS_AS_FAILURES"
+    assert isinstance(instantiate, FunctionCallNode)
+    assert instantiate.name == "INSTANTIATE_TEST_CATEGORIES"
+    assert "// Function: gemm_blas3" in crossgl
+    assert "hipblas_simple_dispatch<gemm_testing>(GetParam())" in crossgl
+    assert "TEST_P" not in crossgl
+
+
+def test_external_rocblas_repeated_instantiate_tests_macro_chain_parse():
+    # Reduced from ROCm/rocBLAS@defce200a69e5346eeadd7ac1e199238758add61,
+    # clients/common/blas3/common_gemm.cpp plus clients/common/common_helpers.hpp.
+    source = """
+    #define INSTANTIATE(T_)                 \\
+        INSTANTIATE_TESTS(gemm, T_)         \\
+        INSTANTIATE_TESTS(gemm_batched, T_) \\
+        INSTANTIATE_TESTS(gemm_strided_batched, T_)
+
+    INSTANTIATE(rocblas_half)
+    INSTANTIATE(float)
+    INSTANTIATE(double)
+    INSTANTIATE(rocblas_float_complex)
+    """
+
+    ast = parse_hip_source(source)
+    calls = ast.statements
+
+    assert len(calls) == 12
+    assert all(isinstance(call, FunctionCallNode) for call in calls)
+    assert {call.name for call in calls} == {"INSTANTIATE_TESTS"}
+    assert [call.args for call in calls[:3]] == [
+        ["gemm", "rocblas_half"],
+        ["gemm_batched", "rocblas_half"],
+        ["gemm_strided_batched", "rocblas_half"],
+    ]
+    assert calls[-1].args == ["gemm_strided_batched", "rocblas_float_complex"]
 
 
 def test_external_rocm_device_globals_symbol_api_codegen_reparse():

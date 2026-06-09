@@ -5521,6 +5521,103 @@ def test_lifetime_turbofish_method_call_codegen_reparse_from_cubecl_vulkan_featu
     crosstl.translator.parse(result)
 
 
+def test_cubecl_array_frontend_macro_codegen_reparse_from_upstream():
+    # Reduced from tracel-ai/cubecl commit
+    # 9afbb3144ba40c2ecb6e7fbfb662b80b94148dd5,
+    # crates/cubecl-core/src/frontend/container/array/base.rs.
+    code = """
+    struct Array<E> {
+        value: E,
+    }
+
+    impl<E> Array<E> {
+        pub fn len(&self) -> comptime_type!(usize) {
+            intrinsic!(|_| self.expand.ty.array_size())
+        }
+
+        pub fn next(&mut self) -> Option<E> {
+            unexpanded!()
+        }
+
+        pub fn assign(&mut self, other: Self) {
+            assert_eq!(
+                other.len(),
+                self.len(),
+                "Can't assign differently sized arrays"
+            );
+        }
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint Array_len(Array<E> self)" in result
+    assert "return intrinsic();" in result
+    assert "return unexpanded();" in result
+    assert (
+        'assert_eq(other.len(), self.len(), "Can\'t assign differently sized arrays");'
+        in result
+    )
+    assert "comptime_type!(" not in result
+    assert "intrinsic!(|_|" not in result
+    assert "assert_eq!(" not in result
+    crosstl.translator.parse(result)
+
+
+def test_cubecl_cmma_comptime_and_size_macro_pattern_codegen_reparse():
+    # Reduced from tracel-ai/cubecl commit
+    # 9afbb3144ba40c2ecb6e7fbfb662b80b94148dd5,
+    # crates/cubecl-core/src/frontend/cmma.rs and
+    # crates/cubecl-core/src/runtime_tests/cmma.rs.
+    code = """
+    struct MmaDefinition<A, B, CD> {
+        m: usize,
+        n: usize,
+        k: usize,
+    }
+
+    impl<A, B, CD> MmaDefinition<A, B, CD> {
+        pub fn num_elems(&self, ident: MatrixIdent) -> comptime_type!(usize) {
+            intrinsic!(|scope| {
+                match ident {
+                    MatrixIdent::A => self.m * self.k,
+                    MatrixIdent::B => self.k * self.n,
+                    MatrixIdent::Accumulator => self.m * self.n,
+                }
+            })
+        }
+
+        pub fn use_accumulator(&self, ident: MatrixIdent) -> bool {
+            if comptime![ident == MatrixIdent::Accumulator] {
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    fn kernel(def: MmaDefinition<A, B, CD>) {
+        let vector_size_a = def.num_elems(MatrixIdent::A);
+        let size!(NA) = vector_size_a;
+        let vector_count_a = comptime!(vector_size_a / NA);
+        let registers_a = Array::<Vector<A, NA>>::new(vector_count_a);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "uint MmaDefinition_num_elems" in result
+    assert "return intrinsic();" in result
+    assert "let NA = vector_size_a;" in result
+    assert "let vector_count_a = vector_size_a/NA;" in result
+    assert "if (ident==MatrixIdent::Accumulator)" in result
+    assert "comptime_type!(" not in result
+    assert "comptime!(" not in result
+    assert "comptime![" not in result
+    assert "size!(" not in result
+    crosstl.translator.parse(result)
+
+
 def test_function_call_conversion():
     code = """
     fn test_calls() {
