@@ -132,6 +132,7 @@ SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
 KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
+GNU_EXTENSION_PREFIXES = {"__extension__"}
 OPERATOR_OVERLOAD_TOKENS = {
     "PLUS",
     "MINUS",
@@ -588,10 +589,13 @@ class MetalParser:
         )
 
     def is_union_declaration_start(self):
-        return self.current_token == ("IDENTIFIER", "union") and self.peek(1)[0] in {
-            "IDENTIFIER",
-            "LBRACE",
-        }
+        idx = self.skip_gnu_extension_prefix_tokens_at(self.pos)
+        return (
+            idx < len(self.tokens)
+            and self.tokens[idx] == ("IDENTIFIER", "union")
+            and idx + 1 < len(self.tokens)
+            and self.tokens[idx + 1][0] in {"IDENTIFIER", "LBRACE"}
+        )
 
     def parse_template_declaration(self):
         template_parameters = self.parse_template_prefix()
@@ -1154,6 +1158,8 @@ class MetalParser:
         self.eat("TYPEDEF")
         if self.current_token[0] == "STRUCT":
             return self.parse_typedef_struct()
+        if self.is_union_alias_start():
+            return self.parse_typedef_union()
         if self.current_token[0] == "ENUM":
             return self.parse_typedef_enum()
         if (
@@ -1214,6 +1220,45 @@ class MetalParser:
             return None
         self.known_types.add(alias_name)
         return TypeAliasNode(f"enum {tag_name}", alias_name)
+
+    def parse_typedef_union(self):
+        self.eat("IDENTIFIER")
+        tag_name = None
+        if self.is_current_name_token():
+            tag_name = self.current_token[1]
+            self.eat(self.current_token[0])
+            self.known_types.add(tag_name)
+
+        if self.current_token[0] == "LBRACE":
+            self.eat("LBRACE")
+            members = self.parse_struct_members()
+            self.eat("RBRACE")
+            (
+                alias_name,
+                _array_sizes,
+                _type_suffix,
+                _grouped_suffix,
+            ) = self.parse_declarator()
+            self.eat("SEMICOLON")
+            union_name = alias_name or tag_name
+            if not union_name:
+                raise SyntaxError("Expected typedef union name")
+            self.known_types.add(union_name)
+            union_node = StructNode(union_name, members)
+            union_node.typedef_tag = tag_name
+            union_node.aggregate_kind = "union"
+            return union_node
+
+        if not tag_name:
+            raise SyntaxError("Expected typedef union body or tag name")
+        alias_name, _array_sizes, _type_suffix, _grouped_suffix = (
+            self.parse_declarator()
+        )
+        self.eat("SEMICOLON")
+        if alias_name == tag_name:
+            return None
+        self.known_types.add(alias_name)
+        return TypeAliasNode(f"union {tag_name}", alias_name)
 
     def parse_function_typedef_declarator(self, return_type):
         self.eat("LPAREN")
@@ -1884,6 +1929,7 @@ class MetalParser:
         return bases
 
     def parse_union(self):
+        self.skip_gnu_extension_prefix_tokens()
         self.eat("IDENTIFIER")
         name = self.current_token[1] if self.is_current_name_token() else None
         if name:
@@ -2009,7 +2055,7 @@ class MetalParser:
         return members
 
     def is_nested_aggregate_declaration_start(self):
-        idx = self.pos
+        idx = self.skip_gnu_extension_prefix_tokens_at(self.pos)
         if idx >= len(self.tokens):
             return False
         if self.tokens[idx][0] not in {"STRUCT", "CLASS"} and self.tokens[idx] != (
@@ -2029,6 +2075,22 @@ class MetalParser:
         if idx >= len(self.tokens):
             return False
         return self.tokens[idx][0] in {"LBRACE", "COLON", "SEMICOLON"}
+
+    def skip_gnu_extension_prefix_tokens_at(self, idx):
+        while (
+            idx < len(self.tokens)
+            and self.tokens[idx][0] == "IDENTIFIER"
+            and self.tokens[idx][1] in GNU_EXTENSION_PREFIXES
+        ):
+            idx += 1
+        return idx
+
+    def skip_gnu_extension_prefix_tokens(self):
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in GNU_EXTENSION_PREFIXES
+        ):
+            self.eat("IDENTIFIER")
 
     def skip_alignas_specifier_tokens_at(self, idx):
         while idx < len(self.tokens) and self.tokens[idx][0] == "ALIGNAS":

@@ -24,6 +24,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "71e78588f73609a1d8d472629b3f3542a74e9199",
     },
+    "shader-slang/slang-main-2026-06-09": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "6b9f98ff90facc35306a0ba643dfecb59a870156",
+    },
     "shader-slang/slang-main-2026-06-08-anonymous-struct": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "e2bb86bad99385790cb7d24655fc9d090346a4ca",
@@ -1749,6 +1753,44 @@ EXTERNAL_FIXTURES = [
             "void computeMain()",
         ],
         "not_contains": ["namespace foo", "foo::bar"],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 6b9f98ff90facc35306a0ba643dfecb59a870156
+        # Path: tests/bugs/gh-4457.slang
+        "id": "slang_global_scope_qualified_type_from_gh_4457",
+        "repo": "shader-slang/slang-main-2026-06-09",
+        "path": "tests/bugs/gh-4457.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            [UnscopedEnum]
+            enum Number {
+              First = 1,
+              Second,
+            };
+
+            static ::Number foo = First;
+
+            [numthreads(4, 1, 1)]
+            void computeMain(int3 dispatchThreadID: SV_DispatchThreadID)
+            {
+              static ::Number bar = Second;
+              outputBuffer[0] = int(foo);
+              outputBuffer[1] = int(bar);
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "enum Number {",
+            "static Number foo = First;",
+            "Number bar = Second;",
+            "outputBuffer[0] = int(foo);",
+            "outputBuffer[1] = int(bar);",
+        ],
+        "not_contains": ["::Number", "Expected IDENTIFIER, got COLON"],
     },
     {
         # Source: https://github.com/shader-slang/slang

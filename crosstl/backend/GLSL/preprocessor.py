@@ -12,6 +12,21 @@ HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
     """HLSL preprocessor variant with GLSL comment/directive semantics."""
 
+    def _handle_define(self, rest: str):
+        rest = rest.lstrip()
+        name_match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", rest)
+        name = name_match.group(0) if name_match else None
+
+        super()._handle_define(rest)
+
+        macro = self.macros.get(name) if name else None
+        if (
+            macro is not None
+            and not macro.is_function_like()
+            and "##" in macro.replacement
+        ):
+            macro.replacement = self._replace_params(macro.replacement, {})
+
     def _split_logical_lines(self, code: str) -> List[str]:
         return super()._split_logical_lines(
             self._strip_comments(code, preserve_block_newlines=False)

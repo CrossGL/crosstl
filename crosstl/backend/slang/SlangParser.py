@@ -303,6 +303,7 @@ class SlangParser:
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
+        current_pos = self.skip_leading_global_scope_tokens(current_pos)
         if current_pos >= len(self.tokens) or self.tokens[current_pos][0] == "EOF":
             return False
 
@@ -612,6 +613,18 @@ class SlangParser:
                 and self.tokens[current_pos][0] == "LESS_THAN"
             ):
                 current_pos = self.skip_generic_type_suffix_tokens(current_pos)
+        return current_pos
+
+    def is_leading_global_scope_at(self, index):
+        return (
+            index + 1 < len(self.tokens)
+            and self.tokens[index][0] == "COLON"
+            and self.tokens[index + 1][0] == "COLON"
+        )
+
+    def skip_leading_global_scope_tokens(self, current_pos):
+        if self.is_leading_global_scope_at(current_pos):
+            return current_pos + 2
         return current_pos
 
     def is_qualifier_token_at(self, index):
@@ -1018,6 +1031,9 @@ class SlangParser:
         ]
 
     def parse_type_name(self, allow_array_suffix=False):
+        if self.is_leading_global_scope_at(self.pos):
+            self.eat("COLON")
+            self.eat("COLON")
         type_name = self.current_token[1]
         self.eat(self.current_token[0])
         if self.current_token[0] == "LESS_THAN":
@@ -2802,6 +2818,10 @@ class SlangParser:
 
     def is_variable_declaration_start(self):
         current_pos = self.skip_declaration_prefix_tokens(self.pos)
+        if current_pos >= len(self.tokens):
+            return False
+
+        current_pos = self.skip_leading_global_scope_tokens(current_pos)
         if current_pos >= len(self.tokens):
             return False
 

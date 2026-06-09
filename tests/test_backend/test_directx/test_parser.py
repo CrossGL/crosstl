@@ -3260,6 +3260,22 @@ def test_parse_legacy_special_float_literal_from_directx_graphics_samples():
     assert math.isinf(infinity.value)
 
 
+def test_parse_double_suffix_float_literals_from_dxc_intrinsics():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/intrinsics/basic/intrinsic-examples_Mod.hlsl
+    # tools/clang/test/HLSLFileCheck/hlsl/intrinsics/compound/pow-mulonly-lit-types.hlsl
+    ast = parse_code("""
+    double overload1(double d) { return 1.0l; }
+
+    float main(float4x4 b : B) : SV_Target
+    {
+        return pow(b, -131072.0L)[0][0];
+    }
+    """)
+
+    assert [function.name for function in ast.functions] == ["overload1", "main"]
+
+
 def test_parse_unsigned_int_namespace_constants_from_directx_graphics_samples():
     ast = parse_code("""
     namespace FilterKernel

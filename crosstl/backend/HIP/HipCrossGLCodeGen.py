@@ -7165,6 +7165,7 @@ class HipToCrossGLConverter:
             "long long": "i64",
             "signed long long": "i64",
             "unsigned long long": "u64",
+            "long long unsigned int": "u64",
             "__int64": "i64",
             "signed __int64": "i64",
             "unsigned __int64": "u64",

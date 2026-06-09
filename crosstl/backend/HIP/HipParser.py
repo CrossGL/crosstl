@@ -2766,7 +2766,15 @@ class HipParser:
         if token_type == "LONG" and self.match("LONG"):
             type_name += " long"
             self.advance()
-        if token_type == "LONG" and self.match("INT"):
+            if self.match("SIGNED", "UNSIGNED"):
+                type_name += f" {self.current_token.value}"
+                self.advance()
+                if self.match("INT"):
+                    type_name += " int"
+                    self.advance()
+            elif self.match("INT"):
+                self.advance()
+        elif token_type == "LONG" and self.match("INT"):
             self.advance()
 
         if self.match("LT"):
@@ -5032,7 +5040,15 @@ class HipParser:
                 if index is None:
                     return None
             if type_token == "LONG" and index < len(self.tokens):
+                saw_long_long = False
                 if self.tokens[index].type == "LONG":
+                    index += 1
+                    saw_long_long = True
+                if (
+                    saw_long_long
+                    and index < len(self.tokens)
+                    and self.tokens[index].type in {"SIGNED", "UNSIGNED"}
+                ):
                     index += 1
                 if index < len(self.tokens) and self.tokens[index].type == "INT":
                     index += 1

@@ -1,6 +1,7 @@
 from crosstl.backend.HIP.HipAst import (
     AtomicOperationNode,
     BinaryOpNode,
+    CastNode,
     FunctionCallNode,
     FunctionNode,
     HipAsmNode,
@@ -192,6 +193,30 @@ def test_external_rocm_device_globals_symbol_api_codegen_reparse():
         "// Kernel launch: test_globals_kernel<<<vec3<u32>(64, 1, 1), "
         "vec3<u32>(1, 1, 1), 0, hipStreamDefault>>>()"
     ) in crossgl
+
+
+def test_external_rocm_host_memory_size_multiword_integer_cast_codegen_reparse():
+    # CUDA-compatible HIP host code uses the same C++ decl-specifier grammar.
+    # This alternate scalar spelling appears in NVIDIA cuda-samples:
+    # repo: https://github.com/NVIDIA/cuda-samples
+    # commit: b7c5481c556c3fe98db060207ecaa41a4b9a9abc
+    # path: cpp/0_Introduction/matrixMulDrv/matrixMulDrv.cpp
+    source = """
+    void host(size_t total_global_mem) {
+        double total_global_mem_in_gbytes =
+            (double)(long long unsigned int)total_global_mem
+            / (1024.0 * 1024.0 * 1024.0);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    outer_cast = ast.statements[0].body[0].value.left
+
+    assert isinstance(outer_cast, CastNode)
+    assert outer_cast.target_type == "double"
+    assert isinstance(outer_cast.expression, CastNode)
+    assert outer_cast.expression.target_type == "long long unsigned int"
+    assert "f64(u64(total_global_mem))" in crossgl
 
 
 def test_external_rocm_cooperative_groups_thread_group_parameter_codegen_reparse():

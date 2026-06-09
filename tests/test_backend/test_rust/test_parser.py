@@ -241,6 +241,41 @@ def test_primitive_named_impl_methods_parse_from_rust_gpu_metadata():
     assert impl_block.methods[0].params[0].vtype == "f32"
 
 
+def test_primitive_named_member_access_parse_from_rust_gpu_codegen():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Commit: a27c0363d391a54de1feb9ee6864ad9dff72d243
+    # Paths:
+    # - crates/rustc_codegen_spirv/src/codegen_cx/declare.rs
+    # - crates/rustc_codegen_spirv/src/codegen_cx/entry.rs
+    code = """
+    impl CodegenCx {
+        fn classify(&self, element: Element) -> bool {
+            element.ty == self.tcx.types.u32
+        }
+
+        fn record(&self) {
+            self.buffer.insert(fn_id, self.tcx.types.usize);
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    classify, record = ast.impl_blocks[0].methods
+
+    comparison = classify.body[0]
+    assert isinstance(comparison, BinaryOpNode)
+    assert comparison.op == "=="
+    assert isinstance(comparison.right, MemberAccessNode)
+    assert comparison.right.member == "u32"
+    assert comparison.right.object.member == "types"
+
+    insert_call = record.body[0]
+    assert isinstance(insert_call, FunctionCallNode)
+    assert insert_call.args[1].member == "usize"
+    assert insert_call.args[1].object.member == "types"
+
+
 def test_enum_parsing():
     code = """
     #[repr(u32)]

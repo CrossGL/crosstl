@@ -682,6 +682,7 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
         assert codegen.convert_hip_type_to_crossgl("bool") == "bool"
         assert codegen.convert_hip_type_to_crossgl("void") == "void"
+        assert codegen.convert_hip_type_to_crossgl("long long unsigned int") == "u64"
         assert codegen.convert_hip_type_to_crossgl("half") == "f16"
         assert codegen.convert_hip_type_to_crossgl("__half") == "f16"
         assert codegen.convert_hip_type_to_crossgl("half2") == "vec2<f16>"

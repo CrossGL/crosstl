@@ -204,8 +204,8 @@ TOKENS = tuple(
             r"|(?:"
             r"\d+\.(?!(?:[xyzwrgbaXYZWRGBA]{1,4})(?![a-zA-Z0-9_]))\d*"
             r"|\.\d+"
-            r")(?:[eE][+-]?\d+)?[fFhH]?"
-            r"|\d+[eE][+-]?\d+[fFhH]?"
+            r")(?:[eE][+-]?\d+)?[fFhHlL]?"
+            r"|\d+[eE][+-]?\d+[fFhHlL]?"
             r"|\d+(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?|[fFhH])?",
         ),
         # Brackets and braces

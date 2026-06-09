@@ -76,6 +76,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/video/src/opencl/optical_flow_farneback.cl",
     },
+    "opencv_batchnorm_macro_type_cast": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/dnn/src/opencl/batchnorm.cl",
+    },
     "opencv_filter_sep_col_macro_type_cast": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -478,6 +483,32 @@ def test_external_opencv_opencl_const_parameter_codegen_reparse():
     }
     assert "var<storage, read_write> src: array<f32>" in crossgl
     assert "__const" not in crossgl
+
+
+def test_external_opencv_batchnorm_macro_type_cast_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["opencv_batchnorm_macro_type_cast"]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/dnn/src/opencl/batchnorm.cl"
+
+    source = """
+    __kernel void batch_norm1(__global const Dtype* src,
+                              __global const float* weight,
+                              __global const float* bias,
+                              __global Dtype* dst) {
+        int index = get_global_id(0);
+        float w = weight[index];
+        float b = bias[index];
+        float_type src_vec = convert_f(src[index]);
+        float_type dst_vec = src_vec * w + (float_type)b;
+        dst[index] = convert_T(dst_vec);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    cast = ast.statements[0].body[4].value.right
+    assert cast.target_type == "float_type"
+    assert "float_type(b)" in crossgl
 
 
 def test_external_opencv_filter_sep_col_macro_type_cast_codegen_reparse():

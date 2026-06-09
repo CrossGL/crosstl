@@ -407,6 +407,26 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/tokenPaste.vert.
+    # Reduced from the object-like macro paste case: #define noArg fl##oat.
+    ExternalFixture(
+        name="glslang-token-paste-object-like-macro",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/tokenPaste.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 450
+
+            #define noArg fl##oat
+            noArg argless;
+
+            void main()
+            {
+                argless = 1.0;
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.memoryScopeSemantics.comp.
     # Reduced from GL_KHR_memory_scope_semantics storage qualifier coverage.
     ExternalFixture(
@@ -1636,6 +1656,22 @@ def test_parse_glslang_preprocessor_edge_case_block_comment_macro_fixture():
     assert (
         "output.gl_Position = vec4(((((3 + 2) + (2 * 4)) + 2) + (3 * 2)));" in crossgl
     )
+    parse_crossgl(crossgl)
+
+
+def test_parse_glslang_token_paste_object_like_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-token-paste-object-like-macro"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    argless = next(var for var in ast.global_variables if var.name == "argless")
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert argless.vtype == "float"
+    assert "float argless;" in crossgl
     parse_crossgl(crossgl)
 
 

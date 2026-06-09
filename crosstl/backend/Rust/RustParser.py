@@ -105,6 +105,7 @@ class RustParser:
             "SUPER",
         }
     )
+    MEMBER_ACCESS_TOKENS = NAME_TOKENS | {"NUMBER"}
     ATTRIBUTE_PATH_SEGMENT_TOKENS = PATH_SEGMENT_TOKENS | {"UNSAFE"}
     ASSIGNMENT_TOKENS = {
         "EQUALS",
@@ -3240,9 +3241,9 @@ class RustParser:
                     left = AwaitNode(left)
                     continue
 
-                if self.current_token[0] not in {"IDENTIFIER", "NUMBER"}:
+                if self.current_token[0] not in self.MEMBER_ACCESS_TOKENS:
                     raise SyntaxError(
-                        f"Expected IDENTIFIER or NUMBER, got {self.current_token[0]}"
+                        f"Expected member access name, got {self.current_token[0]}"
                     )
                 member = self.current_token[1]
                 self.eat(self.current_token[0])

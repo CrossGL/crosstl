@@ -54,6 +54,7 @@ CANDLE_REPO = "https://github.com/huggingface/candle"
 CANDLE_COMMIT = "39355c6c9187747e360a2d6ec9d67a2a501b2552"
 LLAMA_CPP_REPO = "https://github.com/ggml-org/llama.cpp"
 LLAMA_CPP_COMMIT = "94a220cd6745e6e3f8de62870b66fd5b9bc92700"
+LLAMA_CPP_GGML_COMMON_COMMIT = "e3471b3e7306fe120dc8f38a2263c1293fc2add7"
 PMETAL_REPO = "https://github.com/Epistates/pmetal"
 PMETAL_COMMIT = "089171635d1b9c9b7a58b575cf7d522834022cd3"
 IMGUI_REPO = "https://github.com/ocornut/imgui"
@@ -1541,6 +1542,48 @@ EXTERNAL_FIXTURES = [
                     uint tpig[[thread_position_in_grid]]) {
                 dst[tpig] = args.val;
             }
+        """
+        ),
+    },
+    {
+        "name": "llama_cpp_ggml_extension_anonymous_union_member",
+        "repo_url": LLAMA_CPP_REPO,
+        "commit": LLAMA_CPP_GGML_COMMON_COMMIT,
+        "source_path": "ggml/src/ggml-common.h included by ggml-metal.metal",
+        "roundtrip": True,
+        "contains": [
+            "// Metal union iq1m_scale_t represented as struct-like layout; "
+            "overlapping storage is not modeled",
+            "struct iq1m_scale_t {",
+            "struct block_q4_1 {",
+            "uint8[32 / 2] qs;",
+        ],
+        "not_contains": ["__extension__", "GGML_EXTENSION"],
+        "source": (
+            """
+            #define GGML_EXTENSION __extension__
+            #define GGML_COMMON_AGGR_S
+            #define GGML_COMMON_AGGR_U
+            #define QK4_1 32
+
+            typedef half ggml_half;
+            typedef half2 ggml_half2;
+
+            typedef struct {
+                GGML_EXTENSION union {
+                    struct {
+                        ggml_half d;
+                        ggml_half m;
+                    } GGML_COMMON_AGGR_S;
+                    ggml_half2 dm;
+                } GGML_COMMON_AGGR_U;
+                uint8_t qs[QK4_1 / 2];
+            } block_q4_1;
+
+            typedef union {
+                ggml_half f16;
+                uint16_t u16;
+            } iq1m_scale_t;
         """
         ),
     },
