@@ -2720,8 +2720,12 @@ class CudaParser:
 
         if self.current_token[0] == "LPAREN":
             self.parse_parameters()
+        array_suffix = self.parse_array_suffix()
 
-        param_type = f"{return_type} ({pointer_prefix})".strip()
+        if array_suffix:
+            param_type = f"{return_type} {pointer_prefix} {array_suffix}".strip()
+        else:
+            param_type = f"{return_type} ({pointer_prefix})".strip()
         self.skip_parameter_default()
         return VariableNode(param_type, name)
 

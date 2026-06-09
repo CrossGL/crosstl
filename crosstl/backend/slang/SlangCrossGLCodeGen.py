@@ -1401,9 +1401,9 @@ class SlangToCrossGLConverter:
         current = []
         depth = 0
         for char in str(text):
-            if char in "([{":
+            if char in "([{<":
                 depth += 1
-            elif char in ")]}" and depth > 0:
+            elif char in ")]}>" and depth > 0:
                 depth -= 1
 
             if char == "," and depth == 0:

@@ -156,6 +156,36 @@ def test_codegen_vertex_roundtrip():
         assert name in output
 
 
+def test_codegen_multiline_for_header_from_graphicsfuzz_bubblesort():
+    # Reduced from google/graphicsfuzz
+    # shaders/src/main/glsl/samples/100/stable_bubblesort_flag.frag at
+    # aa32d4cb556647ddaaf2048815bd6bca07d1bdab.
+    code = textwrap.dedent("""
+        #version 100
+
+        precision mediump float;
+        uniform vec2 resolution;
+
+        void main()
+        {
+            float data[2];
+            for(
+                int i = 0;
+                i < 2;
+                i ++
+            )
+            {
+                data[i] = float(i);
+            }
+            gl_FragColor = vec4(data[0] / resolution.x);
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert "for (int i = 0; (i < 2); (i++))" in crossgl
+
+
 def test_codegen_layout_qualifier_with_newline_before_parens_from_glsl_grammar():
     # GLSL 4.60 layout-qualifier is "layout ( ... )"; newlines are whitespace.
     code = textwrap.dedent("""

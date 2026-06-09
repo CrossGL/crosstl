@@ -2935,3 +2935,32 @@ def test_cuda_samples_vector_of_const_char_pointer_type_codegen_reparse():
     assert "var metricName: std_vector_ptr_i8;" in crossgl
     assert "ptr<std::vector<const char>>" not in crossgl
     assert_crossgl_reparse(crossgl)
+
+
+def test_llama_cpp_cuda_array_reference_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/ggml-org/llama.cpp
+    # commit: 1e1aca09dab40318c9e0c2c0c47ce239876adc53
+    # path: ggml/src/ggml-cuda/topk-moe.cu
+    source = """
+    template <int experts_per_thread, bool use_limit>
+    __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread],
+                                         const int limit,
+                                         const int lane) {
+        const bool active = !use_limit || (lane < limit);
+        vals[0] = active ? vals[0] : 0.0f;
+    }
+    """
+
+    ast = parse_cuda(source)
+    params = ast.functions[0].params
+    crossgl = cuda_to_crossgl(source)
+
+    assert [(param.vtype, param.name) for param in params] == [
+        ("float & [experts_per_thread]", "vals"),
+        ("const int", "limit"),
+        ("const int", "lane"),
+    ]
+    assert "array<f32, experts_per_thread> vals" in crossgl
+    assert "float (&vals)" not in crossgl
+    assert_crossgl_reparse(crossgl)

@@ -10929,10 +10929,12 @@ class RustToCrossGLConverter:
         return not (text[index].isalnum() or text[index] == "_")
 
     def strip_reference_type(self, type_name):
-        if type_name.startswith("&mut "):
-            return type_name[5:].strip()
-        if type_name.startswith("&"):
-            return type_name[1:].strip()
+        match = re.match(r"^&\s*mut\s*(.+)$", type_name)
+        if match:
+            return match.group(1).strip()
+        match = re.match(r"^&\s*(.+)$", type_name)
+        if match:
+            return match.group(1).strip()
         return type_name
 
     def strip_trait_object_type(self, type_name):

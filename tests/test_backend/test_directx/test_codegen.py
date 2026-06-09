@@ -1451,6 +1451,23 @@ def test_codegen_precise_entry_return_from_hlsl_variable_syntax_docs():
     parse_crossgl(output)
 
 
+def test_codegen_precise_entry_return_with_attribute_from_dxc_trig_reparse():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/intrinsics/trig/keep_precise.0.hlsl
+    output = generate_crossgl("""
+        [RootSignature("")]
+        precise float main(float x : A) : SV_Target {
+            return tanh(x);
+        }
+    """)
+
+    assert '@ RootSignature("")' in output
+    assert "@ precise" in output
+    assert "precise float main" not in output
+    assert "float main(float x @ A) @ gl_FragColor" in output
+    parse_crossgl(output)
+
+
 def test_codegen_local_static_const_array_from_dxc_bc6hdecode():
     # Source: microsoft/DirectXShaderCompiler@517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # tools/clang/test/CodeGenHLSL/Samples/DX11/BC6HDecode.hlsl

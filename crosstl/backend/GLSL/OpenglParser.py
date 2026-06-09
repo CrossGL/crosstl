@@ -2196,6 +2196,7 @@ class GLSLParser:
     def parse_for_loop(self):
         self.eat("FOR")
         self.eat("LPAREN")
+        self.skip_newlines()
 
         init = None
         if self.current_token[0] != "SEMICOLON":
@@ -2221,11 +2222,13 @@ class GLSLParser:
                 init = self.parse_assignment_expression()
 
         self.eat("SEMICOLON")
+        self.skip_newlines()
 
         condition = None
         if self.current_token[0] != "SEMICOLON":
             condition = self.parse_condition()
         self.eat("SEMICOLON")
+        self.skip_newlines()
 
         update = None
         if self.current_token[0] != "RPAREN":

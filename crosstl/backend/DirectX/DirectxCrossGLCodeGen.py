@@ -1694,6 +1694,10 @@ class HLSLToCrossGLConverter:
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         return "precise " if "precise" in qualifiers else ""
 
+    def function_precise_return_needs_attribute(self, func):
+        qualifiers = {str(q).lower() for q in getattr(func, "qualifiers", []) or []}
+        return "precise" in qualifiers and bool(getattr(func, "attributes", []))
+
     def format_interpolation_attributes(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         attributes = []
@@ -3202,6 +3206,9 @@ class HLSLToCrossGLConverter:
         code = self.format_attributes(
             getattr(func, "attributes", []), indent, skip_attribute_names
         )
+        precise_as_attribute = self.function_precise_return_needs_attribute(func)
+        if precise_as_attribute:
+            code += "    " * indent + "@ precise\n"
         code += "    " * indent
         previous_variable_types = self.current_variable_types
         previous_resource_array_dims = self.current_resource_array_dims
@@ -3220,9 +3227,12 @@ class HLSLToCrossGLConverter:
         semantic = f" {semantic}" if semantic else ""
         stage_entry_attribute = " @ stage_entry" if stage_entry else ""
         function_name = self.render_function_identifier(entry_name or func.name)
+        precise_prefix = (
+            "" if precise_as_attribute else self.format_precise_qualifier_prefix(func)
+        )
         return_type = (
-            f"{self.format_precise_qualifier_prefix(func)}"
-            f"{self.map_type(func.return_type)}{self.format_array_suffixes(func)}"
+            f"{precise_prefix}{self.map_type(func.return_type)}"
+            f"{self.format_array_suffixes(func)}"
         )
         code += (
             f"{return_type} "

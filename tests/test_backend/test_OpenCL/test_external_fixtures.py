@@ -66,6 +66,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
         "path": "src/backend/opencl/magma/magma_common.h",
     },
+    "arrayfire_magma_dependent_typename_inline": {
+        "url": "https://github.com/arrayfire/arrayfire",
+        "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
+        "path": "src/backend/opencl/magma/magma_blas_clblast.h",
+    },
 }
 
 
@@ -405,3 +410,32 @@ def test_external_arrayfire_magma_opencl_api_typedefs_codegen_reparse():
     assert "typedef u32 magma_type_t;" in crossgl
     assert "struct cpu_blas_gemv_func_float" in crossgl
     assert "cl_command_queue" not in crossgl
+
+
+def test_external_arrayfire_magma_dependent_typename_inline_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["arrayfire_magma_dependent_typename_inline"]
+    assert source_info["commit"] == "492718b5a256d4a9d5198fdce89d8fd21772bfda"
+    assert source_info["path"] == "src/backend/opencl/magma/magma_blas_clblast.h"
+
+    source = """
+    typedef cl_float2 cfloat;
+
+    template<typename T>
+    struct CLBlastType {
+        using Type = T;
+    };
+
+    template<typename T>
+    typename CLBlastType<T>::Type inline toCLBlastConstant(const T val);
+
+    kernel void arrayfire_magma_probe(global float *out, const float value) {
+        out[0] = toCLBlastConstant(value);
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    helper = ast.statements[2]
+    assert helper.return_type == "CLBlastType<T>::Type"
+    assert helper.qualifiers == ["inline"]
+    assert "CLBlastType<T>::Type toCLBlastConstant(T val)" in crossgl

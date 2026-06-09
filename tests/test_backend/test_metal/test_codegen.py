@@ -674,6 +674,32 @@ def test_codegen_gnu_attribute_between_function_qualifiers_and_return_type_from_
     parse_crossgl(crossgl)
 
 
+def test_codegen_drops_scoped_vendor_function_attribute_from_spirv_cross_quantize():
+    # Reduced from:
+    # Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    # Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    # Path: reference/shaders-msl/asm/comp/quantize.asm.comp
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template<typename F>
+    [[clang::optnone]]
+    F spvQuantizeToF16(F fval) {
+        return F(fval);
+    }
+
+    kernel void main0(device float& out [[buffer(0)]]) {
+        out = spvQuantizeToF16(out);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "spvQuantizeToF16" in crossgl
+    assert "clang::optnone" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_reference_to_array_params_from_spirv_cross_reference():
     # Upstream repo: https://github.com/KhronosGroup/SPIRV-Cross
     # Commit: 9fbd8b789e351c2bb772cec570c1105962056b43

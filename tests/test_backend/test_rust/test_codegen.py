@@ -289,6 +289,32 @@ def test_wgpu_global_tuple_field_access_reparse():
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_wgpu_mut_slice_reference_inside_generic_type_reparse():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-core/src/track/buffer.rs.
+    code = """
+    unsafe fn insert(
+        start_states: Option<&mut[BufferUses]>,
+        current_states: &mut BufferUses[],
+        index: usize,
+        start_state_provider: BufferStateProvider<'_>,
+    ) {
+        let new_start_state = unsafe { start_state_provider.get_state(index) };
+        if let Some(&mut ref mut start_state) = start_states {
+            *start_state.get_unchecked_mut(index) = new_start_state;
+        }
+        current_states.get_unchecked_mut(index) = new_start_state;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Option<BufferUses[]> start_states" in result
+    assert "Option<mut[BufferUses]>" not in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_rust_gpu_unresolved_associated_static_calls_reparse():
     # Reduced from Rust-GPU rust-gpu commit
     # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d compiletests:

@@ -1853,6 +1853,40 @@ def test_nested_parameter_block_resource_wrapper_codegen():
     )
 
 
+def test_nested_parameter_block_generic_parameter_codegen_reparse():
+    # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
+    # tests/language-feature/generics/generic-shader-object.slang.
+    code = """
+    struct Elem
+    {
+        float x;
+    };
+
+    struct Impl<T1, T2>
+    {
+        RWStructuredBuffer<T1> buffer0;
+        RWStructuredBuffer<T2> buffer1;
+    };
+
+    [numthreads(1, 1, 1)]
+    void computeMain(
+        uniform ParameterBlock<Impl<Elem, Elem>> gFoo,
+        uniform float v,
+        uniform RWStructuredBuffer<float> outputBuffer)
+    {
+        outputBuffer[0] = v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "void computeMain(Impl<Elem, Elem> gFoo" in generated_code
+    assert "Impl<Elem gFoo" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_line_texture_resource_global_codegen():
     code = """
     Texture1D<float4> line;

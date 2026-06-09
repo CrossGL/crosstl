@@ -1685,6 +1685,7 @@ class MetalToCrossGLConverter:
                 self.fragment_execution_attribute_names
                 | self.function_metadata_attribute_names
             )
+            and "::" not in str(getattr(attr, "name", ""))
         ]
 
     def generate_fragment_execution_layouts(self, func):
