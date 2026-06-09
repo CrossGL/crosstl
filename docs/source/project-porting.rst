@@ -560,9 +560,10 @@ Project reports are JSON documents with:
   source-map spans still cover the current source and generated files, recomputes
   line-preserving mappings, and checks that compiler source-remap sidecars use
   the closed schema-1 field set. The project pipeline emits line-granularity
-  source maps only when the generated artifact is line-preserving after newline
-  normalization; translated artifacts keep file-granularity source maps until
-  backend pipelines expose generated line, statement, or token provenance.
+  source maps only when the generated artifact preserves the same logical lines
+  after newline normalization, allowing a final-newline-only difference;
+  translated artifacts keep file-granularity source maps until backend pipelines
+  expose generated line, statement, or token provenance.
   Artifact provenance records the
   ``single-file-translate`` pipeline and uses ``crossgl`` as the intermediate
   marker only when both source and target backends route through the CrossGL

@@ -963,6 +963,32 @@ def _normalized_line_text(source_bytes: bytes) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _line_preserving_source_map_mappings(
+    source_path: Path,
+    source_report_path: str,
+    generated_path: Path,
+    generated_report_path: str,
+) -> list[dict[str, Any]]:
+    source_text = _normalized_line_text(source_path.read_bytes())
+    generated_text = _normalized_line_text(generated_path.read_bytes())
+    if source_text.splitlines() != generated_text.splitlines():
+        return []
+
+    source_line_spans = _line_spans(source_path, source_report_path)
+    generated_line_spans = _line_spans(generated_path, generated_report_path)
+    if not source_line_spans or len(source_line_spans) != len(generated_line_spans):
+        return []
+    return [
+        {
+            "source": source_line_span.to_json(),
+            "generated": generated_line_span.to_json(),
+        }
+        for source_line_span, generated_line_span in zip(
+            source_line_spans, generated_line_spans
+        )
+    ]
+
+
 def _artifact_report_path(path: Path, config: ProjectConfig) -> str:
     return (
         _relpath(path, config.root) if _is_relative_to(path, config.root) else str(path)
@@ -4258,22 +4284,12 @@ def _artifact_source_map(
     artifact_path = _artifact_report_path(output_path, config)
     source_span = _file_span(unit.path, unit.relative_path)
     generated_span = _file_span(output_path, artifact_path)
-    source_bytes = unit.path.read_bytes()
-    generated_bytes = output_path.read_bytes()
-    line_mappings = []
-    if _normalized_line_text(source_bytes) == _normalized_line_text(generated_bytes):
-        source_line_spans = _line_spans(unit.path, unit.relative_path)
-        generated_line_spans = _line_spans(output_path, artifact_path)
-        if source_line_spans and len(source_line_spans) == len(generated_line_spans):
-            line_mappings = [
-                {
-                    "source": source_line_span.to_json(),
-                    "generated": generated_line_span.to_json(),
-                }
-                for source_line_span, generated_line_span in zip(
-                    source_line_spans, generated_line_spans
-                )
-            ]
+    line_mappings = _line_preserving_source_map_mappings(
+        unit.path,
+        unit.relative_path,
+        output_path,
+        artifact_path,
+    )
     mapping_granularity = "line" if line_mappings else "file"
     mappings = (
         line_mappings
@@ -4986,21 +5002,14 @@ def _source_map_line_preserving_mapping_reasons(
     mappings = source_map.get("mappings")
     if not isinstance(mappings, list):
         return []
-    if _normalized_line_text(source_path.read_bytes()) != _normalized_line_text(
-        artifact_path.read_bytes()
-    ):
+    expected_mappings = _line_preserving_source_map_mappings(
+        source_path,
+        source_report_path,
+        artifact_path,
+        artifact_report_path,
+    )
+    if not expected_mappings:
         return []
-
-    expected_mappings = [
-        {
-            "source": source_span.to_json(),
-            "generated": generated_span.to_json(),
-        }
-        for source_span, generated_span in zip(
-            _line_spans(source_path, source_report_path),
-            _line_spans(artifact_path, artifact_report_path),
-        )
-    ]
     if mappings == expected_mappings:
         return []
     if len(mappings) != len(expected_mappings):

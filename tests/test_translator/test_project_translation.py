@@ -6586,6 +6586,53 @@ def test_translate_project_records_line_preserving_source_maps(tmp_path):
     }
 
 
+def test_translate_project_records_line_maps_across_final_newline_changes(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "simple.cgl"
+    source_path.write_text(SIMPLE_CROSSL.rstrip("\n"), encoding="utf-8")
+
+    def write_artifact(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del backend, format_output, source_backend, include_paths, defines
+        generated = Path(file_path).read_text(encoding="utf-8") + "\n"
+        Path(save_shader).write_text(generated, encoding="utf-8")
+        return generated
+
+    monkeypatch.setattr(project_pipeline, "translate", write_artifact)
+
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    artifact = payload["artifacts"][0]
+    source_map = artifact["sourceMap"]
+    expected_mappings = project_pipeline._line_preserving_source_map_mappings(
+        source_path,
+        "simple.cgl",
+        repo / artifact["path"],
+        "out/cgl/simple.cgl",
+    )
+
+    assert validation["success"] is True
+    assert source_map["mappingGranularity"] == "line"
+    assert payload["summary"]["sourceMapsByGranularity"] == {"line": 1}
+    assert payload["summary"]["sourceRemapsByGranularity"] == {"line": 1}
+    assert source_map["mappings"] == expected_mappings
+
+
 def test_translate_project_uses_file_source_maps_for_generated_artifacts(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
