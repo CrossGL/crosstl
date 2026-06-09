@@ -2061,6 +2061,10 @@ class CudaParser:
                 self.parse_template_declaration()
                 self.parse_type_alias()
                 continue
+            if self.is_templated_struct_or_class_declaration_start():
+                self.parse_template_declaration()
+                self.parse_struct()
+                continue
             if self.is_anonymous_aggregate_member_start():
                 members.extend(self.parse_anonymous_aggregate_member())
                 continue
@@ -2090,6 +2094,12 @@ class CudaParser:
             "IDENTIFIER",
             "using",
         )
+
+    def is_templated_struct_or_class_declaration_start(self):
+        if self.current_token[0] != "TEMPLATE":
+            return False
+        index = self.skip_optional_template_declaration_at_index(self.current_index)
+        return index < len(self.tokens) and self.tokens[index][0] in {"STRUCT", "CLASS"}
 
     def is_friend_type_declaration_start(self):
         index = self.current_index

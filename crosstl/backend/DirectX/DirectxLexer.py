@@ -119,7 +119,7 @@ TOKENS = tuple(
             "MATRIX",
             r"\b(float|half|fixed|double|int|uint|bool|min16float|min10float|"
             r"min16int|min12int|min16uint|float16_t|float32_t|int16_t|"
-            r"float64_t|int32_t|int64_t|uint16_t|uint32_t|uint64_t)[1-4]x[1-4]\b",
+            r"float64_t|int32_t|int64_t|uint16_t|uint32_t|uint64_t|dword)[1-4]x[1-4]\b",
         ),
         # Vector types (must come before scalar types)
         (
@@ -128,7 +128,7 @@ TOKENS = tuple(
             r"float32_t|float64_t)[1-4]\b",
         ),
         ("IVECTOR", r"\b(int|min16int|min12int|int16_t|int32_t|int64_t)[1-4]\b"),
-        ("UVECTOR", r"\b(uint|min16uint|uint16_t|uint32_t|uint64_t)[1-4]\b"),
+        ("UVECTOR", r"\b(uint|min16uint|uint16_t|uint32_t|uint64_t|dword)[1-4]\b"),
         ("BVECTOR", r"\bbool[1-4]\b"),
         # Scalar types
         ("FLOAT", r"\bfloat\b"),

@@ -10767,7 +10767,7 @@ class RustToCrossGLConverter:
         if not isinstance(type_name, str):
             return type_name
 
-        normalized = type_name.strip()
+        normalized = self.strip_reference_lifetime(type_name.strip())
         if self.is_lifetime_type_argument(normalized):
             return ""
 

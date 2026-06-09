@@ -56,6 +56,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
         "path": "src/backend/opencl/kernel/nearest_neighbour.cl",
     },
+    "arrayfire_magma_opencl_api_handle_typedefs": {
+        "url": "https://github.com/arrayfire/arrayfire",
+        "commit": "492718b5a256d4a9d5198fdce89d8fd21772bfda",
+        "path": "src/backend/opencl/magma/magma_common.h",
+    },
 }
 
 
@@ -333,3 +338,38 @@ def test_external_arrayfire_bare_unsigned_parameter_codegen_reparse():
     assert ast.statements[0].params[0] == {"type": "unsigned int", "name": "x"}
     assert "u32 popcount(u32 x)" in crossgl
     assert "unsigned x _param" not in crossgl
+
+
+def test_external_arrayfire_magma_opencl_api_typedefs_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["arrayfire_magma_opencl_api_handle_typedefs"]
+    assert source_info["commit"] == "492718b5a256d4a9d5198fdce89d8fd21772bfda"
+    assert source_info["path"] == "src/backend/opencl/magma/magma_common.h"
+
+    source = """
+    typedef cl_command_queue magma_queue_t;
+    typedef cl_event magma_event_t;
+    typedef cl_device_id magma_device_t;
+    typedef cl_double2 magmaDoubleComplex;
+    typedef cl_float2 magmaFloatComplex;
+    typedef cl_mem magma_ptr;
+    enum magma_uplo_t {
+        MagmaUpper = 121,
+        MagmaLower = 122,
+    };
+    typedef magma_uplo_t magma_type_t;
+    struct cpu_blas_gemv_func<float> {
+        int placeholder;
+    };
+    """
+
+    _ast, crossgl = assert_crossgl_reparses(source)
+
+    assert "typedef u64 magma_queue_t;" in crossgl
+    assert "typedef u64 magma_event_t;" in crossgl
+    assert "typedef u64 magma_device_t;" in crossgl
+    assert "typedef vec2<f64> magmaDoubleComplex;" in crossgl
+    assert "typedef vec2<f32> magmaFloatComplex;" in crossgl
+    assert "typedef u64 magma_ptr;" in crossgl
+    assert "typedef u32 magma_type_t;" in crossgl
+    assert "struct cpu_blas_gemv_func_float" in crossgl
+    assert "cl_command_queue" not in crossgl

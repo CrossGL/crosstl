@@ -266,6 +266,43 @@ class HipToCrossGLConverter:
         "width",
     }
     CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in"}
+    CPP_OPERATOR_FUNCTION_NAME_PARTS = {
+        "+": "plus",
+        "-": "minus",
+        "*": "mul",
+        "/": "div",
+        "%": "mod",
+        "&": "bit_and",
+        "|": "bit_or",
+        "^": "bit_xor",
+        "~": "bit_not",
+        "!": "not",
+        "=": "assign",
+        "<": "lt",
+        ">": "gt",
+        "+=": "plus_assign",
+        "-=": "minus_assign",
+        "*=": "mul_assign",
+        "/=": "div_assign",
+        "%=": "mod_assign",
+        "&=": "bit_and_assign",
+        "|=": "bit_or_assign",
+        "^=": "bit_xor_assign",
+        "==": "eq",
+        "!=": "ne",
+        "<=": "le",
+        ">=": "ge",
+        "&&": "logical_and",
+        "||": "logical_or",
+        "<<": "shift_left",
+        ">>": "shift_right",
+        "<<=": "shift_left_assign",
+        ">>=": "shift_right_assign",
+        "++": "increment",
+        "--": "decrement",
+        "[]": "index",
+        "()": "call",
+    }
     CPP_SCALAR_TYPE_ALIASES = {
         **{
             f"std::{name}": name
@@ -1062,6 +1099,9 @@ class HipToCrossGLConverter:
         return self.sanitize_identifier_name(output_name)
 
     def format_function_declaration_name(self, name):
+        operator_name = self.format_cpp_operator_function_name(name)
+        if operator_name is not None:
+            return operator_name
         if self.is_simple_identifier(name):
             return self.sanitize_identifier_name(name)
         if not isinstance(name, str) or "::" not in name:
@@ -1069,6 +1109,30 @@ class HipToCrossGLConverter:
 
         normalized_name = name.replace("::~", "::destructor_")
         return self.sanitize_qualified_variable_name(normalized_name) or name
+
+    def format_cpp_operator_function_name(self, name):
+        if not isinstance(name, str):
+            return None
+
+        normalized_name = name.replace("::~", "::destructor_")
+        parts = normalized_name.split("::")
+        raw_operator = parts[-1]
+        if not raw_operator.startswith("operator"):
+            return None
+
+        operator = raw_operator[len("operator") :]
+        if not operator:
+            return None
+
+        suffix = self.CPP_OPERATOR_FUNCTION_NAME_PARTS.get(operator)
+        if suffix is None:
+            suffix = re.sub(r"[^A-Za-z0-9_]+", "_", operator).strip("_")
+            suffix = re.sub(r"_+", "_", suffix)
+        if not suffix:
+            return None
+
+        parts[-1] = f"operator_{suffix}"
+        return self.sanitize_qualified_variable_name("::".join(parts)) or parts[-1]
 
     def format_function_call_name(self, name):
         if self.is_user_defined_function(name):

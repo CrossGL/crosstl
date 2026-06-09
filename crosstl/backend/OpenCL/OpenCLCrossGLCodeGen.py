@@ -55,6 +55,43 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         "uintptr_t": "u64",
         "ptrdiff_t": "i64",
         "dim_t": "i64",
+        "cl_char": "i8",
+        "cl_uchar": "u8",
+        "cl_short": "i16",
+        "cl_ushort": "u16",
+        "cl_int": "i32",
+        "cl_uint": "u32",
+        "cl_long": "i64",
+        "cl_ulong": "u64",
+        "cl_bool": "bool",
+        "cl_bitfield": "u64",
+        "cl_device_type": "u64",
+        "cl_platform_info": "u32",
+        "cl_device_info": "u32",
+        "cl_command_queue_info": "u32",
+        "cl_context_info": "u32",
+        "cl_mem_flags": "u64",
+        "cl_mem_object_type": "u32",
+        "cl_map_flags": "u64",
+        "cl_event_info": "u32",
+        "cl_command_type": "u32",
+        "cl_profiling_info": "u32",
+        "cl_sampler_info": "u32",
+        "cl_channel_order": "u32",
+        "cl_channel_type": "u32",
+        "cl_context": "u64",
+        "cl_command_queue": "u64",
+        "cl_mem": "u64",
+        "cl_program": "u64",
+        "cl_kernel": "u64",
+        "cl_event": "u64",
+        "cl_sampler": "sampler",
+        "cl_device_id": "u64",
+        "cl_platform_id": "u64",
+        "cl_float2": "vec2<f32>",
+        "cl_float4": "vec4<f32>",
+        "cl_double2": "vec2<f64>",
+        "cl_double4": "vec4<f64>",
         "real": "f32",
         "real_arg": "f32",
         "sampler_t": "sampler",
@@ -164,6 +201,28 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         for stmt in getattr(node, "statements", []) or []:
             self.emit_statement(stmt)
 
+    def visit_StructNode(self, node):
+        original_name = getattr(node, "name", None)
+        if original_name:
+            node.name = self.sanitize_opencl_type_identifier(original_name)
+        try:
+            return super().visit_StructNode(node)
+        finally:
+            node.name = original_name
+
+    def sanitize_opencl_type_identifier(self, name):
+        parts = []
+        for char in str(name):
+            if char.isalnum() or char == "_":
+                parts.append(char)
+            elif not parts or parts[-1] != "_":
+                parts.append("_")
+
+        sanitized = "".join(parts).strip("_") or "anonymous"
+        if sanitized[0].isdigit():
+            sanitized = f"type_{sanitized}"
+        return self.sanitize_identifier_name(sanitized)
+
     def visit_kernel_as_compute_shader(self, kernel):
         workgroup_size = self.opencl_workgroup_size(kernel)
         self.emit("@compute")
@@ -261,6 +320,10 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
 
     def visit_EnumNode(self, node):
         if getattr(node, "name", None):
+            enum_type = getattr(node, "underlying_type", None) or "uint"
+            self.register_type_alias(
+                node.name, self.convert_hip_type_to_crossgl(enum_type)
+            )
             return super().visit_EnumNode(node)
 
         next_value = 0

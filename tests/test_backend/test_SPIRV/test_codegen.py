@@ -255,6 +255,75 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_LOCATION_BLOCK_TO_FLAT_INTERFACE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/iomap.blockOutVariableIn.vert.out
+; Reduced from a linked vertex output block consumed as flat fragment inputs.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "main" %block_out %position
+OpEntryPoint Fragment %fs "main" %color %a1_in %a2_in
+OpExecutionMode %fs OriginLowerLeft
+OpName %Block "Block"
+OpMemberName %Block 0 "a1"
+OpMemberName %Block 1 "a2"
+OpName %position "gl_Position"
+OpName %color "color"
+OpName %a1_in "a1"
+OpName %a2_in "a2"
+OpDecorate %Block Block
+OpDecorate %block_out Location 0
+OpDecorate %position BuiltIn Position
+OpDecorate %color Location 0
+OpDecorate %a1_in Location 0
+OpDecorate %a2_in Location 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v2float = OpTypeVector %float 2
+%v4float = OpTypeVector %float 4
+%Block = OpTypeStruct %v4float %v2float
+%ptr_out_block = OpTypePointer Output %Block
+%ptr_out_v4float = OpTypePointer Output %v4float
+%ptr_out_v2float = OpTypePointer Output %v2float
+%ptr_in_v4float = OpTypePointer Input %v4float
+%ptr_in_v2float = OpTypePointer Input %v2float
+%zero_i = OpConstant %int 0
+%one_i = OpConstant %int 1
+%one = OpConstant %float 1.0
+%half = OpConstant %float 0.5
+%white = OpConstantComposite %v4float %one %one %one %one
+%half_vec = OpConstantComposite %v2float %half %half
+%block_out = OpVariable %ptr_out_block Output
+%position = OpVariable %ptr_out_v4float Output
+%color = OpVariable %ptr_out_v4float Output
+%a1_in = OpVariable %ptr_in_v4float Input
+%a2_in = OpVariable %ptr_in_v2float Input
+%vs = OpFunction %void None %fn
+%vs_label = OpLabel
+%a1_ptr = OpAccessChain %ptr_out_v4float %block_out %zero_i
+OpStore %a1_ptr %white
+%a2_ptr = OpAccessChain %ptr_out_v2float %block_out %one_i
+OpStore %a2_ptr %half_vec
+OpStore %position %white
+OpReturn
+OpFunctionEnd
+%fs = OpFunction %void None %fn
+%fs_label = OpLabel
+%a1_value = OpLoad %v4float %a1_in
+%a2_value = OpLoad %v2float %a2_in
+%r = OpCompositeExtract %float %a1_value 0
+%g = OpCompositeExtract %float %a1_value 1
+%b = OpCompositeExtract %float %a2_value 0
+%a = OpCompositeExtract %float %a2_value 1
+%out = OpCompositeConstruct %v4float %r %g %b %a
+OpStore %color %out
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_LINKED_VERTEX_FRAGMENT_MAIN_ASSEMBLY = """
 ; Reduced from glslangValidator -V vertex/fragment modules linked with spirv-link.
 ; The linked module keeps both external entry point names as "main" and uses
@@ -5594,6 +5663,23 @@ def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():
     assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
     assert re.search(r'OpEntryPoint Fragment %\d+ "fs_main"', downstream_code)
     assert downstream_code.count("OpFunction ") == 2
+
+
+def test_glslang_location_decorated_interface_block_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_LOCATION_BLOCK_TO_FLAT_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "float4 a1 @output @location(0);" in generated_code
+    assert "float2 a2 @output @location(1);" in generated_code
+    assert "Block block_out @output @location(0);" not in generated_code
+    assert "float4 a1 @input @location(0);" in generated_code
+    assert "float2 a2 @input @location(1);" in generated_code
+    assert "a1 = float4(1.0, 1.0, 1.0, 1.0);" in generated_code
+    assert "a2 = float2(0.5, 0.5);" in generated_code
+    assert "color = float4(a1[0], a1[1], a2[0], a2[1]);" in generated_code
+    assert "Unhandled statement type" not in generated_code
 
 
 def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_path):

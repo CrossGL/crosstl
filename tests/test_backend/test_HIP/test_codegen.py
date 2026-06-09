@@ -113,6 +113,42 @@ class TestHipCodeGen:
         assert "i32 RecursiveGaussian::readInputImage" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_public_rocm_graph_helpers_operator_overload_conversion_reparse(self):
+        # Reduced from ROCm/rocm-examples@adaf64a066eecb4ad90036dfd1838fc95bed9914,
+        # HIP-Doc/Tutorials/graph_api/src/cudaHelpers.hpp.
+        code = """
+        __host__ __device__ __forceinline__ auto operator+(
+            float3 firstSummand, float3 secondSummand) -> float3 {
+            return float3 {
+                firstSummand.x + secondSummand.x,
+                firstSummand.y + secondSummand.y,
+                firstSummand.z + secondSummand.z
+            };
+        }
+
+        __host__ __device__ __forceinline__ auto operator/=(
+            float3 lhs, float rhs) -> float3 {
+            return float3 {
+                lhs.x / rhs,
+                lhs.y / rhs,
+                lhs.z / rhs
+            };
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        codegen = HipToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "vec3<f32> operator_plus(" in result
+        assert "vec3<f32> operator_div_assign(" in result
+        assert "operator+(" not in result
+        assert "operator/=(" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
     def test_public_hip_examples_variadic_helper_type_conversion_reparse(self):
         code = """
         template <typename T, typename... Args>

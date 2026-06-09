@@ -66,6 +66,11 @@ EXTERNAL_SAMPLES = [
     },
     {
         "repo": "https://github.com/NVIDIA/cccl",
+        "commit": "5ea5d42567693aad8c0e5d6316155ecc612fdc71",
+        "paths": ["thrust/examples/uninitialized_vector.cu"],
+    },
+    {
+        "repo": "https://github.com/NVIDIA/cccl",
         "commit": "cea7dcd759b81d3059db8b74a3d5d4005ce4a398",
         "paths": [
             "README.md",
@@ -326,6 +331,58 @@ def test_cupy_complex_scoped_operator_member_definitions_are_skipped():
     assert ast.structs == []
     assert "operator=" not in crossgl
     assert "operator+=" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_public_cccl_nested_templated_rebind_struct_is_skipped():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5ea5d42567693aad8c0e5d6316155ecc612fdc71
+    # path: thrust/examples/uninitialized_vector.cu
+    source = """
+    template <typename T>
+    struct uninitialized_allocator : thrust::device_allocator<T>
+    {
+      __host__ uninitialized_allocator() {}
+      __host__ uninitialized_allocator(const uninitialized_allocator& other)
+          : thrust::device_allocator<T>(other)
+      {}
+      __host__ ~uninitialized_allocator() {}
+
+      uninitialized_allocator& operator=(const uninitialized_allocator&) = default;
+
+      template <typename U>
+      struct rebind
+      {
+        using other = uninitialized_allocator<U>;
+      };
+
+      __host__ __device__ void construct(T*)
+      {
+      }
+    };
+
+    using uninitialized_vector =
+        thrust::device_vector<float, uninitialized_allocator<float>>;
+
+    int main()
+    {
+      uninitialized_vector vec(10);
+      vec.resize(20);
+      return 0;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "uninitialized_allocator"
+    assert ast.structs[0].members == []
+    assert ast.typedefs[0].name == "uninitialized_vector"
+    assert ast.functions[0].name == "main"
+    assert "struct uninitialized_allocator" in crossgl
+    assert "rebind" not in crossgl
+    assert "i32 main()" in crossgl
     assert_crossgl_reparse(crossgl)
 
 

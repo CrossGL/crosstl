@@ -51,6 +51,9 @@ DIRECTX_SHADER_COMPILER_INLINE_SPIRV_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb
 DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
+    "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
+)
 FIDELITYFX_FSR_REPO = "https://github.com/GPUOpen-Effects/FidelityFX-FSR"
 FIDELITYFX_FSR_COMMIT = "a21ffb8f6c13233ba336352bdff293894c706575"
 FIDELITYFX_SDK_REPO = "https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK"
@@ -854,6 +857,34 @@ EXTERNAL_FIXTURES = [
         contains=(
             "uint x = uint(1);",
             "return vec4(component, component, component, component);",
+        ),
+    ),
+    # Source repo: https://github.com/microsoft/DirectXShaderCompiler
+    # Source commit: d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # Source path: tools/clang/test/HLSLFileCheck/hlsl/types/matrix/unsignedShortHandMatrixVector.hlsl
+    ExternalFixture(
+        name="directx_shader_compiler_unsigned_shorthand_matrix_vector_types",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/matrix/unsignedShortHandMatrixVector.hlsl",
+        code=textwrap.dedent("""
+            unsigned int2 a;
+            unsigned int4x4 b;
+            unsigned dword3x4 c;
+            unsigned min16int3 d;
+            unsigned int64_t2 e;
+
+            float4 main() : SV_Target
+            {
+              return a.x + b[1][0] + c[0][3] + d[2];
+            }
+        """).strip(),
+        contains=(
+            "uvec2 a;",
+            "uint4x4 b;",
+            "uint3x4 c;",
+            "u16vec3 d;",
+            "uint64_t2 e;",
         ),
     ),
     ExternalFixture(

@@ -3180,9 +3180,11 @@ class MetalToCrossGLConverter:
         return text
 
     def dynamic_fragment_output_semantic(self, name, args):
-        if name == "color" and args and re.fullmatch(r"\d+", args[0]):
-            index = int(args[0])
-            return "gl_FragColor" if index == 0 else f"gl_FragColor{index}"
+        if name == "color" and args:
+            if re.fullmatch(r"\d+", args[0]):
+                index = int(args[0])
+                return "gl_FragColor" if index == 0 else f"gl_FragColor{index}"
+            return "gl_FragColor"
         if name == "depth" and args and args[0].lower() in {"any", "less", "greater"}:
             return "gl_FragDepth"
         return None

@@ -5848,6 +5848,7 @@ class VulkanParser:
                 pointer_type,
                 storage_class,
                 names,
+                decorations.get(variable["id"], []),
                 member_decorations,
                 member_names,
                 types,
@@ -6517,6 +6518,7 @@ class VulkanParser:
         pointer_type,
         storage_class,
         names,
+        variable_decorations,
         member_decorations,
         member_names,
         types,
@@ -6529,6 +6531,11 @@ class VulkanParser:
 
         layouts = []
         block_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        variable_qualifiers = self.spirv_layout_qualifiers(variable_decorations)
+        variable_declaration_qualifiers = self.spirv_declaration_qualifiers(
+            variable_decorations
+        )
+        location_cursor = self.spirv_interface_base_location(variable_qualifiers)
         for member_index, member_type_id in enumerate(
             struct_type.get("member_types", [])
         ):
@@ -6547,7 +6554,12 @@ class VulkanParser:
             if not self.spirv_has_interface_qualifier(
                 qualifiers, declaration_qualifiers
             ):
-                continue
+                if location_cursor is None:
+                    continue
+                qualifiers = self.spirv_interface_member_location_qualifiers(
+                    variable_qualifiers, location_cursor
+                )
+                declaration_qualifiers = list(variable_declaration_qualifiers)
 
             data_type, array_suffix = self.spirv_type_name_and_suffix(
                 member_type_id, types, constants
@@ -6576,8 +6588,62 @@ class VulkanParser:
                     spirv_storage_class=storage_class,
                 )
             )
+            if location_cursor is not None:
+                location_cursor += self.spirv_interface_location_count(
+                    member_type_id, types, constants
+                )
 
         return layouts
+
+    def spirv_interface_base_location(self, qualifiers):
+        for name, value in qualifiers:
+            if name != "location":
+                continue
+            try:
+                return int(str(value), 0)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def spirv_interface_member_location_qualifiers(self, variable_qualifiers, location):
+        qualifiers = [
+            (name, value) for name, value in variable_qualifiers if name != "location"
+        ]
+        qualifiers.append(("location", str(location)))
+        return qualifiers
+
+    def spirv_interface_location_count(self, type_id, types, constants):
+        type_info = types.get(type_id, {})
+        kind = type_info.get("kind")
+
+        if kind == "array":
+            length = self.spirv_integer_constant_operand(
+                type_info.get("length_id"), constants
+            )
+            if length is None:
+                return 1
+            return max(
+                1,
+                length
+                * self.spirv_interface_location_count(
+                    type_info.get("element_type"), types, constants
+                ),
+            )
+
+        if kind == "matrix":
+            try:
+                return max(1, int(str(type_info.get("column_count")), 0))
+            except (TypeError, ValueError):
+                return 1
+
+        if kind == "struct":
+            count = sum(
+                self.spirv_interface_location_count(member_type_id, types, constants)
+                for member_type_id in type_info.get("member_types", [])
+            )
+            return max(1, count)
+
+        return 1
 
     def spirv_layout_qualifiers(self, decorations):
         qualifiers = []

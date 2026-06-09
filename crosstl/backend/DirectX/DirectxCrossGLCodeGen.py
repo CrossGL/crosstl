@@ -4171,11 +4171,35 @@ class HLSLToCrossGLConverter:
                 return "uint"
             if base == "int1":
                 return "uint1"
+            if base == "dword":
+                return "uint"
+            if base == "min16int":
+                return "min16uint"
+            if base == "int16_t":
+                return "uint16_t"
+            if base == "int32_t":
+                return "uint32_t"
+            if base == "int64_t":
+                return "uint64_t"
             if re.fullmatch(r"int[2-4]", base):
                 return "u" + base
+            dword_vector_match = re.fullmatch(r"dword([1-4])", base)
+            if dword_vector_match:
+                return f"uint{dword_vector_match.group(1)}"
+            min16_vector_match = re.fullmatch(r"min16int([1-4])", base)
+            if min16_vector_match:
+                return f"min16uint{min16_vector_match.group(1)}"
+            fixed_width_vector_match = re.fullmatch(r"int(16|32|64)_t([1-4])", base)
+            if fixed_width_vector_match:
+                width, lanes = fixed_width_vector_match.groups()
+                return f"uint{width}_t{lanes}"
             int_matrix_match = re.fullmatch(r"int([1-4])x([1-4])", base)
             if int_matrix_match:
                 rows, cols = int_matrix_match.groups()
+                return f"uint{rows}x{cols}"
+            dword_matrix_match = re.fullmatch(r"dword([1-4])x([1-4])", base)
+            if dword_matrix_match:
+                rows, cols = dword_matrix_match.groups()
                 return f"uint{rows}x{cols}"
             if base in {"uint", "dword"} or re.fullmatch(r"uint[2-4]", base):
                 return base
@@ -4190,6 +4214,15 @@ class HLSLToCrossGLConverter:
                 or re.fullmatch(r"int[1-4]x[1-4]", base)
             ):
                 return base
+
+        dword_vector_match = re.fullmatch(r"dword([1-4])", text)
+        if dword_vector_match:
+            return f"uint{dword_vector_match.group(1)}"
+
+        dword_matrix_match = re.fullmatch(r"dword([1-4])x([1-4])", text)
+        if dword_matrix_match:
+            rows, cols = dword_matrix_match.groups()
+            return f"uint{rows}x{cols}"
 
         return text
 
