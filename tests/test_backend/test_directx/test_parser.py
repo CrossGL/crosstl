@@ -360,6 +360,48 @@ def test_parse_struct_base_lists_from_dxc_rewriter():
     assert structs["my_struct_5"].base_classes == ["my_class", "my_interface"]
 
 
+def test_parse_templated_struct_base_from_dxc_templates():
+    # Source: microsoft/DirectXShaderCompiler@8ed708842c1ccb24bd914eff03125c837a01be71
+    # tools/clang/test/CodeGenDXIL/templates/incomplete-target-in-CanConvert.hlsl
+    ast = parse_code(textwrap.dedent("""
+            template<typename T> struct Wrapper;
+            float get(float x) { return x; }
+            float get(Wrapper<float> o);
+
+            template<typename T> struct Wrapper2;
+            float get(Wrapper2<float> o);
+
+            template<typename T>
+            struct Wrapper {
+                T value;
+                void set(float x) {
+                    value = get(x);
+                }
+            };
+
+            float get(Wrapper<float> o) { return o.value; }
+
+            template<typename T>
+            struct Wrapper2 : Wrapper<T> {
+            };
+
+            float get(Wrapper2<float> o) { return o.value; }
+
+            float main(float x : IN) : OUT {
+                Wrapper2<float> w;
+                w.set(x);
+                return get(w);
+            }
+            """))
+
+    structs = {struct.name: struct for struct in ast.structs}
+    main = next(function for function in ast.functions if function.name == "main")
+    local = next(stmt for stmt in main.body if getattr(stmt, "name", "") == "w")
+
+    assert structs["Wrapper2"].base_classes == ["Wrapper<T>"]
+    assert local.vtype == "Wrapper2<float>"
+
+
 def test_parse_elaborated_struct_function_signature_and_local_from_vkd3d():
     ast = parse_code(textwrap.dedent("""
             struct input {

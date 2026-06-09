@@ -449,6 +449,30 @@ def test_local_macro_rules_definition_is_skipped_from_block_expression():
     assert unsafe_block.block.returns_value.name == "pick!"
 
 
+def test_block_local_module_item_is_skipped_from_rust_gpu_type_constraints():
+    # Reduced from:
+    # Repo: https://github.com/Rust-GPU/rust-gpu
+    # Commit: a27c0363d391a54de1feb9ee6864ad9dff72d243
+    # Path: crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+    code = """
+    pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+        mod pat_ctors {
+            pub const S: super::StorageClassPat = super::StorageClassPat::S;
+            pub use super::TyPat::{Array, Either, Function};
+        }
+
+        op
+    }
+    """
+
+    ast = parse_code(code)
+    function = ast.functions[0]
+
+    assert function.name == "instruction_signatures"
+    assert function.return_type == "Option<&'static[InstSig<'static>]>"
+    assert function.body == ["op"]
+
+
 def test_top_level_macro_invocations_are_skipped_from_rust_gpu_spirv_std():
     code = r"""
     bitflags::bitflags! {

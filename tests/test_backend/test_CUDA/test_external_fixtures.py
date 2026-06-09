@@ -61,6 +61,7 @@ EXTERNAL_SAMPLES = [
             "cub/examples/block/example_block_reduce_dyn_smem.cu",
             "cub/cub/device/dispatch/kernels/kernel_transform.cuh",
             "libcudacxx/include/cuda/__bit/bit_reverse.h",
+            "libcudacxx/include/cuda/std/__concepts/equality_comparable.h",
             "libcudacxx/include/cuda/std/__variant/comparison.h",
             "thrust/examples/cuda/async_reduce.cu",
         ],
@@ -185,6 +186,32 @@ def test_external_fixture_metadata_records_repositories_and_commits():
     )
     assert all(len(sample["commit"]) == 40 for sample in EXTERNAL_SAMPLES)
     assert all(sample["paths"] for sample in EXTERNAL_SAMPLES)
+
+
+def test_cccl_libcudacxx_concept_emulation_declaration_is_skipped():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 5a9ea633bfe63f113f4e99ecd505985ec2c38206
+    # path: libcudacxx/include/cuda/std/__concepts/equality_comparable.h
+    source = """
+    template <class _Tp>
+    _CCCL_CONCEPT _With_lvalue_reference =
+      _CCCL_REQUIRES_EXPR((_Tp))(typename(__make_const_lvalue_ref<_Tp>));
+
+    __device__ int keep_after_concept(int value) {
+        return value;
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.global_variables == []
+    assert [function.name for function in ast.functions] == ["keep_after_concept"]
+    assert "i32 keep_after_concept(i32 value)" in crossgl
+    assert "_CCCL_CONCEPT" not in crossgl
+    assert "_CCCL_REQUIRES_EXPR" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cccl_annotated_ptr_explicit_constexpr_constructor_is_skipped():

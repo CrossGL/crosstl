@@ -201,6 +201,11 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         for stmt in getattr(node, "statements", []) or []:
             self.emit_statement(stmt)
 
+    def visit_OpenCLMacroBlockNode(self, node):
+        args = ", ".join(arg for arg in getattr(node, "args", []) if arg)
+        suffix = f"({args})" if args else "()"
+        self.emit(f"// OpenCL macro block: {node.name}{suffix}")
+
     def visit_StructNode(self, node):
         original_name = getattr(node, "name", None)
         if original_name:

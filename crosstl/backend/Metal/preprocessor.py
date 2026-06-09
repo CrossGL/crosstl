@@ -1,10 +1,20 @@
 """Preprocessor support for Metal source imports."""
 
+import os
+import re
 from typing import Dict, List, Optional, Set
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 PRESERVED_INCLUDE_SENTINEL = "__CROSSGL_METAL_PRESERVED_INCLUDE__ "
+CLANG_FEATURE_TEST_MACROS = {
+    "__has_attribute",
+    "__has_builtin",
+    "__has_extension",
+    "__has_feature",
+    "__has_include",
+    "__has_include_next",
+}
 
 
 class MetalPreprocessor(HLSLPreprocessor):
@@ -27,6 +37,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             "TARGET_OS_SIMULATOR",
             Macro(name="TARGET_OS_SIMULATOR", replacement="0"),
         )
+        for name in CLANG_FEATURE_TEST_MACROS:
+            self.macros.setdefault(name, Macro(name=name, replacement="0"))
 
     def preprocess(self, code: str, file_path: Optional[str] = None) -> str:
         processed = super().preprocess(code, file_path=file_path)
@@ -40,11 +52,83 @@ class MetalPreprocessor(HLSLPreprocessor):
         file_path: Optional[str] = None,
         disabled_macros: Optional[Set[str]] = None,
     ) -> str:
+        if in_expression:
+            text = self._expand_clang_feature_test_macros(text, file_path)
         if not in_expression and self._has_incomplete_function_macro_call(text):
             return text
         return super()._expand_macros(
             text, line_num, in_expression, file_path, disabled_macros
         )
+
+    def _expand_clang_feature_test_macros(
+        self, text: str, file_path: Optional[str]
+    ) -> str:
+        result = ""
+        i = 0
+        while i < len(text):
+            if text[i] in "\"'":
+                literal, consumed = self._read_string(text, i)
+                result += literal
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                result += text[i:]
+                break
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    result += text[i:]
+                    break
+                result += text[i : end + 2]
+                i = end + 2
+                continue
+            if text[i].isalpha() or text[i] == "_":
+                ident, consumed = self._read_identifier(text, i)
+                if ident in CLANG_FEATURE_TEST_MACROS:
+                    replacement, consumed_call = self._expand_feature_test_call(
+                        ident, text, i + consumed, file_path
+                    )
+                    if replacement is not None:
+                        result += replacement
+                        i += consumed + consumed_call
+                        continue
+                result += ident
+                i += consumed
+                continue
+            result += text[i]
+            i += 1
+        return result
+
+    def _expand_feature_test_call(
+        self, name: str, text: str, start: int, file_path: Optional[str]
+    ):
+        i = start
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text) or text[i] != "(":
+            return None, 0
+        args, consumed = self._parse_macro_args(text, i)
+        if not consumed or i + consumed > len(text):
+            return None, 0
+        if name in {"__has_include", "__has_include_next"}:
+            value = self._has_include(args[0] if args else "", file_path)
+        else:
+            value = False
+        return ("1" if value else "0"), i + consumed - start
+
+    def _has_include(self, include_arg: str, file_path: Optional[str]) -> bool:
+        include_arg = self._strip_macro_comments(include_arg).strip()
+        match = re.match(r'([<"])([^>"]+)[>"]$', include_arg)
+        if not match:
+            return False
+
+        delimiter, target = match.groups()
+        search_paths: List[str] = []
+        if delimiter == '"' and file_path:
+            search_paths.append(os.path.dirname(file_path))
+        search_paths.extend(self.include_paths)
+
+        return any(os.path.isfile(os.path.join(base, target)) for base in search_paths)
 
     def _join_multiline_function_macro_call(self, lines: List[str], start: int):
         return lines[start], 1

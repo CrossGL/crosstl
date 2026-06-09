@@ -749,6 +749,28 @@ def test_external_hip_tests_nested_section_block_codegen_reparse():
     assert "REQUIRE((ret == hipErrorInvalidValue));" in crossgl
 
 
+def test_external_hip_tests_inline_constant_global_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/memory/memoryGlobal.hh and catch/unit/memory/memoryCommon.cc.
+    source = """
+    inline __constant__ int globalVar;
+
+    void set_value(int const value) {
+        HIP_CHECK(hipMemcpyToSymbol(HIP_SYMBOL(globalVar), &value, sizeof(value)));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    global_var = ast.statements[0]
+
+    assert isinstance(global_var, VariableNode)
+    assert global_var.name == "globalVar"
+    assert global_var.vtype == "int"
+    assert global_var.qualifiers == ["inline", "__constant__"]
+    assert "@group(0) @binding(0) var<uniform> globalVar: i32;" in crossgl
+    assert "HIP symbol copy to: HIP_SYMBOL(globalVar)" in crossgl
+
+
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     source = """
     __global__ void matrix_transpose_kernel(float* out,

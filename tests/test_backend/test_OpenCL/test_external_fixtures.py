@@ -96,6 +96,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "d11f27f3ba667456466cd935dacaf69e5cbf2598",
         "path": "tests/kernel/test_as_type.cl",
     },
+    "opencv_filter2d_small_block_macro_argument": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/imgproc/src/opencl/filter2DSmall.cl",
+    },
 }
 
 
@@ -581,3 +586,28 @@ def test_external_pocl_noinline_function_specifier_codegen_reparse():
     assert helper.name == "clear_bytes"
     assert helper.qualifiers == ["_CL_NOINLINE"]
     assert "void clear_bytes(ptr<u8> p, u8 c, u32 n)" in crossgl
+
+
+def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["opencv_filter2d_small_block_macro_argument"]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/imgproc/src/opencl/filter2DSmall.cl"
+
+    source = """
+    kernel void filter2d_macro_probe(global float *out, int startY) {
+        int py = 0;
+        LOOPPX_LOAD_Y_ITERATIONS(py, {
+            int y = startY + py;
+            out[y] = 1.0f;
+        });
+        out[0] = 2.0f;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    macro_stmt = ast.statements[0].body[1]
+
+    assert macro_stmt.name == "LOOPPX_LOAD_Y_ITERATIONS"
+    assert "int y = startY + py" in macro_stmt.args[1]
+    assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
+    assert "out[0] = 2.0f;" in crossgl

@@ -3687,6 +3687,7 @@ class RustParser:
             "TRAIT",
             "TYPE",
             "IMPL",
+            "MOD",
             "EXTERN",
         } or (self.current_token[0] == "UNSAFE" and self.peek_token_type() == "EXTERN")
 
@@ -3701,6 +3702,8 @@ class RustParser:
             self.parse_type_alias()
         elif self.current_token[0] == "IMPL":
             self.parse_impl_block()
+        elif self.current_token[0] == "MOD":
+            self.skip_module_item()
         elif self.current_token[0] == "EXTERN":
             self.skip_extern_block()
         elif self.current_token[0] == "UNSAFE" and self.peek_token_type() == "EXTERN":

@@ -97,6 +97,7 @@ class HipParser:
         "STATIC",
         "EXTERN",
         "CONSTEXPR",
+        "INLINE",
     }
     TYPE_PREFIX_TOKENS = {"TYPENAME"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}

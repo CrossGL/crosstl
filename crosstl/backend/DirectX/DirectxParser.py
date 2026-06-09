@@ -1258,9 +1258,7 @@ class HLSLParser:
                 raise SyntaxError(
                     f"Expected struct base identifier, got {self.current_token[0]}"
                 )
-            base_name = self.parse_identifier()
-            if self.current_token_is_double_colon():
-                base_name = self.parse_scoped_name(base_name)
+            base_name = self.parse_type_suffixes(self.parse_identifier())
             base_classes.append(base_name)
             if self.current_token[0] != "COMMA":
                 break

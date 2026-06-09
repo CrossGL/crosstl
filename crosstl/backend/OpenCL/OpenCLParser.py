@@ -10,7 +10,11 @@ from crosstl.backend.HIP.HipAst import (
 )
 from crosstl.backend.HIP.HipParser import HipParser
 
-from .OpenCLAst import OpenCLProgramNode, OpenCLStatementExpressionNode
+from .OpenCLAst import (
+    OpenCLMacroBlockNode,
+    OpenCLProgramNode,
+    OpenCLStatementExpressionNode,
+)
 from .OpenCLLexer import OpenCLLexer
 
 
@@ -480,6 +484,95 @@ class OpenCLParser(HipParser):
     def parse_unary_expression(self):
         self.skip_newlines()
         return super().parse_unary_expression()
+
+    def parse_statement(self):
+        if self.is_opencl_macro_block_statement():
+            return self.parse_opencl_macro_block_statement()
+        return super().parse_statement()
+
+    def is_opencl_macro_block_statement(self):
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value.isupper()
+            and any(char.isalpha() for char in self.current_token.value)
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return False
+
+        depth = 0
+        saw_block_argument = False
+        while index < len(self.tokens):
+            token_type = self.tokens[index].type
+            if token_type == "LPAREN":
+                depth += 1
+            elif token_type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    return saw_block_argument
+            elif token_type == "LBRACE" and depth == 1:
+                saw_block_argument = True
+                index = self.skip_balanced_group_at_pos(index, "LBRACE", "RBRACE")
+                if index is None:
+                    return False
+                continue
+            index += 1
+
+        return False
+
+    def parse_opencl_macro_block_statement(self):
+        name = self.consume("IDENTIFIER").value
+        args = self.consume_raw_opencl_macro_arguments()
+        if self.match("SEMICOLON"):
+            self.advance()
+        return OpenCLMacroBlockNode(name, args)
+
+    def consume_raw_opencl_macro_arguments(self):
+        self.consume("LPAREN")
+        args = [[]]
+        depth = 1
+        brace_depth = 0
+
+        while self.current_token and depth > 0:
+            token = self.current_token
+
+            if token.type == "LPAREN":
+                depth += 1
+                args[-1].append(token)
+                self.advance()
+                continue
+
+            if token.type == "RPAREN":
+                depth -= 1
+                if depth == 0:
+                    self.advance()
+                    break
+                args[-1].append(token)
+                self.advance()
+                continue
+
+            if token.type == "LBRACE":
+                brace_depth += 1
+            elif token.type == "RBRACE":
+                brace_depth = max(0, brace_depth - 1)
+
+            if token.type == "COMMA" and depth == 1 and brace_depth == 0:
+                args.append([])
+                self.advance()
+                continue
+
+            args[-1].append(token)
+            self.advance()
+
+        if depth != 0:
+            self.error("Unterminated OpenCL macro argument list")
+
+        return [
+            " ".join(token.value for token in arg if token.type != "NEWLINE").strip()
+            for arg in args
+        ]
 
     def parse_for_statement(self):
         self.consume("FOR")

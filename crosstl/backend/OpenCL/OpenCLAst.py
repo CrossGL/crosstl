@@ -22,3 +22,14 @@ class OpenCLStatementExpressionNode(ASTNode):
 
     def __repr__(self):
         return f"OpenCLStatementExpressionNode(statements={self.statements})"
+
+
+class OpenCLMacroBlockNode(ASTNode):
+    """Unexpanded statement-like macro call with a braced block argument."""
+
+    def __init__(self, name, args=None):
+        self.name = name
+        self.args = args or []
+
+    def __repr__(self):
+        return f"OpenCLMacroBlockNode(name={self.name}, args={self.args})"

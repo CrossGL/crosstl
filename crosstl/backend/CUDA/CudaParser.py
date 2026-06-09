@@ -458,6 +458,8 @@ class CudaParser:
                 includes.append(self.parse_preprocessor())
             elif self.is_cpp_attribute_specifier_start():
                 self.skip_cpp_attribute_specifiers()
+            elif self.is_concept_declaration_start():
+                self.skip_concept_declaration()
             elif self.current_token[0] == "TEMPLATE":
                 self.parse_template_declaration()
             elif self.is_namespace_alias_start():
@@ -2276,6 +2278,61 @@ class CudaParser:
     def is_top_level_macro_statement_start(self):
         end_index = self.top_level_macro_statement_end_index(self.current_index)
         return end_index is not None
+
+    def is_concept_declaration_start(self):
+        index = self.skip_optional_template_declaration_at_index(self.current_index)
+        index = self.skip_cpp_attribute_specifiers_at_index(index)
+
+        if index + 2 >= len(self.tokens):
+            return False
+
+        token_type, token_value = self.tokens[index]
+        if token_type != "IDENTIFIER":
+            return False
+
+        if token_value == "concept":
+            name_index = index + 1
+        elif token_value == "_CCCL_CONCEPT" or token_value.endswith("_CONCEPT"):
+            name_index = index + 1
+        else:
+            return False
+
+        return (
+            name_index + 1 < len(self.tokens)
+            and self.tokens[name_index][0] in self.NAME_COMPONENT_TOKENS
+            and self.tokens[name_index + 1][0] == "ASSIGN"
+        )
+
+    def skip_concept_declaration(self):
+        paren_depth = 0
+        bracket_depth = 0
+        brace_depth = 0
+
+        while self.current_token[0] != "EOF":
+            token_type = self.current_token[0]
+            if (
+                token_type == "SEMICOLON"
+                and paren_depth == 0
+                and bracket_depth == 0
+                and brace_depth == 0
+            ):
+                self.eat("SEMICOLON")
+                break
+
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN" and paren_depth > 0:
+                paren_depth -= 1
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET" and bracket_depth > 0:
+                bracket_depth -= 1
+            elif token_type == "LBRACE":
+                brace_depth += 1
+            elif token_type == "RBRACE" and brace_depth > 0:
+                brace_depth -= 1
+
+            self.eat(token_type)
 
     def top_level_macro_statement_end_index(self, index):
         if (
