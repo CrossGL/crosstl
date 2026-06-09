@@ -2140,6 +2140,14 @@ def _format_define_processing_artifact_line(artifact):
         names = [name for name in define_names if isinstance(name, str) and name]
         if names:
             details.append("defineNames=" + ",".join(names))
+    define_fingerprint = artifact.get("defineFingerprint")
+    if isinstance(define_fingerprint, Mapping):
+        fingerprint_preview = _format_hash_preview(
+            define_fingerprint.get("algorithm"),
+            define_fingerprint.get("value"),
+        )
+        if fingerprint_preview:
+            details.append(f"defineFingerprint={fingerprint_preview}")
 
     suffix = f" ({', '.join(details)})" if details else ""
     return f"- {source} -> {path}{suffix}"

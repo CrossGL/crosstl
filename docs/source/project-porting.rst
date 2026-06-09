@@ -372,9 +372,11 @@ configuration diagnostics so reports retain portability and provenance context.
 Existing include directories that remain inside the repository, plus configured
 defines, are passed to source frontends that expose preprocessor options. CLI
 include and define overrides are merged with this configuration before scan,
-report, or translation. Translation artifacts record ``defineProcessing`` metadata so
-reports distinguish define maps that were forwarded to the source lexer from
-define maps that were not requested or could not be consumed by that frontend.
+report, or translation. Translation artifacts record ``defineProcessing``
+metadata so reports distinguish define maps that were forwarded to the source
+lexer from define maps that were not requested or could not be consumed by that
+frontend. Report inspection samples include effective define names and
+deterministic define fingerprints without exposing define values.
 When configured defines cannot be forwarded, translation reports emit a
 non-blocking warning diagnostic with a missing-capability rollup so the
 limitation appears in validation and inspection summaries.

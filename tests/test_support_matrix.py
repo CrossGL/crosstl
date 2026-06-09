@@ -903,7 +903,8 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert (
             "Define-processing inspection summaries expose redacted project "
             "define names, deterministic define fingerprints, selected variant "
-            "names, and per-variant define records without define values"
+            "names, per-variant define records, and artifact effective define "
+            "fingerprints without define values"
         ) in backend_support["notes"]
         assert "report CLI variant metadata" in backend_support["notes"]
         assert (
@@ -913,7 +914,10 @@ def test_project_macro_variants_document_artifact_define_maps():
         assert "sampled define-processing artifact metadata" in (
             backend_support["notes"]
         )
-        assert "with define names and without define values" in backend_support["notes"]
+        assert (
+            "with define names, deterministic define fingerprints, and without "
+            "define values"
+        ) in backend_support["notes"]
         assert "scoped runs for selected declared variants" in backend_support["notes"]
         assert "configured selected_variants defaults" in backend_support["notes"]
         assert "de-duplicates repeated selections before scan or artifact planning" in (

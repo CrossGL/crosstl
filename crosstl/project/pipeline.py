@@ -6966,6 +6966,7 @@ def _inspection_define_processing_artifact(
         define_names = sorted(name for name in defines if _is_non_empty_string(name))
         if define_names:
             sample["defineNames"] = define_names
+            sample["defineFingerprint"] = _inspection_define_fingerprint(defines)
     if "variant" in artifact:
         sample["variant"] = artifact.get("variant")
     return {key: value for key, value in sample.items() if value is not None}

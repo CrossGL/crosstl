@@ -4431,6 +4431,12 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             {"MODE": "base", "USE_FAST_PATH": "1"}
         )
     )
+    debug_define_fingerprint = project_pipeline._inspection_define_fingerprint(
+        {"MODE": "debug", "USE_FAST_PATH": "1"}
+    )
+    release_define_fingerprint = project_pipeline._inspection_define_fingerprint(
+        {"MODE": "base", "USE_FAST_PATH": "1"}
+    )
     assert inspection["defineProcessing"]["variantCount"] == 2
     assert inspection["defineProcessing"]["selectedVariantCount"] == 0
     assert inspection["defineProcessing"]["selectedVariants"] == []
@@ -4464,6 +4470,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "supportsDefines": True,
             "defineCount": 2,
             "defineNames": ["MODE", "USE_FAST_PATH"],
+            "defineFingerprint": debug_define_fingerprint,
             "variant": "debug",
         },
         {
@@ -4476,6 +4483,7 @@ def test_translate_project_expands_named_variants_with_merged_defines(
             "supportsDefines": True,
             "defineCount": 2,
             "defineNames": ["MODE", "USE_FAST_PATH"],
+            "defineFingerprint": release_define_fingerprint,
             "variant": "release",
         },
     ]
@@ -4485,6 +4493,14 @@ def test_translate_project_expands_named_variants_with_merged_defines(
     )
     assert '"base"' not in json.dumps(inspection["defineProcessing"]["artifacts"])
     assert '"base"' not in json.dumps(inspection["defineProcessing"])
+    debug_define_fingerprint_preview = crosstl_cli._format_hash_preview(
+        debug_define_fingerprint["algorithm"],
+        debug_define_fingerprint["value"],
+    )
+    release_define_fingerprint_preview = crosstl_cli._format_hash_preview(
+        release_define_fingerprint["algorithm"],
+        release_define_fingerprint["value"],
+    )
     assert inspection["includePathProcessing"]["byVariant"] == {
         "debug": {"not-requested": 1},
         "release": {"not-requested": 1},
@@ -4503,13 +4519,15 @@ def test_translate_project_expands_named_variants_with_merged_defines(
         "- simple.cgl -> translated/opengl/debug/simple.glsl "
         "(sourceBackend=cgl, target=opengl, variant=debug, status=forwarded, "
         "frontend=lexer, supportsDefines=true, defines=2, "
-        "defineNames=MODE,USE_FAST_PATH)"
+        "defineNames=MODE,USE_FAST_PATH, "
+        f"defineFingerprint={debug_define_fingerprint_preview})"
     ) in result.stdout
     assert (
         "- simple.cgl -> translated/opengl/release/simple.glsl "
         "(sourceBackend=cgl, target=opengl, variant=release, status=forwarded, "
         "frontend=lexer, supportsDefines=true, defines=2, "
-        "defineNames=MODE,USE_FAST_PATH)"
+        "defineNames=MODE,USE_FAST_PATH, "
+        f"defineFingerprint={release_define_fingerprint_preview})"
     ) in result.stdout
     assert (
         "Include path processing by variant: "
@@ -5803,6 +5821,9 @@ def test_translate_project_records_define_processing_without_frontend_support(
         "cgl": {"not-supported": 1}
     }
     assert payload["summary"]["defineProcessingByVariant"] == {}
+    define_fingerprint = project_pipeline._inspection_define_fingerprint(
+        {"ENABLE_PATH": "1"}
+    )
     assert inspection["defineProcessing"] == {
         "available": True,
         "byStatus": {"not-supported": 1},
@@ -5811,9 +5832,7 @@ def test_translate_project_records_define_processing_without_frontend_support(
         "byVariant": {},
         "projectDefineCount": 1,
         "projectDefineNames": ["ENABLE_PATH"],
-        "projectDefineFingerprint": project_pipeline._inspection_define_fingerprint(
-            {"ENABLE_PATH": "1"}
-        ),
+        "projectDefineFingerprint": define_fingerprint,
         "variantCount": 0,
         "selectedVariantCount": 0,
         "selectedVariants": [],
@@ -5831,6 +5850,7 @@ def test_translate_project_records_define_processing_without_frontend_support(
                 "supportsDefines": False,
                 "defineCount": 1,
                 "defineNames": ["ENABLE_PATH"],
+                "defineFingerprint": define_fingerprint,
             }
         ],
         "notSupportedArtifactCount": 1,
@@ -5846,6 +5866,7 @@ def test_translate_project_records_define_processing_without_frontend_support(
                 "supportsDefines": False,
                 "defineCount": 1,
                 "defineNames": ["ENABLE_PATH"],
+                "defineFingerprint": define_fingerprint,
             }
         ],
     }
@@ -5855,6 +5876,13 @@ def test_translate_project_records_define_processing_without_frontend_support(
         "Define processing by source backend: rust=(not-supported=1)" in result.stdout
     )
     assert "Define processing by target: cgl=(not-supported=1)" in result.stdout
+    define_fingerprint_preview = crosstl_cli._format_hash_preview(
+        define_fingerprint["algorithm"],
+        define_fingerprint["value"],
+    )
+    assert (
+        "defineNames=ENABLE_PATH, " f"defineFingerprint={define_fingerprint_preview}"
+    ) in result.stdout
     assert "Define processing issues:" in result.stdout
     assert (
         "- shader.rs -> cgl at translated/cgl/shader.cgl: "
