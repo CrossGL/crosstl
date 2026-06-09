@@ -10269,7 +10269,8 @@ def _include_dir_status_contract_reasons(
         actual_resolved_path = Path(resolved_path).resolve()
         if actual_resolved_path != expected_path:
             reasons.append(
-                f"{prefix}.resolvedPath must match the resolved include directory"
+                f"{prefix}.resolvedPath must match the resolved include directory "
+                f"({_value_mismatch_context(actual_resolved_path, expected_path)})"
             )
         expected_status = (
             "outside-project"
@@ -10281,7 +10282,10 @@ def _include_dir_status_contract_reasons(
             )
         )
         if status != expected_status:
-            reasons.append(f"{prefix}.status must match the resolved include directory")
+            reasons.append(
+                f"{prefix}.status must match the resolved include directory "
+                f"({_value_mismatch_context(status, expected_status)})"
+            )
         if frontend_visible != (expected_status == "active"):
             reasons.append(f"{prefix}.frontendVisible must match status")
 
@@ -10374,7 +10378,10 @@ def _source_root_status_contract_reasons(
         expected_path = expected_path.resolve()
         actual_resolved_path = Path(resolved_path).resolve()
         if actual_resolved_path != expected_path:
-            reasons.append(f"{prefix}.resolvedPath must match the resolved source root")
+            reasons.append(
+                f"{prefix}.resolvedPath must match the resolved source root "
+                f"({_value_mismatch_context(actual_resolved_path, expected_path)})"
+            )
         expected_status = (
             "outside-project"
             if not _is_relative_to(expected_path, root_path)
@@ -10385,7 +10392,10 @@ def _source_root_status_contract_reasons(
             )
         )
         if status != expected_status:
-            reasons.append(f"{prefix}.status must match the resolved source root")
+            reasons.append(
+                f"{prefix}.status must match the resolved source root "
+                f"({_value_mismatch_context(status, expected_status)})"
+            )
         if scan_visible != (expected_status == "active"):
             reasons.append(f"{prefix}.scanVisible must match status")
 

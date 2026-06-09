@@ -10060,6 +10060,7 @@ def test_validate_project_report_rejects_stale_include_dir_status(tmp_path):
         "project.includeDirStatus[0].status must match the resolved include directory"
         in diagnostic["message"]
     )
+    assert "(expected missing, actual active)" in diagnostic["message"]
     assert "project.includeDirStatusCounts must match project.includeDirStatus" in (
         diagnostic["message"]
     )
@@ -10098,6 +10099,10 @@ def test_validate_project_report_rejects_stale_include_dir_resolved_path(tmp_pat
         "project.includeDirStatus[0].resolvedPath must match the resolved "
         "include directory"
     ) in diagnostic["message"]
+    assert (
+        f"(expected {other_include_dir.resolve()}, actual {include_dir.resolve()})"
+        in diagnostic["message"]
+    )
 
 
 def test_validate_project_report_rejects_stale_source_root_status(tmp_path):
@@ -10128,8 +10133,48 @@ def test_validate_project_report_rejects_stale_source_root_status(tmp_path):
     assert "project.sourceRootStatus[0].status must match the resolved source root" in (
         diagnostic["message"]
     )
+    assert "(expected missing, actual active)" in diagnostic["message"]
     assert "project.sourceRootStatusCounts must match project.sourceRootStatus" in (
         diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_stale_source_root_resolved_path(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    other_shader_dir = repo / "other-shaders"
+    repo.mkdir()
+    shader_dir.mkdir()
+    other_shader_dir.mkdir()
+    (shader_dir / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["cgl"]
+            source_roots = ["shaders"]
+            """).strip(),
+        encoding="utf-8",
+    )
+    report = translate_project(load_project_config(repo), output_dir="out").to_json()
+    report["project"]["sourceRootStatus"][0]["resolvedPath"] = str(
+        other_shader_dir.resolve()
+    )
+    report_path = repo / "out" / "stale-source-root-resolved-path-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "project.sourceRootStatus[0].resolvedPath must match the resolved source root"
+        in diagnostic["message"]
+    )
+    assert (
+        f"(expected {other_shader_dir.resolve()}, actual {shader_dir.resolve()})"
+        in diagnostic["message"]
     )
 
 
