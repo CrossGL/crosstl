@@ -1844,6 +1844,7 @@ class MetalParser:
             else self.parse_alignas_specifiers()
         )
         self.eat("STRUCT")
+        struct_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
         if not self.is_current_name_token():
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
@@ -1868,6 +1869,7 @@ class MetalParser:
         self.eat("SEMICOLON")
 
         struct_node = StructNode(name, members)
+        struct_node.attributes = struct_attributes
         struct_node.alignas = alignas_specs
         struct_node.base_types = base_types
         return struct_node
@@ -1879,6 +1881,7 @@ class MetalParser:
             else self.parse_alignas_specifiers()
         )
         self.eat("CLASS")
+        class_attributes = self.parse_attributes()
         alignas_specs.extend(self.parse_alignas_specifiers())
         if not self.is_current_name_token():
             raise SyntaxError(f"Expected identifier, got {self.current_token[0]}")
@@ -1903,6 +1906,7 @@ class MetalParser:
         self.eat("SEMICOLON")
 
         class_node = StructNode(name, members)
+        class_node.attributes = class_attributes
         class_node.alignas = alignas_specs
         class_node.base_types = base_types
         class_node.aggregate_kind = "class"

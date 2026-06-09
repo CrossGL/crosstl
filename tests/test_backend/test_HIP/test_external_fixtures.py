@@ -771,6 +771,39 @@ def test_external_hip_tests_inline_constant_global_codegen_reparse():
     assert "HIP symbol copy to: HIP_SYMBOL(globalVar)" in crossgl
 
 
+def test_external_hip_tests_bare_check_image_support_macro_codegen_reparse():
+    # Upstream: ROCm/hip-tests@d01e1f96059edc25600eb13434d7e2b71c09af01,
+    # catch/unit/memory/hipFree.cc.
+    source = """
+    HIP_TEMPLATE_TEST_CASE(Unit_hipFreeImplicitSyncArray, char, float, float2, float4) {
+        CHECK_IMAGE_SUPPORT
+
+        hipArray_t arrayPtr{};
+        hipExtent extent{};
+        extent.width = GENERATE(32, 128, 256, 512, 1024);
+        hipChannelFormatDesc desc = hipCreateChannelDesc<TestType>();
+
+        HIP_CHECK(hipMallocArray(&arrayPtr, &desc, extent.width, extent.height, hipArrayDefault));
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    test_case = ast.statements[0]
+
+    assert isinstance(test_case, FunctionNode)
+    assert test_case.name == "Unit_hipFreeImplicitSyncArray"
+    assert test_case.qualifiers == ["HIP_TEMPLATE_TEST_CASE"]
+    assert isinstance(test_case.body[0], VariableNode)
+    assert test_case.body[0].vtype == "hipArray_t"
+    assert test_case.body[0].name == "arrayPtr"
+    assert "CHECK_IMAGE_SUPPORT" not in crossgl
+    assert "var arrayPtr: ptr<void> = {};" in crossgl
+    assert (
+        "HIP array allocate: arrayPtr, desc: desc, width: extent.width, "
+        "height: extent.height, flags: hipArrayDefault"
+    ) in crossgl
+
+
 def test_external_rocm_inline_assembly_kernel_codegen_reparse():
     source = """
     __global__ void matrix_transpose_kernel(float* out,

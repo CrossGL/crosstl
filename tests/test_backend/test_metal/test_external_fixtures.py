@@ -867,6 +867,26 @@ EXTERNAL_FIXTURES = [
         ),
     },
     {
+        "name": "mlx_allocator_class_visibility_attribute",
+        "repo_url": MLX_REPO,
+        "commit": MLX_CURRENT_COMMIT,
+        "source_path": "mlx/allocator.h",
+        "roundtrip": False,
+        "struct_names": ["Buffer"],
+        "source": (
+            """
+            #define MLX_API __attribute__((visibility("default")))
+
+            namespace mlx::core::allocator {
+            class MLX_API Buffer {
+             public:
+                void* raw_ptr();
+            };
+            }
+        """
+        ),
+    },
+    {
         "name": "mlx_rope_metal_fast_math_namespace_intrinsics",
         "repo_url": MLX_REPO,
         "commit": MLX_COMMIT,

@@ -324,6 +324,55 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_GLSLANG_GEOMETRY_INPUT_ARRAY_INTERFACE_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/glslang
+; Source commit: 98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+; Source path: Test/baseResults/iomap.blockOutVariableIn.2.vert.out
+; Reduced from linked vertex-to-geometry disassembly where geometry stage
+; location inputs are arrays of the previous stage's per-vertex outputs.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "main" %vertex_out
+OpEntryPoint Geometry %gs "main" %geom_in %geom_out
+OpExecutionMode %gs InputTriangles
+OpExecutionMode %gs OutputTriangleStrip
+OpExecutionMode %gs OutputVertices 3
+OpName %vertex_out "a1"
+OpName %geom_in "inA"
+OpName %geom_out "gOut"
+OpDecorate %vertex_out Location 0
+OpDecorate %geom_in Location 0
+OpDecorate %geom_out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%int = OpTypeInt 32 1
+%v4float = OpTypeVector %float 4
+%three = OpConstant %int 3
+%zero = OpConstant %int 0
+%float_1 = OpConstant %float 1.0
+%const_value = OpConstantComposite %v4float %float_1 %float_1 %float_1 %float_1
+%arr3_v4float = OpTypeArray %v4float %three
+%ptr_out_v4float = OpTypePointer Output %v4float
+%ptr_in_arr3_v4float = OpTypePointer Input %arr3_v4float
+%ptr_in_v4float = OpTypePointer Input %v4float
+%vertex_out = OpVariable %ptr_out_v4float Output
+%geom_in = OpVariable %ptr_in_arr3_v4float Input
+%geom_out = OpVariable %ptr_out_v4float Output
+%vs = OpFunction %void None %fn
+%vs_label = OpLabel
+OpStore %vertex_out %const_value
+OpReturn
+OpFunctionEnd
+%gs = OpFunction %void None %fn
+%gs_label = OpLabel
+%first_ptr = OpAccessChain %ptr_in_v4float %geom_in %zero
+%first = OpLoad %v4float %first_ptr
+OpStore %geom_out %first
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_GLSLANG_LINKED_VERTEX_FRAGMENT_MAIN_ASSEMBLY = """
 ; Reduced from glslangValidator -V vertex/fragment modules linked with spirv-link.
 ; The linked module keeps both external entry point names as "main" and uses
@@ -5680,6 +5729,18 @@ def test_glslang_location_decorated_interface_block_codegen_reparse():
     assert "a2 = float2(0.5, 0.5);" in generated_code
     assert "color = float4(a1[0], a1[1], a2[0], a2[1]);" in generated_code
     assert "Unhandled statement type" not in generated_code
+
+
+def test_glslang_geometry_input_array_interface_codegen_reparse():
+    tokens = tokenize_code(SPIRV_GLSLANG_GEOMETRY_INPUT_ARRAY_INTERFACE_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 a1 @output @location(0);" in generated_code
+    assert "float4 inA[3] @input;" in generated_code
+    assert "float4 inA[3] @input @location(0);" not in generated_code
+    assert "gOut = inA[0];" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_path):

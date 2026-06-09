@@ -101,6 +101,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/imgproc/src/opencl/filter2DSmall.cl",
     },
+    "opencv_filter2d_small_elaborated_struct_type": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
+        "path": "modules/imgproc/src/opencl/filter2DSmall.cl",
+    },
     "opencv_cascadedetect_aligned_typedef_struct": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -616,6 +621,48 @@ def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
     assert "int y = startY + py" in macro_stmt.args[1]
     assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
     assert "out[0] = 2.0f;" in crossgl
+
+
+def test_external_opencv_filter2d_small_elaborated_struct_type_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "opencv_filter2d_small_elaborated_struct_type"
+    ]
+    assert source_info["commit"] == "6f29af625bb4617e2e061f8097b5f3e2ed341a82"
+    assert source_info["path"] == "modules/imgproc/src/opencl/filter2DSmall.cl"
+
+    source = """
+    struct RectCoords
+    {
+        int x1, y1, x2, y2;
+    };
+
+    inline bool isBorder(const struct RectCoords bounds, int2 coord) {
+        return coord.x < bounds.x1 || coord.y < bounds.y1;
+    }
+
+    kernel void filter2d_rectcoords_probe(global int *out,
+                                          int srcOffsetX,
+                                          int srcOffsetY,
+                                          int srcEndX,
+                                          int srcEndY) {
+        const struct RectCoords srcCoords = {
+            srcOffsetX, srcOffsetY, srcEndX, srcEndY
+        };
+        int2 pos = (int2)(srcOffsetX, srcOffsetY);
+        out[0] = isBorder(srcCoords, pos) ? 1 : 0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[1].params[0] == {
+        "type": "const struct RectCoords",
+        "name": "bounds",
+    }
+    assert "bool isBorder(RectCoords bounds" in crossgl
+    assert "var srcCoords: RectCoords" in crossgl
+    assert "struct RectCoords bounds" not in crossgl
+    assert "var srcCoords: struct RectCoords" not in crossgl
 
 
 def test_external_opencv_cascadedetect_aligned_typedef_struct_codegen_reparse():

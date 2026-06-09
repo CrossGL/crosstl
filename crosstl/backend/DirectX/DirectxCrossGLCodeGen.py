@@ -1586,12 +1586,17 @@ class HLSLToCrossGLConverter:
         normalized_attributes = []
         for attr in attributes or []:
             attr_name = str(getattr(attr, "name", ""))
+            args = getattr(attr, "args", getattr(attr, "arguments", []))
             if attr_name in {"vk::input_attachment_index", "vk::binding"}:
                 attr_name = attr_name.rsplit("::", 1)[1]
+                if attr_name == "binding" and len(args) >= 2:
+                    normalized_attributes.append(AttributeNode("binding", [args[0]]))
+                    normalized_attributes.append(AttributeNode("set", [args[1]]))
+                    continue
             normalized_attributes.append(
                 AttributeNode(
                     attr_name,
-                    getattr(attr, "args", getattr(attr, "arguments", [])),
+                    args,
                 )
             )
         return self.format_attributes(normalized_attributes, indent)

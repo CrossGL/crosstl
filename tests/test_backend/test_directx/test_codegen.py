@@ -2728,6 +2728,28 @@ def test_codegen_subpass_input_globals_reparse_crossgl():
     assert reparsed.global_variables[0].attributes[0].name == "input_attachment_index"
 
 
+def test_codegen_subpass_input_binding_set_from_dxc_reparse_crossgl():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/CodeGenSPIRV/vk.subpass-input.binding.hlsl
+    hlsl = textwrap.dedent("""
+        [[vk::input_attachment_index(2), vk::binding(5, 3)]]
+        SubpassInput SI2;
+
+        void main() {
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+    reparsed = parse_crossgl(output)
+
+    assert "@ input_attachment_index(2)" in output
+    assert "@ binding(5)" in output
+    assert "@ set(3)" in output
+    assert "@ binding(5, 3)" not in output
+    assert reparsed.global_variables[0].attributes[1].name == "binding"
+    assert reparsed.global_variables[0].attributes[2].name == "set"
+
+
 def test_codegen_cxx11_namespaced_cbuffer_attribute_passthrough():
     hlsl = textwrap.dedent("""
         [[vk::push_constant]]

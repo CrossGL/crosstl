@@ -482,9 +482,19 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
             "&&",
             *self.OPENCL_ADDRESS_SPACE_QUALIFIERS,
         }
-        return " ".join(
+        stripped = " ".join(
             part for part in str(type_name).split() if part not in qualifiers
         )
+        return self.strip_opencl_elaborated_type_keyword(stripped)
+
+    def strip_opencl_elaborated_type_keyword(self, type_name):
+        for keyword in ("struct", "enum"):
+            prefix = f"{keyword} "
+            if type_name.startswith(prefix):
+                tag_name = type_name[len(prefix) :].strip()
+                if tag_name and not tag_name.startswith("<anonymous>"):
+                    return tag_name
+        return type_name
 
 
 def generate_opencl_crossgl(ast_node):

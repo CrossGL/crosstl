@@ -214,6 +214,9 @@ class HipParser:
         "THEN",
         "WHEN",
     }
+    STANDALONE_STATEMENT_MACRO_NAMES = {
+        "CHECK_IMAGE_SUPPORT",
+    }
     TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
         "__DEVICE__",
@@ -773,6 +776,27 @@ class HipParser:
         self.skip_newlines()
         return self.parse_block()
 
+    def is_standalone_statement_macro(self):
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.STANDALONE_STATEMENT_MACRO_NAMES
+        ):
+            return False
+
+        next_index = self.pos + 1
+        return next_index >= len(self.tokens) or self.tokens[next_index].type in {
+            "NEWLINE",
+            "SEMICOLON",
+            "RBRACE",
+        }
+
+    def parse_standalone_statement_macro(self):
+        self.advance()
+        self.skip_newlines()
+        if self.match("SEMICOLON"):
+            self.advance()
+        return None
+
     def consume_raw_macro_arguments(self):
         self.consume("LPAREN")
         args = [[]]
@@ -1044,6 +1068,8 @@ class HipParser:
             return self.parse_catch_test_block_macro()
         if self.is_catch_nested_block_macro():
             return self.parse_catch_nested_block_macro()
+        if self.is_standalone_statement_macro():
+            return self.parse_standalone_statement_macro()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_label_statement_start():

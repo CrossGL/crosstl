@@ -189,6 +189,7 @@ class VulkanToCrossGLConverter:
         self.used_global_declaration_names = set()
         self.non_renamable_global_declaration_names = set()
         self.renamed_spirv_global_names = {}
+        self.spirv_module_shader_stages = set()
 
     def get_indent(self):
         return "    " * self.indentation
@@ -205,6 +206,7 @@ class VulkanToCrossGLConverter:
             self.collect_non_renamable_global_declaration_names(ast)
         )
         self.renamed_spirv_global_names = {}
+        self.spirv_module_shader_stages = self.collect_spirv_module_shader_stages(ast)
         code = "shader main {\n"
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
@@ -373,8 +375,35 @@ class VulkanToCrossGLConverter:
     def generate_stage_interface_layouts(self, function, stage_interface_layouts):
         code = ""
         for layout in stage_interface_layouts.get(id(function), []):
-            code += self.indent_generated_layout(self.generate_layout(layout))
+            code += self.indent_generated_layout(
+                self.generate_layout(
+                    layout,
+                    suppressed_interface_qualifiers=(
+                        self.suppressed_stage_interface_qualifiers(function, layout)
+                    ),
+                )
+            )
         return code
+
+    def suppressed_stage_interface_qualifiers(self, function, layout):
+        layout_type = (getattr(layout, "layout_type", None) or "").lower()
+        if layout_type != "in" or self.function_shader_stage(function) != "geometry":
+            return set()
+        if not self.spirv_module_shader_stages.intersection(
+            {"vertex", "tessellation_control", "tessellation_evaluation"}
+        ):
+            return set()
+        if "[" not in str(getattr(layout, "variable_name", "")):
+            return set()
+        return {"location", "component", "index"}
+
+    def collect_spirv_module_shader_stages(self, ast):
+        return {
+            stage
+            for function in getattr(ast, "functions", []) or []
+            for stage in [self.function_shader_stage(function)]
+            if stage is not None
+        }
 
     def indent_generated_layout(self, layout_code):
         return "".join(
@@ -688,7 +717,7 @@ class VulkanToCrossGLConverter:
                 generated_name
             )
 
-    def generate_layout(self, node):
+    def generate_layout(self, node, suppressed_interface_qualifiers=None):
         code = ""
         if (getattr(node, "layout_type", None) or "").lower() == "const":
             return self.generate_specialization_constant_layout(node)
@@ -747,7 +776,7 @@ class VulkanToCrossGLConverter:
             if node.data_type and node.variable_name:
                 code += (
                     f"    {self.map_type(node.data_type)} {node.variable_name}"
-                    f"{self.interface_layout_attribute_suffix(node)};\n"
+                    f"{self.interface_layout_attribute_suffix(node, suppressed_interface_qualifiers)};\n"
                 )
                 self.reserve_global_declaration_name(node.variable_name)
         elif self.is_ray_storage_layout(node):
@@ -985,14 +1014,19 @@ class VulkanToCrossGLConverter:
             "rgba32ui",
         }
 
-    def interface_layout_attribute_suffix(self, node):
+    def interface_layout_attribute_suffix(self, node, suppressed_qualifiers=None):
         layout_type = node.layout_type.lower() if node.layout_type else ""
         if layout_type not in {"in", "out"}:
             return ""
 
+        suppressed_qualifiers = {
+            str(qualifier).lower() for qualifier in suppressed_qualifiers or set()
+        }
         attributes = ["@input" if layout_type == "in" else "@output"]
         for name, value in getattr(node, "qualifiers", []) or []:
             qualifier_name = str(name).lower()
+            if qualifier_name in suppressed_qualifiers:
+                continue
             if (
                 qualifier_name in {"location", "component", "index"}
                 and value is not None
