@@ -24,11 +24,13 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    PointerType,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReferenceType,
     ReturnNode,
     StructNode,
     SwitchNode,
@@ -8269,7 +8271,11 @@ class GLSLCodeGen:
     def type_name_string(self, vtype):
         if vtype is None:
             return None
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if (
+            isinstance(vtype, (PointerType, ReferenceType))
+            or hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+        ):
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
@@ -14909,6 +14915,11 @@ class GLSLCodeGen:
         if vtype is None:
             return "float"
 
+        if isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}*"
+        if isinstance(vtype, ReferenceType):
+            return f"{self.map_type(vtype.referenced_type)}&"
+
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
@@ -14962,6 +14973,9 @@ class GLSLCodeGen:
     ):
         if vtype is None:
             return self.map_type(vtype)
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "buffer" in qualifiers and isinstance(vtype, PointerType):
+            return f"{self.map_type(vtype.pointee_type)}[]"
         if self.is_structured_buffer_type(vtype):
             return f"{self.structured_buffer_element_type(vtype)}[]"
 
@@ -14996,7 +15010,11 @@ class GLSLCodeGen:
         if vtype is None:
             return self.map_type(vtype)
 
-        if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
+        if (
+            isinstance(vtype, (PointerType, ReferenceType))
+            or hasattr(vtype, "name")
+            or hasattr(vtype, "element_type")
+        ):
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
@@ -16026,6 +16044,14 @@ class GLSLCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, PointerType):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            return f"{pointee_type}*"
+        if isinstance(type_node, ReferenceType):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            return f"{referenced_type}&"
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(

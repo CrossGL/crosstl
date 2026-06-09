@@ -214,6 +214,9 @@ class HipParser:
         "THEN",
         "WHEN",
     }
+    BARE_NESTED_BLOCK_MACRO_NAMES = {
+        "HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY",
+    }
     STANDALONE_STATEMENT_MACRO_NAMES = {
         "CHECK_IMAGE_SUPPORT",
     }
@@ -776,6 +779,23 @@ class HipParser:
         self.skip_newlines()
         return self.parse_block()
 
+    def is_bare_nested_block_macro(self):
+        if self.block_depth == 0:
+            return False
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.BARE_NESTED_BLOCK_MACRO_NAMES
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        return index < len(self.tokens) and self.tokens[index].type == "LBRACE"
+
+    def parse_bare_nested_block_macro(self):
+        self.consume("IDENTIFIER")
+        self.skip_newlines()
+        return self.parse_block()
+
     def is_standalone_statement_macro(self):
         if not (
             self.match("IDENTIFIER")
@@ -1068,6 +1088,8 @@ class HipParser:
             return self.parse_catch_test_block_macro()
         if self.is_catch_nested_block_macro():
             return self.parse_catch_nested_block_macro()
+        if self.is_bare_nested_block_macro():
+            return self.parse_bare_nested_block_macro()
         if self.is_standalone_statement_macro():
             return self.parse_standalone_statement_macro()
         if self.match("LBRACE"):
@@ -3177,6 +3199,7 @@ class HipParser:
         vtype = self.parse_type()
         name = self.consume("IDENTIFIER").value
         self.consume("COLON")
+        self.skip_newlines()
         iterable = self.parse_expression()
         self.consume("RPAREN")
 

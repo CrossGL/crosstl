@@ -1026,6 +1026,125 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     assert "atomicCAS_system(" not in crossgl
 
 
+def test_external_hip_tests_bare_atomic_compat_block_macro_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    __device__ int perform_atomic_add(int* mem, int val) {
+        if(val > 0) {
+            HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY {
+                return __hip_atomic_fetch_add(
+                    mem,
+                    val,
+                    __ATOMIC_RELAXED,
+                    __HIP_MEMORY_SCOPE_AGENT);
+            }
+        }
+        return 0;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    branch = ast.statements[0].body[0]
+
+    assert isinstance(branch, IfNode)
+    assert len(branch.if_body) == 1
+    assert "HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY" not in crossgl
+    assert "__hip_atomic_fetch_add" in crossgl
+    assert "return 0;" in crossgl
+
+
+def test_external_hip_tests_newline_split_range_for_initializer_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    void host() {
+        using LA = LinearAllocs;
+        for (const auto alloc_type :
+             {LA::hipMalloc}) {
+            sink(alloc_type);
+        }
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    loop = ast.statements[0].body[1]
+
+    assert loop.vtype == "const auto"
+    assert loop.name == "alloc_type"
+    assert "for alloc_type in {LA::hipMalloc}" in crossgl
+
+
+def test_external_hip_tests_user_function_template_call_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    struct TestParams {
+        int value;
+    };
+
+    template <typename TestType, int operation, bool use_shared_mem, int memory_scope>
+    void TestCore(TestParams params) {
+        sink(params.value);
+    }
+
+    template <typename TestType, int operation, int memory_scope>
+    void host(TestParams params) {
+        TestCore<TestType, operation, false, memory_scope>(params);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "TestCore(params);" in crossgl
+    assert "TestCore<TestType" not in crossgl
+
+
+def test_external_hip_tests_user_function_template_reference_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    template <typename TestType, int operation>
+    void HostAtomicOperation(int iterations) {
+        sink(iterations);
+    }
+
+    template <typename TestType, int operation>
+    void host(int iterations) {
+        std::thread(HostAtomicOperation<TestType, operation>, iterations);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "std::thread(HostAtomicOperation, iterations);" in crossgl
+    assert "HostAtomicOperation<TestType" not in crossgl
+
+
+def test_external_hip_tests_tuple_of_vectors_return_type_codegen_reparse():
+    # Upstream: https://github.com/ROCm/hip-tests
+    # Commit: 8889ba5c7a89a85d5262dadcfbde17589a53ccfb
+    # Path: catch/unit/atomics/arithmetic_common.hh
+    source = """
+    template <typename TestType>
+    std::tuple<std::vector<TestType>, std::vector<TestType>>
+    TestKernelHostRef(TestParams p) {
+        std::vector<TestType> old_vals(p.width);
+        std::vector<TestType> res_vals(p.width);
+        return std::make_tuple(res_vals, old_vals);
+    }
+    """
+
+    _, crossgl = assert_crossgl_reparses(source)
+
+    assert "tuple<array<TestType>, array<TestType>> TestKernelHostRef" in crossgl
+    assert "std::tuple" not in crossgl
+
+
 def test_external_rocm_rocdecode_typedef_enum_codegen_reparse():
     # Upstream: ROCm/rocm-examples@d3ad835e46ff50412cf51086df7400fb3bbd1649,
     # Common/rocdecode_utils.hpp.

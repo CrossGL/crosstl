@@ -1960,6 +1960,35 @@ def test_glsl_compiler_set_zero_buffer_pointer_resource_lowers_to_ssbo():
     assert "PointerType" not in generated
 
 
+def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
+    code = """
+    shader BufferPointerHelperParameter {
+        float readValue(buffer float* values, int index) {
+            return values[index];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+
+            void main() {
+                float value = readValue(values, 0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert (
+        "layout(std430, binding = 0) buffer valuesBuffer { float values[]; };"
+        in generated
+    )
+    assert "float readValue(float values[], int index)" in generated
+    assert "float value = readValue(values, 0);" in generated
+    assert "PointerType" not in generated
+
+
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
     # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
     code = """

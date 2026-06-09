@@ -401,6 +401,9 @@ class HipToCrossGLConverter:
             query_expression = self.format_hip_device_query_read(node)
             if query_expression is not None:
                 return query_expression
+            user_defined_name = self.format_user_defined_function_call_name(node)
+            if user_defined_name is not None:
+                return user_defined_name
             return self.output_identifier_name(node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
@@ -1135,9 +1138,20 @@ class HipToCrossGLConverter:
         return self.sanitize_qualified_variable_name("::".join(parts)) or parts[-1]
 
     def format_function_call_name(self, name):
+        user_defined_name = self.format_user_defined_function_call_name(name)
+        if user_defined_name is not None:
+            return user_defined_name
+        return name
+
+    def format_user_defined_function_call_name(self, name):
         if self.is_user_defined_function(name):
             return self.format_function_declaration_name(name)
-        return name
+
+        base_name, template_args = self.parse_cpp_template(name)
+        if template_args and self.is_user_defined_function(base_name):
+            return self.format_function_declaration_name(base_name)
+
+        return None
 
     def strip_cpp_template_arguments(self, text):
         stripped = []
@@ -4864,7 +4878,11 @@ class HipToCrossGLConverter:
         return f"(/* HIP device property: {property_name}, device: {device_id} */ 0)"
 
     def visit_KernelLaunchNode(self, node):
-        kernel_name = self.visit(node.kernel_name)
+        kernel_name = (
+            node.kernel_name
+            if isinstance(node.kernel_name, str)
+            else self.visit(node.kernel_name)
+        )
         config = [self.visit(node.blocks), self.visit(node.threads)]
         if node.shared_mem is not None:
             config.append(self.visit(node.shared_mem))
@@ -5112,8 +5130,9 @@ class HipToCrossGLConverter:
         if hip_intrinsic is not None:
             return hip_intrinsic
 
-        if self.is_user_defined_function(func_name):
-            return f"{self.format_function_call_name(func_name)}({args_str})"
+        user_defined_call_name = self.format_user_defined_function_call_name(func_name)
+        if user_defined_call_name is not None:
+            return f"{user_defined_call_name}({args_str})"
 
         timer_intrinsic = self.format_hip_timer_intrinsic_call(func_name, args)
         if timer_intrinsic is not None:
@@ -7263,6 +7282,11 @@ class HipToCrossGLConverter:
             element_type = self.convert_hip_type_to_crossgl(template_args[0])
             size = self.format_crossgl_array_extent(template_args[1])
             return f"array<{element_type}, {size}>"
+        if self.is_std_tuple_base_name(base_name) and template_args:
+            element_types = [
+                self.convert_hip_type_to_crossgl(arg) for arg in template_args
+            ]
+            return f"tuple<{', '.join(element_types)}>"
         return None
 
     def is_unique_ptr_type_name(self, type_name):
@@ -7282,6 +7306,9 @@ class HipToCrossGLConverter:
 
     def is_std_array_base_name(self, base_name):
         return base_name in {"array", "std::array"}
+
+    def is_std_tuple_base_name(self, base_name):
+        return base_name in {"tuple", "std::tuple"}
 
     def is_std_make_unique_base_name(self, base_name):
         return base_name in {"make_unique", "std::make_unique"}
