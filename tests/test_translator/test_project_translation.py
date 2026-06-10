@@ -23801,6 +23801,16 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert artifact["provenance"] == report_artifact["provenance"]
     assert artifact["sourceMap"]["kind"] == "crosstl-artifact-source-map"
     assert artifact["sourceRemap"]["path"] == "out/cgl/simple.source-remap.json"
+    assert artifact["hostInterface"] == {
+        "status": "ready",
+        "source": "source-artifact",
+        "parser": "cgl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        "resources": [],
+        "diagnostics": [],
+    }
 
     assert set(payload["runtimePlan"]) == (
         project_pipeline.RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS
@@ -23977,6 +23987,16 @@ def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):
     assert artifact["sourcePath"] == "out/cgl/simple.cgl"
     assert artifact["packagePath"] == "artifacts/out/cgl/simple.cgl"
     assert artifact["hash"]["algorithm"] == "sha256"
+    assert artifact["hostInterface"] == {
+        "status": "ready",
+        "source": "source-artifact",
+        "parser": "cgl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        "resources": [],
+        "diagnostics": [],
+    }
     assert (
         set(artifact["sourceRemap"])
         == project_pipeline.RUNTIME_PACKAGE_SOURCE_REMAP_FIELDS
@@ -25059,9 +25079,18 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
     assert adapter["artifactFormat"] == "WGSL source"
     assert adapter["requiredTools"] == ["naga"]
     assert adapter["packagePath"] == "artifacts/out/wgsl/simple.wgsl"
+    assert adapter["hostInterface"] == {
+        "status": "ready",
+        "source": "source-artifact",
+        "parser": "cgl",
+        "entryPointCount": 1,
+        "resourceCount": 0,
+        "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        "resources": [],
+        "diagnostics": [],
+    }
     assert [action["kind"] for action in payload["actions"]] == [
         "wire-runtime-adapter",
-        "resolve-host-interface-metadata",
         "review-runtime-references",
     ]
 
@@ -25417,6 +25446,12 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
     load_unit = payload["loadUnits"][0]
     validate_step = load_unit["loadSteps"][-1]
     assert load_unit["target"] == "wgsl"
+    assert load_unit["hostInterface"]["status"] == "ready"
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "bind-host-interface",
+        "validate-target-toolchain",
+    ]
     assert validate_step["kind"] == "validate-target-toolchain"
     assert validate_step["tools"] == ["naga"]
     assert validate_step["command"] == [

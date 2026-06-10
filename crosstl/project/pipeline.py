@@ -239,6 +239,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "provenance",
         "sourceMap",
         "sourceRemap",
+        "hostInterface",
     )
 )
 RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS = frozenset(
@@ -302,6 +303,7 @@ RUNTIME_PACKAGE_ARTIFACT_FIELDS = frozenset(
         "hash",
         "sizeBytes",
         "sourceRemap",
+        "hostInterface",
     )
 )
 RUNTIME_PACKAGE_SOURCE_REMAP_FIELDS = frozenset(
@@ -8119,7 +8121,50 @@ def _runtime_manifest_artifact_id(artifact: Mapping[str, Any]) -> str:
     )
 
 
-def _runtime_manifest_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
+def _runtime_manifest_source_host_interface(
+    root_path: Path | None, artifact: Mapping[str, Any]
+) -> dict[str, Any] | None:
+    if root_path is None:
+        return None
+    source = artifact.get("source")
+    source_backend = artifact.get("sourceBackend")
+    if not (
+        _is_non_empty_string(source)
+        and _is_report_identity_path(source)
+        and _is_non_empty_string(source_backend)
+    ):
+        return None
+
+    try:
+        register_default_sources()
+        parser_name = SOURCE_REGISTRY.resolve_name(str(source_backend))
+        source_spec = SOURCE_REGISTRY.get(parser_name)
+    except Exception:
+        return None
+
+    source_path = (root_path / str(source)).resolve()
+    if not _is_relative_to(source_path, root_path) or not source_path.is_file():
+        return None
+
+    try:
+        ast = source_spec.parse(
+            source_path.read_text(encoding="utf-8"),
+            file_path=str(source_path),
+        )
+    except Exception:
+        return None
+
+    host_interface = _runtime_host_interface_from_ast(
+        ast, parser=parser_name or "", source="source-artifact"
+    )
+    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+        return None
+    return host_interface
+
+
+def _runtime_manifest_artifact(
+    artifact: Mapping[str, Any], *, root_path: Path | None = None
+) -> dict[str, Any]:
     payload = {
         "id": _runtime_manifest_artifact_id(artifact),
         "source": artifact.get("source"),
@@ -8152,6 +8197,7 @@ def _runtime_manifest_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(artifact.get("sourceRemap"), Mapping)
             else None
         ),
+        "hostInterface": _runtime_manifest_source_host_interface(root_path, artifact),
     }
     return payload
 
@@ -8258,8 +8304,12 @@ def build_runtime_artifact_manifest(
     runtime_plan_payload = _runtime_manifest_runtime_plan(runtime_plan)
     runtime_reference_count = runtime_plan_payload["runtimeReferenceCount"]
     source_map_rollups = _source_map_rollups(translated_artifacts)
+    root_path = None
+    if _is_non_empty_string(project_payload.get("root")):
+        root_path = Path(str(project_payload["root"])).resolve()
     manifest_artifacts = [
-        _runtime_manifest_artifact(artifact) for artifact in translated_artifacts
+        _runtime_manifest_artifact(artifact, root_path=root_path)
+        for artifact in translated_artifacts
     ]
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
@@ -8678,6 +8728,11 @@ def _runtime_package_artifact_payload(
         "hash": artifact.get("hash"),
         "sizeBytes": artifact.get("sizeBytes"),
         "sourceRemap": source_remap_payload,
+        "hostInterface": (
+            dict(artifact.get("hostInterface"))
+            if isinstance(artifact.get("hostInterface"), Mapping)
+            else None
+        ),
     }
     return payload, diagnostics
 
@@ -8818,6 +8873,11 @@ def build_runtime_package(
                     "hash": artifact.get("hash"),
                     "sizeBytes": artifact.get("sizeBytes"),
                     "sourceRemap": None,
+                    "hostInterface": (
+                        dict(artifact.get("hostInterface"))
+                        if isinstance(artifact.get("hostInterface"), Mapping)
+                        else None
+                    ),
                 }
             )
 
@@ -9707,12 +9767,14 @@ def _runtime_host_interface_resources(ast: Any) -> list[dict[str, Any]]:
     return resources
 
 
-def _runtime_host_interface_from_ast(ast: Any, parser: str) -> dict[str, Any]:
+def _runtime_host_interface_from_ast(
+    ast: Any, parser: str, *, source: str = "package-artifact"
+) -> dict[str, Any]:
     entry_points = _runtime_host_interface_entry_points(ast)
     resources = _runtime_host_interface_resources(ast)
     return {
         "status": "ready",
-        "source": "package-artifact",
+        "source": source,
         "parser": parser,
         "entryPointCount": len(entry_points),
         "resourceCount": len(resources),
@@ -9728,6 +9790,38 @@ def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
     if target_name == "webgl":
         return "opengl"
     return SOURCE_REGISTRY.resolve_name(target_name)
+
+
+def _runtime_package_artifact_host_interface(
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    host_interface = artifact.get("hostInterface")
+    if not isinstance(host_interface, Mapping):
+        return None
+    if host_interface.get("status") != "ready":
+        return None
+    return {
+        "status": host_interface.get("status"),
+        "source": host_interface.get("source"),
+        "parser": host_interface.get("parser"),
+        "entryPointCount": host_interface.get("entryPointCount", 0),
+        "resourceCount": host_interface.get("resourceCount", 0),
+        "entryPoints": [
+            dict(entry_point)
+            for entry_point in _record_sequence(host_interface.get("entryPoints"))
+            if isinstance(entry_point, Mapping)
+        ],
+        "resources": [
+            dict(resource)
+            for resource in _record_sequence(host_interface.get("resources"))
+            if isinstance(resource, Mapping)
+        ],
+        "diagnostics": [
+            diagnostic
+            for diagnostic in _record_sequence(host_interface.get("diagnostics"))
+            if _is_non_empty_string(diagnostic)
+        ],
+    }
 
 
 def _runtime_package_inspection_host_interface(
@@ -9757,6 +9851,9 @@ def _runtime_package_inspection_host_interface(
             ),
         )
     if source_spec is None:
+        source_host_interface = _runtime_package_artifact_host_interface(artifact)
+        if source_host_interface is not None:
+            return source_host_interface
         return _runtime_host_interface_empty(
             "unavailable",
             diagnostics=(
