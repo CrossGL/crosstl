@@ -30,12 +30,14 @@ REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
 RUNTIME_INTEGRATION_PLAN_KIND = "crosstl-runtime-integration-plan"
 RUNTIME_ARTIFACT_MANIFEST_KIND = "crosstl-runtime-artifact-manifest"
+RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
 RUNTIME_LOADER_PLAN_CONTRACT_ISSUE = "https://github.com/CrossGL/compiler/issues/29"
 RUNTIME_INTEGRATION_PLAN_SCOPE = "metadata-only-runtime-integration-planning"
 RUNTIME_ARTIFACT_MANIFEST_SCOPE = "translated-artifact-runtime-consumption"
+RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -45,6 +47,12 @@ RUNTIME_ARTIFACT_MANIFEST_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
+)
+RUNTIME_PACKAGE_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
 )
 REPORT_FIELDS = frozenset(
     (
@@ -213,6 +221,57 @@ RUNTIME_ARTIFACT_MANIFEST_RUNTIME_PLAN_FIELDS = frozenset(
         "compilerRequests",
         "actionCount",
     )
+)
+RUNTIME_PACKAGE_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceManifest",
+        "sourceManifestHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "packageRoot",
+        "packageManifest",
+        "integrationGuide",
+        "project",
+        "summary",
+        "targets",
+        "artifacts",
+        "runtimePlan",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_PACKAGE_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "artifactCount",
+        "packagedArtifactCount",
+        "failedArtifactCount",
+        "runtimeReferenceCount",
+        "artifacts",
+    )
+)
+RUNTIME_PACKAGE_ARTIFACT_FIELDS = frozenset(
+    (
+        "id",
+        "status",
+        "source",
+        "sourcePath",
+        "packagePath",
+        "target",
+        "sourceBackend",
+        "variant",
+        "defines",
+        "hash",
+        "sizeBytes",
+        "sourceRemap",
+    )
+)
+RUNTIME_PACKAGE_SOURCE_REMAP_FIELDS = frozenset(
+    ("sourcePath", "packagePath", "hash", "sizeBytes")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -7613,6 +7672,594 @@ def build_runtime_artifact_manifest(
         "diagnosticCounts": validation_report.get("diagnosticCounts", {}),
         "diagnostics": validation_report.get("diagnostics", []),
     }
+
+
+def _runtime_package_load_manifest(
+    path: Path,
+) -> tuple[Mapping[str, Any], list[ProjectDiagnostic]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.manifest-read-failed",
+                message=f"Runtime artifact manifest could not be read: {exc}",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.manifest-json-invalid",
+                message=f"Runtime artifact manifest is not valid JSON: {exc}",
+                location=SourceLocation(
+                    file=str(path), line=exc.lineno, column=exc.colno
+                ),
+                check_kind="runtime-package",
+            )
+        ]
+    if not isinstance(manifest, Mapping):
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.manifest-invalid",
+                message="Runtime artifact manifest must be a JSON object.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        ]
+    return manifest, []
+
+
+def _runtime_package_manifest_diagnostics(
+    path: Path, manifest: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if manifest.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.manifest-schema-invalid",
+                message=f"Runtime artifact manifest schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        )
+    if manifest.get("kind") != RUNTIME_ARTIFACT_MANIFEST_KIND:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.manifest-kind-invalid",
+                message=(
+                    "Runtime package input must be a "
+                    f"{RUNTIME_ARTIFACT_MANIFEST_KIND} document."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        )
+    if manifest.get("success") is not True:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.manifest-failed",
+                message=(
+                    "Runtime artifact manifest must be successful before it can "
+                    "be packaged."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        )
+    return diagnostics
+
+
+def _runtime_package_project_root(
+    path: Path, manifest: Mapping[str, Any]
+) -> tuple[Path | None, list[ProjectDiagnostic]]:
+    project = manifest.get("project")
+    if not isinstance(project, Mapping):
+        return None, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.project-missing",
+                message="Runtime artifact manifest is missing a project object.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        ]
+    root = project.get("root")
+    if not _is_non_empty_string(root):
+        return None, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.project-root-missing",
+                message="Runtime artifact manifest is missing project.root.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        ]
+    root_path = Path(root)
+    if not root_path.is_absolute() or not root_path.exists() or not root_path.is_dir():
+        return None, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.project-root-invalid",
+                message=(
+                    "Runtime artifact manifest project.root must be an existing "
+                    f"absolute directory: {root}"
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-package",
+            )
+        ]
+    return root_path.resolve(), []
+
+
+def _runtime_package_artifact_source_path(
+    root_path: Path,
+    artifact: Mapping[str, Any],
+    manifest_path: Path,
+) -> tuple[Path | None, list[ProjectDiagnostic]]:
+    source_path = artifact.get("path")
+    artifact_id = artifact.get("id", "<unknown>")
+    if not _is_non_empty_string(source_path) or not _is_report_identity_path(
+        source_path
+    ):
+        return None, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.artifact-path-invalid",
+                message=(
+                    "Runtime artifact manifest artifact paths must be stable "
+                    f"repository-relative POSIX paths: {artifact_id}"
+                ),
+                location=SourceLocation(file=str(manifest_path)),
+                target=(
+                    artifact.get("target")
+                    if _is_non_empty_string(artifact.get("target"))
+                    else None
+                ),
+                source_backend=(
+                    artifact.get("sourceBackend")
+                    if _is_non_empty_string(artifact.get("sourceBackend"))
+                    else None
+                ),
+                variant=(
+                    artifact.get("variant")
+                    if _is_non_empty_string(artifact.get("variant"))
+                    else None
+                ),
+                check_kind="runtime-package",
+            )
+        ]
+    path = (root_path / source_path).resolve()
+    if not _is_relative_to(path, root_path):
+        return None, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-package.artifact-outside-project",
+                message=(
+                    "Runtime artifact manifest artifact path resolves outside "
+                    f"project.root: {source_path}"
+                ),
+                location=SourceLocation(file=str(manifest_path)),
+                check_kind="runtime-package",
+            )
+        ]
+    return path, []
+
+
+def _runtime_package_file_diagnostics(
+    *,
+    manifest_path: Path,
+    artifact: Mapping[str, Any],
+    source_path: Path,
+    expected_hash: Any,
+    expected_size: Any,
+    label: str,
+    missing_code: str,
+    hash_code: str,
+    size_code: str,
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    diagnostic_context = {
+        "target": (
+            artifact.get("target")
+            if _is_non_empty_string(artifact.get("target"))
+            else None
+        ),
+        "source_backend": (
+            artifact.get("sourceBackend")
+            if _is_non_empty_string(artifact.get("sourceBackend"))
+            else None
+        ),
+        "variant": (
+            artifact.get("variant")
+            if _is_non_empty_string(artifact.get("variant"))
+            else None
+        ),
+        "check_kind": "runtime-package",
+    }
+    if not source_path.exists() or not source_path.is_file():
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=missing_code,
+                message=f"Runtime package {label} is missing: {source_path}",
+                location=SourceLocation(file=str(manifest_path)),
+                **diagnostic_context,
+            )
+        )
+        return diagnostics
+
+    if isinstance(expected_hash, Mapping):
+        actual_hash = _source_hash(source_path)
+        if not _hash_matches_report(actual_hash, expected_hash):
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code=hash_code,
+                    message=(
+                        f"Runtime package {label} hash mismatch "
+                        f"({_hash_mismatch_context(actual_hash, expected_hash)})"
+                    ),
+                    location=SourceLocation(file=str(manifest_path)),
+                    **diagnostic_context,
+                )
+            )
+    if _is_non_negative_int(expected_size):
+        actual_size = source_path.stat().st_size
+        if actual_size != expected_size:
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code=size_code,
+                    message=(
+                        f"Runtime package {label} size mismatch "
+                        f"({_size_mismatch_context(expected_size, actual_size)})"
+                    ),
+                    location=SourceLocation(file=str(manifest_path)),
+                    **diagnostic_context,
+                )
+            )
+    return diagnostics
+
+
+def _runtime_package_copy_file(
+    source_path: Path, package_root: Path, package_relative_path: str
+) -> None:
+    destination = package_root / package_relative_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, destination)
+
+
+def _runtime_package_remap_payload(
+    root_path: Path,
+    manifest_path: Path,
+    artifact: Mapping[str, Any],
+) -> tuple[dict[str, Any] | None, list[ProjectDiagnostic], Path | None, str | None]:
+    source_remap = artifact.get("sourceRemap")
+    if not isinstance(source_remap, Mapping):
+        return None, [], None, None
+
+    source_remap_path = source_remap.get("path")
+    if not _is_non_empty_string(source_remap_path) or not _is_report_identity_path(
+        source_remap_path
+    ):
+        return (
+            None,
+            [
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.runtime-package.source-remap-path-invalid",
+                    message=(
+                        "Runtime artifact manifest sourceRemap.path must be a stable "
+                        f"repository-relative POSIX path: {artifact.get('id', '<unknown>')}"
+                    ),
+                    location=SourceLocation(file=str(manifest_path)),
+                    check_kind="runtime-package",
+                )
+            ],
+            None,
+            None,
+        )
+
+    source_path = (root_path / source_remap_path).resolve()
+    diagnostics = _runtime_package_file_diagnostics(
+        manifest_path=manifest_path,
+        artifact=artifact,
+        source_path=source_path,
+        expected_hash=source_remap.get("hash"),
+        expected_size=source_remap.get("sizeBytes"),
+        label="source remap",
+        missing_code="project.runtime-package.source-remap-missing",
+        hash_code="project.runtime-package.source-remap-hash-mismatch",
+        size_code="project.runtime-package.source-remap-size-mismatch",
+    )
+    package_path = f"source-remaps/{source_remap_path}"
+    return (
+        {
+            "sourcePath": source_remap_path,
+            "packagePath": package_path,
+            "hash": source_remap.get("hash"),
+            "sizeBytes": source_remap.get("sizeBytes"),
+        },
+        diagnostics,
+        source_path,
+        package_path,
+    )
+
+
+def _runtime_package_artifact_payload(
+    root_path: Path,
+    package_root: Path,
+    manifest_path: Path,
+    artifact: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    source_path, diagnostics = _runtime_package_artifact_source_path(
+        root_path, artifact, manifest_path
+    )
+    source_path_text = (
+        artifact.get("path") if _is_non_empty_string(artifact.get("path")) else ""
+    )
+    package_path = f"artifacts/{source_path_text}" if source_path_text else ""
+
+    if source_path is not None:
+        diagnostics.extend(
+            _runtime_package_file_diagnostics(
+                manifest_path=manifest_path,
+                artifact=artifact,
+                source_path=source_path,
+                expected_hash=artifact.get("hash"),
+                expected_size=artifact.get("sizeBytes"),
+                label="artifact",
+                missing_code="project.runtime-package.artifact-missing",
+                hash_code="project.runtime-package.artifact-hash-mismatch",
+                size_code="project.runtime-package.artifact-size-mismatch",
+            )
+        )
+
+    (
+        source_remap_payload,
+        source_remap_diagnostics,
+        source_remap_source_path,
+        source_remap_package_path,
+    ) = _runtime_package_remap_payload(root_path, manifest_path, artifact)
+    diagnostics.extend(source_remap_diagnostics)
+
+    status = "packaged" if not diagnostics and source_path is not None else "failed"
+    if status == "packaged":
+        _runtime_package_copy_file(source_path, package_root, package_path)
+        if (
+            source_remap_source_path is not None
+            and source_remap_package_path is not None
+        ):
+            _runtime_package_copy_file(
+                source_remap_source_path, package_root, source_remap_package_path
+            )
+
+    payload = {
+        "id": artifact.get("id"),
+        "status": status,
+        "source": artifact.get("source"),
+        "sourcePath": source_path_text,
+        "packagePath": package_path if status == "packaged" else None,
+        "target": artifact.get("target"),
+        "sourceBackend": artifact.get("sourceBackend"),
+        "variant": artifact.get("variant"),
+        "defines": (
+            dict(artifact.get("defines"))
+            if isinstance(artifact.get("defines"), Mapping)
+            else {}
+        ),
+        "hash": artifact.get("hash"),
+        "sizeBytes": artifact.get("sizeBytes"),
+        "sourceRemap": source_remap_payload,
+    }
+    return payload, diagnostics
+
+
+def _runtime_package_target(
+    target: str,
+    artifacts: Sequence[Mapping[str, Any]],
+    runtime_reference_count: int,
+) -> dict[str, Any]:
+    target_artifacts = [
+        artifact for artifact in artifacts if artifact.get("target") == target
+    ]
+    packaged_artifacts = [
+        artifact
+        for artifact in target_artifacts
+        if artifact.get("status") == "packaged"
+    ]
+    failed_artifacts = [
+        artifact for artifact in target_artifacts if artifact.get("status") == "failed"
+    ]
+    return {
+        "target": target,
+        "artifactCount": len(target_artifacts),
+        "packagedArtifactCount": len(packaged_artifacts),
+        "failedArtifactCount": len(failed_artifacts),
+        "runtimeReferenceCount": runtime_reference_count,
+        "artifacts": [artifact.get("id") for artifact in packaged_artifacts],
+    }
+
+
+def _runtime_package_integration_guide(package: Mapping[str, Any]) -> str:
+    lines = [
+        "# CrossTL Runtime Package",
+        "",
+        "This package contains translated shader and GPU artifacts plus metadata for host or packaging tools.",
+        "",
+        f"- Package manifest: {package.get('packageManifest')}",
+        f"- Runtime plan contract: {package.get('runtimePlan', {}).get('contract', '<none>')}",
+        f"- Runtime references: {package.get('summary', {}).get('runtimeReferenceCount', 0)}",
+        "",
+        "Artifacts",
+    ]
+    artifacts = package.get("artifacts", [])
+    if isinstance(artifacts, list) and artifacts:
+        for artifact in artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{artifact.get('target', 'unknown')}: "
+                f"{artifact.get('packagePath') or '<not packaged>'}"
+            )
+    else:
+        lines.append("- <none>")
+    lines.extend(
+        [
+            "",
+            "Scope",
+            "",
+            "The package preserves translated artifacts, source-remap sidecars, hashes, sizes, target identity, variants, and runtime planning metadata.",
+            "It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def build_runtime_package(
+    manifest_path: str | os.PathLike[str],
+    package_dir: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a deterministic runtime handoff package from an artifact manifest."""
+
+    manifest_file = _filesystem_path_arg(
+        manifest_path, field_name="Runtime artifact manifest path"
+    )
+    package_root = _filesystem_path_arg(package_dir, field_name="Runtime package dir")
+    manifest, diagnostics = _runtime_package_load_manifest(manifest_file)
+    if manifest:
+        diagnostics.extend(
+            _runtime_package_manifest_diagnostics(manifest_file, manifest)
+        )
+    root_path, root_diagnostics = _runtime_package_project_root(manifest_file, manifest)
+    diagnostics.extend(root_diagnostics)
+
+    project_payload = (
+        dict(manifest.get("project"))
+        if isinstance(manifest.get("project"), Mapping)
+        else {"targets": []}
+    )
+    targets = [
+        target
+        for target in project_payload.get("targets", [])
+        if _is_non_empty_string(target)
+    ]
+    runtime_plan = (
+        dict(manifest.get("runtimePlan"))
+        if isinstance(manifest.get("runtimePlan"), Mapping)
+        else {}
+    )
+    runtime_reference_count = (
+        runtime_plan.get("runtimeReferenceCount")
+        if _is_non_negative_int(runtime_plan.get("runtimeReferenceCount"))
+        else 0
+    )
+    manifest_artifacts = [
+        artifact
+        for artifact in _record_sequence(manifest.get("artifacts"))
+        if isinstance(artifact, Mapping)
+    ]
+    packaged_artifacts: list[dict[str, Any]] = []
+    if root_path is not None and not diagnostics:
+        package_root.mkdir(parents=True, exist_ok=True)
+        for artifact in manifest_artifacts:
+            artifact_payload, artifact_diagnostics = _runtime_package_artifact_payload(
+                root_path, package_root, manifest_file, artifact
+            )
+            packaged_artifacts.append(artifact_payload)
+            diagnostics.extend(artifact_diagnostics)
+    else:
+        for artifact in manifest_artifacts:
+            packaged_artifacts.append(
+                {
+                    "id": artifact.get("id"),
+                    "status": "failed",
+                    "source": artifact.get("source"),
+                    "sourcePath": artifact.get("path"),
+                    "packagePath": None,
+                    "target": artifact.get("target"),
+                    "sourceBackend": artifact.get("sourceBackend"),
+                    "variant": artifact.get("variant"),
+                    "defines": (
+                        dict(artifact.get("defines"))
+                        if isinstance(artifact.get("defines"), Mapping)
+                        else {}
+                    ),
+                    "hash": artifact.get("hash"),
+                    "sizeBytes": artifact.get("sizeBytes"),
+                    "sourceRemap": None,
+                }
+            )
+
+    packaged_count = sum(
+        1 for artifact in packaged_artifacts if artifact.get("status") == "packaged"
+    )
+    failed_count = sum(
+        1 for artifact in packaged_artifacts if artifact.get("status") == "failed"
+    )
+    source_remap_count = sum(
+        1
+        for artifact in packaged_artifacts
+        if isinstance(artifact.get("sourceRemap"), Mapping)
+        and artifact.get("status") == "packaged"
+    )
+    success = not any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    payload = {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_PACKAGE_KIND,
+        "sourceManifest": str(manifest_file),
+        "sourceManifestHash": _optional_source_hash(manifest_file),
+        "generatedAt": int(time.time()),
+        "success": success,
+        "scope": RUNTIME_PACKAGE_SCOPE,
+        "nonGoals": list(RUNTIME_PACKAGE_NON_GOALS),
+        "packageRoot": str(package_root),
+        "packageManifest": "runtime-package.json",
+        "integrationGuide": "INTEGRATION.md",
+        "project": project_payload,
+        "summary": {
+            "targetCount": len(targets),
+            "artifactCount": len(packaged_artifacts),
+            "packagedArtifactCount": packaged_count,
+            "failedArtifactCount": failed_count,
+            "sourceRemapCount": source_remap_count,
+            "runtimeReferenceCount": runtime_reference_count,
+            "compilerRequestCount": (
+                len(runtime_plan.get("compilerRequests", []))
+                if isinstance(runtime_plan.get("compilerRequests"), list)
+                else 0
+            ),
+        },
+        "targets": [
+            _runtime_package_target(target, packaged_artifacts, runtime_reference_count)
+            for target in targets
+        ],
+        "artifacts": packaged_artifacts,
+        "runtimePlan": runtime_plan,
+        "diagnosticCounts": _diagnostic_counts(diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
+    if root_path is not None:
+        package_root.mkdir(parents=True, exist_ok=True)
+        (package_root / "runtime-package.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (package_root / "INTEGRATION.md").write_text(
+            _runtime_package_integration_guide(payload),
+            encoding="utf-8",
+        )
+    return payload
 
 
 def _inspection_artifact_matrix_summary(

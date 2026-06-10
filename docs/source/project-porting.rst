@@ -363,6 +363,23 @@ produce diagnostic-only failed manifests. The manifest is a handoff contract;
 it does not generate runtime framework code, execute device code, or rewrite
 host application code.
 
+Build a deterministic runtime handoff package from a runtime artifact manifest:
+
+.. code-block:: bash
+
+   python -m crosstl package-runtime crosstl-out/runtime-manifest.json \
+     --package-dir crosstl-runtime-package \
+     --format text
+
+Runtime packages emit a ``crosstl-runtime-package`` JSON report and write a
+package manifest, translated artifacts, source-remap sidecars, and a short
+integration guide into the package directory. Packaging revalidates artifact
+hash and byte-size metadata before copying files so stale generated outputs are
+reported as structured diagnostics instead of hidden. The package is a handoff
+artifact for host or build-system tooling; it does not rewrite host application
+code, execute device code, generate runtime framework code, or install target
+SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
