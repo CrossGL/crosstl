@@ -11,4 +11,3 @@ kernel void kernel_saxpy(uint3 gl_GlobalInvocationID [[thread_position_in_grid]]
     int gid = gl_GlobalInvocationID.x;
     y[gid] = fma(saxpy_Args.a, x[gid], y[gid]);
 }
-
