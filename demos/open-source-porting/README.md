@@ -58,6 +58,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `nvpro-vk-mini-samples-rectangle` | `nvpro-samples/vk_mini_samples` at `994ac9f446ef44962c563b9600c8e9f117a3725d` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream rectangle shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
+| `rocm-examples-add-kernel` | `ROCm/rocm-examples` at `cf369da68f209c315074204bd0eb61d1a5c015d1` | MIT | HIP | CrossGL, Metal, Vulkan | Uses the upstream sphinx-marked add-kernel slice. Host HIP runtime setup remains outside the demo scope. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base vertex shader unchanged. |
 | `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
@@ -81,10 +82,10 @@ formatting checks. The DirectX Hello Texture shader was retested after issue
 #783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 closed
 and is now checked for Metal, DirectX, and Vulkan output. The Vulkan Samples,
-Apple, and Rust-GPU/rust-gpu graphics cases are reduced source slices copied
-from fixture-backed upstream examples so the demo remains small and
-deterministic. The reductions remove unrelated code around the shader construct
-being demonstrated; they do not patch translator output.
+Apple, ROCm add-kernel, and Rust-GPU/rust-gpu graphics cases are reduced
+source slices copied from fixture-backed upstream examples so the demo remains
+small and deterministic. The reductions remove unrelated code around the
+shader construct being demonstrated; they do not patch translator output.
 
 The `google/angle` SimpleTexture2D case extracts the upstream GLSL ES shader
 strings from `samples/simple_texture_2d/SimpleTexture2D.cpp` into standalone
@@ -188,12 +189,15 @@ CrossGL, OpenGL, Metal, and Vulkan output. Rust-GPU compute examples still
 need Rust `Option<T>`, fixed-size array, and unsigned-constant lowering for
 Metal and SPIR-V targets; that translator issue is tracked in issue #809.
 
-The `ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #778
+The `ROCm/rocm-examples` add-kernel case uses only the upstream
+`[sphinx-kernel-start]` to `[sphinx-kernel-end]` source section. The full sample
+host `main()`, HIP runtime calls, and launch configuration are runtime
+integration work outside this shader translation demo. The earlier
+`ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #778
 closed. The generated artifacts now preserve a compute entry point, but Metal
 still needs scalar kernel-parameter lowering and host `main` filtering, and
 SPIR-V still needs host-entry filtering; that follow-up is tracked in issue
-#795. HIP candidates remain intentionally excluded until target artifacts
-compile directly and preserve only the relevant kernel entries.
+#795.
 
 The `modular/modular` Mojo GPU vector-add example was tested as a candidate.
 It translates to CrossGL, but Metal and SPIR-V artifact generation still fails

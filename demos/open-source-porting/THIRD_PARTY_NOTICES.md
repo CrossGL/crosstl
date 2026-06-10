@@ -144,6 +144,16 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/KhronosGroup/OpenCL-SDK/blob/e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f/LICENSE
 
+## ROCm/rocm-examples
+
+- Repository: https://github.com/ROCm/rocm-examples
+- Commit: `cf369da68f209c315074204bd0eb61d1a5c015d1`
+- Source path:
+  `HIP-Doc/Programming-Guide/Introduction-to-the-HIP-Programming-Model/add_kernel/main.hip`
+- License: MIT
+- License URL:
+  https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/LICENSE.md
+
 ## KhronosGroup/SPIRV-Tools
 
 - Repository: https://github.com/KhronosGroup/SPIRV-Tools

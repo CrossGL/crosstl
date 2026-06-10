@@ -118,6 +118,7 @@ jobs:
             --case apple-modern-rendering-mesh-viewdir \
             --case metal-performance-testing-matmul \
             --case nvidia-cuda-samples-vector-add \
+            --case rocm-examples-add-kernel \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-headless-compute \
             --target vulkan \
@@ -147,6 +148,7 @@ jobs:
             --case raylib-base-fragment \
             --case raylib-base-vertex \
             --case raylib-lighting-shader-pair \
+            --case rocm-examples-add-kernel \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
@@ -181,6 +183,7 @@ jobs:
             demos/open-source-porting/cases/raylib-base-vertex/crosstl-out/metal/base.metal \
             demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/metal/lighting.fs.metal \
             demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/metal/lighting.vs.metal \
+            demos/open-source-porting/cases/rocm-examples-add-kernel/crosstl-out/metal/main.metal \
             demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/metal/headless.metal \

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/main.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 13,
+        "endOffset": 399,
+        "file": "crosstl-out/cgl/main.cgl",
+        "length": 399,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 1470,
+        "file": "main.hip",
+        "length": 1470,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
