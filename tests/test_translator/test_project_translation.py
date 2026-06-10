@@ -9873,7 +9873,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
 
     def run_toolchain(command, **kwargs):
         commands.append((command, kwargs))
-        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
+        assert command == ["glslangValidator", "--stdin", "-S", "vert"]
         assert kwargs["cwd"] == str(repo)
         assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
         assert kwargs["input"]
@@ -9922,7 +9922,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
             "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
-            "command": ["glslangValidator", "--stdin", "-S", "comp"],
+            "command": ["glslangValidator", "--stdin", "-S", "vert"],
             "checkKind": "artifact",
             "returncode": 0,
             "status": "ok",
@@ -10003,6 +10003,77 @@ def test_translate_project_directx_smoke_compiles_generated_artifact_with_dxc(
             "returncode": 0,
             "status": "ok",
             "stdout": "",
+            "stderr": "",
+        }
+    ]
+
+
+def test_translate_project_webgl_smoke_validates_generated_artifact_with_glslang(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    expected_command = ["glslangValidator", "--stdin", "-S", "vert"]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert "#version 300 es" in kwargs["input"]
+        assert "// Vertex Shader" in kwargs["input"]
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["webgl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "webgl",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "glslangValidator",
+                    "path": "/usr/bin/glslangValidator",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["path"] == (
+        "out/webgl/simple.webgl.glsl"
+    )
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "webgl",
+            "path": "out/webgl/simple.webgl.glsl",
+            "command": expected_command,
+            "checkKind": "artifact",
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "validation ok",
             "stderr": "",
         }
     ]
@@ -10173,6 +10244,28 @@ def test_opengl_toolchain_smoke_command_prefers_opengl_source_stage(tmp_path):
         generic_shader,
         artifact={"source": "shaders/grid.frag", "sourceBackend": "cgl"},
     ) == (["glslangValidator", "--stdin", "-S", "comp"], "artifact")
+
+
+def test_webgl_toolchain_smoke_command_selects_glslang_stage_from_generated_markers(
+    tmp_path,
+):
+    vertex_shader = tmp_path / "vertex.webgl.glsl"
+    vertex_shader.write_text(
+        "#version 300 es\n// Vertex Shader\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    fragment_shader = tmp_path / "fragment.webgl.glsl"
+    fragment_shader.write_text(
+        "#version 300 es\n// Fragment Shader\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "webgl", ["glslangValidator"], vertex_shader
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "webgl", ["glslangValidator"], fragment_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
 
 
 def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
@@ -24197,6 +24290,23 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
         "resolve-host-interface-metadata",
         "review-runtime-references",
     ]
+
+
+def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("webgl",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["targets"][0]["target"] == "webgl"
+    assert payload["targets"][0]["adapterKind"] == "webgl-glsl-adapter"
+    assert payload["targets"][0]["requiredTools"] == ["glslangValidator"]
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "webgl"
+    assert adapter["adapterKind"] == "webgl-glsl-adapter"
+    assert adapter["artifactFormat"] == "GLSL ES source"
+    assert adapter["requiredTools"] == ["glslangValidator"]
+    assert adapter["packagePath"] == "artifacts/out/webgl/simple.webgl.glsl"
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):

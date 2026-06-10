@@ -1079,6 +1079,7 @@ TOOLCHAIN_BY_BACKEND = {
     "rust": ("rustc",),
     "slang": ("slangc",),
     "vulkan": ("spirv-val", "spirv-as"),
+    "webgl": ("glslangValidator",),
     "wgsl": ("naga",),
 }
 TOOLCHAIN_AVAILABILITY_COMMANDS = {
@@ -1217,7 +1218,7 @@ RUNTIME_ADAPTER_CATALOG = {
     "webgl": {
         "adapterKind": "webgl-glsl-adapter",
         "artifactFormat": "GLSL ES source",
-        "requiredTools": [],
+        "requiredTools": ["glslangValidator"],
         "loaderResponsibilities": [
             "Load the packaged GLSL ES artifact with the existing WebGL shader creation path.",
             "Bind uniforms, buffers, textures, and draw or dispatch state in JavaScript.",
@@ -5266,6 +5267,21 @@ def _artifact_target_extension(target: str) -> str:
     if normalized_target in CROSSL_TARGETS:
         return ".cgl"
     return get_backend_extension(normalized_target) or ".out"
+
+
+def _artifact_path_extension(path: str | os.PathLike[str]) -> str:
+    filename = PurePosixPath(str(path).replace("\\", "/")).name
+    return "".join(PurePosixPath(filename).suffixes).lower()
+
+
+def _artifact_path_matches_target_extension(
+    path: str | os.PathLike[str], target: str
+) -> bool:
+    return (
+        PurePosixPath(str(path).replace("\\", "/"))
+        .name.lower()
+        .endswith(_artifact_target_extension(target).lower())
+    )
 
 
 def _variant_jobs(
@@ -17308,12 +17324,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         f"artifacts[{index}].path must be under "
                         "project.outputDir target/variant directory"
                     )
-                elif Path(path).suffix.lower() != _artifact_target_extension(target):
+                elif not _artifact_path_matches_target_extension(path, target):
                     expected_extension = _artifact_target_extension(target)
+                    actual_extension = _artifact_path_extension(path)
                     reasons.append(
                         f"artifacts[{index}].path suffix must match "
                         f"artifacts[{index}].target "
-                        f"({_value_mismatch_context(expected_extension, Path(path).suffix.lower())})"
+                        f"({_value_mismatch_context(expected_extension, actual_extension)})"
                     )
                 elif _is_non_empty_string(source) and _is_report_identity_path(source):
                     normalized_target = _normalized_targets([target])[0]
@@ -17776,7 +17793,7 @@ def _toolchain_smoke_command(
 ) -> tuple[list[str], str] | None:
     if target == "directx":
         return _directx_dxc_smoke_command(tools[0], artifact_path), "artifact"
-    if target == "opengl":
+    if target in {"opengl", "webgl"}:
         return (
             [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
             "artifact",
@@ -17889,9 +17906,13 @@ def _glslang_stage(
 
     if "local_size_" in source or "gl_globalinvocationid" in source:
         return "comp"
-    if "gl_position" in source:
+    if "gl_position" in source or "vertex shader" in source:
         return "vert"
-    if "gl_fragcoord" in source or "gl_fragcolor" in source:
+    if (
+        "gl_fragcoord" in source
+        or "gl_fragcolor" in source
+        or "fragment shader" in source
+    ):
         return "frag"
     return "comp"
 
