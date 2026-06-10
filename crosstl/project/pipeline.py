@@ -13075,7 +13075,10 @@ def _toolchain_run_contract_reasons(
             if root_path is not None and not artifact_path.is_absolute():
                 artifact_path = (root_path / artifact_path).resolve()
             smoke_command = _toolchain_smoke_command(
-                normalized_target, configured_tools, artifact_path
+                normalized_target,
+                configured_tools,
+                artifact_path,
+                artifact=referenced_artifact[1] if referenced_artifact else run,
             )
             if smoke_command is not None:
                 expected_command, expected_check_kind = smoke_command
@@ -15299,7 +15302,9 @@ def _run_toolchain_smoke(
             continue
         if not artifact_path.is_file():
             continue
-        smoke_command = _toolchain_smoke_command(target, tools, artifact_path)
+        smoke_command = _toolchain_smoke_command(
+            target, tools, artifact_path, artifact=artifact
+        )
         if smoke_command is None:
             continue
         command, check_kind = smoke_command
@@ -15351,10 +15356,17 @@ def _run_toolchain_smoke(
 
 
 def _toolchain_smoke_command(
-    target: str, tools: Sequence[str], artifact_path: Path
+    target: str,
+    tools: Sequence[str],
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], str] | None:
     if target == "opengl":
-        return [tools[0], "--stdin", "-S", _glslang_stage(artifact_path)], "artifact"
+        return (
+            [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
+            "artifact",
+        )
     if target == "vulkan":
         if artifact_path.suffix.lower() == ".spvasm" and len(tools) > 1:
             return [tools[1], str(artifact_path), "-o", os.devnull], "artifact"
@@ -15365,18 +15377,49 @@ def _toolchain_smoke_command(
     return list(availability_command), "tool-availability"
 
 
-def _glslang_stage(artifact_path: Path) -> str:
-    suffix_stage = {
-        ".vert": "vert",
-        ".vs": "vert",
-        ".frag": "frag",
-        ".fs": "frag",
-        ".geom": "geom",
-        ".tesc": "tesc",
-        ".tese": "tese",
-        ".comp": "comp",
-        ".cs": "comp",
-    }.get(artifact_path.suffix.lower())
+GLSLANG_STAGE_BY_SUFFIX = {
+    ".vert": "vert",
+    ".vs": "vert",
+    ".vsh": "vert",
+    ".vertex": "vert",
+    ".frag": "frag",
+    ".fs": "frag",
+    ".fsh": "frag",
+    ".fragment": "frag",
+    ".geom": "geom",
+    ".gs": "geom",
+    ".gsh": "geom",
+    ".geometry": "geom",
+    ".tesc": "tesc",
+    ".tcs": "tesc",
+    ".tese": "tese",
+    ".tes": "tese",
+    ".comp": "comp",
+    ".cs": "comp",
+    ".csh": "comp",
+    ".compute": "comp",
+    ".mesh": "mesh",
+    ".task": "task",
+    ".rgen": "rgen",
+    ".rint": "rint",
+    ".rahit": "rahit",
+    ".rchit": "rchit",
+    ".rmiss": "rmiss",
+    ".rcall": "rcall",
+}
+GLSLANG_STAGE_FILENAME_SUFFIXES = tuple(
+    (f"_{suffix[1:]}", stage) for suffix, stage in GLSLANG_STAGE_BY_SUFFIX.items()
+)
+
+
+def _glslang_stage(
+    artifact_path: Path, artifact: Mapping[str, Any] | None = None
+) -> str:
+    source_stage = _glslang_source_stage(artifact)
+    if source_stage:
+        return source_stage
+
+    suffix_stage = _glslang_stage_from_path(artifact_path)
     if suffix_stage:
         return suffix_stage
 
@@ -15392,3 +15435,42 @@ def _glslang_stage(artifact_path: Path) -> str:
     if "gl_fragcoord" in source or "gl_fragcolor" in source:
         return "frag"
     return "comp"
+
+
+def _glslang_source_stage(artifact: Mapping[str, Any] | None) -> str | None:
+    if artifact is None:
+        return None
+    source_backend = artifact.get("sourceBackend")
+    if not _is_opengl_source_backend(source_backend):
+        return None
+    source = artifact.get("source")
+    if not _is_non_empty_string(source):
+        return None
+    return _glslang_stage_from_path(str(source))
+
+
+def _is_opengl_source_backend(value: Any) -> bool:
+    if not _is_non_empty_string(value):
+        return False
+    return str(value).strip().lower() in {"opengl", "glsl", "ogl"}
+
+
+def _glslang_stage_from_path(path: str | os.PathLike[str]) -> str | None:
+    filename = PurePosixPath(str(path).replace("\\", "/")).name
+    stem, suffix = os.path.splitext(filename)
+    stage = GLSLANG_STAGE_BY_SUFFIX.get(suffix.lower())
+    if stage:
+        return stage
+    if suffix.lower() != ".glsl":
+        return None
+
+    _, stem_suffix = os.path.splitext(stem)
+    stage = GLSLANG_STAGE_BY_SUFFIX.get(stem_suffix.lower())
+    if stage:
+        return stage
+
+    normalized_stem = stem.lower()
+    for stage_suffix, stage in GLSLANG_STAGE_FILENAME_SUFFIXES:
+        if normalized_stem.endswith(stage_suffix):
+            return stage
+    return None
