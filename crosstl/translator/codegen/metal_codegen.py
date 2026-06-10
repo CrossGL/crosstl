@@ -11523,6 +11523,23 @@ class MetalCodeGen:
             }
         )
 
+    def is_bound_scalar_value_parameter(
+        self, raw_param_type, node=None, shader_type=None
+    ):
+        if node is None or shader_type != "compute":
+            return False
+        if self.explicit_buffer_binding_index(node) is None:
+            return False
+        qualifiers = self.parameter_qualifier_names(node)
+        if not qualifiers & {"uniform", "constant"}:
+            return False
+        if self.is_resource_parameter_type(raw_param_type):
+            return False
+        if self.is_raw_buffer_parameter_type(raw_param_type, node):
+            return False
+        type_name = self.type_name_string(raw_param_type)
+        return is_numeric_scalar_type_name(type_name, self.map_type)
+
     def is_texture_or_image_resource_type(self, vtype):
         return (
             self.is_resource_parameter_type(vtype)
@@ -11718,6 +11735,10 @@ class MetalCodeGen:
             namespace = "texture"
             attribute_names = {"binding", "texture"}
             prefixes = ("t", "u")
+        elif self.is_bound_scalar_value_parameter(raw_param_type, node, "compute"):
+            namespace = "buffer"
+            attribute_names = {"binding", "buffer"}
+            prefixes = ("b", "u", "t")
         elif self.is_raw_buffer_parameter_type(raw_param_type, node):
             namespace = "buffer"
             attribute_names = {"binding", "buffer"}
@@ -11944,6 +11965,11 @@ class MetalCodeGen:
                 node, {"binding", "texture"}, ("t", "u")
             )
             return f" [[texture({binding})]]" if binding is not None else ""
+        if self.is_bound_scalar_value_parameter(raw_param_type, node, "compute"):
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer"}, ("b", "u", "t")
+            )
+            return f" [[buffer({binding})]]" if binding is not None else ""
         if self.is_raw_buffer_parameter_type(raw_param_type, node):
             binding = self.explicit_resource_binding_index(
                 node, {"binding", "buffer"}, ("b", "u", "t")
@@ -12002,6 +12028,8 @@ class MetalCodeGen:
             return self.format_intersection_function_table_parameter(
                 raw_param_type, name
             )
+        if self.is_bound_scalar_value_parameter(raw_param_type, node, shader_type):
+            return f"constant {mapped_type}& {name}"
         address_space_declaration = self.format_address_space_parameter_declaration(
             raw_param_type, mapped_type, name, node, shader_type
         )

@@ -7383,6 +7383,68 @@ def test_translate_project_batches_real_units_targets_and_variants(tmp_path):
     )
 
 
+def test_translate_project_hip_bit_extract_artifacts_bind_scalar_and_skip_host_main(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    source_dir = repo / "src"
+    source_dir.mkdir(parents=True)
+    (source_dir / "main.hip").write_text(
+        textwrap.dedent("""
+            #include <hip/hip_runtime.h>
+
+            __global__ void bit_extract_kernel(
+                unsigned int* d_output,
+                const unsigned int* d_input,
+                unsigned int size) {
+                unsigned int idx = blockIdx.x * blockDim.x + threadIdx.x;
+                if (idx < size) {
+                    d_output[idx] = __bitextract_u32(d_input[idx], 8, 8);
+                }
+            }
+
+            int main() {
+                return 0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["src"]
+            targets = ["metal", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "translated" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    metal_output = (repo / "translated" / "metal" / "src" / "main.metal").read_text(
+        encoding="utf-8"
+    )
+    spirv_output = (repo / "translated" / "vulkan" / "src" / "main.spvasm").read_text(
+        encoding="utf-8"
+    )
+
+    assert validation["success"] is True
+    assert payload["summary"]["translatedCount"] == 2
+    assert "kernel void bit_extract_kernel(" in metal_output
+    assert "constant uint& size [[buffer(2)]]" in metal_output
+    assert "int main(" not in metal_output
+    assert "uint size" not in metal_output
+    assert re.findall(r'OpEntryPoint\s+(\w+)\s+%\d+\s+"([^"]+)"', spirv_output) == [
+        ("GLCompute", "bit_extract_kernel")
+    ]
+    assert "CrossGL_glcompute_input_size" not in spirv_output
+    assert re.search(r'OpName %\d+ "bit_extract_kernel_sizeUniformBlock"', spirv_output)
+    assert re.search(r"OpDecorate %\d+ Binding 2", spirv_output)
+
+
 def test_validate_project_report_rejects_artifacts_with_undeclared_variants(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
