@@ -303,6 +303,10 @@ python -m crosstl._crosstl translate-project /path/to/repo \
 python -m crosstl._crosstl validate-project \
   crosstl-out/portability-report.json \
   --format text
+
+python -m crosstl._crosstl inspect-report \
+  crosstl-out/portability-report.json \
+  --format text
 ```
 
 Project reports cover shader and kernel source translation, diagnostics,

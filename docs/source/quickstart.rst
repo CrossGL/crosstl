@@ -39,6 +39,10 @@ Audit a repository before writing translated project artifacts:
      crosstl-out/portability-report.json \
      --format text
 
+   python -m crosstl._crosstl inspect-report \
+     crosstl-out/portability-report.json \
+     --format text
+
 Project reports focus on shader and kernel source translation. Host runtime
 API migration, build-system rewrites, and framework integration remain manual
 migration work tracked in the report. See :doc:`project-porting` for the full

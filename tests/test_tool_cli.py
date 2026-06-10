@@ -174,6 +174,9 @@ def test_public_docs_reference_project_porting_workflow():
     )
 
     for text in (readme, quickstart):
+        assert "scan" in text
         assert "translate-project" in text
         assert "validate-project" in text
+        assert "inspect-report" in text
+        assert "--format text" in text
         assert "project-porting" in text
