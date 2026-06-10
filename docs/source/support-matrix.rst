@@ -28,7 +28,7 @@ implicitly supported.
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "964", "495", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "977", "36", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "778", "194", "CUDA C++ programming guide"
-   "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "native", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "823", "136", "ROCm HIP documentation"
+   "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "native", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "826", "136", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "native", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "921", "98", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "native", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "982", "69", "Rust reference"
    "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "native", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "787", "410", "Slang user guide"
@@ -36,16 +36,16 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "59", "3", "2", "0", "0", "0"
-   "OpenGL / GLSL", "59", "3", "2", "0", "0", "0"
-   "WebGL / GLSL ES", "30", "3", "22", "9", "0", "0"
-   "Metal", "58", "3", "3", "0", "0", "0"
-   "Vulkan SPIR-V", "59", "3", "2", "0", "0", "0"
-   "CUDA", "54", "3", "7", "0", "0", "0"
-   "HIP", "54", "3", "7", "0", "0", "0"
-   "Mojo", "56", "3", "5", "0", "0", "0"
-   "Rust", "57", "3", "4", "0", "0", "0"
-   "Slang", "58", "3", "3", "0", "0", "0"
+   "DirectX / HLSL", "60", "3", "2", "0", "0", "0"
+   "OpenGL / GLSL", "60", "3", "2", "0", "0", "0"
+   "WebGL / GLSL ES", "31", "3", "22", "9", "0", "0"
+   "Metal", "59", "3", "3", "0", "0", "0"
+   "Vulkan SPIR-V", "60", "3", "2", "0", "0", "0"
+   "CUDA", "55", "3", "7", "0", "0", "0"
+   "HIP", "55", "3", "7", "0", "0", "0"
+   "Mojo", "57", "3", "5", "0", "0", "0"
+   "Rust", "58", "3", "4", "0", "0", "0"
+   "Slang", "59", "3", "3", "0", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -56,9 +56,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "59", "3", "2", "0", "0", "0"
-   "OpenGL / GLSL", "59", "3", "2", "0", "0", "0"
-   "Metal", "58", "3", "3", "0", "0", "0"
+   "DirectX / HLSL", "60", "3", "2", "0", "0", "0"
+   "OpenGL / GLSL", "60", "3", "2", "0", "0", "0"
+   "Metal", "59", "3", "3", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -82,16 +82,16 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "17", "3", "1", "0", "0", "0"
-   "OpenGL / GLSL", "17", "3", "1", "0", "0", "0"
-   "WebGL / GLSL ES", "17", "3", "1", "0", "0", "0"
-   "Metal", "17", "3", "1", "0", "0", "0"
-   "Vulkan SPIR-V", "17", "3", "1", "0", "0", "0"
-   "CUDA", "17", "3", "1", "0", "0", "0"
-   "HIP", "17", "3", "1", "0", "0", "0"
-   "Mojo", "17", "3", "1", "0", "0", "0"
-   "Rust", "17", "3", "1", "0", "0", "0"
-   "Slang", "17", "3", "1", "0", "0", "0"
+   "DirectX / HLSL", "18", "3", "1", "0", "0", "0"
+   "OpenGL / GLSL", "18", "3", "1", "0", "0", "0"
+   "WebGL / GLSL ES", "18", "3", "1", "0", "0", "0"
+   "Metal", "18", "3", "1", "0", "0", "0"
+   "Vulkan SPIR-V", "18", "3", "1", "0", "0", "0"
+   "CUDA", "18", "3", "1", "0", "0", "0"
+   "HIP", "18", "3", "1", "0", "0", "0"
+   "Mojo", "18", "3", "1", "0", "0", "0"
+   "Rust", "18", "3", "1", "0", "0", "0"
+   "Slang", "18", "3", "1", "0", "0", "0"
 
 .. csv-table:: Project-porting actionable backlog
    :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
@@ -230,6 +230,7 @@ Each category below uses the status codes from the legend.
    "Runtime host loader scaffolds", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime host loader scaffold inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime host loader consumption plan", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Runtime host integration handoff", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Project report inspection", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Artifact manifest", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Source provenance and source-map bridge", "P", "P", "P", "P", "P", "P", "P", "P", "P", "P"
