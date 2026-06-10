@@ -10,4 +10,3 @@ void computeMain(uint3 threadId [[thread_position_in_grid]], const device float*
 // Compute Shader
 kernel void kernel_main(const device float* buffer0 [[buffer(0)]], const device float* buffer1 [[buffer(1)]], device float* result [[buffer(2)]]) {
 }
-
