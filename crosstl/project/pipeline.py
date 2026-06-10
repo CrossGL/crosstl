@@ -450,6 +450,16 @@ RUNTIME_WGSL_RESOURCE_RE = re.compile(
     r"(?P<name>[A-Za-z_]\w*)\s*:\s*(?P<type>[^;]+);",
     re.MULTILINE,
 )
+RUNTIME_WGSL_BOUND_RESOURCE_RE = re.compile(
+    r"@group\((?P<set>[^)]+)\)\s*"
+    r"@binding\((?P<binding>[^)]+)\)\s*"
+    r"var(?:<(?P<address>[^>]*)>)?\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*:\s*(?P<type>[^;]+);",
+    re.MULTILINE,
+)
+RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC = (
+    "project.runtime-package-inspection.host-interface-symbolic-resource-binding"
+)
 RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
     (
         "id",
@@ -10190,6 +10200,22 @@ def _runtime_wgsl_reflect_resources(code: str) -> list[dict[str, Any]]:
     return resources
 
 
+def _runtime_wgsl_symbolic_resource_binding_diagnostics(code: str) -> list[str]:
+    has_symbolic_resource_binding = False
+    for match in RUNTIME_WGSL_BOUND_RESOURCE_RE.finditer(code):
+        group = match.group("set").strip()
+        binding = match.group("binding").strip()
+        if group.isdigit() and binding.isdigit():
+            continue
+        type_name = match.group("type").strip()
+        kind, _ = _runtime_wgsl_resource_kind(match.group("address"), type_name)
+        if kind is not None:
+            has_symbolic_resource_binding = True
+    if has_symbolic_resource_binding:
+        return [RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC]
+    return []
+
+
 def _runtime_host_interface_from_wgsl_source(
     code: str,
     *,
@@ -10198,15 +10224,16 @@ def _runtime_host_interface_from_wgsl_source(
 ) -> dict[str, Any]:
     entry_points = _runtime_wgsl_reflect_entry_points(code)
     resources = _runtime_wgsl_reflect_resources(code)
+    diagnostics = _runtime_wgsl_symbolic_resource_binding_diagnostics(code)
     return {
-        "status": "ready",
+        "status": "unavailable" if diagnostics else "ready",
         "source": source,
         "parser": parser,
         "entryPointCount": len(entry_points),
         "resourceCount": len(resources),
         "entryPoints": entry_points,
         "resources": resources,
-        "diagnostics": [],
+        "diagnostics": diagnostics,
     }
 
 

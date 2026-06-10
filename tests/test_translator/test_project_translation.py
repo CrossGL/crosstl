@@ -25039,6 +25039,84 @@ def test_inspect_runtime_package_reflects_explicit_wgsl_texture_sampler_group(
     )
 
 
+def test_inspect_runtime_package_reports_symbolic_wgsl_resource_bindings(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = BIND_GROUP, binding = COLOR_BINDING) uniform sampler2D sourceTexture;
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "unavailable"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["resourceCount"] == 0
+    assert host_interface["resources"] == []
+    assert host_interface["diagnostics"] == [
+        project_pipeline.RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC
+    ]
+
+
+def test_inspect_runtime_package_flags_partially_reflected_symbolic_wgsl_bindings(
+    tmp_path,
+):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+            layout(set = BIND_GROUP, binding = COLOR_BINDING) uniform sampler2D sourceTexture;
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "unavailable"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["resourceCount"] == 1
+    assert host_interface["resources"] == [
+        {
+            "name": "_Camera",
+            "kind": "uniform",
+            "type": "Camera",
+            "set": 0,
+            "binding": 0,
+            "access": "read",
+        }
+    ]
+    assert host_interface["diagnostics"] == [
+        project_pipeline.RUNTIME_WGSL_SYMBOLIC_RESOURCE_BINDING_DIAGNOSTIC
+    ]
+
+
 def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_path):
     source = textwrap.dedent("""
         shader ResourceShader {
