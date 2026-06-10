@@ -947,6 +947,63 @@ def test_project_runtime_loader_manifest_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_host_loader_scaffolds_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_host_loader_scaffolds"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime host loader scaffolds"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-runtime-host-loader-scaffolds" in backend_support["notes"]
+        assert "runtime loader manifest" in backend_support["notes"]
+        assert "host-loader-scaffolds.json" in backend_support["notes"]
+        assert "HOST_LOADERS.md" in backend_support["notes"]
+        assert "target-scoped loader metadata files" in backend_support["notes"]
+        assert "source-remap handoff paths" in backend_support["notes"]
+        assert "hostInterface" in backend_support["notes"]
+        assert "requiredTools" in backend_support["notes"]
+        assert "hostResponsibilities" in backend_support["notes"]
+        assert "loadSteps" in backend_support["notes"]
+        assert "resolve-host-interface-metadata" in backend_support["notes"]
+        assert "sanitizes target and load-unit derived output paths" in (
+            backend_support["notes"]
+        )
+        assert "do not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_build_runtime_host_loader_scaffolds_from_loader_manifest"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_runtime_host_loader_scaffolds_reject_wrong_manifest_kind"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_runtime_host_loader_scaffolds_sanitize_target_and_unit_paths"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scaffold_host_loaders_text_outputs_scaffolds"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_scaffold_host_loaders_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

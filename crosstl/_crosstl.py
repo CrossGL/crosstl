@@ -1439,6 +1439,146 @@ def _run_runtime_loader_manifest(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_host_loader_scaffolds(payload):
+    lines = [f"Runtime host loader scaffolds: {payload.get('sourceLoaderManifest')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Scaffold schema version"),
+        _format_payload_kind(payload, "Scaffold kind"),
+        _format_payload_generated_at(payload, "Scaffold generated at"),
+        _format_payload_hash(
+            payload, "sourceLoaderManifestHash", "Source loader manifest hash"
+        ),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {payload.get('status', 'failed')}")
+    scaffold_root = payload.get("scaffoldRoot")
+    if isinstance(scaffold_root, str) and scaffold_root:
+        lines.append(f"Scaffold root: {scaffold_root}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Scaffold scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Scaffold non-goals: {', '.join(non_goal_labels)}")
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('loadUnitCount', 0)} load units, "
+            f"{summary.get('readyLoadUnitCount', 0)} ready, "
+            f"{summary.get('blockedLoadUnitCount', 0)} blocked, "
+            f"{summary.get('scaffoldCount', 0)} scaffold files, "
+            f"{summary.get('generatedFileCount', 0)} generated files"
+        )
+
+    generated_files = payload.get("generatedFiles")
+    if isinstance(generated_files, list) and generated_files:
+        lines.append("Generated files:")
+        for generated_file in generated_files:
+            if not isinstance(generated_file, Mapping):
+                continue
+            details = []
+            target = generated_file.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{generated_file.get('path', '<unknown>')} "
+                f"({generated_file.get('kind', 'unknown')})"
+                f"{suffix}"
+            )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime host loader targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('status', 'unknown')}, "
+                f"{target.get('readyLoadUnitCount', 0)} ready, "
+                f"{target.get('blockedLoadUnitCount', 0)} blocked"
+            )
+
+    scaffolds = payload.get("scaffolds", [])
+    if scaffolds:
+        lines.append("Runtime host loader scaffold records:")
+        for scaffold in scaffolds:
+            if not isinstance(scaffold, Mapping):
+                continue
+            details = [f"status: {scaffold.get('status', 'unknown')}"]
+            output_path = scaffold.get("outputPath")
+            if isinstance(output_path, str) and output_path:
+                details.append(f"output: {output_path}")
+            blockers = scaffold.get("blockers")
+            if isinstance(blockers, list) and blockers:
+                details.append(f"blockers: {len(blockers)}")
+            lines.append(
+                "- "
+                f"{scaffold.get('target', 'unknown')}: "
+                f"{scaffold.get('packagePath') or '<missing package path>'} "
+                f"[{'; '.join(details)}]"
+            )
+
+    actions = payload.get("actions", [])
+    if actions:
+        lines.append("Runtime host loader actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            details = []
+            severity = action.get("severity")
+            if isinstance(severity, str) and severity:
+                details.append(f"severity: {severity}")
+            target = action.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{action.get('kind', 'unknown')}{suffix}: "
+                f"{action.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_scaffold_host_loaders(args):
+    from .project import build_runtime_host_loader_scaffolds
+
+    payload = build_runtime_host_loader_scaffolds(
+        args.loader_manifest, args.scaffold_dir
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime host loader scaffolds"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_host_loader_scaffolds(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -5084,6 +5224,31 @@ def _build_parser():
     )
     runtime_loader_parser.set_defaults(func=_run_runtime_loader_manifest)
 
+    host_loader_scaffold_parser = subparsers.add_parser(
+        "scaffold-host-loaders",
+        help="Build host loader scaffold metadata from a runtime loader manifest",
+    )
+    host_loader_scaffold_parser.add_argument(
+        "loader_manifest", help="Runtime loader manifest JSON"
+    )
+    host_loader_scaffold_parser.add_argument(
+        "--scaffold-dir",
+        required=True,
+        help="Directory to write host loader scaffold files",
+    )
+    host_loader_scaffold_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Host loader scaffold output format",
+    )
+    host_loader_scaffold_parser.add_argument(
+        "--output",
+        "-o",
+        help="Write host loader scaffold report; use '-' for stdout",
+    )
+    host_loader_scaffold_parser.set_defaults(func=_run_scaffold_host_loaders)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -5117,6 +5282,7 @@ def _use_legacy_cli(argv):
         "plan-host-bindings",
         "plan-runtime-adapters",
         "runtime-loader-manifest",
+        "scaffold-host-loaders",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:
