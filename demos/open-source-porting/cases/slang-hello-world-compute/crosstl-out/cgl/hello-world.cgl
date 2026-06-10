@@ -1,0 +1,14 @@
+shader main {
+    StructuredBuffer<float> buffer0;
+    StructuredBuffer<float> buffer1;
+    RWStructuredBuffer<float> result;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+       void computeMain(uvec3 threadId @ gl_GlobalInvocationID) {
+        uint index = threadId.x;
+        result[index] = buffer0[index] + buffer1[index];
+    }
+
+    }
+
+}

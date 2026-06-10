@@ -43,3 +43,12 @@ should be treated with the same upstream license context when redistributed.
 - License: BSD-style permissive license
 - License URL:
   https://github.com/bkvogel/metal_performance_testing/blob/b467b4b1dee0f7d9d43bda13856306ca3f1baea5/LICENSE
+
+## shader-slang/slang
+
+- Repository: https://github.com/shader-slang/slang
+- Commit: `29e69b0bf626f87500be73a7fb3764db25658c66`
+- Source path: `examples/hello-world/hello-world.slang`
+- License: Apache-2.0 WITH LLVM-exception
+- License URL:
+  https://github.com/shader-slang/slang/blob/29e69b0bf626f87500be73a7fb3764db25658c66/LICENSE

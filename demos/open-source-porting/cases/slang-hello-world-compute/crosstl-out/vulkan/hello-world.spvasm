@@ -1,0 +1,81 @@
+; SPIR-V
+; Version: 1.0
+; Generator: CrossGL Vulkan SPIR-V Generator
+; Bound: 42
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %40 "main"
+OpExecutionMode %40 LocalSize 1 1 1
+OpName %10 "buffer0Buffer"
+OpMemberName %10 0 "buffer0"
+OpName %12 "buffer0"
+OpName %13 "buffer1Buffer"
+OpMemberName %13 0 "buffer1"
+OpName %15 "buffer1"
+OpName %16 "resultBuffer"
+OpMemberName %16 0 "result"
+OpName %18 "result"
+OpName %23 "threadId"
+OpName %26 "index"
+OpDecorate %9 ArrayStride 4
+OpDecorate %10 BufferBlock
+OpMemberDecorate %10 0 Offset 0
+OpMemberDecorate %10 0 NonWritable
+OpDecorate %12 DescriptorSet 0
+OpDecorate %12 Binding 0
+OpDecorate %13 BufferBlock
+OpMemberDecorate %13 0 Offset 0
+OpMemberDecorate %13 0 NonWritable
+OpDecorate %15 DescriptorSet 0
+OpDecorate %15 Binding 1
+OpDecorate %16 BufferBlock
+OpMemberDecorate %16 0 Offset 0
+OpDecorate %18 DescriptorSet 0
+OpDecorate %18 Binding 2
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeRuntimeArray %5
+%10 = OpTypeStruct %9
+%11 = OpTypePointer Uniform %10
+%13 = OpTypeStruct %9
+%14 = OpTypePointer Uniform %13
+%16 = OpTypeStruct %9
+%17 = OpTypePointer Uniform %16
+%19 = OpTypeInt 32 0
+%20 = OpTypeVector %19 3
+%21 = OpTypeFunction %2 %20
+%25 = OpTypePointer Function %19
+%29 = OpConstant %4 0
+%30 = OpTypePointer Uniform %5
+%39 = OpTypeFunction %2
+%12 = OpVariable %11 Uniform
+%15 = OpVariable %14 Uniform
+%18 = OpVariable %17 Uniform
+%22 = OpFunction %2 None %21
+%23 = OpFunctionParameter %20
+%24 = OpLabel
+%26 = OpVariable %25 Function
+%27 = OpCompositeExtract %19 %23 0
+OpStore %26 %27
+%28 = OpLoad %19 %26
+%31 = OpAccessChain %30 %12 %29 %28
+%32 = OpLoad %5 %31
+%33 = OpLoad %19 %26
+%34 = OpAccessChain %30 %15 %29 %33
+%35 = OpLoad %5 %34
+%36 = OpFAdd %5 %32 %35
+%37 = OpLoad %19 %26
+%38 = OpAccessChain %30 %18 %29 %37
+OpStore %38 %36
+OpReturn
+OpFunctionEnd
+%40 = OpFunction %2 None %39
+%41 = OpLabel
+OpReturn
+OpFunctionEnd

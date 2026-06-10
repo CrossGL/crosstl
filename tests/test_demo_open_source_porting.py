@@ -29,6 +29,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
         "metal-performance-testing-matmul",
+        "slang-hello-world-compute",
         "vulkan-samples-dynamic-line-grid",
     }
 
