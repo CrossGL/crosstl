@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/AAPLMeshRenderer.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 30,
+        "endOffset": 503,
+        "file": "crosstl-out/cgl/AAPLMeshRenderer.cgl",
+        "length": 503,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 11,
+        "endOffset": 344,
+        "file": "AAPLMeshRenderer.metal",
+        "length": 344,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

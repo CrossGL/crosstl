@@ -1,0 +1,145 @@
+name: Open-Source Porting Demo
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    name: Demo (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux shader validators
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools spirv-tools
+
+      - name: Install macOS shader validators
+        if: runner.os == 'macOS'
+        run: brew install glslang spirv-tools
+
+      - name: Install DirectX Shader Compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $release = Invoke-RestMethod `
+            -Headers @{ "User-Agent" = "crosstl-demo-ci" } `
+            -Uri "https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/latest"
+          $asset = $release.assets |
+            Where-Object { $_.name -match "(windows|win).*\.zip$" } |
+            Select-Object -First 1
+          if (-not $asset) {
+            throw "No Windows DXC release archive found."
+          }
+          $zip = Join-Path $env:RUNNER_TEMP $asset.name
+          $dest = Join-Path $env:RUNNER_TEMP "dxc"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest
+          $dxc = Get-ChildItem -Path $dest -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\" } |
+            Select-Object -First 1
+          if (-not $dxc) {
+            $dxc = Get-ChildItem -Path $dest -Recurse -Filter dxc.exe |
+              Select-Object -First 1
+          }
+          if (-not $dxc) {
+            throw "dxc.exe not found in release archive."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -e .
+        shell: bash
+
+      - name: Verify checked-in demo artifacts
+        run: |
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --reports-dir support/generated/demo-reports
+        shell: bash
+
+      - name: Linux OpenGL and Vulkan smoke checks
+        if: runner.os == 'Linux'
+        run: |
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --run-toolchains \
+            --require-toolchain-runs \
+            --case directx-graphics-samples-hello-triangle \
+            --target opengl \
+            --target vulkan \
+            --reports-dir support/generated/demo-reports/linux-opengl-vulkan
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --run-toolchains \
+            --require-toolchain-runs \
+            --case vulkan-samples-dynamic-line-grid \
+            --case apple-modern-rendering-mesh-viewdir \
+            --case metal-performance-testing-matmul \
+            --target vulkan \
+            --reports-dir support/generated/demo-reports/linux-vulkan
+        shell: bash
+
+      - name: macOS Metal smoke checks
+        if: runner.os == 'macOS'
+        run: |
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --run-toolchains \
+            --require-toolchain-runs \
+            --target metal \
+            --reports-dir support/generated/demo-reports/macos-metal
+        shell: bash
+
+      - name: Windows DirectX smoke checks
+        if: runner.os == 'Windows'
+        run: |
+          python demos/open-source-porting/run_demo.py \
+            --check \
+            --run-toolchains \
+            --require-toolchain-runs \
+            --case directx-graphics-samples-hello-triangle \
+            --case vulkan-samples-dynamic-line-grid \
+            --case apple-modern-rendering-mesh-viewdir \
+            --target directx \
+            --reports-dir support/generated/demo-reports/windows-directx
+        shell: bash
+
+      - name: Upload demo reports
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-reports-${{ matrix.os }}
+          path: support/generated/demo-reports
+          if-no-files-found: ignore
+          retention-days: 30

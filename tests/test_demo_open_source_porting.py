@@ -1,0 +1,89 @@
+import importlib.util
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DEMO_ROOT = ROOT / "demos" / "open-source-porting"
+CASE_ROOT = DEMO_ROOT / "cases"
+
+
+def _load_demo_runner():
+    spec = importlib.util.spec_from_file_location(
+        "open_source_demo", DEMO_ROOT / "run_demo.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_open_source_demo_cases_have_pinned_manifests_and_references():
+    runner = _load_demo_runner()
+    case_dirs = sorted(path for path in CASE_ROOT.iterdir() if path.is_dir())
+
+    assert {path.name for path in case_dirs} == {
+        "apple-modern-rendering-mesh-viewdir",
+        "directx-graphics-samples-hello-triangle",
+        "metal-performance-testing-matmul",
+        "vulkan-samples-dynamic-line-grid",
+    }
+
+    for case_dir in case_dirs:
+        config_targets = set(runner._case_targets(case_dir))
+        manifest = json.loads((case_dir / "corpus.json").read_text(encoding="utf-8"))
+
+        assert manifest["schemaVersion"] == 1
+        assert manifest["entries"], case_dir.name
+        assert not (case_dir / "crosstl-out" / "portability-report.json").exists()
+
+        for entry in manifest["entries"]:
+            assert (case_dir / entry["path"]).is_file()
+            assert entry["sourceUrl"].startswith(entry["repository"])
+            assert re.fullmatch(r"[0-9a-f]{40}", entry["commit"])
+            assert set(entry["targets"]).issubset(config_targets)
+
+        for target in config_targets:
+            target_dir = case_dir / "crosstl-out" / target
+            assert target_dir.is_dir(), f"{case_dir.name} missing {target} references"
+            assert any(path.is_file() for path in target_dir.rglob("*"))
+
+
+def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
+    workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
+
+    assert "os: [ubuntu-latest, macOS-latest, windows-latest]" in workflow
+    assert "glslang-tools spirv-tools" in workflow
+    assert "brew install glslang spirv-tools" in workflow
+    assert "DirectXShaderCompiler/releases/latest" in workflow
+    assert "--run-toolchains" in workflow
+    assert "--require-toolchain-runs" in workflow
+    assert "--target opengl" in workflow
+    assert "--target vulkan" in workflow
+    assert "--target metal" in workflow
+    assert "--target directx" in workflow
+    assert "demo-reports-${{ matrix.os }}" in workflow
+
+
+def test_open_source_demo_runner_verifies_fast_reference_subset():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "demos/open-source-porting/run_demo.py",
+            "--check",
+            "--case",
+            "directx-graphics-samples-hello-triangle",
+            "--target",
+            "cgl",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "directx-graphics-samples-hello-triangle: verified cgl" in result.stdout

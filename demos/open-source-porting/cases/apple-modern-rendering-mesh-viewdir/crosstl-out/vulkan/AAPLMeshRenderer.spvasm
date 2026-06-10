@@ -1,0 +1,71 @@
+; SPIR-V
+; Version: 1.0
+; Generator: Khronos SPIR-V Tools Assembler; 0
+; Bound: 43
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Vertex %2 "main_vertex" %CrossGL_vertex_output_main_vertex_viewDir %CrossGL_vertex_input_in_position %CrossGL_vertex_input_camera
+               OpName %Camera "Camera"
+               OpMemberName %Camera 0 "invViewMatrix"
+               OpName %Input "Input"
+               OpMemberName %Input 0 "position"
+               OpName %Output "Output"
+               OpMemberName %Output 0 "viewDir"
+               OpName %CrossGL_vertex_output_main_vertex_viewDir "CrossGL_vertex_output_main_vertex_viewDir"
+               OpName %CrossGL_vertex_input_in_position "CrossGL_vertex_input_in_position"
+               OpName %in_ "in_"
+               OpName %CrossGL_vertex_input_camera "CrossGL_vertex_input_camera"
+               OpName %camera "camera"
+               OpName %out_ "out_"
+               OpDecorate %CrossGL_vertex_output_main_vertex_viewDir Location 0
+               OpDecorate %CrossGL_vertex_input_in_position Location 0
+               OpDecorate %CrossGL_vertex_input_camera Location 1
+       %void = OpTypeVoid
+       %bool = OpTypeBool
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+    %v3float = OpTypeVector %float 3
+    %v4float = OpTypeVector %float 4
+%mat4v4float = OpTypeMatrix %v4float 4
+     %Camera = OpTypeStruct %mat4v4float
+      %Input = OpTypeStruct %v3float
+     %Output = OpTypeStruct %float
+         %20 = OpTypeFunction %void
+%_ptr_Output_float = OpTypePointer Output %float
+%_ptr_Input_v3float = OpTypePointer Input %v3float
+%_ptr_Function_Input = OpTypePointer Function %Input
+%_ptr_Input_float = OpTypePointer Input %float
+%_ptr_Function_float = OpTypePointer Function %float
+%_ptr_Function_Output = OpTypePointer Function %Output
+      %int_3 = OpConstant %int 3
+    %float_0 = OpConstant %float 0
+      %int_0 = OpConstant %int 0
+%_ptr_Function_v3float = OpTypePointer Function %v3float
+%CrossGL_vertex_output_main_vertex_viewDir = OpVariable %_ptr_Output_float Output
+%CrossGL_vertex_input_in_position = OpVariable %_ptr_Input_v3float Input
+%CrossGL_vertex_input_camera = OpVariable %_ptr_Input_float Input
+          %2 = OpFunction %void None %20
+         %31 = OpLabel
+        %in_ = OpVariable %_ptr_Function_Input Function
+     %camera = OpVariable %_ptr_Function_float Function
+       %out_ = OpVariable %_ptr_Function_Output Function
+         %32 = OpLoad %v3float %CrossGL_vertex_input_in_position
+         %33 = OpCompositeConstruct %Input %32
+               OpStore %in_ %33
+         %34 = OpLoad %float %CrossGL_vertex_input_camera
+               OpStore %camera %34
+         %35 = OpLoad %float %camera
+         %36 = OpLoad %float %camera
+         %37 = OpAccessChain %_ptr_Function_v3float %in_ %int_0
+         %38 = OpLoad %v3float %37
+         %39 = OpExtInst %float %1 Normalize %float_0
+         %40 = OpAccessChain %_ptr_Function_float %out_ %int_0
+               OpStore %40 %float_0
+         %41 = OpLoad %Output %out_
+         %42 = OpCompositeExtract %float %41 0
+               OpStore %CrossGL_vertex_output_main_vertex_viewDir %42
+               OpReturn
+               OpFunctionEnd

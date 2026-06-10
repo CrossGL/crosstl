@@ -1,0 +1,131 @@
+; SPIR-V
+; Version: 1.0
+; Generator: Khronos SPIR-V Tools Assembler; 0
+; Bound: 92
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %2 "main" %main_return_outColor %CrossGL_fragment_input_input_nearPoint %CrossGL_fragment_input_input_farPoint
+               OpExecutionMode %2 OriginUpperLeft
+               OpName %FragmentInput "FragmentInput"
+               OpMemberName %FragmentInput 0 "nearPoint"
+               OpMemberName %FragmentInput 1 "farPoint"
+               OpName %pos "pos"
+               OpName %coord "coord"
+               OpName %derivative "derivative"
+               OpName %gridLine "gridLine"
+               OpName %line "line"
+               OpName %main_return_outColor "main_return_outColor"
+               OpName %CrossGL_fragment_input_input_nearPoint "CrossGL_fragment_input_input_nearPoint"
+               OpName %CrossGL_fragment_input_input_farPoint "CrossGL_fragment_input_input_farPoint"
+               OpName %input "input"
+               OpName %outColor "outColor"
+               OpName %t "t"
+               OpName %pos_0 "pos"
+               OpDecorate %main_return_outColor Location 0
+               OpDecorate %CrossGL_fragment_input_input_nearPoint Location 0
+               OpDecorate %CrossGL_fragment_input_input_farPoint Location 1
+       %void = OpTypeVoid
+       %bool = OpTypeBool
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+    %v3float = OpTypeVector %float 3
+    %v4float = OpTypeVector %float 4
+%FragmentInput = OpTypeStruct %v3float %v3float
+         %23 = OpTypeFunction %v4float %v3float
+%_ptr_Function_v2float = OpTypePointer Function %v2float
+  %float_0_5 = OpConstant %float 0.5
+%_ptr_Function_float = OpTypePointer Function %float
+    %float_1 = OpConstant %float 1
+         %28 = OpTypeFunction %void
+%_ptr_Output_v4float = OpTypePointer Output %v4float
+%_ptr_Input_v3float = OpTypePointer Input %v3float
+%_ptr_Function_FragmentInput = OpTypePointer Function %FragmentInput
+%_ptr_Function_v4float = OpTypePointer Function %v4float
+      %int_0 = OpConstant %int 0
+%_ptr_Function_v3float = OpTypePointer Function %v3float
+      %int_1 = OpConstant %int 1
+%main_return_outColor = OpVariable %_ptr_Output_v4float Output
+%CrossGL_fragment_input_input_nearPoint = OpVariable %_ptr_Input_v3float Input
+%CrossGL_fragment_input_input_farPoint = OpVariable %_ptr_Input_v3float Input
+         %36 = OpFunction %v4float None %23
+        %pos = OpFunctionParameter %v3float
+         %37 = OpLabel
+      %coord = OpVariable %_ptr_Function_v2float Function
+ %derivative = OpVariable %_ptr_Function_v2float Function
+   %gridLine = OpVariable %_ptr_Function_v2float Function
+       %line = OpVariable %_ptr_Function_float Function
+         %38 = OpVectorShuffle %v2float %pos %pos 0 2
+               OpStore %coord %38
+         %39 = OpLoad %v2float %coord
+         %40 = OpFwidth %v2float %39
+               OpStore %derivative %40
+         %41 = OpLoad %v2float %coord
+         %42 = OpCompositeConstruct %v2float %float_0_5 %float_0_5
+         %43 = OpFSub %v2float %41 %42
+         %44 = OpExtInst %v2float %1 Fract %43
+         %45 = OpCompositeConstruct %v2float %float_0_5 %float_0_5
+         %46 = OpFSub %v2float %44 %45
+         %47 = OpExtInst %v2float %1 FAbs %46
+         %48 = OpLoad %v2float %derivative
+         %49 = OpFDiv %v2float %47 %48
+               OpStore %gridLine %49
+         %50 = OpLoad %v2float %gridLine
+         %51 = OpCompositeExtract %float %50 0
+         %52 = OpLoad %v2float %gridLine
+         %53 = OpCompositeExtract %float %52 1
+         %54 = OpExtInst %float %1 FMin %51 %53
+               OpStore %line %54
+         %55 = OpLoad %float %line
+         %56 = OpExtInst %float %1 FMin %55 %float_1
+         %57 = OpFSub %float %float_1 %56
+         %58 = OpCompositeConstruct %v4float %float_0_5 %float_0_5 %float_0_5 %57
+               OpReturnValue %58
+               OpFunctionEnd
+          %2 = OpFunction %void None %28
+         %59 = OpLabel
+      %input = OpVariable %_ptr_Function_FragmentInput Function
+   %outColor = OpVariable %_ptr_Function_v4float Function
+          %t = OpVariable %_ptr_Function_float Function
+      %pos_0 = OpVariable %_ptr_Function_v3float Function
+         %60 = OpLoad %v3float %CrossGL_fragment_input_input_nearPoint
+         %61 = OpLoad %v3float %CrossGL_fragment_input_input_farPoint
+         %62 = OpCompositeConstruct %FragmentInput %60 %61
+               OpStore %input %62
+         %63 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %64 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %65 = OpLoad %v3float %64
+         %66 = OpCompositeExtract %float %65 1
+         %67 = OpFNegate %float %66
+         %68 = OpAccessChain %_ptr_Function_v3float %input %int_1
+         %69 = OpAccessChain %_ptr_Function_v3float %input %int_1
+         %70 = OpLoad %v3float %69
+         %71 = OpCompositeExtract %float %70 1
+         %72 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %73 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %74 = OpLoad %v3float %73
+         %75 = OpCompositeExtract %float %74 1
+         %76 = OpFSub %float %71 %75
+         %77 = OpFDiv %float %67 %76
+               OpStore %t %77
+         %78 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %79 = OpLoad %v3float %78
+         %80 = OpLoad %float %t
+         %81 = OpAccessChain %_ptr_Function_v3float %input %int_1
+         %82 = OpLoad %v3float %81
+         %83 = OpAccessChain %_ptr_Function_v3float %input %int_0
+         %84 = OpLoad %v3float %83
+         %85 = OpFSub %v3float %82 %84
+         %86 = OpCompositeConstruct %v3float %80 %80 %80
+         %87 = OpFMul %v3float %86 %85
+         %88 = OpFAdd %v3float %79 %87
+               OpStore %pos_0 %88
+         %89 = OpLoad %v3float %pos_0
+         %90 = OpFunctionCall %v4float %36 %89
+               OpStore %outColor %90
+         %91 = OpLoad %v4float %outColor
+               OpStore %main_return_outColor %91
+               OpReturn
+               OpFunctionEnd

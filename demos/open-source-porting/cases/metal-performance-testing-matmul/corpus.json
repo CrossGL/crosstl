@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Metal performance testing matrix multiplication",
+  "description": "Metal compute source used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "metal-performance-testing-matmul-simple1",
+      "path": "mat_mul_simple1.metal",
+      "sourceBackend": "metal",
+      "targets": ["cgl", "metal", "vulkan"],
+      "repository": "https://github.com/bkvogel/metal_performance_testing",
+      "commit": "b467b4b1dee0f7d9d43bda13856306ca3f1baea5",
+      "sourceUrl": "https://github.com/bkvogel/metal_performance_testing/blob/b467b4b1dee0f7d9d43bda13856306ca3f1baea5/metal_performance_testing/mat_mul_simple1.metal"
+    }
+  ]
+}

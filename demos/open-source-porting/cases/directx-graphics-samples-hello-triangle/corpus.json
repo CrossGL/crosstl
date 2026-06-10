@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "DirectX Graphics Samples Hello Triangle",
+  "description": "Pinned HLSL source used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "directx-graphics-samples-hello-triangle",
+      "path": "shaders.hlsl",
+      "sourceBackend": "directx",
+      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/microsoft/DirectX-Graphics-Samples",
+      "commit": "31ae3c91160d8634264004cdaf4e41a99c41243e",
+      "sourceUrl": "https://github.com/microsoft/DirectX-Graphics-Samples/blob/31ae3c91160d8634264004cdaf4e41a99c41243e/Samples/Desktop/D3D12HelloWorld/src/HelloTriangle/shaders.hlsl"
+    }
+  ]
+}

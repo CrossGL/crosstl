@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "Vulkan Samples dynamic line grid",
+  "description": "Reduced GLSL source used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "vulkan-samples-dynamic-line-grid-fragment",
+      "path": "grid.frag",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/KhronosGroup/Vulkan-Samples",
+      "commit": "ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a",
+      "sourceUrl": "https://github.com/KhronosGroup/Vulkan-Samples/blob/ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a/shaders/dynamic_line_rasterization/glsl/grid.frag"
+    }
+  ]
+}

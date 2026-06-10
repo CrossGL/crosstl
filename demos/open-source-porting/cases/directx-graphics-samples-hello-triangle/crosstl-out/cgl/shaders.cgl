@@ -1,0 +1,25 @@
+shader main {
+    struct PSInput {
+        vec4 position @ gl_Position;
+        vec4 color @ Color;
+    }
+    // vertex Shader
+    vertex {
+    PSInput VSMain(vec4 position @ Position, vec4 color @ Color) @ stage_entry {
+        PSInput result;
+        result.position = position;
+        result.color = color;
+        return result;
+    }
+
+    }
+
+    // fragment Shader
+    fragment {
+    vec4 PSMain(PSInput input) @ gl_FragColor {
+        return input.color;
+    }
+
+    }
+
+}

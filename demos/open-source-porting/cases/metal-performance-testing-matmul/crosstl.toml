@@ -1,0 +1,7 @@
+[project]
+source_roots = ["."]
+include = ["mat_mul_simple1.metal"]
+include_dirs = ["."]
+targets = ["cgl", "metal", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/grid.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 27,
+        "endOffset": 747,
+        "file": "crosstl-out/cgl/grid.cgl",
+        "length": 747,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 539,
+        "file": "grid.frag",
+        "length": 539,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

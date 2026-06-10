@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/mat_mul_simple1.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 34,
+        "endOffset": 985,
+        "file": "crosstl-out/cgl/mat_mul_simple1.cgl",
+        "length": 985,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 41,
+        "endOffset": 1289,
+        "file": "mat_mul_simple1.metal",
+        "length": 1289,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
