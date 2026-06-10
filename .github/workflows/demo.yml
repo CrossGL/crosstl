@@ -52,7 +52,7 @@ jobs:
             -Headers @{ "User-Agent" = "crosstl-demo-ci" } `
             -Uri "https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/latest"
           $asset = $release.assets |
-            Where-Object { $_.name -match "(windows|win).*\.zip$" } |
+            Where-Object { $_.name -match "^dxc_.*\.zip$" } |
             Select-Object -First 1
           if (-not $asset) {
             throw "No Windows DXC release archive found."
