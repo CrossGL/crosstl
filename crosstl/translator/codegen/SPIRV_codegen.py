@@ -11814,6 +11814,10 @@ class VulkanSPIRVCodeGen:
         if type_str in self.enum_type_names:
             return self.register_primitive_type("int")
 
+        option_payload = self.lowerable_option_payload_type_name(type_str)
+        if option_payload is not None:
+            return self.map_crossgl_type(option_payload)
+
         registered_type = self.find_registered_type_by_base(type_str)
         if registered_type:
             return registered_type
@@ -15156,6 +15160,48 @@ class VulkanSPIRVCodeGen:
 
     def type_name_string(self, type_value) -> str:
         return self.type_name_from_value(type_value)
+
+    def option_payload_type_name(self, type_value) -> Optional[str]:
+        type_name = self.type_name_from_value(type_value)
+        if not isinstance(type_name, str):
+            return None
+
+        base_name, generic_args = generic_type_parts(type_name.strip())
+        if base_name.rsplit("::", 1)[-1] != "Option" or len(generic_args) != 1:
+            return None
+        return generic_args[0]
+
+    def lowerable_option_payload_type_name(self, type_value) -> Optional[str]:
+        type_name = self.type_name_from_value(type_value)
+        payload_type = self.option_payload_type_name(type_name)
+        if payload_type is None:
+            return None
+        if resolve_generic_enum_specialization(self, type_name) is not None:
+            return None
+        return payload_type
+
+    def option_or_expected_payload_type_name(self) -> Optional[str]:
+        expected_type = self.current_expression_expected_type
+        payload_type = self.lowerable_option_payload_type_name(expected_type)
+        if payload_type is not None:
+            return payload_type
+        if self.option_payload_type_name(expected_type) is not None:
+            return None
+        return self.type_name_from_value(expected_type)
+
+    def option_none_default_value(self) -> Optional[SpirvId]:
+        payload_type = self.lowerable_option_payload_type_name(
+            self.current_expression_expected_type
+        )
+        if payload_type is None:
+            return None
+        return self.default_value_for_type(self.map_crossgl_type(payload_type))
+
+    def expected_primitive_type_name(self) -> Optional[str]:
+        expected_type = self.option_or_expected_payload_type_name()
+        if expected_type is None:
+            return None
+        return self.normalize_primitive_name(expected_type)
 
     def is_type_node_like(self, value) -> bool:
         return any(
@@ -19849,13 +19895,23 @@ class VulkanSPIRVCodeGen:
             bool_type = self.register_primitive_type("bool")
             return self.register_constant(expr, bool_type)
         elif isinstance(expr, int):
-            int_type = self.register_primitive_type("int")
+            primitive_type = (
+                "uint"
+                if self.expected_primitive_type_name() == "uint" and expr >= 0
+                else "int"
+            )
+            int_type = self.register_primitive_type(primitive_type)
             return self.register_constant(expr, int_type)
         elif isinstance(expr, float):
             float_type = self.register_primitive_type("float")
             return self.register_constant(expr, float_type)
 
         elif isinstance(expr, str):
+            if expr.rsplit("::", 1)[-1] == "None":
+                none_default = self.option_none_default_value()
+                if none_default is not None:
+                    return none_default
+
             if self.enum_variant_is_payload_path(expr):
                 enum_value = self.process_enum_variant_constructor(expr, [])
                 if enum_value is not None:
@@ -19915,6 +19971,12 @@ class VulkanSPIRVCodeGen:
                 literal_type_id = self.register_primitive_type(primitive_type_name)
                 return self.register_constant(float(expr.value), literal_type_id)
             if primitive_type_name in {"int", "uint"}:
+                if (
+                    primitive_type_name == "int"
+                    and self.expected_primitive_type_name() == "uint"
+                    and int(expr.value) >= 0
+                ):
+                    primitive_type_name = "uint"
                 literal_type_id = self.register_primitive_type(primitive_type_name)
                 return self.register_constant(int(expr.value), literal_type_id)
             if primitive_type_name == "bool":
@@ -20083,6 +20145,27 @@ class VulkanSPIRVCodeGen:
                 callee_name = callee_expr.name
             elif isinstance(callee_expr, str):
                 callee_name = callee_expr
+
+            if (
+                isinstance(callee_name, str)
+                and callee_name.rsplit("::", 1)[-1] == "Some"
+            ):
+                payload_type = self.option_or_expected_payload_type_name()
+                if payload_type is not None and not expr.args:
+                    return self.default_value_for_type(
+                        self.map_crossgl_type(payload_type)
+                    )
+                if payload_type is not None:
+                    payload_value = self.process_expression_with_expected_type(
+                        expr.args[0],
+                        payload_type,
+                    )
+                    if payload_value is None:
+                        return None
+                    return self.convert_value_to_type(
+                        payload_value,
+                        self.map_crossgl_type(payload_type),
+                    )
 
             if isinstance(callee_name, str) and callee_name.lower() == "nonuniformext":
                 return self.process_non_uniform_function_call(callee_name, expr.args)

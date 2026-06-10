@@ -993,7 +993,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 979
+        "test_count": 982
       },
       "translator_codegen": {
         "exists": true,
