@@ -44,6 +44,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/bkvogel/metal_performance_testing/blob/b467b4b1dee0f7d9d43bda13856306ca3f1baea5/LICENSE
 
+## raysan5/raylib
+
+- Repository: https://github.com/raysan5/raylib
+- Commit: `94897c4eca842673bad16ab03ad776a0a2255b14`
+- Source path: `examples/shaders/resources/shaders/glsl330/base.fs`
+- License: zlib/libpng
+- License URL:
+  https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/LICENSE
+
 ## SaschaWillems/Vulkan
 
 - Repository: https://github.com/SaschaWillems/Vulkan
