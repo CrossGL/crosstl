@@ -11,4 +11,3 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]]) {
     outColor = float4(input.fragColor, 1.0);
     return outColor;
 }
-

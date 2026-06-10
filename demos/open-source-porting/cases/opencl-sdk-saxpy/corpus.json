@@ -7,7 +7,7 @@
       "id": "opencl-sdk-saxpy",
       "path": "saxpy.cl",
       "sourceBackend": "opencl",
-      "targets": ["cgl", "metal", "vulkan"],
+      "targets": ["cgl", "opengl", "metal", "vulkan"],
       "repository": "https://github.com/KhronosGroup/OpenCL-SDK",
       "commit": "e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f",
       "sourceUrl": "https://github.com/KhronosGroup/OpenCL-SDK/blob/e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f/samples/core/saxpy/saxpy.cl"
