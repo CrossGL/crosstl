@@ -353,6 +353,40 @@ def test_metal_scalar_dispatch_id_promotes_to_directx_uint3(tmp_path):
     assert "uint index : SV_DispatchThreadID" not in generated
 
 
+def test_slang_non_main_compute_entry_lowers_dispatch_id_to_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "hello-world.slang",
+        """
+        StructuredBuffer<float> buffer0;
+        StructuredBuffer<float> buffer1;
+        RWStructuredBuffer<float> result;
+
+        [shader("compute")]
+        [numthreads(1,1,1)]
+        void computeMain(uint3 threadId : SV_DispatchThreadID)
+        {
+            uint index = threadId.x;
+            result[index] = buffer0[index] + buffer1[index];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert (
+        "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;" in generated
+    )
+    assert "void main()" in generated
+    assert "uint index = gl_GlobalInvocationID.x;" in generated
+    assert "result[index] = (buffer0[index] + buffer1[index]);" in generated
+    assert "threadId gl_GlobalInvocationID" not in generated
+    assert "SV_DispatchThreadID" not in generated
+
+
 def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     source_path = _write_source(
         tmp_path,
