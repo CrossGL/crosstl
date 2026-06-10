@@ -118,11 +118,12 @@ tracked in issue #794. Rust-GPU compute examples still need Rust `Option<T>`,
 fixed-size array, and unsigned-constant lowering for Metal and SPIR-V targets;
 that translator issue is tracked in issue #775.
 
-The `ROCm/rocm-examples` bit-extract HIP kernel and the `ROCm/hip-tests` Set
-kernel were tested as candidates. Metal and SPIR-V output still needs HIP
-compute entry-point, storage-buffer, and invocation-index lowering; that
-translator issue is tracked in issue #778, and the cases are intentionally not
-checked in until target artifacts preserve compute semantics.
+The `ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #778
+closed. The generated artifacts now preserve a compute entry point, but Metal
+still needs scalar kernel-parameter lowering and host `main` filtering, and
+SPIR-V still needs host-entry filtering; that follow-up is tracked in issue
+#795. HIP candidates remain intentionally excluded until target artifacts
+compile directly and preserve only the relevant kernel entries.
 
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 closed
 and is now checked for Metal and Vulkan output. OpenGL output still needs an
