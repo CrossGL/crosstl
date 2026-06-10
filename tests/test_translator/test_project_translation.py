@@ -18,6 +18,7 @@ from crosstl.project import (
     build_runtime_package,
     inspect_project_report,
     load_project_config,
+    plan_runtime_host_bindings,
     plan_runtime_integration,
     scan_project,
     translate_project,
@@ -76,6 +77,7 @@ def test_project_package_exposes_public_api_surface():
         "build_runtime_package",
         "inspect_project_report",
         "load_project_config",
+        "plan_runtime_host_bindings",
         "plan_runtime_integration",
         "scan_project",
         "translate_project",
@@ -23016,6 +23018,196 @@ def test_project_cli_package_runtime_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_PACKAGE_KIND
     assert payload["artifacts"][0]["packagePath"] == "artifacts/out/cgl/simple.cgl"
     assert (package_dir / "runtime-package.json").is_file()
+
+
+def test_plan_runtime_host_bindings_from_runtime_package(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+    build_runtime_package(manifest_path, package_dir)
+    package_manifest = package_dir / "runtime-package.json"
+
+    payload = plan_runtime_host_bindings(package_manifest)
+
+    assert set(payload) == project_pipeline.RUNTIME_HOST_BINDING_PLAN_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_HOST_BINDING_PLAN_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_HOST_BINDING_PLAN_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_BINDING_PLAN_NON_GOALS
+    )
+    assert payload["packageRoot"] == str(package_dir)
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "artifactCount": 1,
+        "actionCount": 2,
+        "runtimeReferenceCount": 1,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_BINDING_PLAN_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["artifactCount"] == 1
+    assert payload["targets"][0]["packagePaths"] == ["artifacts/out/cgl/simple.cgl"]
+    assert len(payload["actions"]) == 2
+    bind_action = payload["actions"][0]
+    assert set(bind_action) == project_pipeline.RUNTIME_HOST_BINDING_PLAN_ACTION_FIELDS
+    assert bind_action == {
+        "kind": "bind-runtime-artifact",
+        "severity": "note",
+        "message": (
+            "Load packaged artifact artifacts/out/cgl/simple.cgl for target cgl."
+        ),
+        "target": "cgl",
+        "artifact": payload["targets"][0]["artifacts"][0],
+        "packagePath": "artifacts/out/cgl/simple.cgl",
+        "sourceRemap": "source-remaps/out/cgl/simple.source-remap.json",
+    }
+    assert payload["actions"][1]["kind"] == "review-runtime-references"
+    assert payload["actions"][1]["severity"] == "warning"
+    assert "Review 1 detected host or build runtime references" in (
+        payload["actions"][1]["message"]
+    )
+    assert payload["runtimePlan"]["contract"] == "runtime-loader-plan-v1"
+
+
+def test_plan_runtime_host_bindings_rejects_failed_package(tmp_path):
+    package_path = tmp_path / "runtime-package.json"
+    package_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-package",
+                "success": False,
+                "project": {"targets": ["cgl"]},
+                "artifacts": [
+                    {
+                        "id": "artifact-1",
+                        "status": "packaged",
+                        "target": "cgl",
+                        "packagePath": "artifacts/simple.cgl",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = plan_runtime_host_bindings(package_path)
+
+    assert payload["success"] is False
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["targets"][0]["artifactCount"] == 0
+    assert payload["actions"] == []
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-host-bindings.package-failed"
+    )
+
+
+def test_project_cli_plan_host_bindings_text_outputs_actions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+    build_runtime_package(manifest_path, package_dir)
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-bindings",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host binding plan: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Host binding scope: host-binding-planning" in result.stdout
+    assert (
+        "Host binding non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 artifacts, 2 actions, 1 runtime references" in (
+        result.stdout
+    )
+    assert "- cgl: 1 artifacts, 1 runtime references" in result.stdout
+    assert "bind-runtime-artifact" in result.stdout
+    assert "review-runtime-references" in result.stdout
+
+
+def test_project_cli_plan_host_bindings_json_writes_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+    build_runtime_package(manifest_path, package_dir)
+    output_path = repo / "out" / "host-binding-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-bindings",
+            str(package_dir / "runtime-package.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_HOST_BINDING_PLAN_KIND
+    assert payload["actions"][0]["kind"] == "bind-runtime-artifact"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
