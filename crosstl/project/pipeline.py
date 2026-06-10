@@ -9790,6 +9790,44 @@ def _runtime_adapter_action(adapter: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_adapter_host_interface_action(
+    adapter: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    host_interface = adapter.get("hostInterface")
+    if isinstance(host_interface, Mapping):
+        status = host_interface.get("status")
+        diagnostics = [
+            diagnostic
+            for diagnostic in _record_sequence(host_interface.get("diagnostics"))
+            if _is_non_empty_string(diagnostic)
+        ]
+    else:
+        status = "not-inspected"
+        diagnostics = ["project.runtime-package-inspection.host-interface-not-recorded"]
+
+    status = status if _is_non_empty_string(status) else "not-inspected"
+    if status == "ready":
+        return None
+
+    diagnostic_suffix = (
+        f" Diagnostics: {', '.join(diagnostics)}." if diagnostics else ""
+    )
+    return {
+        "kind": "resolve-host-interface-metadata",
+        "severity": "note" if status == "not-inspected" else "warning",
+        "message": (
+            f"Resolve host interface metadata for {adapter.get('packagePath')} "
+            f"before wiring {adapter.get('adapterKind')}: status is {status}. "
+            "Provide reflection data or backend-specific entry point and resource "
+            f"binding metadata for host and build tooling.{diagnostic_suffix}"
+        ),
+        "target": adapter.get("target"),
+        "adapter": adapter.get("id"),
+        "binding": adapter.get("binding"),
+        "packagePath": adapter.get("packagePath"),
+    }
+
+
 def _runtime_adapter_review_action(
     target: str, runtime_reference_count: int
 ) -> dict[str, Any] | None:
@@ -9855,7 +9893,12 @@ def plan_runtime_adapters(
         if _is_non_negative_int(summary.get("runtimeReferenceCount"))
         else 0
     )
-    actions = [_runtime_adapter_action(adapter) for adapter in adapters]
+    actions = []
+    for adapter in adapters:
+        actions.append(_runtime_adapter_action(adapter))
+        host_interface_action = _runtime_adapter_host_interface_action(adapter)
+        if host_interface_action is not None:
+            actions.append(host_interface_action)
     if adapters:
         for target in targets:
             review_action = _runtime_adapter_review_action(
