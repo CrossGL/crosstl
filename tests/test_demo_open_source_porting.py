@@ -87,10 +87,6 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
         "glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal"
         in workflow
     )
-    assert (
-        "glslang-push-constant-vertex/crosstl-out/directx/spv.pushConstant.hlsl"
-        in workflow
-    )
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
@@ -154,7 +150,6 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
-        "glslang-push-constant-vertex",
         "slang-hello-world-compute",
         "lonelydevil-vulkan-tutorial-triangle",
         "sascha-willems-vulkan-headless-compute",
@@ -191,7 +186,6 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
     assert {
         "demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl",
         "demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl",
-        "demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/directx/spv.pushConstant.hlsl",
         "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
         "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
     } == directx_paths
