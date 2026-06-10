@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/saxpy.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 487,
+        "file": "crosstl-out/cgl/saxpy.cgl",
+        "length": 487,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 181,
+        "file": "saxpy.cl",
+        "length": 181,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

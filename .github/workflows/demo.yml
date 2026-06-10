@@ -99,6 +99,7 @@ jobs:
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
             --case metal-performance-testing-matmul \
+            --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-vulkan
@@ -115,6 +116,7 @@ jobs:
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
             --case metal-performance-testing-matmul \
+            --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \

@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["saxpy.cl"]
+targets = ["cgl", "metal", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"
