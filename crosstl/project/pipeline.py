@@ -418,6 +418,20 @@ RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS = frozenset(
 RUNTIME_HOST_INTERFACE_RESOURCE_FIELDS = frozenset(
     ("name", "kind", "type", "set", "binding", "access")
 )
+RUNTIME_WGSL_REFLECTION_PARSER = "wgsl-reflection"
+RUNTIME_WGSL_ENTRY_RE = re.compile(
+    r"@(?P<stage>vertex|fragment|compute)\b"
+    r"(?P<attributes>(?:\s+@\w+(?:\([^)]*\))?)*)"
+    r"\s+fn\s+(?P<name>[A-Za-z_]\w*)\s*\(",
+    re.MULTILINE,
+)
+RUNTIME_WGSL_RESOURCE_RE = re.compile(
+    r"@group\((?P<set>\d+)\)\s*"
+    r"@binding\((?P<binding>\d+)\)\s*"
+    r"var(?:<(?P<address>[^>]*)>)?\s+"
+    r"(?P<name>[A-Za-z_]\w*)\s*:\s*(?P<type>[^;]+);",
+    re.MULTILINE,
+)
 RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
     (
         "id",
@@ -9954,6 +9968,83 @@ def _runtime_host_interface_for_wgsl_target(
     return payload
 
 
+def _runtime_wgsl_reflect_entry_points(code: str) -> list[dict[str, Any]]:
+    entry_points = []
+    for match in RUNTIME_WGSL_ENTRY_RE.finditer(code):
+        entry_points.append(
+            {
+                "name": match.group("name"),
+                "stage": match.group("stage"),
+                "executionConfig": {},
+            }
+        )
+    return entry_points
+
+
+def _runtime_wgsl_resource_kind(
+    address_space: str | None, type_name: str
+) -> tuple[str | None, str | None]:
+    address_parts = [
+        part.strip().lower()
+        for part in (address_space or "").split(",")
+        if part.strip()
+    ]
+    address_kind = address_parts[0] if address_parts else None
+    access = address_parts[1] if len(address_parts) > 1 else None
+    lowered_type = type_name.strip().lower()
+    if address_kind == "uniform":
+        return "uniform", "read"
+    if address_kind == "storage":
+        return "buffer", access or "read"
+    if lowered_type.startswith("texture_storage_"):
+        return "storage-texture", None
+    if lowered_type.startswith("texture_"):
+        return "texture", None
+    if lowered_type in {"sampler", "sampler_comparison"}:
+        return "sampler", None
+    return None, None
+
+
+def _runtime_wgsl_reflect_resources(code: str) -> list[dict[str, Any]]:
+    resources = []
+    for match in RUNTIME_WGSL_RESOURCE_RE.finditer(code):
+        type_name = match.group("type").strip()
+        kind, access = _runtime_wgsl_resource_kind(match.group("address"), type_name)
+        if kind is None:
+            continue
+        resources.append(
+            {
+                "name": match.group("name"),
+                "kind": kind,
+                "type": type_name,
+                "set": int(match.group("set")),
+                "binding": int(match.group("binding")),
+                "access": access,
+            }
+        )
+    return resources
+
+
+def _runtime_host_interface_from_wgsl_source(
+    code: str,
+    *,
+    parser: str = RUNTIME_WGSL_REFLECTION_PARSER,
+    source: str = "package-artifact",
+) -> dict[str, Any]:
+    entry_points = _runtime_wgsl_reflect_entry_points(code)
+    resources = _runtime_wgsl_reflect_resources(code)
+    return {
+        "status": "ready",
+        "source": source,
+        "parser": parser,
+        "entryPointCount": len(entry_points),
+        "resourceCount": len(resources),
+        "entryPoints": entry_points,
+        "resources": resources,
+        "diagnostics": [],
+    }
+
+
 def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
     if not target_name:
         return None
@@ -10020,6 +10111,52 @@ def _runtime_package_inspection_host_interface(
                 "project.runtime-package-inspection.host-interface-artifact-not-ready",
             ),
         )
+    package_relative_path = artifact.get("packagePath")
+    if target_name == "wgsl":
+        if not _is_non_empty_string(package_relative_path):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        artifact_path = (package_root / package_relative_path).resolve()
+        if (
+            not _is_relative_to(artifact_path, package_root)
+            or not artifact_path.is_file()
+        ):
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        try:
+            host_interface = _runtime_host_interface_from_wgsl_source(
+                artifact_path.read_text(encoding="utf-8", errors="replace")
+            )
+        except OSError:
+            return _runtime_host_interface_empty(
+                "not-inspected",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-artifact-not-ready",
+                ),
+            )
+        if (
+            host_interface["entryPointCount"] == 0
+            and host_interface["resourceCount"] == 0
+        ):
+            return _runtime_host_interface_empty(
+                "unavailable",
+                parser=RUNTIME_WGSL_REFLECTION_PARSER,
+                diagnostics=(
+                    "project.runtime-package-inspection.host-interface-empty",
+                ),
+            )
+        return host_interface
     if source_spec is None:
         source_host_interface = _runtime_package_artifact_host_interface(artifact)
         if source_host_interface is not None:
@@ -10031,7 +10168,6 @@ def _runtime_package_inspection_host_interface(
             ),
         )
 
-    package_relative_path = artifact.get("packagePath")
     if not _is_non_empty_string(package_relative_path):
         return _runtime_host_interface_empty(
             "not-inspected",

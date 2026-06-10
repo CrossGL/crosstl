@@ -24457,6 +24457,95 @@ def test_inspect_runtime_package_uses_registered_target_parser_for_host_interfac
     assert host_interface["diagnostics"] == []
 
 
+def test_inspect_runtime_package_reflects_generated_wgsl_resource_bindings(tmp_path):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            sampler2D sourceTexture;
+            StructuredBuffer<float> values;
+            RWStructuredBuffer<float> outValues;
+
+            compute {
+                void main() {
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path,
+        source=source,
+        source_name="resource.cgl",
+        targets=("wgsl",),
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "wgsl-reflection"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"] == [
+        {"name": "compute_main", "stage": "compute", "executionConfig": {}}
+    ]
+    assert host_interface["resourceCount"] == 5
+    expected_resources = [
+        {
+            "name": "_Camera",
+            "kind": "uniform",
+            "type": "Camera",
+            "set": 0,
+            "binding": 0,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "texture_2d<f32>",
+            "set": 0,
+            "binding": 1,
+            "access": None,
+        },
+        {
+            "name": "sourceTexture_sampler",
+            "kind": "sampler",
+            "type": "sampler",
+            "set": 0,
+            "binding": 2,
+            "access": None,
+        },
+        {
+            "name": "values",
+            "kind": "buffer",
+            "type": "array<f32>",
+            "set": 0,
+            "binding": 3,
+            "access": "read",
+        },
+        {
+            "name": "outValues",
+            "kind": "buffer",
+            "type": "array<f32>",
+            "set": 0,
+            "binding": 4,
+            "access": "read_write",
+        },
+    ]
+    assert host_interface["resources"] == expected_resources
+    assert host_interface["diagnostics"] == []
+
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+    assert (
+        loader_manifest["loadUnits"][0]["hostInterface"]["resources"]
+        == expected_resources
+    )
+
+
 def test_inspect_runtime_package_reports_entry_point_parameter_resources(tmp_path):
     source = textwrap.dedent("""
         shader ResourceShader {
@@ -25170,8 +25259,8 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
     assert adapter["packagePath"] == "artifacts/out/wgsl/simple.wgsl"
     assert adapter["hostInterface"] == {
         "status": "ready",
-        "source": "source-artifact",
-        "parser": "cgl",
+        "source": "package-artifact",
+        "parser": "wgsl-reflection",
         "entryPointCount": 1,
         "resourceCount": 0,
         "entryPoints": [
