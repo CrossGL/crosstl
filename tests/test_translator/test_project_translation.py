@@ -23416,6 +23416,14 @@ def test_plan_runtime_host_bindings_from_runtime_package(tmp_path):
         payload["actions"][1]["message"]
     )
     assert payload["runtimePlan"]["contract"] == "runtime-loader-plan-v1"
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": True,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "verifiedArtifactCount": 1,
+        "failedArtifactCount": 0,
+    }
 
 
 def test_plan_runtime_host_bindings_rejects_failed_package(tmp_path):
@@ -23446,9 +23454,71 @@ def test_plan_runtime_host_bindings_rejects_failed_package(tmp_path):
     assert payload["summary"]["artifactCount"] == 0
     assert payload["targets"][0]["artifactCount"] == 0
     assert payload["actions"] == []
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": False,
+        "readyBindingCount": 0,
+        "failedBindingCount": 0,
+        "verifiedArtifactCount": 0,
+        "failedArtifactCount": 0,
+    }
     assert payload["diagnosticCounts"]["error"] == 1
     assert payload["diagnostics"][0]["code"] == (
-        "project.runtime-host-bindings.package-failed"
+        "project.runtime-package-inspection.package-failed"
+    )
+
+
+def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    (package_dir / "artifacts" / "out" / "cgl" / "simple.cgl").unlink()
+
+    payload = plan_runtime_host_bindings(package_dir / "runtime-package.json")
+
+    assert payload["success"] is False
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["summary"]["actionCount"] == 0
+    assert payload["targets"][0]["artifactCount"] == 0
+    assert payload["targets"][0]["artifacts"] == []
+    assert payload["targets"][0]["packagePaths"] == []
+    assert payload["actions"] == []
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": False,
+        "readyBindingCount": 0,
+        "failedBindingCount": 1,
+        "verifiedArtifactCount": 0,
+        "failedArtifactCount": 1,
+    }
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-package-inspection.artifact-missing"
+    )
+
+
+def test_plan_runtime_host_bindings_rejects_missing_source_remap(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    (
+        package_dir / "source-remaps" / "out" / "cgl" / "simple.source-remap.json"
+    ).unlink()
+
+    payload = plan_runtime_host_bindings(package_dir / "runtime-package.json")
+
+    assert payload["success"] is False
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["summary"]["actionCount"] == 0
+    assert payload["targets"][0]["artifactCount"] == 0
+    assert payload["actions"] == []
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": False,
+        "readyBindingCount": 0,
+        "failedBindingCount": 1,
+        "verifiedArtifactCount": 1,
+        "failedArtifactCount": 0,
+    }
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-package-inspection.source-remap-missing"
     )
 
 
@@ -23499,9 +23569,43 @@ def test_project_cli_plan_host_bindings_text_outputs_actions(tmp_path):
     assert "Summary: 1 targets, 1 artifacts, 2 actions, 1 runtime references" in (
         result.stdout
     )
+    assert "Package inspection: ok, 1 ready bindings, 0 failed bindings" in (
+        result.stdout
+    )
     assert "- cgl: 1 artifacts, 1 runtime references" in result.stdout
     assert "bind-runtime-artifact" in result.stdout
     assert "review-runtime-references" in result.stdout
+
+
+def test_project_cli_plan_host_bindings_text_rejects_stale_package(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    artifact_path = package_dir / "artifacts" / "out" / "cgl" / "simple.cgl"
+    artifact_path.write_text("// stale package artifact\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-bindings",
+            str(package_dir / "runtime-package.json"),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Status: failed" in result.stdout
+    assert "Package inspection: failed, 0 ready bindings, 1 failed bindings" in (
+        result.stdout
+    )
+    assert "Host binding actions:" not in result.stdout
+    assert "bind-runtime-artifact" not in result.stdout
+    assert "project.runtime-package-inspection.artifact-hash-mismatch" in result.stdout
 
 
 def test_project_cli_plan_host_bindings_json_writes_output(tmp_path):
@@ -23541,6 +23645,7 @@ def test_project_cli_plan_host_bindings_json_writes_output(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["kind"] == project_pipeline.RUNTIME_HOST_BINDING_PLAN_KIND
     assert payload["actions"][0]["kind"] == "bind-runtime-artifact"
+    assert payload["packageInspection"]["readyBindingCount"] == 1
 
 
 def test_plan_runtime_adapters_from_runtime_package(tmp_path):
