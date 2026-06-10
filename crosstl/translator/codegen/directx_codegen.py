@@ -7866,7 +7866,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             normalized = normalized[len("hlsl_") :]
 
         valid_names = {
+            "compute",
             "domain",
+            "fragment",
             "maxvertexcount",
             "maxtessfactor",
             "numthreads",
@@ -7874,6 +7876,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "outputtopology",
             "partitioning",
             "patchconstantfunc",
+            "stage_entry",
+            "vertex",
+            "workgroup_size",
         }
         if normalized in valid_names:
             return normalized
