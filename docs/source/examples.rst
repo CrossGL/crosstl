@@ -22,7 +22,7 @@ Translate from the command line
 
 .. code-block:: bash
 
-   python -m crosstl._crosstl examples/graphics/SimpleShader.cgl --backend directx
+   python -m crosstl translate examples/graphics/SimpleShader.cgl --backend directx
 
 Translate native shader input
 -----------------------------
