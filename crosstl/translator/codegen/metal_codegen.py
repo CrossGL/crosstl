@@ -3650,7 +3650,9 @@ class MetalCodeGen:
                     "gl_VertexIndex"
                 ] = explicit_stage_builtins["vertex_id"]
             reserved_builtin_names = set(reserved_parameter_names)
-            reserved_builtin_names.update(self.metal_function_local_variable_names(func))
+            reserved_builtin_names.update(
+                self.metal_function_local_variable_names(func)
+            )
             for (
                 builtin_name,
                 name,
@@ -3661,9 +3663,7 @@ class MetalCodeGen:
             ):
                 params.append(f"{param_type} {name} [[{attribute}]]")
                 reserved_parameter_names.add(name)
-                self.current_metal_graphics_builtin_parameter_names[
-                    builtin_name
-                ] = name
+                self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
 
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
@@ -3950,8 +3950,8 @@ class MetalCodeGen:
         if shader_type == "vertex":
             function_name = entry_name or f"vertex_{func.name}"
             if vertex_stage_input_parameters:
-                stage_input_struct_name = (
-                    self.unique_vertex_stage_input_struct_name(function_name)
+                stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
+                    function_name
                 )
                 stage_input_parameter_name = self.unique_metal_generated_name(
                     "_crossglInput",
