@@ -408,6 +408,115 @@ def test_webgl_codegen_explicit_graphics_stage_ignores_unsupported_siblings():
     assert "// Compute Shader" not in generated
 
 
+@pytest.mark.parametrize("buffer_type", ("StructuredBuffer", "RWStructuredBuffer"))
+def test_webgl_codegen_rejects_storage_buffer_resources(buffer_type):
+    shader = f"""
+    shader WebGLNoStorageBuffer {{
+        {buffer_type}<int> values;
+
+        fragment {{
+            vec4 main() @ gl_FragColor {{
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support storage buffer resource "
+            rf"'values' \({buffer_type}\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_glsl_buffer_blocks():
+    shader = """
+    shader WebGLNoGlslBufferBlock {
+        layout(std430, binding = 0) buffer DataBlock {
+            float values[];
+        } data;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support GLSL buffer block resource 'data'",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_storage_image_resources():
+    shader = """
+    shader WebGLNoStorageImage {
+        image2D target;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WebGL target does not support storage image resource "
+            r"'target' \(image2D\)"
+        ),
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_storage_image_intrinsics():
+    shader = """
+    shader WebGLNoStorageImageIntrinsic {
+        sampler2D colorTex;
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return imageLoad(colorTex, ivec2(0, 0));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support storage image intrinsic 'imageLoad'",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_rejects_atomics():
+    shader = """
+    shader WebGLNoAtomics {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint value = 0u;
+                uint oldValue = atomicAdd(value, 1u);
+                return vec4(float(oldValue));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support atomic operation 'atomicAdd'",
+    ):
+        WebGLCodeGen().generate(parse_shader(shader))
+
+
 @pytest.mark.parametrize(
     "stage",
     (

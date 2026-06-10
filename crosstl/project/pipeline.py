@@ -1075,6 +1075,27 @@ TOOLCHAIN_AVAILABILITY_COMMANDS = {
     "slang": ("slangc", "--version"),
     "wgsl": ("naga", "--version"),
 }
+DIRECTX_DXC_LIBRARY_ATTRIBUTES = frozenset(
+    (
+        "raygeneration",
+        "intersection",
+        "closesthit",
+        "anyhit",
+        "miss",
+        "callable",
+    )
+)
+DIRECTX_DXC_ENTRY_PROFILES = (
+    ("VSMain", "vs_6_0"),
+    ("PSMain", "ps_6_0"),
+    ("CSMain", "cs_6_0"),
+    ("GSMain", "gs_6_0"),
+    ("HSMain", "hs_6_0"),
+    ("DSMain", "ds_6_0"),
+    ("ASMain", "as_6_5"),
+    ("MSMain", "ms_6_5"),
+)
+DIRECTX_DXC_DEFAULT_ENTRY_PROFILE = ("VSMain", "vs_6_0")
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
 RUNTIME_ADAPTER_CATALOG = {
@@ -17737,6 +17758,8 @@ def _toolchain_smoke_command(
     *,
     artifact: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], str] | None:
+    if target == "directx":
+        return _directx_dxc_smoke_command(tools[0], artifact_path), "artifact"
     if target == "opengl":
         return (
             [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
@@ -17752,6 +17775,49 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
+    entry_profile = _directx_dxc_entry_profile(artifact_path)
+    if entry_profile is None:
+        return [tool, "-T", "lib_6_3", str(artifact_path), "-Fo", os.devnull]
+
+    entry, profile = entry_profile
+    return [
+        tool,
+        "-T",
+        profile,
+        "-E",
+        entry,
+        str(artifact_path),
+        "-Fo",
+        os.devnull,
+    ]
+
+
+def _directx_dxc_entry_profile(artifact_path: Path) -> tuple[str, str] | None:
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return DIRECTX_DXC_DEFAULT_ENTRY_PROFILE
+
+    lowered = source.lower()
+    if any(
+        f'[shader("{attribute}")]' in lowered
+        for attribute in DIRECTX_DXC_LIBRARY_ATTRIBUTES
+    ):
+        return None
+
+    matches = []
+    for entry, profile in DIRECTX_DXC_ENTRY_PROFILES:
+        match = re.search(rf"\b{re.escape(entry)}\s*\(", source)
+        if match:
+            matches.append((match.start(), entry, profile))
+    if not matches:
+        return DIRECTX_DXC_DEFAULT_ENTRY_PROFILE
+
+    _position, entry, profile = min(matches, key=lambda item: item[0])
+    return entry, profile
 
 
 GLSLANG_STAGE_BY_SUFFIX = {

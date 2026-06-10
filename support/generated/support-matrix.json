@@ -275,11 +275,43 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 8,
+        "unsupported_marker_count": 16,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "UNSUPPORTED_STAGE_NAMES = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support storage image resource \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support storage image intrinsic \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "f\"WebGL target does not support atomic operation '{func_name}'\""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support GLSL buffer block resource \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support storage buffer resource \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support storage image resource \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support storage buffer resource \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "f\"WebGL target does not support GLSL buffer block resource '{name}'\""
           },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -315,7 +347,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 19
+        "test_count": 24
       },
       "translator_codegen": {
         "exists": true,
@@ -9040,7 +9072,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -9201,7 +9233,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -9362,7 +9394,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -9523,7 +9555,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -9684,7 +9716,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -9846,7 +9878,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -10007,7 +10039,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -10168,7 +10200,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -10331,7 +10363,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -10493,7 +10525,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
@@ -10655,7 +10687,7 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
-            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",

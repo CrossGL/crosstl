@@ -2360,7 +2360,7 @@ def test_project_validation_hooks_document_migration_contract_checks():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
-            "test_validate_project_report_rejects_availability_toolchain_run_"
+            "test_validate_project_report_rejects_directx_artifact_toolchain_run_"
             "argv_mismatch"
         ) in backend_support["evidence"]
         assert (

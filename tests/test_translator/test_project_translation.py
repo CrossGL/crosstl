@@ -9891,6 +9891,82 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
     ]
 
 
+def test_translate_project_directx_smoke_compiles_generated_artifact_with_dxc(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    artifact_path = (repo / "out" / "directx" / "simple.hlsl").resolve()
+    expected_command = [
+        "dxc",
+        "-T",
+        "vs_6_0",
+        "-E",
+        "VSMain",
+        str(artifact_path),
+        "-Fo",
+        project_pipeline.os.devnull,
+    ]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/dxc" if tool == "dxc" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "directx",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "dxc",
+                    "path": "/usr/bin/dxc",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["path"] == "out/directx/simple.hlsl"
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "directx",
+            "path": "out/directx/simple.hlsl",
+            "command": expected_command,
+            "checkKind": "artifact",
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "",
+            "stderr": "",
+        }
+    ]
+
+
 def test_translate_project_wgsl_smoke_validates_generated_artifact_with_naga(
     tmp_path, monkeypatch
 ):
@@ -10073,6 +10149,62 @@ def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "vulkan", ["spirv-val", "spirv-as"], binary_shader
     ) == (["spirv-val", str(binary_shader)], "artifact")
+
+
+def test_directx_toolchain_smoke_command_compiles_detected_entry(tmp_path):
+    shader = tmp_path / "shader.hlsl"
+    shader.write_text(
+        "float4 PSMain() : SV_Target { return 1.0.xxxx; }\n",
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        [
+            "dxc",
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            str(shader),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        "artifact",
+    )
+
+
+def test_directx_toolchain_smoke_command_compiles_library_targets(tmp_path):
+    shader = tmp_path / "ray_library.hlsl"
+    shader.write_text(
+        '[shader("raygeneration")]\nvoid RayGenMain() {}\n',
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        ["dxc", "-T", "lib_6_3", str(shader), "-Fo", project_pipeline.os.devnull],
+        "artifact",
+    )
+
+
+def test_directx_toolchain_smoke_command_uses_vertex_default_for_unknown_entry(
+    tmp_path,
+):
+    shader = tmp_path / "shader.hlsl"
+    shader.write_text("void main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command("directx", ["dxc"], shader) == (
+        [
+            "dxc",
+            "-T",
+            "vs_6_0",
+            "-E",
+            "VSMain",
+            str(shader),
+            "-Fo",
+            project_pipeline.os.devnull,
+        ],
+        "artifact",
+    )
 
 
 def test_wgsl_toolchain_smoke_command_validates_artifact_with_naga(tmp_path):
@@ -12850,9 +12982,18 @@ def test_validate_project_report_rejects_toolchain_run_command_target_mismatch(
         (
             "directx",
             "out/directx/simple.hlsl",
-            ["dxc", "-help"],
-            "artifact",
+            [
+                "dxc",
+                "-T",
+                "vs_6_0",
+                "-E",
+                "VSMain",
+                "out/directx/simple.hlsl",
+                "-Fo",
+                project_pipeline.os.devnull,
+            ],
             "tool-availability",
+            "artifact",
         ),
     ),
 )
@@ -12984,7 +13125,7 @@ def test_validate_project_report_rejects_artifact_toolchain_run_argv_mismatch(
     ) in diagnostic["message"]
 
 
-def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch(
+def test_validate_project_report_rejects_directx_artifact_toolchain_run_argv_mismatch(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -13018,8 +13159,17 @@ def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatc
                             "sourceBackend": "cgl",
                             "target": "directx",
                             "path": "out/directx/simple.hlsl",
-                            "command": ["dxc", "-T", "cs_6_0"],
-                            "checkKind": "tool-availability",
+                            "command": [
+                                "dxc",
+                                "-T",
+                                "cs_6_0",
+                                "-E",
+                                "CSMain",
+                                "out/directx/simple.hlsl",
+                                "-Fo",
+                                os.devnull,
+                            ],
+                            "checkKind": "artifact",
                             "returncode": 0,
                             "status": "ok",
                             "stdout": "",
@@ -13039,8 +13189,8 @@ def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatc
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.validate.invalid-report"
     assert (
-        "validation.toolchainRuns[0].command must match the configured tool "
-        "availability check for target directx"
+        "validation.toolchainRuns[0].command must match the configured "
+        "artifact check for target directx"
     ) in diagnostic["message"]
 
 
@@ -18575,7 +18725,6 @@ def test_inspect_project_report_omits_invalid_toolchain_run_commands(
     ("target", "extension", "tool", "command"),
     (
         ("cuda", "cu", "nvcc", ["nvcc", "--version"]),
-        ("directx", "hlsl", "dxc", ["dxc", "-help"]),
         ("hip", "hip", "hipcc", ["hipcc", "--version"]),
         ("metal", "metal", "xcrun", ["xcrun", "metal", "-v"]),
         ("mojo", "mojo", "mojo", ["mojo", "--version"]),

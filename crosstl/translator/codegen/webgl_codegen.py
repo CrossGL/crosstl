@@ -26,11 +26,37 @@ class WebGLCodeGen(GLSLCodeGen):
         ("int", "precision highp int;"),
     )
     SUPPORTED_STAGE_NAMES = {"fragment", "vertex"}
+    STORAGE_IMAGE_INTRINSIC_NAMES = {
+        "imageLoad",
+        "imageStore",
+        "imageSize",
+        "imageSamples",
+        "imageAtomicAdd",
+        "imageAtomicMin",
+        "imageAtomicMax",
+        "imageAtomicAnd",
+        "imageAtomicOr",
+        "imageAtomicXor",
+        "imageAtomicExchange",
+        "imageAtomicCompSwap",
+    }
+    ATOMIC_INTRINSIC_NAMES = GLSLCodeGen.GLSL_MEMORY_ATOMIC_FUNCTIONS | {
+        "atomicCounterIncrement",
+        "atomicCounterDecrement",
+        "atomicCounter",
+        "atomicCounterAdd",
+    }
 
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
 
     def map_image_base_type_with_format(self, vtype, node=None):
+        if self.is_storage_image_type(vtype):
+            raise ValueError(
+                "WebGL target does not support storage image resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}' "
+                f"({self.type_name_string(self.resource_base_type(vtype))})"
+            )
         mapped_type = super().map_image_base_type_with_format(vtype, node)
         return self.sampled_image_type(mapped_type)
 
@@ -41,7 +67,20 @@ class WebGLCodeGen(GLSLCodeGen):
         replacement = getattr(self, "_webgl_expression_replacements", {}).get(id(expr))
         if replacement is not None:
             return replacement
+        if isinstance(expr, FunctionCallNode):
+            self.validate_webgl_function_call_support(self.function_call_name(expr))
         return super().generate_expression(expr, is_main=is_main)
+
+    def validate_webgl_function_call_support(self, func_name):
+        if func_name in self.STORAGE_IMAGE_INTRINSIC_NAMES:
+            raise ValueError(
+                "WebGL target does not support storage image intrinsic "
+                f"'{func_name}'"
+            )
+        if func_name in self.ATOMIC_INTRINSIC_NAMES:
+            raise ValueError(
+                f"WebGL target does not support atomic operation '{func_name}'"
+            )
 
     def glsl_dynamic_resource_call_dispatch_info(self, expr):
         dispatch = super().glsl_dynamic_resource_call_dispatch_info(expr)
@@ -364,11 +403,73 @@ class WebGLCodeGen(GLSLCodeGen):
     def generate_program(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
         self.validate_webgl_stage_support(ast, target_stage)
+        supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
+        self.validate_webgl_resource_support(supported_ast)
         code = super().generate_program(
-            self.webgl_supported_stage_ast(ast, target_stage),
+            supported_ast,
             target_stage=target_stage,
         )
         return self._with_default_precision(code)
+
+    def validate_webgl_resource_support(self, ast):
+        for node in self.walk_ast(ast):
+            self.validate_webgl_node_resource_support(node)
+
+    def validate_webgl_node_resource_support(self, node):
+        if isinstance(node, FunctionCallNode):
+            self.validate_webgl_function_call_support(self.function_call_name(node))
+            return
+
+        node_type = self.resource_node_type(node)
+        pointer_buffer_type = self.pointer_buffer_structured_type(node, node_type)
+        if pointer_buffer_type is not None:
+            node_type = pointer_buffer_type
+
+        if self.is_webgl_glsl_buffer_block_node(node):
+            raise ValueError(
+                "WebGL target does not support GLSL buffer block resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}'"
+            )
+        if self.is_structured_buffer_type(node_type):
+            raise ValueError(
+                "WebGL target does not support storage buffer resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}' "
+                f"({self.structured_buffer_type_name(node_type)})"
+            )
+        if self.is_storage_image_type(node_type):
+            raise ValueError(
+                "WebGL target does not support storage image resource "
+                f"'{self.resource_node_name(node, '<unnamed>')}' "
+                f"({self.type_name_string(self.resource_base_type(node_type))})"
+            )
+
+    def is_webgl_glsl_buffer_block_node(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "buffer" in qualifiers:
+            return True
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == "glsl_buffer_block":
+                return True
+        return False
+
+    def structured_buffer_block_declaration(
+        self, vtype, name, binding, array_size=None, node=None
+    ):
+        raise ValueError(
+            "WebGL target does not support storage buffer resource "
+            f"'{name}' ({self.structured_buffer_type_name(vtype)})"
+        )
+
+    def glsl_buffer_block_declaration(
+        self, node, vtype, name, binding, array_suffix=""
+    ):
+        raise ValueError(
+            f"WebGL target does not support GLSL buffer block resource '{name}'"
+        )
 
     def validate_webgl_stage_support(self, ast, target_stage=None):
         normalized_target_stage = normalize_stage_name(target_stage)
