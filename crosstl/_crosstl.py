@@ -8,7 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
-from .backend.OpenCL.target_lowering import normalize_opencl_intermediate_for_target
+from .backend.OpenCL.target_lowering import (
+    normalize_opencl_intermediate_for_target,
+    validate_opencl_intermediate_for_target,
+)
 from .translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -164,6 +167,12 @@ def translate(
                 raise ValueError(f"Reverse translation not supported for: {file_path}")
             codegen = source_spec.reverse_codegen_factory()
             generated_code = codegen.generate(ast)
+            if source_spec.name == "opencl":
+                cgl_spec = SOURCE_REGISTRY.get("cgl")
+                if not cgl_spec:
+                    raise ValueError("CrossGL parser not available for validation")
+                cgl_ast = cgl_spec.parse(generated_code)
+                validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
         else:
             if not source_spec.reverse_codegen_factory:
                 raise ValueError(
@@ -178,6 +187,7 @@ def translate(
                 raise ValueError("CrossGL parser not available for intermediate step")
             cgl_ast = cgl_spec.parse(intermediate_code)
             if source_spec.name == "opencl" and normalized_backend != "webgl":
+                validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             if source_spec.name == "cuda" and normalized_backend in {"metal", "vulkan"}:
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)

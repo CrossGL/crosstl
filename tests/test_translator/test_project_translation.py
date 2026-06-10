@@ -27345,6 +27345,144 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "kernel void kernel_scale(" in outputs["metal"]
 
 
+def test_translate_project_khronos_opencl_reduce_reports_target_diagnostics(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reduce.cl").write_text(
+        textwrap.dedent("""
+            int op(int lhs, int rhs);
+            int work_group_reduce_op(int val);
+            int sub_group_reduce_op(int val);
+
+            int read_local(local int* shared, size_t count, int zero, size_t i) {
+                return i < count ? shared[i] : zero;
+            }
+
+            size_t zmin(size_t a, size_t b) {
+                return a < b ? a : b;
+            }
+
+            kernel void reduce(
+                global int* front,
+                global int* back,
+                local int* shared,
+                unsigned long length,
+                int zero_elem
+            ) {
+                const size_t lid = get_local_id(0),
+                             lsi = get_local_size(0),
+                             wid = get_group_id(0),
+                             wsi = get_num_groups(0);
+                const size_t wg_stride = lsi * 2,
+                             valid_count = zmin(
+                                 wg_stride,
+                                 (size_t)(length) - wid * wg_stride
+                             );
+
+                event_t read;
+                async_work_group_copy(
+                    shared,
+                    front + wid * wg_stride,
+                    valid_count,
+                    read
+                );
+                wait_group_events(1, &read);
+                barrier(CLK_LOCAL_MEM_FENCE);
+
+                #ifdef USE_WORK_GROUP_REDUCE
+                int temp = work_group_reduce_op(
+                    op(
+                        read_local(shared, valid_count, zero_elem, lid),
+                        read_local(shared, valid_count, zero_elem, lid + lsi)
+                    )
+                );
+                if (lid == 0) back[wid] = temp;
+                #else
+                #ifdef USE_SUB_GROUP_REDUCE
+                const uint sid = get_sub_group_id();
+                const uint ssi = get_sub_group_size();
+                const uint slid = get_sub_group_local_id();
+
+                for (int i = valid_count ; i != 0 ; i /= ssi * 2) {
+                    int temp = zero_elem;
+                    if (sid * ssi < valid_count) {
+                        temp = sub_group_reduce_op(
+                            op(
+                                read_local(
+                                    shared,
+                                    i,
+                                    zero_elem,
+                                    sid * 2 * ssi + slid
+                                ),
+                                read_local(
+                                    shared,
+                                    i,
+                                    zero_elem,
+                                    sid * 2 * ssi + slid + ssi
+                                )
+                            )
+                        );
+                    }
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                    if (sid * ssi < valid_count) shared[sid] = temp;
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                }
+                if (lid == 0) back[wid] = shared[0];
+                #else
+                for (int i = lsi; i != 0; i /= 2) {
+                    if (lid < i) {
+                        shared[lid] = op(
+                            read_local(shared, valid_count, zero_elem, lid),
+                            read_local(shared, valid_count, zero_elem, lid + i)
+                        );
+                    }
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                }
+                if (lid == 0) back[wid] = shared[0];
+                #endif
+                #endif
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "opengl", "metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    expected_targets = {"cgl", "opengl", "metal", "vulkan"}
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {(target, "failed") for target in expected_targets}
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 4
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 4}
+    assert payload["summary"]["diagnosticsByTarget"] == {
+        target: 1 for target in expected_targets
+    }
+
+    for artifact in payload["artifacts"]:
+        assert not (repo / artifact["path"]).exists()
+        assert "opencl.target.unsupported" in artifact["error"]
+        assert (
+            "unresolved non-void helper declarations without bodies: "
+            "op, sub_group_reduce_op, work_group_reduce_op"
+        ) in artifact["error"]
+        assert "read_local(shared_: ptr<i32>)" in artifact["error"]
+
+    assert len(payload["diagnostics"]) == 4
+    for diagnostic in payload["diagnostics"]:
+        assert diagnostic["code"] == "project.translate.failed"
+        assert diagnostic["sourceBackend"] == "opencl"
+        assert diagnostic["location"]["file"] == "reduce.cl"
+        assert diagnostic["target"] in expected_targets
+        assert "opencl.target.unsupported" in diagnostic["message"]
+
+
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     tmp_path,
 ):
