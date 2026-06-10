@@ -16,10 +16,26 @@ MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
 MLX_COMMIT = "968d264f2903d578e699c4452a4dbf48633921aa"
 MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
+MLX_UNARY_SOURCE = "mlx/backend/metal/kernels/unary.metal"
+MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
+    "mlx/backend/metal/kernels/arange.metal",
+    "mlx/backend/metal/kernels/arg_reduce.metal",
+    "mlx/backend/metal/kernels/binary.metal",
+    "mlx/backend/metal/kernels/binary_two.metal",
+    "mlx/backend/metal/kernels/copy.metal",
+    "mlx/backend/metal/kernels/fence.metal",
+    "mlx/backend/metal/kernels/random.metal",
+    "mlx/backend/metal/kernels/rope.metal",
+    "mlx/backend/metal/kernels/ternary.metal",
+)
 EXPECTED_METAL_KERNEL_COUNT = 40
 OPENGL_BFLOAT16_GAP = "OpenGL asuint alias cannot bitcast from bfloat16_t"
+VULKAN_UNARY_LITERAL_GAP = "Integer 2147483648 does not fit in a 32-bit signed integer"
 ISSUE_INSTANTIATE_KERNEL = "https://github.com/CrossGL/crosstl/issues/827"
 ISSUE_OPENGL_BFLOAT16 = "https://github.com/CrossGL/crosstl/issues/828"
+ISSUE_DIRECTX_THREADGROUP = "https://github.com/CrossGL/crosstl/issues/834"
+ISSUE_VULKAN_THREADGROUP_METADATA = "https://github.com/CrossGL/crosstl/issues/835"
+ISSUE_VULKAN_UNARY_LITERAL = "https://github.com/CrossGL/crosstl/issues/836"
 
 
 class PortingCheckError(RuntimeError):
@@ -117,17 +133,19 @@ def _run_command(
 def _write_project_config(
     path: Path,
     *,
-    include: str,
+    include: str | Sequence[str],
     targets: Sequence[str],
     output_dir: str,
 ) -> None:
+    include_values = [include] if isinstance(include, str) else list(include)
+    include_list = ", ".join(json.dumps(value) for value in include_values)
     target_list = ", ".join(json.dumps(target) for target in targets)
     path.write_text(
         "\n".join(
             [
                 "[project]",
                 f'source_roots = ["{MLX_METAL_KERNEL_ROOT}"]',
-                f'include = ["{include}"]',
+                f"include = [{include_list}]",
                 'include_dirs = ["."]',
                 f"targets = [{target_list}]",
                 f'output_dir = "{output_dir}"',
@@ -147,6 +165,11 @@ def _verify_mlx_checkout(mlx_root: Path, python: str, log_dir: Path) -> dict[str
         (mlx_root / MLX_ARANGE_SOURCE).is_file(),
         f"MLX Metal frontier source is missing: {MLX_ARANGE_SOURCE}",
     )
+    for source in (*MLX_DIRECTX_VULKAN_FRONTIER_SOURCES, MLX_UNARY_SOURCE):
+        _require(
+            (mlx_root / source).is_file(),
+            f"MLX Metal frontier source is missing: {source}",
+        )
     result = _run_command(
         "mlx-revision",
         ["git", "-C", str(mlx_root), "rev-parse", "HEAD"],
@@ -214,7 +237,8 @@ def _scan_metal_kernels(
         "MLX Metal scan reported errors",
     )
     unit_paths = {unit.get("path") for unit in units if isinstance(unit, dict)}
-    _require(MLX_ARANGE_SOURCE in unit_paths, f"{MLX_ARANGE_SOURCE} was not scanned")
+    for source in (*MLX_DIRECTX_VULKAN_FRONTIER_SOURCES, MLX_UNARY_SOURCE):
+        _require(source in unit_paths, f"{source} was not scanned")
     return {
         "name": "metal-kernel-scan",
         "status": "passed",
@@ -225,7 +249,7 @@ def _scan_metal_kernels(
     }
 
 
-def _translate_arange_frontier(
+def _translate_directx_vulkan_frontier(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -235,16 +259,16 @@ def _translate_arange_frontier(
     *,
     require_vulkan_toolchain: bool,
 ) -> dict[str, Any]:
-    config_path = config_dir / "arange-directx-vulkan.toml"
-    report_path = report_dir / "arange-directx-vulkan.json"
+    config_path = config_dir / "directx-vulkan-frontier.toml"
+    report_path = report_dir / "directx-vulkan-frontier.json"
     _write_project_config(
         config_path,
-        include=MLX_ARANGE_SOURCE,
+        include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
         targets=("directx", "vulkan"),
-        output_dir=_relpath(work_dir / "out-arange-directx-vulkan", mlx_root),
+        output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
     )
     _run_command(
-        "translate-arange-directx-vulkan",
+        "translate-directx-vulkan-frontier",
         [
             python,
             "-m",
@@ -262,35 +286,43 @@ def _translate_arange_frontier(
     payload = _load_json(report_path)
     summary = payload.get("summary", {})
     _require(isinstance(summary, dict), "translation report summary must be an object")
-    _require(summary.get("unitCount") == 1, "arange translation must scan one unit")
+    frontier_count = len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
     _require(
-        summary.get("artifactCount") == 2, "arange translation must emit two artifacts"
+        summary.get("unitCount") == frontier_count,
+        f"DirectX/Vulkan frontier translation must scan {frontier_count} units",
     )
     _require(
-        summary.get("translatedCount") == 2,
-        "arange translation did not emit both artifacts",
+        summary.get("artifactCount") == frontier_count * 2,
+        "DirectX/Vulkan frontier translation must emit {} artifacts".format(
+            frontier_count * 2
+        ),
     )
     _require(
-        summary.get("failedCount") == 0, "arange translation reported failed artifacts"
+        summary.get("translatedCount") == frontier_count * 2,
+        "DirectX/Vulkan frontier translation did not emit every artifact",
+    )
+    _require(
+        summary.get("failedCount") == 0,
+        "DirectX/Vulkan frontier translation reported failed artifacts",
     )
     _require(
         summary.get("diagnosticCounts", {}).get("error", 0) == 0,
-        "arange DirectX/Vulkan translation reported errors",
+        "DirectX/Vulkan frontier translation reported errors",
     )
     artifacts_by_target = summary.get("artifactsByTarget", {})
     for target in ("directx", "vulkan"):
         target_summary = artifacts_by_target.get(target, {})
         _require(
-            target_summary.get("translatedCount") == 1
+            target_summary.get("translatedCount") == frontier_count
             and target_summary.get("failedCount") == 0,
-            f"arange {target} artifact was not translated cleanly",
+            f"DirectX/Vulkan frontier {target} artifacts were not translated cleanly",
         )
     validation = payload.get("validation", {})
     _require(isinstance(validation, dict), "translation validation must be an object")
     artifact_validation = validation.get("summary", {})
     _require(
         artifact_validation.get("failedCount") == 0,
-        "artifact validation reported failures for arange DirectX/Vulkan outputs",
+        "artifact validation reported failures for DirectX/Vulkan frontier outputs",
     )
     toolchain_runs = validation.get("toolchainRuns", [])
     _require(isinstance(toolchain_runs, list), "toolchainRuns must be a list")
@@ -301,15 +333,18 @@ def _translate_arange_frontier(
     ]
     if require_vulkan_toolchain:
         _require(
-            vulkan_runs, "Vulkan toolchain validation was required but did not run"
+            len(vulkan_runs) == frontier_count,
+            "Vulkan toolchain validation was required for every frontier artifact",
         )
     for run in vulkan_runs:
         _require(run.get("status") == "ok", "Vulkan toolchain validation failed")
     return {
-        "name": "arange-directx-vulkan",
+        "name": "directx-vulkan-frontier",
         "status": "passed",
         "report": _relpath(report_path, mlx_root),
-        "source": MLX_ARANGE_SOURCE,
+        "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "unitCount": frontier_count,
+        "artifactCount": frontier_count * 2,
         "targets": ["directx", "vulkan"],
         "toolchainRuns": len(toolchain_runs),
         "vulkanToolchainRequired": require_vulkan_toolchain,
@@ -387,6 +422,111 @@ def _check_opengl_gap(
     }
 
 
+def _diagnostic_messages(payload: dict[str, Any]) -> list[str]:
+    messages: list[str] = []
+    for diagnostic in payload.get("diagnostics", []):
+        if isinstance(diagnostic, dict):
+            message = diagnostic.get("message")
+            if isinstance(message, str):
+                messages.append(message)
+    for artifact in payload.get("artifacts", []):
+        if isinstance(artifact, dict):
+            error = artifact.get("error")
+            if isinstance(error, str):
+                messages.append(error)
+    validation = payload.get("validation", {})
+    if isinstance(validation, dict):
+        for run in validation.get("toolchainRuns", []):
+            if isinstance(run, dict):
+                for key in ("stderr", "stdout"):
+                    message = run.get(key)
+                    if isinstance(message, str):
+                        messages.append(message)
+    return messages
+
+
+def _check_unary_vulkan_toolchain_gap(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_vulkan_toolchain: bool,
+) -> dict[str, Any]:
+    config_path = config_dir / "unary-vulkan-toolchain.toml"
+    report_path = report_dir / "unary-vulkan-toolchain.json"
+    _write_project_config(
+        config_path,
+        include=MLX_UNARY_SOURCE,
+        targets=("vulkan",),
+        output_dir=_relpath(work_dir / "out-unary-vulkan-toolchain", mlx_root),
+    )
+    result = _run_command(
+        "translate-unary-vulkan-toolchain",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--run-toolchains",
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    payload = _load_json(report_path)
+    validation = payload.get("validation", {})
+    _require(isinstance(validation, dict), "unary validation must be an object")
+    toolchain_runs = validation.get("toolchainRuns", [])
+    _require(isinstance(toolchain_runs, list), "unary toolchainRuns must be a list")
+    vulkan_runs = [
+        run
+        for run in toolchain_runs
+        if isinstance(run, dict) and run.get("target") == "vulkan"
+    ]
+    if not vulkan_runs:
+        _require(
+            not require_vulkan_toolchain,
+            "Vulkan unary toolchain validation was required but did not run",
+        )
+        return {
+            "name": "unary-vulkan-toolchain-gap",
+            "status": "not-run",
+            "report": _relpath(report_path, mlx_root),
+            "source": MLX_UNARY_SOURCE,
+            "issue": ISSUE_VULKAN_UNARY_LITERAL,
+            "reason": "vulkan toolchain unavailable",
+        }
+    failed_runs = [run for run in vulkan_runs if run.get("status") != "ok"]
+    if result.returncode == 0 and not failed_runs:
+        return {
+            "name": "unary-vulkan-toolchain-gap",
+            "status": "resolved",
+            "report": _relpath(report_path, mlx_root),
+            "source": MLX_UNARY_SOURCE,
+            "issue": ISSUE_VULKAN_UNARY_LITERAL,
+        }
+    messages = _diagnostic_messages(payload)
+    _require(
+        any(VULKAN_UNARY_LITERAL_GAP in message for message in messages),
+        f"Vulkan unary failure did not match the tracked MLX literal gap: {ISSUE_VULKAN_UNARY_LITERAL}",
+    )
+    return {
+        "name": "unary-vulkan-toolchain-gap",
+        "status": "expected-gap",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_UNARY_SOURCE,
+        "issue": ISSUE_VULKAN_UNARY_LITERAL,
+        "message": VULKAN_UNARY_LITERAL_GAP,
+    }
+
+
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
     work_dir = _resolve_work_dir(mlx_root, args.work_dir)
@@ -408,7 +548,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             log_dir,
             args.python,
         ),
-        _translate_arange_frontier(
+        _translate_directx_vulkan_frontier(
             mlx_root,
             work_dir,
             config_dir,
@@ -425,6 +565,15 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             log_dir,
             args.python,
         ),
+        _check_unary_vulkan_toolchain_gap(
+            mlx_root,
+            work_dir,
+            config_dir,
+            report_dir,
+            log_dir,
+            args.python,
+            require_vulkan_toolchain=args.require_vulkan_toolchain,
+        ),
     ]
     return {
         "schema_version": 1,
@@ -435,11 +584,17 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         },
         "scope": {
             "sourceRoot": MLX_METAL_KERNEL_ROOT,
-            "frontierSource": MLX_ARANGE_SOURCE,
+            "frontierSources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
         },
-        "trackedIssues": [ISSUE_INSTANTIATE_KERNEL, ISSUE_OPENGL_BFLOAT16],
+        "trackedIssues": [
+            ISSUE_INSTANTIATE_KERNEL,
+            ISSUE_OPENGL_BFLOAT16,
+            ISSUE_DIRECTX_THREADGROUP,
+            ISSUE_VULKAN_THREADGROUP_METADATA,
+            ISSUE_VULKAN_UNARY_LITERAL,
+        ],
         "checks": checks,
         "status": "passed",
     }
