@@ -87,6 +87,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case directx-graphics-samples-hello-texture \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
@@ -120,6 +121,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case directx-graphics-samples-hello-texture \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
@@ -145,6 +147,7 @@ jobs:
           out_dir="${RUNNER_TEMP}/demo-metal-air"
           mkdir -p "$out_dir"
           for shader in \
+            demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.frag.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.vert.metal \
             demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
@@ -173,6 +176,7 @@ jobs:
             --run-toolchains \
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
+            --case directx-graphics-samples-hello-texture \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
