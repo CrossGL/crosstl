@@ -33,6 +33,7 @@ RUNTIME_ARTIFACT_MANIFEST_KIND = "crosstl-runtime-artifact-manifest"
 RUNTIME_PACKAGE_KIND = "crosstl-runtime-package"
 RUNTIME_HOST_BINDING_PLAN_KIND = "crosstl-runtime-host-binding-plan"
 RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
+RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -42,6 +43,7 @@ RUNTIME_ARTIFACT_MANIFEST_SCOPE = "translated-artifact-runtime-consumption"
 RUNTIME_PACKAGE_SCOPE = "runtime-artifact-handoff-package"
 RUNTIME_HOST_BINDING_PLAN_SCOPE = "host-binding-planning"
 RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
+RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -65,6 +67,12 @@ RUNTIME_HOST_BINDING_PLAN_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_PACKAGE_INSPECTION_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_ADAPTER_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -375,6 +383,72 @@ RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
         "sizeBytes",
         "sourceRemap",
         "diagnostics",
+    )
+)
+RUNTIME_ADAPTER_PLAN_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourcePackage",
+        "sourcePackageHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "packageRoot",
+        "project",
+        "summary",
+        "targets",
+        "adapters",
+        "actions",
+        "runtimePlan",
+        "packageInspection",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_ADAPTER_PLAN_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "adapterKind",
+        "artifactCount",
+        "readyBindingCount",
+        "failedBindingCount",
+        "runtimeReferenceCount",
+        "requiredTools",
+        "loaderResponsibilities",
+        "bindings",
+        "packagePaths",
+    )
+)
+RUNTIME_ADAPTER_PLAN_ADAPTER_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "binding",
+        "artifact",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "variant",
+        "defines",
+        "sourceRemap",
+        "requiredTools",
+        "hostResponsibilities",
+        "validation",
+    )
+)
+RUNTIME_ADAPTER_PLAN_ACTION_FIELDS = frozenset(
+    (
+        "kind",
+        "severity",
+        "message",
+        "target",
+        "adapter",
+        "binding",
+        "packagePath",
     )
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
@@ -980,6 +1054,125 @@ TOOLCHAIN_AVAILABILITY_COMMANDS = {
 }
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
+RUNTIME_ADAPTER_CATALOG = {
+    "cgl": {
+        "adapterKind": "crossgl-source-adapter",
+        "artifactFormat": "CrossGL source",
+        "requiredTools": [],
+        "loaderResponsibilities": [
+            "Pass the packaged CrossGL artifact to the downstream compiler or translator stage.",
+            "Preserve package-relative paths in build metadata for diagnostics.",
+        ],
+    },
+    "crossgl": {
+        "adapterKind": "crossgl-source-adapter",
+        "artifactFormat": "CrossGL source",
+        "requiredTools": [],
+        "loaderResponsibilities": [
+            "Pass the packaged CrossGL artifact to the downstream compiler or translator stage.",
+            "Preserve package-relative paths in build metadata for diagnostics.",
+        ],
+    },
+    "cuda": {
+        "adapterKind": "cuda-source-adapter",
+        "artifactFormat": "CUDA source",
+        "requiredTools": ["nvcc"],
+        "loaderResponsibilities": [
+            "Compile or load the packaged CUDA artifact with the application build.",
+            "Bind kernel parameters and launch configuration in the existing CUDA runtime path.",
+        ],
+    },
+    "directx": {
+        "adapterKind": "directx-hlsl-adapter",
+        "artifactFormat": "HLSL source",
+        "requiredTools": ["dxc"],
+        "loaderResponsibilities": [
+            "Compile the packaged HLSL artifact to bytecode with the selected shader model.",
+            "Bind the bytecode into the existing Direct3D pipeline state.",
+        ],
+    },
+    "hip": {
+        "adapterKind": "hip-source-adapter",
+        "artifactFormat": "HIP source",
+        "requiredTools": ["hipcc"],
+        "loaderResponsibilities": [
+            "Compile or load the packaged HIP artifact with the application build.",
+            "Bind kernel parameters and launch configuration in the existing HIP runtime path.",
+        ],
+    },
+    "metal": {
+        "adapterKind": "metal-source-adapter",
+        "artifactFormat": "Metal source",
+        "requiredTools": ["xcrun", "metal"],
+        "loaderResponsibilities": [
+            "Compile the packaged Metal artifact into a library for the deployment target.",
+            "Create pipeline state objects and bind resources in the existing Metal host code.",
+        ],
+    },
+    "mojo": {
+        "adapterKind": "mojo-kernel-adapter",
+        "artifactFormat": "Mojo source",
+        "requiredTools": ["mojo"],
+        "loaderResponsibilities": [
+            "Compile the packaged Mojo artifact with the application build.",
+            "Wire runtime arguments through the existing Mojo execution path.",
+        ],
+    },
+    "opengl": {
+        "adapterKind": "opengl-glsl-adapter",
+        "artifactFormat": "GLSL source",
+        "requiredTools": ["glslangValidator"],
+        "loaderResponsibilities": [
+            "Load the packaged GLSL artifact with the existing OpenGL shader creation path.",
+            "Bind uniforms, buffers, textures, and dispatch or draw state in host code.",
+        ],
+    },
+    "rust": {
+        "adapterKind": "rust-gpu-source-adapter",
+        "artifactFormat": "Rust GPU source",
+        "requiredTools": ["rustc"],
+        "loaderResponsibilities": [
+            "Compile the packaged Rust GPU artifact with the target crate or shader build.",
+            "Connect generated module outputs to the host runtime already used by the project.",
+        ],
+    },
+    "slang": {
+        "adapterKind": "slang-source-adapter",
+        "artifactFormat": "Slang source",
+        "requiredTools": ["slangc"],
+        "loaderResponsibilities": [
+            "Compile the packaged Slang artifact for the selected runtime target.",
+            "Bind reflected entry points and resources in the existing host integration.",
+        ],
+    },
+    "vulkan": {
+        "adapterKind": "vulkan-shader-adapter",
+        "artifactFormat": "Vulkan-targeted shader source",
+        "requiredTools": ["glslangValidator", "spirv-val"],
+        "loaderResponsibilities": [
+            "Compile the packaged artifact to SPIR-V for the target environment.",
+            "Create shader modules and bind descriptor layouts in the existing Vulkan code.",
+        ],
+    },
+    "webgl": {
+        "adapterKind": "webgl-glsl-adapter",
+        "artifactFormat": "GLSL ES source",
+        "requiredTools": [],
+        "loaderResponsibilities": [
+            "Load the packaged GLSL ES artifact with the existing WebGL shader creation path.",
+            "Bind uniforms, buffers, textures, and draw or dispatch state in JavaScript.",
+        ],
+    },
+}
+RUNTIME_ADAPTER_DEFAULT_CATALOG_ENTRY = {
+    "adapterKind": "target-source-adapter",
+    "artifactFormat": "translated shader source",
+    "requiredTools": [],
+    "loaderResponsibilities": [
+        "Load or compile the packaged translated artifact with target runtime tooling.",
+        "Bind entry points and resources in the existing host integration.",
+    ],
+}
 
 CROSSL_TARGETS = {"cgl", "crossgl"}
 SHA256_HEX_LENGTH = 64
@@ -9138,6 +9331,242 @@ def inspect_runtime_package(
         "runtimePlan": runtime_plan,
         "diagnosticCounts": _diagnostic_counts(diagnostics),
         "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
+
+
+def _runtime_adapter_catalog_entry(target: Any) -> Mapping[str, Any]:
+    if not _is_non_empty_string(target):
+        return RUNTIME_ADAPTER_DEFAULT_CATALOG_ENTRY
+    return RUNTIME_ADAPTER_CATALOG.get(target, RUNTIME_ADAPTER_DEFAULT_CATALOG_ENTRY)
+
+
+def _runtime_adapter_id(binding: Mapping[str, Any]) -> str:
+    return "|".join(
+        str(part)
+        for part in (
+            binding.get("target", ""),
+            binding.get("id", ""),
+            binding.get("packagePath", ""),
+        )
+    )
+
+
+def _runtime_adapter_entry(binding: Mapping[str, Any]) -> dict[str, Any]:
+    catalog_entry = _runtime_adapter_catalog_entry(binding.get("target"))
+    source_remap = binding.get("sourceRemap")
+    return {
+        "id": _runtime_adapter_id(binding),
+        "target": binding.get("target"),
+        "adapterKind": catalog_entry["adapterKind"],
+        "artifactFormat": catalog_entry["artifactFormat"],
+        "binding": binding.get("id"),
+        "artifact": binding.get("artifact"),
+        "packagePath": binding.get("packagePath"),
+        "sourcePath": binding.get("sourcePath"),
+        "sourceBackend": binding.get("sourceBackend"),
+        "variant": binding.get("variant"),
+        "defines": (
+            dict(binding.get("defines"))
+            if isinstance(binding.get("defines"), Mapping)
+            else {}
+        ),
+        "sourceRemap": (
+            {
+                "packagePath": source_remap.get("packagePath"),
+                "sourcePath": source_remap.get("sourcePath"),
+                "status": source_remap.get("status"),
+            }
+            if isinstance(source_remap, Mapping)
+            else None
+        ),
+        "requiredTools": list(catalog_entry["requiredTools"]),
+        "hostResponsibilities": list(catalog_entry["loaderResponsibilities"]),
+        "validation": {
+            "packageInspection": binding.get("status"),
+            "artifact": binding.get("artifactStatus"),
+            "sourceRemap": (
+                source_remap.get("status")
+                if isinstance(source_remap, Mapping)
+                else "not-recorded"
+            ),
+        },
+    }
+
+
+def _runtime_adapter_target(
+    target: str,
+    bindings: Sequence[Mapping[str, Any]],
+    adapters: Sequence[Mapping[str, Any]],
+    runtime_reference_count: int,
+) -> dict[str, Any]:
+    catalog_entry = _runtime_adapter_catalog_entry(target)
+    target_bindings = [
+        binding for binding in bindings if binding.get("target") == target
+    ]
+    target_adapters = [
+        adapter for adapter in adapters if adapter.get("target") == target
+    ]
+    ready_bindings = [
+        binding for binding in target_bindings if binding.get("status") == "ready"
+    ]
+    failed_bindings = [
+        binding for binding in target_bindings if binding.get("status") == "failed"
+    ]
+    return {
+        "target": target,
+        "adapterKind": catalog_entry["adapterKind"],
+        "artifactCount": len(target_bindings),
+        "readyBindingCount": len(ready_bindings),
+        "failedBindingCount": len(failed_bindings),
+        "runtimeReferenceCount": runtime_reference_count,
+        "requiredTools": list(catalog_entry["requiredTools"]),
+        "loaderResponsibilities": list(catalog_entry["loaderResponsibilities"]),
+        "bindings": [binding.get("id") for binding in target_bindings],
+        "packagePaths": [
+            adapter.get("packagePath")
+            for adapter in target_adapters
+            if _is_non_empty_string(adapter.get("packagePath"))
+        ],
+    }
+
+
+def _runtime_adapter_action(adapter: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": "wire-runtime-adapter",
+        "severity": "note",
+        "message": (
+            f"Wire {adapter.get('adapterKind')} to load "
+            f"{adapter.get('packagePath')} for target {adapter.get('target')}."
+        ),
+        "target": adapter.get("target"),
+        "adapter": adapter.get("id"),
+        "binding": adapter.get("binding"),
+        "packagePath": adapter.get("packagePath"),
+    }
+
+
+def _runtime_adapter_review_action(
+    target: str, runtime_reference_count: int
+) -> dict[str, Any] | None:
+    if runtime_reference_count <= 0:
+        return None
+    return {
+        "kind": "review-runtime-references",
+        "severity": "warning",
+        "message": (
+            f"Review {runtime_reference_count} detected host or build runtime "
+            f"references before wiring adapters for {target}."
+        ),
+        "target": target,
+        "adapter": None,
+        "binding": None,
+        "packagePath": None,
+    }
+
+
+def plan_runtime_adapters(
+    package_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a target adapter plan from a runtime package manifest."""
+
+    package_path = _filesystem_path_arg(
+        package_manifest_path, field_name="Runtime package manifest path"
+    )
+    inspection = inspect_runtime_package(package_path)
+    project_payload = (
+        dict(inspection.get("project"))
+        if isinstance(inspection.get("project"), Mapping)
+        else {"targets": []}
+    )
+    targets = [
+        target
+        for target in project_payload.get("targets", [])
+        if _is_non_empty_string(target)
+    ]
+    bindings = [
+        binding
+        for binding in _record_sequence(inspection.get("bindings"))
+        if isinstance(binding, Mapping)
+    ]
+    ready_bindings = [
+        binding for binding in bindings if binding.get("status") == "ready"
+    ]
+    failed_binding_count = sum(
+        1 for binding in bindings if binding.get("status") == "failed"
+    )
+    adapters = [_runtime_adapter_entry(binding) for binding in ready_bindings]
+    runtime_plan = (
+        dict(inspection.get("runtimePlan"))
+        if isinstance(inspection.get("runtimePlan"), Mapping)
+        else {}
+    )
+    summary = (
+        inspection.get("summary")
+        if isinstance(inspection.get("summary"), Mapping)
+        else {}
+    )
+    runtime_reference_count = (
+        summary.get("runtimeReferenceCount")
+        if _is_non_negative_int(summary.get("runtimeReferenceCount"))
+        else 0
+    )
+    actions = [_runtime_adapter_action(adapter) for adapter in adapters]
+    if adapters:
+        for target in targets:
+            review_action = _runtime_adapter_review_action(
+                target, runtime_reference_count
+            )
+            if review_action is not None:
+                actions.append(review_action)
+
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_ADAPTER_PLAN_KIND,
+        "sourcePackage": str(package_path),
+        "sourcePackageHash": _optional_source_hash(package_path),
+        "generatedAt": int(time.time()),
+        "success": bool(inspection.get("success")),
+        "scope": RUNTIME_ADAPTER_PLAN_SCOPE,
+        "nonGoals": list(RUNTIME_ADAPTER_PLAN_NON_GOALS),
+        "packageRoot": inspection.get("packageRoot"),
+        "project": project_payload,
+        "summary": {
+            "targetCount": len(targets),
+            "bindingCount": len(bindings),
+            "readyBindingCount": len(ready_bindings),
+            "failedBindingCount": failed_binding_count,
+            "adapterCount": len(adapters),
+            "actionCount": len(actions),
+            "runtimeReferenceCount": runtime_reference_count,
+        },
+        "targets": [
+            _runtime_adapter_target(
+                target,
+                bindings,
+                adapters,
+                runtime_reference_count,
+            )
+            for target in targets
+        ],
+        "adapters": adapters,
+        "actions": actions,
+        "runtimePlan": runtime_plan,
+        "packageInspection": {
+            "kind": inspection.get("kind"),
+            "success": inspection.get("success"),
+            "readyBindingCount": len(ready_bindings),
+            "failedBindingCount": failed_binding_count,
+        },
+        "diagnosticCounts": (
+            dict(inspection.get("diagnosticCounts"))
+            if isinstance(inspection.get("diagnosticCounts"), Mapping)
+            else {}
+        ),
+        "diagnostics": (
+            [dict(diagnostic) for diagnostic in inspection.get("diagnostics", [])]
+            if isinstance(inspection.get("diagnostics"), list)
+            else []
+        ),
     }
 
 

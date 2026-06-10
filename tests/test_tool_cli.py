@@ -34,6 +34,7 @@ TOOLS = [
                 "package-runtime",
                 "inspect-runtime-package",
                 "plan-host-bindings",
+                "plan-runtime-adapters",
                 "report",
             ),
         ),
@@ -137,6 +138,14 @@ TOOLS = [
         ),
         (
             ("plan-host-bindings",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("plan-runtime-adapters",),
             (
                 "usage:",
                 "--format",
