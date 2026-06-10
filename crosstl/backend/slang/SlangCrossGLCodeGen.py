@@ -1075,6 +1075,8 @@ class SlangToCrossGLConverter:
         )
         semantic = self.map_semantic(getattr(func, "semantic", None))
         semantic_suffix = f" {semantic}" if semantic else ""
+        if self.should_preserve_slang_stage_entry_name(func, function_qualifier):
+            semantic_suffix += " @ stage_entry"
         code += (
             f"    {self.map_type(func.return_type)} "
             f"{self.format_function_name(func.name)}({params}){semantic_suffix} {{\n"
@@ -1143,6 +1145,11 @@ class SlangToCrossGLConverter:
             self.effective_function_qualifier(func)
             or getattr(func, "semantic", None)
             or getattr(func, "name", None) == "main"
+        )
+
+    def should_preserve_slang_stage_entry_name(self, func, function_qualifier):
+        return bool(
+            function_qualifier == "compute" and getattr(func, "name", None) != "main"
         )
 
     def format_parameter_qualifier_prefix(self, param, preserve_qualifiers=False):

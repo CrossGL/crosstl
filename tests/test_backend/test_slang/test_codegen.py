@@ -5,6 +5,7 @@ import pytest
 import crosstl.translator as cgl_translator
 from crosstl import translate
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
+from crosstl.translator.ast import ShaderStage
 
 
 def generate_code(ast_node):
@@ -301,6 +302,38 @@ def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
     assert "static int nonConstVar;" in generated_code
     assert "const int nonStaticVar;" not in generated_code
     cgl_translator.parse(generated_code)
+
+
+def test_non_main_compute_shader_entry_codegen_preserves_stage_entry():
+    # Reduced from shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # examples/hello-world/hello-world.slang.
+    code = """
+    StructuredBuffer<float> buffer0;
+    StructuredBuffer<float> buffer1;
+    RWStructuredBuffer<float> result;
+
+    [shader("compute")]
+    [numthreads(1,1,1)]
+    void computeMain(uint3 threadId : SV_DispatchThreadID)
+    {
+        uint index = threadId.x;
+        result[index] = buffer0[index] + buffer1[index];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert (
+        "void computeMain(uvec3 threadId @ gl_GlobalInvocationID) @ stage_entry"
+        in generated_code
+    )
+    parsed = cgl_translator.parse(generated_code)
+    compute_stage = parsed.stages[ShaderStage.COMPUTE]
+    assert compute_stage.entry_point.name == "computeMain"
+    assert not compute_stage.local_functions
 
 
 def test_name_first_property_codegen_from_generated_interface_sample():
