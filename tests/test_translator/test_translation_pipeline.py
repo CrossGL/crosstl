@@ -645,6 +645,41 @@ def test_directx_real_world_extensions_translate_to_crossgl(tmp_path, filename):
     assert "vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated
 
 
+def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "scalar-splat.hlsl",
+        """
+        groupshared int a;
+        [numthreads(64, 1, 1)]
+        void main() {
+            a = 123;
+            int4 x = (a).xxxx;
+        }
+        """,
+    )
+
+    crossgl = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+    vulkan = crosstl.translate(str(source_path), backend="vulkan", format_output=False)
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "ivec4 x = ivec4(a);" in crossgl
+    assert "a.xxxx" not in crossgl
+    loaded_scalar = re.search(r"(%\d+) = OpLoad %\d+ %\d+", vulkan)
+    assert loaded_scalar is not None
+    assert re.search(
+        rf"OpCompositeConstruct %\d+ {loaded_scalar.group(1)} "
+        rf"{loaded_scalar.group(1)} {loaded_scalar.group(1)} "
+        rf"{loaded_scalar.group(1)}",
+        vulkan,
+    )
+    assert "Could not find member xxxx" not in vulkan
+    assert "int4 x = int4(a);" in metal
+    assert "a.xxxx" not in metal
+    assert "unsupported Metal program-scope groupshared global" in metal
+    assert "unsupported Metal program-scope groupshared store" in metal
+
+
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
 @pytest.mark.parametrize("target_backend", codegen.backend_names())
 def test_native_source_to_registered_target_pipeline_is_total(
