@@ -42,6 +42,7 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND = (
 RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND = (
     "crosstl-runtime-host-loader-consumption-plan"
 )
+RUNTIME_HOST_INTEGRATION_HANDOFF_KIND = "crosstl-runtime-host-integration-handoff"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -58,6 +59,7 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
     "host-loader-scaffold-readiness-inspection"
 )
 RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_SCOPE = "host-loader-consumption-planning"
+RUNTIME_HOST_INTEGRATION_HANDOFF_SCOPE = "host-integration-handoff-bundle"
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -111,6 +113,12 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -758,6 +766,50 @@ RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_ACTION_FIELDS = frozenset(
         "outputPath",
         "tools",
     )
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceConsumptionPlan",
+        "sourceConsumptionPlanHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "handoffRoot",
+        "handoffManifest",
+        "integrationGuide",
+        "project",
+        "summary",
+        "targets",
+        "loaderUnits",
+        "actions",
+        "consumptionPlan",
+        "generatedFiles",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "loaderUnitCount",
+        "readyLoaderUnitCount",
+        "blockedLoaderUnitCount",
+        "failedLoaderUnitCount",
+        "actionCount",
+        "requiredTools",
+        "hostResponsibilities",
+        "packagePaths",
+        "scaffoldFiles",
+        "handoffFile",
+    )
+)
+RUNTIME_HOST_INTEGRATION_HANDOFF_GENERATED_FILE_FIELDS = frozenset(
+    ("path", "kind", "target")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -12413,6 +12465,494 @@ def plan_runtime_host_loader_consumption(
         "diagnosticCounts": _diagnostic_payload_counts(diagnostics_payload),
         "diagnostics": diagnostics_payload,
     }
+
+
+def _runtime_host_integration_handoff_diagnostic(
+    path: Path,
+    code: str,
+    message: str,
+    *,
+    severity: str = "error",
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity=severity,
+        code=f"project.runtime-host-integration-handoff.{code}",
+        message=message,
+        location=SourceLocation(file=str(path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-integration-handoff",
+    )
+
+
+def _runtime_host_integration_handoff_load_plan(
+    path: Path,
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-read-failed",
+                f"Host loader consumption plan could not be read: {exc}",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-json-invalid",
+                f"Host loader consumption plan is not valid JSON: {exc}",
+            )
+        ]
+    if not isinstance(plan, dict):
+        return {}, [
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-invalid",
+                "Host integration handoff input must be a JSON object.",
+            )
+        ]
+    return plan, []
+
+
+def _runtime_host_integration_handoff_plan_diagnostics(
+    path: Path, plan: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if plan.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-schema-invalid",
+                f"Host loader consumption plan schemaVersion must be {REPORT_SCHEMA_VERSION}.",
+            )
+        )
+    if plan.get("kind") != RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND:
+        diagnostics.append(
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-kind-invalid",
+                "Host integration handoff input must be a "
+                f"{RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND} document.",
+            )
+        )
+    if plan.get("success") is not True:
+        diagnostics.append(
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-failed",
+                "Host loader consumption plan must be successful before "
+                "host integration handoff files can be written.",
+            )
+        )
+    if not isinstance(plan.get("loaderUnits"), list):
+        diagnostics.append(
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-loader-units-invalid",
+                "Host loader consumption plan loaderUnits must be a list.",
+            )
+        )
+    if not isinstance(plan.get("actions"), list):
+        diagnostics.append(
+            _runtime_host_integration_handoff_diagnostic(
+                path,
+                "plan-actions-invalid",
+                "Host loader consumption plan actions must be a list.",
+            )
+        )
+    return diagnostics
+
+
+def _runtime_host_integration_handoff_generated_file(
+    path: str, kind: str, target: str | None = None
+) -> dict[str, Any]:
+    return {"path": path, "kind": kind, "target": target}
+
+
+def _runtime_host_integration_handoff_unit(unit: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": unit.get("id"),
+        "target": unit.get("target"),
+        "status": unit.get("status"),
+        "scaffold": unit.get("scaffold"),
+        "outputPath": unit.get("outputPath"),
+        "packagePath": unit.get("packagePath"),
+        "adapterKind": unit.get("adapterKind"),
+        "artifactFormat": unit.get("artifactFormat"),
+        "requiredTools": [
+            tool
+            for tool in _record_sequence(unit.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        ],
+        "hostResponsibilities": [
+            responsibility
+            for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        ],
+        "loadSteps": [
+            dict(step)
+            for step in _record_sequence(unit.get("loadSteps"))
+            if isinstance(step, Mapping)
+        ],
+        "blockers": [
+            dict(blocker)
+            for blocker in _record_sequence(unit.get("blockers"))
+            if isinstance(blocker, Mapping)
+        ],
+    }
+
+
+def _runtime_host_integration_handoff_action(
+    action: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "kind": action.get("kind"),
+        "severity": action.get("severity"),
+        "message": action.get("message"),
+        "target": action.get("target"),
+        "loaderUnit": action.get("loaderUnit"),
+        "scaffold": action.get("scaffold"),
+        "packagePath": action.get("packagePath"),
+        "outputPath": action.get("outputPath"),
+        "tools": [
+            tool
+            for tool in _record_sequence(action.get("tools"))
+            if _is_non_empty_string(tool)
+        ],
+    }
+
+
+def _runtime_host_integration_handoff_target_status(
+    units: Sequence[Mapping[str, Any]],
+) -> str:
+    ready_count = sum(1 for unit in units if unit.get("status") == "ready")
+    blocked_count = sum(1 for unit in units if unit.get("status") == "blocked")
+    failed_count = sum(1 for unit in units if unit.get("status") == "failed")
+    return _runtime_host_loader_scaffold_status(
+        ready_count,
+        blocked_count,
+        failed=bool(failed_count),
+    )
+
+
+def _runtime_host_integration_handoff_target_record(
+    target_name: str,
+    units: Sequence[Mapping[str, Any]],
+    actions: Sequence[Mapping[str, Any]],
+    handoff_file: str,
+) -> dict[str, Any]:
+    target_units = [unit for unit in units if unit.get("target") == target_name]
+    target_actions = [
+        action for action in actions if action.get("target") == target_name
+    ]
+    required_tools = sorted(
+        {
+            tool
+            for unit in target_units
+            for tool in _record_sequence(unit.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for unit in target_units
+            for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    return {
+        "target": target_name,
+        "status": _runtime_host_integration_handoff_target_status(target_units),
+        "loaderUnitCount": len(target_units),
+        "readyLoaderUnitCount": sum(
+            1 for unit in target_units if unit.get("status") == "ready"
+        ),
+        "blockedLoaderUnitCount": sum(
+            1 for unit in target_units if unit.get("status") == "blocked"
+        ),
+        "failedLoaderUnitCount": sum(
+            1 for unit in target_units if unit.get("status") == "failed"
+        ),
+        "actionCount": len(target_actions),
+        "requiredTools": required_tools,
+        "hostResponsibilities": host_responsibilities,
+        "packagePaths": [
+            unit.get("packagePath")
+            for unit in target_units
+            if _is_non_empty_string(unit.get("packagePath"))
+        ],
+        "scaffoldFiles": [
+            unit.get("outputPath")
+            for unit in target_units
+            if _is_non_empty_string(unit.get("outputPath"))
+        ],
+        "handoffFile": handoff_file,
+    }
+
+
+def _runtime_host_integration_handoff_target_payload(
+    target: Mapping[str, Any],
+    units: Sequence[Mapping[str, Any]],
+    actions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_name = target.get("target")
+    target_units = [unit for unit in units if unit.get("target") == target_name]
+    target_actions = [
+        action for action in actions if action.get("target") == target_name
+    ]
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": "crosstl-runtime-host-integration-target",
+        "target": target_name,
+        "status": target.get("status"),
+        "nonGoals": list(RUNTIME_HOST_INTEGRATION_HANDOFF_NON_GOALS),
+        "loaderUnits": [dict(unit) for unit in target_units],
+        "actions": [dict(action) for action in target_actions],
+        "requiredTools": list(target.get("requiredTools", [])),
+        "hostResponsibilities": list(target.get("hostResponsibilities", [])),
+        "packagePaths": list(target.get("packagePaths", [])),
+        "scaffoldFiles": list(target.get("scaffoldFiles", [])),
+    }
+
+
+def _runtime_host_integration_handoff_guide(payload: Mapping[str, Any]) -> str:
+    lines = [
+        "# CrossTL Host Integration Handoff",
+        "",
+        f"- Source consumption plan: {payload.get('sourceConsumptionPlan')}",
+        f"- Handoff manifest: {payload.get('handoffManifest')}",
+        f"- Status: {payload.get('status')}",
+        "",
+        "This bundle is metadata for host build and runtime integration tooling. "
+        "It does not rewrite host application code, execute device code, generate "
+        "runtime framework code, or install target SDKs.",
+        "",
+    ]
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.extend(
+            [
+                "## Summary",
+                "",
+                f"- Targets: {summary.get('targetCount', 0)}",
+                f"- Loader units: {summary.get('loaderUnitCount', 0)}",
+                f"- Ready loader units: {summary.get('readyLoaderUnitCount', 0)}",
+                f"- Blocked loader units: {summary.get('blockedLoaderUnitCount', 0)}",
+                f"- Actions: {summary.get('actionCount', 0)}",
+                "",
+            ]
+        )
+    targets = payload.get("targets")
+    if isinstance(targets, list) and targets:
+        lines.extend(["## Targets", ""])
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: {target.get('status', 'unknown')} "
+                f"({target.get('loaderUnitCount', 0)} units, "
+                f"{target.get('actionCount', 0)} actions) -> "
+                f"{target.get('handoffFile')}"
+            )
+        lines.append("")
+    actions = payload.get("actions")
+    if isinstance(actions, list) and actions:
+        lines.extend(["## Actions", ""])
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{action.get('target', 'unknown')}: "
+                f"{action.get('kind', 'unknown')} - "
+                f"{action.get('message', '')}"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def build_runtime_host_integration_handoff(
+    consumption_plan_path: str | os.PathLike[str],
+    handoff_dir: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a deterministic host integration handoff bundle."""
+
+    plan_path = _filesystem_path_arg(
+        consumption_plan_path, field_name="Host loader consumption plan path"
+    )
+    handoff_root = _filesystem_path_arg(
+        handoff_dir, field_name="Host integration handoff dir"
+    )
+    plan, diagnostics = _runtime_host_integration_handoff_load_plan(plan_path)
+    if plan:
+        diagnostics.extend(
+            _runtime_host_integration_handoff_plan_diagnostics(plan_path, plan)
+        )
+
+    units: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
+    targets: list[dict[str, Any]] = []
+    generated_files: list[dict[str, Any]] = []
+    if not any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        units = [
+            _runtime_host_integration_handoff_unit(unit)
+            for unit in _record_sequence(plan.get("loaderUnits"))
+            if isinstance(unit, Mapping)
+        ]
+        actions = [
+            _runtime_host_integration_handoff_action(action)
+            for action in _record_sequence(plan.get("actions"))
+            if isinstance(action, Mapping)
+        ]
+        target_names = sorted(
+            {
+                unit.get("target")
+                for unit in units
+                if _is_non_empty_string(unit.get("target"))
+            }
+        )
+        used_slugs: set[str] = set()
+        for target_name in target_names:
+            target_slug = _runtime_host_loader_scaffold_unique_slug(
+                target_name, "target", used_slugs
+            )
+            handoff_file = f"targets/{target_slug}.integration.json"
+            targets.append(
+                _runtime_host_integration_handoff_target_record(
+                    target_name, units, actions, handoff_file
+                )
+            )
+            generated_files.append(
+                _runtime_host_integration_handoff_generated_file(
+                    handoff_file, "host-integration-target", target_name
+                )
+            )
+        generated_files.insert(
+            0,
+            _runtime_host_integration_handoff_generated_file(
+                "host-integration.json", "host-integration-manifest"
+            ),
+        )
+        generated_files.insert(
+            1,
+            _runtime_host_integration_handoff_generated_file(
+                "HOST_INTEGRATION.md", "host-integration-guide"
+            ),
+        )
+
+    ready_count = sum(1 for unit in units if unit.get("status") == "ready")
+    blocked_count = sum(1 for unit in units if unit.get("status") == "blocked")
+    failed_count = sum(1 for unit in units if unit.get("status") == "failed")
+    required_tools = sorted(
+        {
+            tool
+            for unit in units
+            for tool in _record_sequence(unit.get("requiredTools"))
+            if _is_non_empty_string(tool)
+        }
+    )
+    host_responsibilities = sorted(
+        {
+            responsibility
+            for unit in units
+            for responsibility in _record_sequence(unit.get("hostResponsibilities"))
+            if _is_non_empty_string(responsibility)
+        }
+    )
+    failed = any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    payload = {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_INTEGRATION_HANDOFF_KIND,
+        "sourceConsumptionPlan": str(plan_path),
+        "sourceConsumptionPlanHash": _optional_source_hash(plan_path),
+        "generatedAt": int(time.time()),
+        "success": not failed,
+        "status": (
+            _runtime_host_loader_scaffold_status(
+                ready_count,
+                blocked_count,
+                failed=bool(failed_count),
+            )
+            if not failed
+            else "failed"
+        ),
+        "scope": RUNTIME_HOST_INTEGRATION_HANDOFF_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_INTEGRATION_HANDOFF_NON_GOALS),
+        "handoffRoot": str(handoff_root),
+        "handoffManifest": "host-integration.json",
+        "integrationGuide": "HOST_INTEGRATION.md",
+        "project": (
+            dict(plan.get("project"))
+            if isinstance(plan.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(targets),
+            "loaderUnitCount": len(units),
+            "readyLoaderUnitCount": ready_count,
+            "blockedLoaderUnitCount": blocked_count,
+            "failedLoaderUnitCount": failed_count,
+            "actionCount": len(actions),
+            "requiredToolCount": len(required_tools),
+            "hostResponsibilityCount": len(host_responsibilities),
+            "generatedFileCount": len(generated_files),
+        },
+        "targets": targets,
+        "loaderUnits": units,
+        "actions": actions,
+        "consumptionPlan": {
+            "kind": plan.get("kind"),
+            "success": plan.get("success"),
+            "status": plan.get("status"),
+            "loaderUnitCount": (
+                plan.get("summary", {}).get("loaderUnitCount", 0)
+                if isinstance(plan.get("summary"), Mapping)
+                else 0
+            ),
+            "actionCount": (
+                plan.get("summary", {}).get("actionCount", 0)
+                if isinstance(plan.get("summary"), Mapping)
+                else 0
+            ),
+        },
+        "generatedFiles": generated_files,
+        "diagnosticCounts": _diagnostic_counts(diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
+
+    if payload["success"]:
+        handoff_root.mkdir(parents=True, exist_ok=True)
+        (handoff_root / "targets").mkdir(parents=True, exist_ok=True)
+        for target in targets:
+            handoff_file = target.get("handoffFile")
+            if not _is_non_empty_string(handoff_file):
+                continue
+            target_path = handoff_root / Path(handoff_file)
+            target_path.write_text(
+                json.dumps(
+                    _runtime_host_integration_handoff_target_payload(
+                        target, units, actions
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        (handoff_root / "host-integration.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        (handoff_root / "HOST_INTEGRATION.md").write_text(
+            _runtime_host_integration_handoff_guide(payload),
+            encoding="utf-8",
+        )
+    return payload
 
 
 def _inspection_artifact_matrix_summary(
