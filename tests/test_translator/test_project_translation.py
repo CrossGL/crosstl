@@ -13,6 +13,8 @@ import pytest
 import crosstl._crosstl as crosstl_cli
 import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
+from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
+from crosstl.backend.GLSL.OpenglParser import GLSLParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
     build_runtime_package,
@@ -25330,6 +25332,40 @@ def test_translate_project_opencl_targets_do_not_leak_resource_parameter_syntax(
     assert "const device float* in_ [[buffer(1)]]" in outputs["metal"]
     assert "constant scale_Args& scale_Args [[buffer(2)]]" in outputs["metal"]
     assert "kernel void kernel_scale(" in outputs["metal"]
+
+
+def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "saxpy.cl").write_text(
+        textwrap.dedent("""
+            kernel void saxpy(global float *dst,
+                              global const float *x,
+                              const float a) {
+                int gid = get_global_id(0);
+                dst[gid] = a * x[gid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("opengl", "translated")}
+
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    assert "int gid = int(gl_GlobalInvocationID.x);" in output
+    assert "uint gid = gl_GlobalInvocationID.x;" not in output
+    GLSLParser(GLSLLexer(output).tokenize(), "compute").parse()
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):
