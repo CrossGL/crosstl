@@ -414,6 +414,25 @@ the ``runtime-loader-plan-v1`` summary linkage from earlier reports. It is an
 action plan only; it does not rewrite host application code, execute device
 code, generate runtime framework code, or install target SDKs.
 
+Build a target-scoped runtime adapter plan from a runtime package manifest:
+
+.. code-block:: bash
+
+   python -m crosstl plan-runtime-adapters \
+     crosstl-runtime-package/runtime-package.json \
+     --format text
+
+Runtime adapter plans emit a ``crosstl-runtime-adapter-plan`` JSON document
+from the same package handoff metadata used by package inspection. The plan
+lists ready package bindings by target with ``adapterKind``, ``artifactFormat``,
+``requiredTools``, ``hostResponsibilities``, source-remap handoff paths, and
+``wire-runtime-adapter`` actions for host loader or build-system tooling. It
+also carries through package inspection diagnostics and
+``review-runtime-references`` actions when the source repository contained
+runtime API references. The plan is a target-scoped integration contract; it
+does not rewrite host application code, execute device code, generate runtime
+framework code, or install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized

@@ -22,6 +22,7 @@ from crosstl.project import (
     inspect_project_report,
     inspect_runtime_package,
     load_project_config,
+    plan_runtime_adapters,
     plan_runtime_host_bindings,
     plan_runtime_integration,
     scan_project,
@@ -109,6 +110,7 @@ def test_project_package_exposes_public_api_surface():
         "inspect_runtime_package",
         "inspect_project_report",
         "load_project_config",
+        "plan_runtime_adapters",
         "plan_runtime_host_bindings",
         "plan_runtime_integration",
         "scan_project",
@@ -23539,6 +23541,163 @@ def test_project_cli_plan_host_bindings_json_writes_output(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["kind"] == project_pipeline.RUNTIME_HOST_BINDING_PLAN_KIND
     assert payload["actions"][0]["kind"] == "bind-runtime-artifact"
+
+
+def test_plan_runtime_adapters_from_runtime_package(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert set(payload) == project_pipeline.RUNTIME_ADAPTER_PLAN_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_ADAPTER_PLAN_SCOPE
+    assert payload["nonGoals"] == list(project_pipeline.RUNTIME_ADAPTER_PLAN_NON_GOALS)
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "adapterCount": 1,
+        "actionCount": 2,
+        "runtimeReferenceCount": 1,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_ADAPTER_PLAN_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["adapterKind"] == "crossgl-source-adapter"
+    assert payload["targets"][0]["packagePaths"] == ["artifacts/out/cgl/simple.cgl"]
+    assert len(payload["adapters"]) == 1
+    adapter = payload["adapters"][0]
+    assert set(adapter) == project_pipeline.RUNTIME_ADAPTER_PLAN_ADAPTER_FIELDS
+    assert adapter["target"] == "cgl"
+    assert adapter["adapterKind"] == "crossgl-source-adapter"
+    assert adapter["artifactFormat"] == "CrossGL source"
+    assert adapter["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert adapter["validation"] == {
+        "packageInspection": "ready",
+        "artifact": "ready",
+        "sourceRemap": "ready",
+    }
+    assert adapter["sourceRemap"]["packagePath"] == (
+        "source-remaps/out/cgl/simple.source-remap.json"
+    )
+    assert len(payload["actions"]) == 2
+    assert set(payload["actions"][0]) == (
+        project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
+    )
+    assert payload["actions"][0]["kind"] == "wire-runtime-adapter"
+    assert payload["actions"][1]["kind"] == "review-runtime-references"
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": True,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+    }
+
+
+def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
+    package_path = tmp_path / "runtime-package.json"
+    package_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-package",
+                "success": False,
+                "project": {"targets": ["cgl"]},
+                "artifacts": [
+                    {
+                        "id": "artifact-1",
+                        "status": "packaged",
+                        "target": "cgl",
+                        "packagePath": "artifacts/simple.cgl",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = plan_runtime_adapters(package_path)
+
+    assert payload["success"] is False
+    assert payload["summary"]["adapterCount"] == 0
+    assert payload["adapters"] == []
+    assert payload["actions"] == []
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-package-inspection.package-failed"
+    )
+
+
+def test_project_cli_plan_runtime_adapters_text_outputs_adapters(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime-adapters",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime adapter plan: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Adapter scope: runtime-adapter-integration-planning" in result.stdout
+    assert (
+        "Adapter non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 adapters, 1 ready bindings" in result.stdout
+    assert "- cgl: crossgl-source-adapter, 1 ready bindings" in result.stdout
+    assert "Runtime adapters:" in result.stdout
+    assert (
+        "- cgl: artifacts/out/cgl/simple.cgl via crossgl-source-adapter "
+        "[format: CrossGL source;"
+    ) in result.stdout
+    assert "Runtime adapter actions:" in result.stdout
+    assert "wire-runtime-adapter" in result.stdout
+    assert "review-runtime-references" in result.stdout
+
+
+def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    output_path = package_dir / "runtime-adapter-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime-adapters",
+            str(package_dir / "runtime-package.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
+    assert payload["summary"]["adapterCount"] == 1
+    assert payload["adapters"][0]["adapterKind"] == "crossgl-source-adapter"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

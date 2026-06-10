@@ -3142,6 +3142,44 @@
     },
     {
       "category": "project",
+      "description": "Emit target-scoped runtime adapter plans from runtime package manifests without rewriting host code or executing device code.",
+      "id": "project.runtime_adapter_plan",
+      "name": "Runtime adapter plan",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
+          ],
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
+          ],
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_adapters_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_text_outputs_adapters",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_adapters_json_writes_output"
+          ],
+          "notes": "plan-runtime-adapters builds crosstl-runtime-adapter-plan JSON, text, and SARIF output from a runtime package manifest, consumes package inspection diagnostics, records target adapterKind, artifactFormat, requiredTools, and hostResponsibilities metadata for ready bindings, preserves source-remap handoff paths, and emits wire-runtime-adapter and review-runtime-references actions for host loader or build-system tooling. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -3993,12 +4031,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 59,
+    "feature_count": 60,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 54,
+        "supported": 55,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4006,7 +4044,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 53,
+        "supported": 54,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4014,7 +4052,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 54,
+        "supported": 55,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
