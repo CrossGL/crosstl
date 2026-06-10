@@ -406,6 +406,29 @@ def test_codegen_fragment_roundtrip():
         assert name in output
 
 
+@pytest.mark.parametrize("keyword", ["vertex", "fragment", "compute"])
+def test_codegen_fragment_output_named_crossgl_stage_keyword_roundtrips(keyword):
+    code = textwrap.dedent(f"""
+        #version 450 core
+        layout(location = 0) in vec3 color;
+        layout(location = 0) out vec4 {keyword};
+
+        void main() {{
+            {keyword} = vec4(color, 1.0);
+        }}
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "fragment", ShaderStage.FRAGMENT)
+
+    assert f"@{keyword}" in crossgl
+    assert f"@ {keyword}" not in crossgl
+    assert f"vec4 {keyword};" in crossgl
+    assert f"{keyword} = vec4(input.color, 1.0);" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert f"{keyword} = vec4(color, 1.0);" in glsl
+
+
 def test_codegen_fragment_output_array_roundtrip_uses_direct_declaration():
     # Fragment output arrays are a common MRT pattern; they cannot be modeled as
     # a scalar fragment return value without corrupting indexed writes.
