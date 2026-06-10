@@ -1723,6 +1723,8 @@ class RustParser:
             return False
         if previous.isdigit() and current == "D":
             return False
+        if current == "as" and previous in {")", "]", "}", ">"}:
+            return True
         return self.is_token_word(previous) and self.is_token_word(current)
 
     def parse_array_type_size(self):
@@ -1742,7 +1744,7 @@ class RustParser:
             parts.append(str(token_value))
             self.eat(token_type)
 
-        return self.normalize_array_type_size("".join(parts).strip())
+        return self.normalize_array_type_size(self.format_macro_type_parts(parts))
 
     def normalize_array_type_size(self, size):
         if not size:

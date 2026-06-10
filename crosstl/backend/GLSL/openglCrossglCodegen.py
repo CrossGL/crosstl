@@ -3539,10 +3539,11 @@ class GLSLToCrossGLConverter:
         var_type = self.variable_declaration_type(node)
         var_name = node.name
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
+        has_value = getattr(node, "value", None) is not None
         prefix_parts = []
         if "shared" in qualifiers:
             prefix_parts.append("shared")
-        if getattr(node, "is_const", False) or "const" in qualifiers:
+        if has_value and (getattr(node, "is_const", False) or "const" in qualifiers):
             prefix_parts.append("const")
         if (
             memory_qualifier_prefix
@@ -3590,7 +3591,7 @@ class GLSLToCrossGLConverter:
             else f"{var_name}{attributes}{array_suffix}"
         )
 
-        if getattr(node, "value", None) is not None:
+        if has_value:
             value = self.generate_expression(node.value)
             return f"{prefix}{var_type} {declarator} = {value}"
 

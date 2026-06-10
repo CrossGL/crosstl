@@ -93,6 +93,59 @@ class OpenCLPreprocessor(HLSLPreprocessor):
             return value
         return self._expand_macros(value, 0, False, None)
 
+    def _parse_macro_args(self, text: str, start: int) -> Tuple[List[str], int]:
+        assert text[start] == "("
+        args: List[str] = []
+        current = ""
+        paren_depth = 0
+        brace_depth = 0
+        bracket_depth = 0
+        i = start
+
+        while i < len(text):
+            ch = text[i]
+            if ch in "\"'":
+                literal, consumed = self._read_string(text, i)
+                current += literal
+                i += consumed
+                continue
+
+            if ch == "(":
+                paren_depth += 1
+                if paren_depth > 1:
+                    current += ch
+            elif ch == ")":
+                paren_depth -= 1
+                if paren_depth == 0:
+                    args.append(current.strip())
+                    return args, i - start + 1
+                current += ch
+            elif ch == "{":
+                brace_depth += 1
+                current += ch
+            elif ch == "}":
+                brace_depth = max(0, brace_depth - 1)
+                current += ch
+            elif ch == "[":
+                bracket_depth += 1
+                current += ch
+            elif ch == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+                current += ch
+            elif (
+                ch == ","
+                and paren_depth == 1
+                and brace_depth == 0
+                and bracket_depth == 0
+            ):
+                args.append(current.strip())
+                current = ""
+            else:
+                current += ch
+            i += 1
+
+        return args, i - start
+
     def _token_paste_or_stringize_parameters(self, replacement: str) -> Set[str]:
         tokens = self._tokenize_replacement(replacement)
         blocked = set()
@@ -190,14 +243,50 @@ class OpenCLPreprocessor(HLSLPreprocessor):
 
         line = self._strip_macro_comments(lines[start])
         consumed = 1
+        conditional_stack: List[Dict[str, bool]] = []
+
+        def is_active() -> bool:
+            return all(frame["active"] for frame in conditional_stack)
 
         while self._function_macro_call_balance(line) > 0 and start + consumed < len(
             lines
         ):
             next_line = lines[start + consumed]
-            if next_line.lstrip().startswith("#"):
-                break
-            line += " " + self._strip_macro_comments(next_line.lstrip())
+            stripped = next_line.lstrip()
+            if stripped.startswith("#"):
+                directive, rest = self._parse_directive(stripped)
+                if directive in ("if", "ifdef", "ifndef"):
+                    parent_active = is_active()
+                    condition = self._evaluate_condition(directive, rest, 0, None)
+                    conditional_stack.append(
+                        {
+                            "parent_active": parent_active,
+                            "active": parent_active and condition,
+                            "branch_taken": condition,
+                        }
+                    )
+                elif directive == "elif" and conditional_stack:
+                    frame = conditional_stack[-1]
+                    if frame["parent_active"] and not frame["branch_taken"]:
+                        condition = self._evaluate_expression(
+                            self._expand_macros(rest, 0, True, None)
+                        )
+                        frame["active"] = condition
+                        frame["branch_taken"] = condition
+                    else:
+                        frame["active"] = False
+                elif directive == "else" and conditional_stack:
+                    frame = conditional_stack[-1]
+                    frame["active"] = (
+                        frame["parent_active"] and not frame["branch_taken"]
+                    )
+                    frame["branch_taken"] = True
+                elif directive == "endif" and conditional_stack:
+                    conditional_stack.pop()
+                consumed += 1
+                continue
+            if is_active():
+                line += " " + self._strip_macro_comments(stripped)
             consumed += 1
 
         return line, consumed

@@ -2488,6 +2488,25 @@ def test_const_expression_array_size_parsing_from_rust_gpu_const_generics():
     assert function.body[0].vtype == "u32[LANES+1]"
 
 
+def test_cast_array_size_spacing_parsing_from_wgpu_backend_list():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu
+    # Commit: 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6
+    # Path: wgpu-types/src/backend.rs
+    code = """
+    impl Backend {
+        pub const ALL: [Backend; Backends::all().bits().count_ones() as usize] = [
+            Self::Noop,
+        ];
+    }
+    """
+
+    ast = parse_code(code)
+    const = ast.impl_blocks[0].associated_consts[0]
+
+    assert const.vtype == "Backend[Backends::all().bits().count_ones() as usize]"
+
+
 def test_reference_array_type_parsing():
     code = """
     fn sample_arrays(weights: &[f32; 4], output: &mut [Vec3<f32>; 2]) {

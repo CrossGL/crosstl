@@ -274,6 +274,35 @@ def test_forward_struct_declaration_codegen_from_generated_conformance_sample():
     cgl_translator.parse(generated_code)
 
 
+def test_uninitialized_global_const_codegen_reparse_from_slang_bug_fixture():
+    # Source: shader-slang/slang@29e69b0bf626f87500be73a7fb3764db25658c66
+    # tests/bugs/static-const-without-default-value.slang
+    code = """
+    static const int globalVar;
+    extern static const int externVar;
+    static const int initializedVar = 42;
+    const int nonStaticVar;
+    static int nonConstVar;
+
+    [numthreads(1,1,1)]
+    void computeMain(uint3 dispatchThreadID : SV_DispatchThreadID)
+    {
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const int globalVar;" in generated_code
+    assert "extern static const int externVar;" in generated_code
+    assert "static const int initializedVar = 42;" in generated_code
+    assert "int nonStaticVar;" in generated_code
+    assert "static int nonConstVar;" in generated_code
+    assert "const int nonStaticVar;" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_name_first_property_codegen_from_generated_interface_sample():
     code = """
     struct IntProperty

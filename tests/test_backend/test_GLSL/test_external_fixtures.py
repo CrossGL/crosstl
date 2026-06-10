@@ -2101,6 +2101,30 @@ def test_parse_glslang_token_paste_object_like_macro_fixture():
     parse_crossgl(crossgl)
 
 
+def test_codegen_glslang_uninitialized_const_declaration_reparses():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/decls.frag. The source is semantically invalid GLSL, but the importer
+    # accepts it syntactically; reverse-codegen should still emit parseable CrossGL.
+    code = textwrap.dedent("""
+        #version 120
+
+        const int missing;
+        const int present = 1;
+
+        void main()
+        {
+            gl_FragColor = vec4(float(present));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "int missing;" in crossgl
+    assert "const int missing;" not in crossgl
+    assert "const int present = 1;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_glslang_extension_directive_feature_macro_fixture():
     fixture = next(
         item

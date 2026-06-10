@@ -147,6 +147,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
         "path": "modules/imgproc/src/opencl/filter2DSmall.cl",
     },
+    "opencv_filter_small_loop_token_paste_block_argument": {
+        "url": "https://github.com/opencv/opencv",
+        "commit": "b9a38df0e6e3a327610e6ce2de1a17ddeddce5d6",
+        "path": "modules/imgproc/src/opencl/filterSmall.cl",
+    },
     "opencv_filter2d_small_elaborated_struct_type": {
         "url": "https://github.com/opencv/opencv",
         "commit": "6f29af625bb4617e2e061f8097b5f3e2ed341a82",
@@ -1040,6 +1045,48 @@ def test_external_opencv_filter2d_small_block_macro_argument_codegen_reparse():
     assert "int y = startY + py" in macro_stmt.args[1]
     assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
     assert "out[0] = 2.0f;" in crossgl
+
+
+def test_external_opencv_filter_small_token_paste_block_argument_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES[
+        "opencv_filter_small_loop_token_paste_block_argument"
+    ]
+    assert source_info["commit"] == "b9a38df0e6e3a327610e6ce2de1a17ddeddce5d6"
+    assert source_info["path"] == "modules/imgproc/src/opencl/filterSmall.cl"
+
+    source = """
+    #define __CAT(x, y) x##y
+    #define CAT(x, y) __CAT(x, y)
+    #define LOOP(N, VAR, STMT) CAT(LOOP, N)(VAR, STMT)
+
+    kernel void filter_small_macro_probe(global float *out, int startY) {
+        int py = 0;
+        LOOP(PX_LOAD_Y_ITERATIONS, py,
+        {
+            int2 pos = (int2)(startY + py, py);
+#ifdef SQR
+            out[pos.y] = out[0] * out[0];
+#else
+            out[pos.y] = fma(out[0], out[1], out[2]);
+#endif
+        });
+        out[0] = py;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    macro_stmt = next(
+        stmt
+        for stmt in ast.statements[0].body
+        if stmt.__class__.__name__ == "OpenCLMacroBlockNode"
+    )
+
+    assert macro_stmt.name == "LOOPPX_LOAD_Y_ITERATIONS"
+    assert macro_stmt.args[0] == "py"
+    assert "fma ( out [ 0 ] , out [ 1 ] , out [ 2 ] )" in macro_stmt.args[1]
+    assert "out [ 0 ] * out [ 0 ]" not in macro_stmt.args[1]
+    assert "// OpenCL macro block: LOOPPX_LOAD_Y_ITERATIONS" in crossgl
+    assert "out[0] = py;" in crossgl
 
 
 def test_external_opencv_filter2d_small_elaborated_struct_type_codegen_reparse():

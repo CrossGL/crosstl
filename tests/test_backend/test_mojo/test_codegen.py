@@ -5,6 +5,7 @@ import pytest
 from crosstl.backend.Mojo import MojoCrossGLCodeGen
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
+from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -68,6 +69,78 @@ def test_struct_codegen():
         assert "struct VSOutput" in generated_code
     except SyntaxError:
         pytest.fail("Struct parsing or code generation not implemented.")
+
+
+def test_crossgl_scalar_min_max_calls_disambiguate_mojo_helper_overloads():
+    # Reduced from examples/graphics/ComplexShader.cgl, whose generated Mojo
+    # package hit ambiguous scalar max calls against vector overload helpers.
+    code = """
+    shader ScalarMinMax {
+        float shade(vec3 n, vec3 l, float denom, float eps) {
+            float n_dot_l = max(dot(n, l), 0.0);
+            float ratio = 1.0 / max(denom, eps);
+            int bucket = max(1, 2);
+            return n_dot_l + ratio + float(bucket);
+        }
+    }
+    """
+
+    generated_code = MojoCodeGen().generate(parse_crossgl(code))
+
+    assert "max(Float32(dot_product(n, l)), Float32(0.0))" in generated_code
+    assert "max(Float32(denom), Float32(eps))" in generated_code
+    assert "fn max(a: Int32, b: Int32) -> Int32:" in generated_code
+    assert "var bucket: Int32 = max(Int32(1), Int32(2))" in generated_code
+
+
+def test_crossgl_scalar_smoothstep_call_disambiguates_mojo_helper_overloads():
+    # Reduced from examples/graphics/ComplexShader.cgl, whose generated Mojo
+    # package hit ambiguous scalar smoothstep calls against vector overloads.
+    code = """
+    shader ScalarSmoothstep {
+        float shade(vec2 uv) {
+            float vignette = 1.0 - smoothstep(0.5, 1.0, length(uv - 0.5) * 1.5);
+            return vignette;
+        }
+    }
+    """
+
+    generated_code = MojoCodeGen().generate(parse_crossgl(code))
+
+    assert (
+        "smoothstep(Float32(0.5), Float32(1.0), "
+        "Float32((magnitude((uv - 0.5)) * 1.5)))"
+    ) in generated_code
+
+
+def test_crossgl_compute_builtin_aliases_emit_mojo_placeholders():
+    # Reduced from examples/graphics/ComplexShader.cgl compute_main, where
+    # gl_GlobalInvocationID lowered to global_idx_uint but left it undeclared.
+    code = """
+    shader ComputeBuiltinAlias {
+        compute {
+            void main() {
+                ivec2 texCoord = ivec2(gl_GlobalInvocationID.xy);
+            }
+        }
+    }
+    """
+
+    generated_code = MojoCodeGen().generate(parse_crossgl(code))
+
+    assert "# CrossGL GPU builtin placeholders" in generated_code
+    assert "struct _CrossGLGpuBuiltinU32Vec3" in generated_code
+    assert "var x: UInt32" in generated_code
+    assert "var y: UInt32" in generated_code
+    assert "var z: UInt32" in generated_code
+    assert (
+        "var global_idx_uint = _CrossGLGpuBuiltinU32Vec3(0, 0, 0)"
+    ) in generated_code
+    assert (
+        "SIMD[DType.uint32, 4]("
+        "global_idx_uint.x, global_idx_uint.y, global_idx_uint.z, 0)"
+    ) in generated_code
+    assert "gl_GlobalInvocationID" not in generated_code
 
 
 def test_struct_generic_member_codegen():

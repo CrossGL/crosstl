@@ -1417,13 +1417,15 @@ class SlangToCrossGLConverter:
 
     def generate_global_variable(self, node):
         if isinstance(node, AssignmentNode):
-            left = self.generate_variable_declaration(node.left)
+            left = self.generate_variable_declaration(node.left, has_initializer=True)
             right = self.generate_expression(node.right, False)
             return f"    {left} {node.operator} {right};\n"
         return f"    {self.generate_variable_declaration(node)};\n"
 
-    def generate_variable_declaration(self, node):
-        qualifiers = self.format_global_variable_qualifiers(node)
+    def generate_variable_declaration(self, node, has_initializer=False):
+        qualifiers = self.format_global_variable_qualifiers(
+            node, has_initializer=has_initializer
+        )
         if qualifiers:
             qualifiers += " "
         return (
@@ -1432,9 +1434,24 @@ class SlangToCrossGLConverter:
             f"{self.format_variable_metadata(node)}"
         )
 
-    def format_global_variable_qualifiers(self, node):
+    def format_global_variable_qualifiers(self, node, has_initializer=False):
         allowed_qualifiers = {"extern", "static", "const", "constexpr"}
-        return self.format_ordered_storage_qualifiers(node, allowed_qualifiers)
+        excluded_qualifiers = set()
+        if not has_initializer and self.is_plain_uninitialized_const_global(node):
+            # CrossGL requires plain top-level const declarations to carry an
+            # initializer; static const declarations are accepted and can keep
+            # their original storage semantics.
+            excluded_qualifiers = {"const"}
+        return self.format_ordered_storage_qualifiers(
+            node, allowed_qualifiers, excluded_qualifiers=excluded_qualifiers
+        )
+
+    def is_plain_uninitialized_const_global(self, node):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        return "const" in qualifiers and "static" not in qualifiers
 
     def generate_struct_member(self, struct_node, member):
         qualifiers = self.format_struct_member_qualifiers(member)
@@ -1456,12 +1473,18 @@ class SlangToCrossGLConverter:
         allowed_qualifiers = {"static", "const"} | self.interpolation_qualifiers
         return self.format_ordered_storage_qualifiers(member, allowed_qualifiers)
 
-    def format_ordered_storage_qualifiers(self, node, allowed_qualifiers):
+    def format_ordered_storage_qualifiers(
+        self, node, allowed_qualifiers, excluded_qualifiers=None
+    ):
         allowed = {str(qualifier).lower() for qualifier in allowed_qualifiers}
+        excluded = {
+            str(qualifier).lower() for qualifier in excluded_qualifiers or set()
+        }
         qualifiers = [
             (index, str(qualifier))
             for index, qualifier in enumerate(getattr(node, "qualifiers", []) or [])
             if str(qualifier).lower() in allowed
+            and str(qualifier).lower() not in excluded
         ]
         storage_order = {"extern": 0, "static": 1, "const": 2, "constexpr": 3}
         return " ".join(

@@ -8675,6 +8675,31 @@ def test_const_expression_array_size_codegen_from_rust_gpu_const_generics():
     crosstl.translator.parse(result)
 
 
+def test_cast_array_size_codegen_reparse_from_wgpu_backend_list():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu
+    # Commit: 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6
+    # Path: wgpu-types/src/backend.rs
+    code = """
+    enum Backend {
+        Noop = 0,
+    }
+
+    impl Backend {
+        pub const ALL: [Backend; Backends::all().bits().count_ones() as usize] = [
+            Self::Noop,
+        ];
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Backend_ALL[Backends::all().bits().count_ones()]" in result
+    assert "asusize" not in result
+    assert " as usize" not in result
+    crosstl.translator.parse(result)
+
+
 def test_reference_array_conversion():
     code = """
     pub struct Filter {

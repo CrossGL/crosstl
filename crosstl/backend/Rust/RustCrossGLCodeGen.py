@@ -10363,7 +10363,10 @@ class RustToCrossGLConverter:
         array_parts = self.split_array_type(rust_type)
         if array_parts:
             base_type, array_suffix = array_parts
-            return f"{self.map_type(base_type)}{array_suffix}"
+            return (
+                f"{self.map_type(base_type)}"
+                f"{self.normalize_array_suffix_for_crossgl(array_suffix)}"
+            )
 
         resolved_alias = self.resolve_type_alias(rust_type)
         if resolved_alias is not None:
@@ -11317,6 +11320,13 @@ class RustToCrossGLConverter:
             elif char in ">)]":
                 depth = max(0, depth - 1)
         return None
+
+    def normalize_array_suffix_for_crossgl(self, array_suffix):
+        return re.sub(
+            r"\s*as\s+[ui](?:8|16|32|64|128|size)\b",
+            "",
+            array_suffix,
+        )
 
     def format_typed_declarator(self, type_name, name):
         mapped_type = self.map_type(type_name)
