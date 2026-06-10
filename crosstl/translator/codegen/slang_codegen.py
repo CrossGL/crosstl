@@ -12913,8 +12913,10 @@ class SlangCodeGen:
 
         if spec["mip"]:
             lod = self.generate_expression(args[1]) if len(args) > 1 else "0"
-            return f"{helper_name}({resource_name}, {lod})"
-        return f"{helper_name}({resource_name})"
+            query = f"{helper_name}({resource_name}, {lod})"
+        else:
+            query = f"{helper_name}({resource_name})"
+        return self.coerce_resource_query_result(result_type, query)
 
     def dimension_query_accepts_resource(self, func_name, resource_type):
         if func_name == "textureSize":
@@ -12953,7 +12955,29 @@ class SlangCodeGen:
             return None
         if expected_type == result_type:
             return None
+        if self.resource_query_result_cast_type(result_type) is not None:
+            return None
         return f"returns {result_type} but target expects {expected_type}"
+
+    def resource_query_result_cast_type(self, result_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        result_info = self.vector_value_info(result_type)
+        expected_info = self.vector_value_info(expected_type)
+        if result_info is None or expected_info is None:
+            return None
+        if result_info["component_type"] != "int":
+            return None
+        if expected_info["component_type"] not in {"half", "float", "double"}:
+            return None
+        if result_info["size"] != expected_info["size"]:
+            return None
+        return expected_info["type"]
+
+    def coerce_resource_query_result(self, result_type, query):
+        cast_type = self.resource_query_result_cast_type(result_type)
+        if cast_type is None:
+            return query
+        return f"{cast_type}({query})"
 
     def generate_sample_count_query(self, func_name, args):
         if not args:

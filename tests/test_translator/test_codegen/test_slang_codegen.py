@@ -19715,6 +19715,37 @@ def test_slangc_smoke_compiles_generated_resource_query_helpers_if_available(
     compile_generated_slang(generated_code, tmp_path, "compute")
 
 
+def test_slang_texture_size_casts_int_vector_query_for_float_arithmetic(tmp_path):
+    code = """
+    shader SlangTextureSizeFloatArithmetic {
+        sampler2D shadowMap @register(t0);
+        image2D outputImage @rgba32f @register(u0);
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main() {
+                vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+                imageStore(outputImage, ivec2(0, 0), vec4(texelSize, 0.0, 1.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Slang resource query" not in generated_code
+    assert (
+        "float2 texelSize = 1.0 / float2(cgl_textureSize_sampler2D(shadowMap, 0));"
+        in generated_code
+    )
+    assert "int2 cgl_textureSize_sampler2D(Sampler2D<float4> tex, uint mipLevel)" in (
+        generated_code
+    )
+    assert "textureSize(" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
+
+
 def test_storage_image_load_store_emit_slang_subscript_access():
     code = """
     shader Resources {

@@ -1,3 +1,12 @@
+int2 cgl_textureSize_sampler2D(Sampler2D<float4> tex, uint mipLevel)
+{
+    int width;
+    int height;
+    int levels;
+    tex.GetDimensions(mipLevel, width, height, levels);
+    return int2(width, height);
+}
+
 static const float PI = 3.14159265359;
 static const float EPSILON = 0.0001;
 static const int MAX_LIGHTS = 32;
@@ -136,8 +145,7 @@ float calculateShadow(Sampler2D<float4> shadow_map, float4 frag_pos_light_space,
         return 0.0;
     }
     float shadow = 0.0;
-    float2 texel_size =
-        1.0 / /* unsupported Slang resource query: textureSize returns int2 but target expects float2 */ float2(0.0);
+    float2 texel_size = 1.0 / float2(cgl_textureSize_sampler2D(shadow_map, 0));
     for (int x = -1; x <= 1; ++x)
     {
         for (int y = -1; y <= 1; ++y)
