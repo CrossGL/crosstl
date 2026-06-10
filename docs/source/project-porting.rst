@@ -527,6 +527,26 @@ diagnostics are reported without reading unsafe unit files. The plan remains
 metadata only: it does not rewrite host application code, execute device code,
 generate runtime framework code, or install target SDKs.
 
+Write a deterministic host integration handoff bundle from a consumption plan:
+
+.. code-block:: bash
+
+   python -m crosstl host-integration-handoff \
+     crosstl-host-loaders/host-loader-consumption-plan.json \
+     --handoff-dir crosstl-host-integration \
+     --format text
+
+Host integration handoff bundles emit a
+``crosstl-runtime-host-integration-handoff`` JSON report and write
+``host-integration.json``, ``HOST_INTEGRATION.md``, and one
+``targets/*.integration.json`` file per target. The bundle is designed as a
+stable handoff for build-system and runtime integration tools: it preserves the
+validated loader units, promoted actions, required tools, host responsibilities,
+package paths, scaffold files, and blocked-unit records from the consumption
+plan. It remains a metadata bundle only and does not rewrite host application
+code, execute device code, generate runtime framework code, or install target
+SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized

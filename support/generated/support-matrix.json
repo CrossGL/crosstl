@@ -763,7 +763,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 823
+        "test_count": 826
       },
       "translator_codegen": {
         "exists": true,
@@ -993,7 +993,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 982
+        "test_count": 983
       },
       "translator_codegen": {
         "exists": true,
@@ -11241,6 +11241,124 @@
     },
     {
       "category": "project",
+      "description": "Write a deterministic host integration handoff bundle for downstream build-system and runtime integration tooling.",
+      "id": "project.runtime_host_integration_handoff",
+      "name": "Runtime host integration handoff",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_ready_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_writes_blocked_bundle",
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_host_integration_handoff_rejects_wrong_plan_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_text_outputs_bundle",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_host_integration_handoff_json_writes_output"
+          ],
+          "notes": "host-integration-handoff builds crosstl-runtime-host-integration-handoff JSON, text, and SARIF output from a host loader consumption plan, writes host-integration.json, HOST_INTEGRATION.md, and per-target targets/*.integration.json files, preserves loader units, promoted consumption actions, requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-unit records for build-system and runtime integration tooling, validates the input plan kind before writing files, and keeps the bundle metadata-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -13930,12 +14048,12 @@
   "summary": {
     "backend_count": 10,
     "backlog_count": 30,
-    "feature_count": 64,
+    "feature_count": 65,
     "status_counts": {
       "cuda": {
         "diagnostic": 7,
         "partial": 3,
-        "supported": 54,
+        "supported": 55,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13943,7 +14061,7 @@
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 59,
+        "supported": 60,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13951,7 +14069,7 @@
       "hip": {
         "diagnostic": 7,
         "partial": 3,
-        "supported": 54,
+        "supported": 55,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13959,7 +14077,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 58,
+        "supported": 59,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13967,7 +14085,7 @@
       "mojo": {
         "diagnostic": 5,
         "partial": 3,
-        "supported": 56,
+        "supported": 57,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13975,7 +14093,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 59,
+        "supported": 60,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13983,7 +14101,7 @@
       "rust": {
         "diagnostic": 4,
         "partial": 3,
-        "supported": 57,
+        "supported": 58,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13991,7 +14109,7 @@
       "slang": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 58,
+        "supported": 59,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -13999,7 +14117,7 @@
       "vulkan": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 59,
+        "supported": 60,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -14007,7 +14125,7 @@
       "webgl": {
         "diagnostic": 22,
         "partial": 3,
-        "supported": 30,
+        "supported": 31,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 9

@@ -1851,6 +1851,111 @@ def _run_plan_host_loader_consumption(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_host_integration_handoff(payload):
+    lines = [
+        f"Runtime host integration handoff: {payload.get('sourceConsumptionPlan')}"
+    ]
+    for header_line in (
+        _format_payload_schema_version(payload, "Handoff schema version"),
+        _format_payload_kind(payload, "Handoff kind"),
+        _format_payload_generated_at(payload, "Handoff generated at"),
+        _format_payload_hash(
+            payload, "sourceConsumptionPlanHash", "Source consumption plan hash"
+        ),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {payload.get('status', 'failed')}")
+    handoff_root = payload.get("handoffRoot")
+    if isinstance(handoff_root, str) and handoff_root:
+        lines.append(f"Handoff root: {handoff_root}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Handoff scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Handoff non-goals: {', '.join(non_goal_labels)}")
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('loaderUnitCount', 0)} loader units, "
+            f"{summary.get('readyLoaderUnitCount', 0)} ready, "
+            f"{summary.get('blockedLoaderUnitCount', 0)} blocked, "
+            f"{summary.get('failedLoaderUnitCount', 0)} failed, "
+            f"{summary.get('generatedFileCount', 0)} generated files"
+        )
+
+    generated_files = payload.get("generatedFiles", [])
+    if generated_files:
+        lines.append("Generated files:")
+        for generated_file in generated_files:
+            if not isinstance(generated_file, Mapping):
+                continue
+            target = generated_file.get("target")
+            suffix = (
+                f" [target: {target}]" if isinstance(target, str) and target else ""
+            )
+            lines.append(
+                "- "
+                f"{generated_file.get('path', '<unknown>')} "
+                f"({generated_file.get('kind', 'unknown')})"
+                f"{suffix}"
+            )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime host integration targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('status', 'unknown')}, "
+                f"{target.get('loaderUnitCount', 0)} units, "
+                f"{target.get('actionCount', 0)} actions -> "
+                f"{target.get('handoffFile')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_host_integration_handoff(args):
+    from .project import build_runtime_host_integration_handoff
+
+    payload = build_runtime_host_integration_handoff(
+        args.consumption_plan, args.handoff_dir
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime host integration handoff"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(
+            _format_runtime_host_integration_handoff(payload),
+            args.output,
+        )
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -5561,6 +5666,31 @@ def _build_parser():
     )
     host_loader_consumption_parser.set_defaults(func=_run_plan_host_loader_consumption)
 
+    host_integration_handoff_parser = subparsers.add_parser(
+        "host-integration-handoff",
+        help="Build a host integration handoff bundle from a consumption plan",
+    )
+    host_integration_handoff_parser.add_argument(
+        "consumption_plan", help="Host loader consumption plan JSON"
+    )
+    host_integration_handoff_parser.add_argument(
+        "--handoff-dir",
+        required=True,
+        help="Directory to write host integration handoff files",
+    )
+    host_integration_handoff_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Host integration handoff report output format",
+    )
+    host_integration_handoff_parser.add_argument(
+        "--output",
+        "-o",
+        help="Write host integration handoff report; use '-' for stdout",
+    )
+    host_integration_handoff_parser.set_defaults(func=_run_host_integration_handoff)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -5597,6 +5727,7 @@ def _use_legacy_cli(argv):
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",
         "plan-host-loader-consumption",
+        "host-integration-handoff",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:
