@@ -10151,6 +10151,10 @@ class GLSLCodeGen:
             )
 
         value = self.generate_expression(args[0])
+        if target == "__crossgl_identity":
+            return value
+        if target.startswith("__crossgl_cast:"):
+            return f"{target.split(':', 1)[1]}({value})"
         if target == "__crossgl_bfloat16_to_uint":
             return f"(floatBitsToUint({value}) >> 16u)"
         return f"{target}({value})"
@@ -10169,6 +10173,22 @@ class GLSLCodeGen:
 
         value_type = self.map_type(source_type)
         component_type = self.vector_component_type(value_type) or value_type
+        if (
+            (func_name == "asfloat" and component_type == "float")
+            or (func_name == "asint" and component_type == "int")
+            or (func_name == "asuint" and component_type == "uint")
+        ):
+            return "__crossgl_identity"
+        if func_name == "asint" and component_type == "uint":
+            if value_type == "uint":
+                return "__crossgl_cast:int"
+            if value_type.startswith("uvec"):
+                return f"__crossgl_cast:ivec{value_type[-1]}"
+        if func_name == "asuint" and component_type == "int":
+            if value_type == "int":
+                return "__crossgl_cast:uint"
+            if value_type.startswith("ivec"):
+                return f"__crossgl_cast:uvec{value_type[-1]}"
         if func_name == "asfloat":
             if component_type == "int":
                 return "intBitsToFloat"
@@ -10191,13 +10211,29 @@ class GLSLCodeGen:
             if value_type.endswith(("2", "3", "4")):
                 return f"vec{value_type[-1]}"
         if func_name == "asint":
+            if value_type == "int":
+                return "int"
             if value_type == "float":
                 return "int"
+            if value_type == "uint":
+                return "int"
+            if value_type.startswith("ivec"):
+                return value_type
+            if value_type.startswith("uvec"):
+                return f"ivec{value_type[-1]}"
             if value_type.endswith(("2", "3", "4")):
                 return f"ivec{value_type[-1]}"
         if func_name == "asuint":
+            if value_type == "uint":
+                return "uint"
             if value_type == "float":
                 return "uint"
+            if value_type == "int":
+                return "uint"
+            if value_type.startswith("uvec"):
+                return value_type
+            if value_type.startswith("ivec"):
+                return f"uvec{value_type[-1]}"
             if value_type.endswith(("2", "3", "4")):
                 return f"uvec{value_type[-1]}"
         return None

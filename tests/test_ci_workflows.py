@@ -1781,13 +1781,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     assert re.search(r"translate-project\b[\s\S]*--run-toolchains", harness)
-    assert "https://github.com/CrossGL/crosstl/issues/827" in mlx_porting
-    assert "https://github.com/CrossGL/crosstl/issues/828" in mlx_porting
-    assert "https://github.com/CrossGL/crosstl/issues/834" in mlx_porting
-    assert "https://github.com/CrossGL/crosstl/issues/835" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/850" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/851" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/852" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/853" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/854" in mlx_porting
+    assert "https://github.com/CrossGL/crosstl/issues/855" in mlx_porting
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
     assert "mlx/backend/metal/kernels/unary.metal" in harness
+    assert "arange-opengl" in harness
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():

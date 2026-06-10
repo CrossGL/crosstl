@@ -29,11 +29,12 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/unary.metal",
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
-OPENGL_BFLOAT16_GAP = "OpenGL asuint alias cannot bitcast from bfloat16_t"
-ISSUE_INSTANTIATE_KERNEL = "https://github.com/CrossGL/crosstl/issues/827"
-ISSUE_OPENGL_BFLOAT16 = "https://github.com/CrossGL/crosstl/issues/828"
-ISSUE_DIRECTX_THREADGROUP = "https://github.com/CrossGL/crosstl/issues/834"
-ISSUE_VULKAN_THREADGROUP_METADATA = "https://github.com/CrossGL/crosstl/issues/835"
+ISSUE_THREADGROUP_METADATA = "https://github.com/CrossGL/crosstl/issues/850"
+ISSUE_RESOURCE_DECL_SCOPE = "https://github.com/CrossGL/crosstl/issues/851"
+ISSUE_OPENGL_BINDINGS = "https://github.com/CrossGL/crosstl/issues/852"
+ISSUE_OPENGL_INCLUDES = "https://github.com/CrossGL/crosstl/issues/853"
+ISSUE_VULKAN_QUANTIZED_LITERAL = "https://github.com/CrossGL/crosstl/issues/854"
+ISSUE_VULKAN_SORT_RECURSION = "https://github.com/CrossGL/crosstl/issues/855"
 
 
 class PortingCheckError(RuntimeError):
@@ -349,7 +350,7 @@ def _translate_directx_vulkan_frontier(
     }
 
 
-def _check_opengl_gap(
+def _check_arange_opengl(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -384,39 +385,31 @@ def _check_opengl_gap(
     payload = _load_json(report_path)
     summary = payload.get("summary", {})
     _require(isinstance(summary, dict), "OpenGL report summary must be an object")
-    if result.returncode == 0:
-        _require(
-            summary.get("translatedCount") == 1 and summary.get("failedCount") == 0,
-            "OpenGL arange translation succeeded but the report did not show one clean artifact",
-        )
-        return {
-            "name": "arange-opengl-gap",
-            "status": "resolved",
-            "report": _relpath(report_path, mlx_root),
-            "issue": ISSUE_OPENGL_BFLOAT16,
-        }
+    if result.returncode != 0:
+        messages = []
+        for diagnostic in payload.get("diagnostics", []):
+            if isinstance(diagnostic, dict):
+                message = diagnostic.get("message")
+                if isinstance(message, str):
+                    messages.append(message)
+        for artifact in payload.get("artifacts", []):
+            if isinstance(artifact, dict):
+                error = artifact.get("error")
+                if isinstance(error, str):
+                    messages.append(error)
+        detail = f": {messages[0]}" if messages else ""
+        raise PortingCheckError(f"OpenGL arange translation failed{detail}")
 
-    messages = []
-    for diagnostic in payload.get("diagnostics", []):
-        if isinstance(diagnostic, dict):
-            message = diagnostic.get("message")
-            if isinstance(message, str):
-                messages.append(message)
-    for artifact in payload.get("artifacts", []):
-        if isinstance(artifact, dict):
-            error = artifact.get("error")
-            if isinstance(error, str):
-                messages.append(error)
     _require(
-        any(OPENGL_BFLOAT16_GAP in message for message in messages),
-        f"OpenGL failure did not match the tracked MLX bfloat16 gap: {ISSUE_OPENGL_BFLOAT16}",
+        summary.get("translatedCount") == 1 and summary.get("failedCount") == 0,
+        "OpenGL arange translation succeeded but the report did not show one clean artifact",
     )
     return {
-        "name": "arange-opengl-gap",
-        "status": "expected-gap",
+        "name": "arange-opengl",
+        "status": "passed",
         "report": _relpath(report_path, mlx_root),
-        "issue": ISSUE_OPENGL_BFLOAT16,
-        "message": OPENGL_BFLOAT16_GAP,
+        "source": MLX_ARANGE_SOURCE,
+        "target": "opengl",
     }
 
 
@@ -450,7 +443,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             args.python,
             require_vulkan_toolchain=args.require_vulkan_toolchain,
         ),
-        _check_opengl_gap(
+        _check_arange_opengl(
             mlx_root,
             work_dir,
             config_dir,
@@ -473,10 +466,12 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "runtimeIntegrationIncluded": False,
         },
         "trackedIssues": [
-            ISSUE_INSTANTIATE_KERNEL,
-            ISSUE_OPENGL_BFLOAT16,
-            ISSUE_DIRECTX_THREADGROUP,
-            ISSUE_VULKAN_THREADGROUP_METADATA,
+            ISSUE_THREADGROUP_METADATA,
+            ISSUE_RESOURCE_DECL_SCOPE,
+            ISSUE_OPENGL_BINDINGS,
+            ISSUE_OPENGL_INCLUDES,
+            ISSUE_VULKAN_QUANTIZED_LITERAL,
+            ISSUE_VULKAN_SORT_RECURSION,
         ],
         "checks": checks,
         "status": "passed",

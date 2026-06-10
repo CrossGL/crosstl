@@ -24476,6 +24476,46 @@ def test_opengl_hlsl_bitcast_aliases_map_to_glsl_bit_functions():
     assert "asfloat(" not in generated_code
 
 
+def test_opengl_hlsl_bitcast_aliases_elide_same_type_conversions():
+    shader = """
+    shader BitcastAliasIdentity {
+        fragment {
+            vec4 main(float value, int signedBits, uint bits, ivec2 signedPair, uvec2 pair) @ gl_FragColor {
+                float sameFloat = asfloat(value);
+                int sameInt = asint(signedBits);
+                uint sameUint = asuint(bits);
+                uvec2 samePair = asuint(pair);
+                uint unsignedBits = asuint(signedBits);
+                uvec2 unsignedPair = asuint(signedPair);
+                int signedFromUint = asint(bits);
+                ivec2 signedFromPair = asint(pair);
+                return vec4(
+                    sameFloat + float(sameInt + sameUint + samePair.x),
+                    float(unsignedBits + unsignedPair.x),
+                    float(signedFromUint + signedFromPair.x),
+                    1.0
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float sameFloat = value;" in generated_code
+    assert "int sameInt = signedBits;" in generated_code
+    assert "uint sameUint = bits;" in generated_code
+    assert "uvec2 samePair = pair;" in generated_code
+    assert "uint unsignedBits = uint(signedBits);" in generated_code
+    assert "uvec2 unsignedPair = uvec2(signedPair);" in generated_code
+    assert "int signedFromUint = int(bits);" in generated_code
+    assert "ivec2 signedFromPair = ivec2(pair);" in generated_code
+    assert "BitsTo" not in generated_code
+    assert "asuint(" not in generated_code
+    assert "asint(" not in generated_code
+    assert "asfloat(" not in generated_code
+
+
 def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     shader = """
     shader BFloat16BitcastAlias {

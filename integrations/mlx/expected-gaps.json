@@ -4,28 +4,40 @@
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "tracked_issues": [
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/827",
-      "scope": "metal-instantiation",
+      "issue": "https://github.com/CrossGL/crosstl/issues/850",
+      "scope": "directx-opengl-threadgroup-metadata",
       "status": "open",
-      "summary": "Materialize MLX instantiate_kernel entries as concrete target entry points."
+      "summary": "Lower MLX Metal max_total_threads_per_threadgroup metadata for DirectX and OpenGL compute output."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/828",
-      "scope": "opengl-bfloat16-bitcast",
+      "issue": "https://github.com/CrossGL/crosstl/issues/851",
+      "scope": "directx-opengl-resource-declaration-scope",
       "status": "open",
-      "summary": "Lower MLX bfloat16_t bitcasts for OpenGL project translation."
+      "summary": "Scope MLX resource declarations per generated DirectX and OpenGL entry point."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/834",
-      "scope": "directx-threadgroup-scratch",
+      "issue": "https://github.com/CrossGL/crosstl/issues/852",
+      "scope": "opengl-resource-bindings",
       "status": "open",
-      "summary": "Lower MLX Metal threadgroup scratch storage for DirectX."
+      "summary": "Disambiguate OpenGL resource bindings for multi-entry MLX kernels."
     },
     {
-      "issue": "https://github.com/CrossGL/crosstl/issues/835",
-      "scope": "vulkan-threadgroup-metadata",
+      "issue": "https://github.com/CrossGL/crosstl/issues/853",
+      "scope": "opengl-include-validation",
       "status": "open",
-      "summary": "Handle MLX Metal max_total_threads_per_threadgroup metadata for Vulkan."
+      "summary": "Remove Metal include directives from generated OpenGL MLX artifacts."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/854",
+      "scope": "vulkan-quantized-literals",
+      "status": "open",
+      "summary": "Emit valid SPIR-V literals for MLX quantized bit-packing constants."
+    },
+    {
+      "issue": "https://github.com/CrossGL/crosstl/issues/855",
+      "scope": "vulkan-sort-recursion",
+      "status": "open",
+      "summary": "Avoid recursion overflow translating MLX sort.metal to Vulkan."
     }
   ]
 }

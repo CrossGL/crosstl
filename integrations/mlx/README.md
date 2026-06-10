@@ -16,7 +16,11 @@ The current harness verifies:
   `copy.metal`, `fence.metal`, `random.metal`, `rope.metal`, and
   `ternary.metal`, and `unary.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
-- tracked OpenGL behavior for the current MLX `bfloat16_t` bitcast gap.
+- OpenGL artifact generation for `arange.metal`.
+
+A separate full-corpus scout against the same pinned MLX revision currently
+translates 72 of 120 target artifacts across DirectX, OpenGL, and Vulkan before
+the tracked gaps below.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -51,17 +55,20 @@ python integrations/mlx/run_mlx_porting.py \
 The harness writes reports, generated artifacts, and command logs under
 `<mlx-root>/.crosstl-mlx-porting`.
 
-## Tracked Translator Gaps
+## Current Translator Gaps
 
-- CrossGL/crosstl#827: materialize MLX `instantiate_kernel` entries during
-  project translation so generated targets expose the concrete MLX kernel entry
-  names and type specializations.
-- CrossGL/crosstl#828: lower MLX `bfloat16_t` bitcasts for OpenGL project
-  translation.
-- CrossGL/crosstl#834: lower MLX Metal `threadgroup` scratch storage for
-  DirectX output.
-- CrossGL/crosstl#835: handle MLX Metal `max_total_threads_per_threadgroup`
-  metadata for Vulkan output.
+- CrossGL/crosstl#850: lower MLX Metal `max_total_threads_per_threadgroup`
+  metadata for DirectX and OpenGL compute output.
+- CrossGL/crosstl#851: scope MLX resource declarations per generated DirectX
+  and OpenGL entry point.
+- CrossGL/crosstl#852: disambiguate OpenGL resource bindings for multi-entry
+  MLX kernels.
+- CrossGL/crosstl#853: remove Metal include directives from generated OpenGL
+  MLX artifacts before validation.
+- CrossGL/crosstl#854: emit valid SPIR-V literals for MLX quantized
+  bit-packing constants.
+- CrossGL/crosstl#855: avoid recursion overflow translating MLX `sort.metal`
+  to Vulkan.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as
