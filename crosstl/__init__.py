@@ -1,5 +1,7 @@
 """Public package interface for CrossGL Translator."""
 
+from importlib import import_module
+
 __all__ = ["translate", "supported_backends", "supported_sources", "project"]
 
 
@@ -23,9 +25,7 @@ def __getattr__(name):
 
         return translate
     if name == "project":
-        from . import project
-
-        return project
+        return import_module(f"{__name__}.project")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
