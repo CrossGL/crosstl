@@ -122,7 +122,7 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
 
     functions = [
         function
-        for function in (getattr(cgl_ast, "functions", []) or [])
+        for function in getattr(cgl_ast, "functions", []) or []
         if isinstance(function, FunctionNode)
     ]
     called_names = set()
@@ -132,9 +132,7 @@ def validate_opencl_intermediate_for_target(cgl_ast, target_backend=None):
     unsupported = []
 
     empty_helpers = [
-        function.name
-        for function in functions
-        if _is_empty_nonvoid_function(function)
+        function.name for function in functions if _is_empty_nonvoid_function(function)
     ]
     if empty_helpers:
         unsupported.append(
