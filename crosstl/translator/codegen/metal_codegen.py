@@ -2756,19 +2756,21 @@ class MetalCodeGen:
             )
             for member in getattr(struct, "members", []) or []:
                 lowering = self.metal_stage_io_member_lowering(
-                    member, default_member_semantics
+                    member, default_member_semantics, struct_name
                 )
                 if lowering is not None:
                     lowerings.setdefault(struct_name, {})[member.name] = lowering
         return lowerings
 
-    def metal_stage_io_member_lowering(self, member, default_member_semantics=None):
+    def metal_stage_io_member_lowering(
+        self, member, default_member_semantics=None, struct_name=None
+    ):
         member_name = getattr(member, "name", None)
         if not member_name:
             return None
-        semantic = self.semantic_from_node(member)
-        if semantic is None:
-            semantic = (default_member_semantics or {}).get(member_name)
+        semantic = self.metal_struct_member_effective_semantic(
+            member, default_member_semantics or {}, struct_name
+        )
 
         array_info = self.metal_stage_io_member_array_info(member)
         if array_info is not None:
@@ -2968,9 +2970,9 @@ class MetalCodeGen:
             return code, dependencies
 
         if isinstance(member, ArrayNode):
-            semantic = self.semantic_from_node(member)
-            if semantic is None:
-                semantic = default_member_semantics.get(member.name)
+            semantic = self.metal_struct_member_effective_semantic(
+                member, default_member_semantics, struct_name
+            )
             resource_array_declaration = self.format_struct_resource_array_member(
                 member
             )
@@ -3017,9 +3019,9 @@ class MetalCodeGen:
                 dependencies,
             )
 
-        semantic = self.semantic_from_node(member)
-        if semantic is None:
-            semantic = default_member_semantics.get(member.name)
+        semantic = self.metal_struct_member_effective_semantic(
+            member, default_member_semantics, struct_name
+        )
         abi_attr = self.format_metal_struct_member_abi_attributes(member)
         semantic_attr = self.map_semantic(semantic) if semantic else ""
         interpolation_attr = self.metal_interpolation_attribute_suffix(member)
@@ -3598,6 +3600,7 @@ class MetalCodeGen:
                         "name": p.name,
                         "raw_type": raw_param_type,
                         "mapped_type": param_type,
+                        "semantic": semantic,
                     }
                 )
                 continue
@@ -3616,6 +3619,7 @@ class MetalCodeGen:
                         "name": p.name,
                         "declaration": declaration,
                         "attribute": param_attr,
+                        "semantic": semantic,
                     }
                 )
                 continue
@@ -4821,14 +4825,35 @@ class MetalCodeGen:
         self, struct_name, parameters
     ):
         code = f"struct {struct_name} {{\n"
-        for attribute_index, parameter in enumerate(parameters):
+        used_attributes = {
+            attribute_index
+            for parameter in parameters
+            for attribute_index in [
+                self.metal_attribute_index_from_attribute(parameter.get("attribute"))
+            ]
+            if attribute_index is not None
+        }
+        next_attribute = 0
+        for parameter in parameters:
+            attribute = parameter.get("attribute")
+            attribute_index = self.metal_attribute_index_from_attribute(attribute)
+            if attribute_index is None and (
+                attribute is None
+                or not attribute.strip()
+                or self.is_metal_user_stage_io_semantic(parameter.get("semantic"))
+            ):
+                while next_attribute in used_attributes:
+                    next_attribute += 1
+                attribute = f" [[attribute({next_attribute})]]"
+                used_attributes.add(next_attribute)
+                next_attribute += 1
             if "declaration" in parameter:
-                code += f"    {parameter['declaration']}{parameter['attribute']};\n"
+                code += f"    {parameter['declaration']}{attribute or ''};\n"
             else:
                 field_decl = format_c_style_array_declaration(
                     parameter["mapped_type"], parameter["name"]
                 )
-                code += f"    {field_decl} [[attribute({attribute_index})]];\n"
+                code += f"    {field_decl}{attribute or ''};\n"
         code += "};\n\n"
         return code
 
@@ -13388,13 +13413,26 @@ class MetalCodeGen:
 
     def metal_default_struct_member_semantics(self, struct_node):
         struct_name = getattr(struct_node, "name", None)
+        defaults = {}
         if struct_name in self.metal_vertex_entry_input_struct_names:
-            return self.metal_default_vertex_input_member_semantics(struct_node)
-        if struct_name in self.metal_vertex_entry_output_struct_names:
-            return self.metal_default_vertex_output_member_semantics(struct_node)
-        if struct_name in self.metal_fragment_entry_output_struct_names:
-            return self.metal_default_fragment_output_member_semantics(struct_node)
-        return {}
+            defaults.update(
+                self.metal_default_vertex_input_member_semantics(struct_node)
+            )
+        elif struct_name in self.metal_vertex_entry_output_struct_names:
+            defaults.update(
+                self.metal_default_vertex_output_member_semantics(struct_node)
+            )
+        elif struct_name in self.metal_fragment_entry_output_struct_names:
+            defaults.update(
+                self.metal_default_fragment_output_member_semantics(struct_node)
+            )
+        if struct_name in self.metal_stage_io_struct_names:
+            defaults.update(
+                self.metal_default_user_stage_io_member_semantics(
+                    struct_node, defaults
+                )
+            )
+        return defaults
 
     def metal_default_vertex_input_member_semantics(self, struct_node):
         used_attributes = set()
@@ -13423,6 +13461,94 @@ class MetalCodeGen:
             used_attributes.update(range(next_attribute, next_attribute + span))
             next_attribute += span
         return defaults
+
+    def metal_default_user_stage_io_member_semantics(
+        self, struct_node, existing_defaults=None
+    ):
+        defaults = {}
+        existing_defaults = existing_defaults or {}
+        used_attributes = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = existing_defaults.get(getattr(member, "name", None))
+            if semantic is None:
+                semantic = self.semantic_from_node(member)
+            attribute_index = self.metal_attribute_index_from_semantic(semantic)
+            if attribute_index is not None:
+                span = self.metal_stage_io_member_attribute_span(member)
+                used_attributes.update(range(attribute_index, attribute_index + span))
+
+        next_attribute = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name or member_name in existing_defaults:
+                continue
+            if not self.is_metal_user_stage_io_semantic(
+                self.semantic_from_node(member)
+            ):
+                continue
+            if not self.metal_can_default_stage_io_semantic(
+                self.struct_member_raw_type(member)
+            ):
+                continue
+
+            while next_attribute in used_attributes:
+                next_attribute += 1
+            defaults[member_name] = f"attribute({next_attribute})"
+            span = self.metal_stage_io_member_attribute_span(member)
+            used_attributes.update(range(next_attribute, next_attribute + span))
+            next_attribute += span
+        return defaults
+
+    def metal_struct_member_effective_semantic(
+        self, member, default_member_semantics, struct_name=None
+    ):
+        semantic = self.semantic_from_node(member)
+        default_semantic = (default_member_semantics or {}).get(
+            getattr(member, "name", None)
+        )
+        if semantic is None:
+            return default_semantic
+        if (
+            struct_name in getattr(self, "metal_stage_io_struct_names", set())
+            and default_semantic is not None
+            and self.is_metal_user_stage_io_semantic(semantic)
+        ):
+            return default_semantic
+        return semantic
+
+    def is_metal_user_stage_io_semantic(self, semantic):
+        if semantic is None:
+            return False
+        if self.metal_attribute_index_from_semantic(semantic) is not None:
+            return False
+        canonical = self.canonical_metal_semantic(semantic)
+        if canonical is None:
+            return False
+        canonical = str(canonical)
+        if canonical.startswith("attribute("):
+            return False
+        if canonical.startswith("color(") or canonical.startswith("depth("):
+            return False
+        return canonical not in {
+            "barycentric_coord",
+            "clip_distance",
+            "instance_id",
+            "is_front_facing",
+            "payload",
+            "point_coord",
+            "point_size",
+            "position",
+            "primitive_id",
+            "sample_id",
+            "sample_mask",
+            "stencil_ref",
+            "thread_index_in_threadgroup",
+            "thread_position_in_grid",
+            "thread_position_in_threadgroup",
+            "threadgroup_position_in_grid",
+            "threads_per_threadgroup",
+            "vertex_id",
+        }
 
     def metal_stage_io_member_attribute_span(self, member):
         array_info = self.metal_stage_io_member_array_info(member)
@@ -13518,6 +13644,12 @@ class MetalCodeGen:
             return None
         index = mapped_semantic[len("attribute(") : -1]
         return int(index) if index.isdigit() else None
+
+    def metal_attribute_index_from_attribute(self, attribute):
+        if not attribute:
+            return None
+        match = re.search(r"\[\[\s*attribute\((\d+)\)\s*\]\]", str(attribute))
+        return int(match.group(1)) if match else None
 
     def uses_metal_raytracing_namespace(self, ast, global_vars, functions):
         for stage_type in getattr(ast, "stages", {}) or {}:

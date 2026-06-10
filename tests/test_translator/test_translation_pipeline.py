@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -102,6 +104,33 @@ def _assert_generated_output_is_usable(generated):
     assert "Traceback" not in generated
     assert "NotImplemented" not in generated
     assert "<crosstl." not in generated
+
+
+def _compile_with_metal_if_available(source: str, tmp_path: Path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return
+
+    lookup = subprocess.run(
+        [xcrun, "-f", "metal"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if lookup.returncode != 0:
+        return
+
+    source_path = tmp_path / "generated.metal"
+    output_path = tmp_path / "generated.air"
+    source_path.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        [xcrun, "metal", str(source_path), "-o", str(output_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_cgl_translate_save_shader_preserves_source_line_endings(tmp_path):
@@ -368,7 +397,14 @@ def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
     )
 
     _assert_generated_output_is_usable(generated)
-    assert "ConstantBuffer<MatMulParams> params" in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "RWStructuredBuffer<float> A : register(u0);" in generated
+    assert "RWStructuredBuffer<float> B : register(u1);" in generated
+    assert "RWStructuredBuffer<float> X : register(u2);" in generated
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in generated
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in generated
+    assert "void CSMain(float* A" not in generated
+    assert "RWStructuredBuffer<float> A," not in generated
     assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in generated
     assert "uint2 id = id_dispatchThreadID.xy;" in generated
     assert "const uint row_dim_x = params.row_dim_x;" in generated
@@ -734,6 +770,76 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "a.xxxx" not in metal
     assert "unsupported Metal program-scope groupshared global" in metal
     assert "unsupported Metal program-scope groupshared store" in metal
+
+
+def test_metal_max_total_threads_metadata_translates_to_vulkan(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-max-total-threads.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        [[max_total_threads_per_threadgroup(1024)]]
+        kernel void pinned_kernel(
+            device float* out [[buffer(0)]],
+            uint index [[thread_position_in_grid]]) {
+            out[index] = 1.0;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="vulkan", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert 'OpEntryPoint GLCompute' in generated
+    assert '"pinned_kernel"' in generated
+    assert "return semantic" not in generated
+
+
+def test_hlsl_hello_const_buffers_vertex_semantics_lower_to_metal_attributes(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "hello-const-buffers.hlsl",
+        """
+        cbuffer SceneConstantBuffer : register(b0)
+        {
+            float4 offset;
+        };
+
+        struct PSInput
+        {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        PSInput VSMain(float4 position : POSITION, float4 color : COLOR)
+        {
+            PSInput result;
+            result.position = position + offset;
+            result.color = color;
+            return result;
+        }
+
+        float4 PSMain(PSInput input) : SV_TARGET
+        {
+            return input.color;
+        }
+        """,
+    )
+
+    metal = crosstl.translate(str(source_path), backend="metal", format_output=False)
+
+    assert "float4 position [[attribute(0)]];" in metal
+    assert "float4 color [[attribute(1)]];" in metal
+    assert "float4 position [[position]];" in metal
+    assert "[[Color]]" not in metal
+    assert "[[COLOR]]" not in metal
+    _compile_with_metal_if_available(metal, tmp_path)
 
 
 @pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
