@@ -1063,6 +1063,7 @@ TOOLCHAIN_BY_BACKEND = {
     "rust": ("rustc",),
     "slang": ("slangc",),
     "vulkan": ("spirv-val", "spirv-as"),
+    "wgsl": ("naga",),
 }
 TOOLCHAIN_AVAILABILITY_COMMANDS = {
     "cuda": ("nvcc", "--version"),
@@ -1072,6 +1073,7 @@ TOOLCHAIN_AVAILABILITY_COMMANDS = {
     "mojo": ("mojo", "--version"),
     "rust": ("rustc", "--version"),
     "slang": ("slangc", "--version"),
+    "wgsl": ("naga", "--version"),
 }
 TOOLCHAIN_SMOKE_TIMEOUT_SECONDS = 30
 TOOLCHAIN_TIMEOUT_RETURNCODE = 124
@@ -1182,6 +1184,15 @@ RUNTIME_ADAPTER_CATALOG = {
         "loaderResponsibilities": [
             "Load the packaged GLSL ES artifact with the existing WebGL shader creation path.",
             "Bind uniforms, buffers, textures, and draw or dispatch state in JavaScript.",
+        ],
+    },
+    "wgsl": {
+        "adapterKind": "webgpu-wgsl-adapter",
+        "artifactFormat": "WGSL source",
+        "requiredTools": ["naga"],
+        "loaderResponsibilities": [
+            "Load the packaged WGSL artifact into the WebGPU shader-module creation path.",
+            "Bind WebGPU pipeline layouts, bind groups, and dispatch or draw state in host code.",
         ],
     },
 }
@@ -17735,6 +17746,8 @@ def _toolchain_smoke_command(
         if artifact_path.suffix.lower() == ".spvasm" and len(tools) > 1:
             return [tools[1], str(artifact_path), "-o", os.devnull], "artifact"
         return [tools[0], str(artifact_path)], "artifact"
+    if target == "wgsl":
+        return [tools[0], "--input-kind", "wgsl", str(artifact_path)], "artifact"
     availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(target)
     if availability_command is None:
         return None

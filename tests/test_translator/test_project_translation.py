@@ -9891,6 +9891,73 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
     ]
 
 
+def test_translate_project_wgsl_smoke_validates_generated_artifact_with_naga(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    artifact_path = (repo / "out" / "wgsl" / "simple.wgsl").resolve()
+    expected_command = ["naga", "--input-kind", "wgsl", str(artifact_path)]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: "/usr/bin/naga" if tool == "naga" else None,
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["input"] is None
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        return SimpleNamespace(returncode=0, stdout="Validation successful", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["wgsl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+
+    assert len(commands) == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert payload["validation"]["toolchains"] == [
+        {
+            "target": "wgsl",
+            "status": "available",
+            "tools": [
+                {
+                    "name": "naga",
+                    "path": "/usr/bin/naga",
+                    "available": True,
+                }
+            ],
+        }
+    ]
+    assert payload["validation"]["artifacts"][0]["path"] == "out/wgsl/simple.wgsl"
+    assert payload["validation"]["artifacts"][0]["status"] == "ok"
+    assert payload["validation"]["toolchainRuns"] == [
+        {
+            "source": "simple.cgl",
+            "sourceBackend": "cgl",
+            "target": "wgsl",
+            "path": "out/wgsl/simple.wgsl",
+            "command": expected_command,
+            "checkKind": "artifact",
+            "returncode": 0,
+            "status": "ok",
+            "stdout": "Validation successful",
+            "stderr": "",
+        }
+    ]
+
+
 def test_translate_project_opengl_smoke_uses_source_stage_metadata(
     tmp_path, monkeypatch
 ):
@@ -10006,6 +10073,16 @@ def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "vulkan", ["spirv-val", "spirv-as"], binary_shader
     ) == (["spirv-val", str(binary_shader)], "artifact")
+
+
+def test_wgsl_toolchain_smoke_command_validates_artifact_with_naga(tmp_path):
+    shader = tmp_path / "shader.wgsl"
+    shader.write_text("@compute @workgroup_size(1) fn main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command("wgsl", ["naga"], shader) == (
+        ["naga", "--input-kind", "wgsl", str(shader)],
+        "artifact",
+    )
 
 
 def test_validate_project_report_emits_closed_validation_report_schema(tmp_path):
@@ -23904,6 +23981,32 @@ def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_ta
     assert host_interface_action["packagePath"] == adapter["packagePath"]
     assert "status is unavailable" in host_interface_action["message"]
     assert "host-interface-parser-unavailable" in host_interface_action["message"]
+
+
+def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["targets"][0]["target"] == "wgsl"
+    assert payload["targets"][0]["adapterKind"] == "webgpu-wgsl-adapter"
+    assert payload["targets"][0]["requiredTools"] == ["naga"]
+    assert payload["targets"][0]["loaderResponsibilities"] == [
+        "Load the packaged WGSL artifact into the WebGPU shader-module creation path.",
+        "Bind WebGPU pipeline layouts, bind groups, and dispatch or draw state in host code.",
+    ]
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "wgsl"
+    assert adapter["adapterKind"] == "webgpu-wgsl-adapter"
+    assert adapter["artifactFormat"] == "WGSL source"
+    assert adapter["requiredTools"] == ["naga"]
+    assert adapter["packagePath"] == "artifacts/out/wgsl/simple.wgsl"
+    assert [action["kind"] for action in payload["actions"]] == [
+        "wire-runtime-adapter",
+        "resolve-host-interface-metadata",
+        "review-runtime-references",
+    ]
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
