@@ -7,17 +7,21 @@ struct PSInput {
     float4 color [[Color]];
 };
 // Vertex Shader
-vertex PSInput VSMain(float4 position [[Position]], float4 color [[Color]]) {
+struct VSMain_Input {
+    float4 position [[attribute(0)]];
+    float4 color [[Color]];
+};
+
+vertex PSInput VSMain(VSMain_Input _crossglInput [[stage_in]]) {
+    float4 position = _crossglInput.position;
+    float4 color = _crossglInput.color;
     PSInput result;
     result.position = position;
     result.color = color;
     return result;
 }
 
-float4 PSMain(PSInput input)  [[color(0)]] {
-    return input.color;
-}
-
 // Fragment Shader
-fragment void fragment_main() {
+fragment float4 PSMain(PSInput input [[stage_in]]) {
+    return input.color;
 }

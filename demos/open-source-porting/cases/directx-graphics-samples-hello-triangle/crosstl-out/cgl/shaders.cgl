@@ -16,7 +16,7 @@ shader main {
 
     // fragment Shader
     fragment {
-    vec4 PSMain(PSInput input) @ gl_FragColor {
+    vec4 PSMain(PSInput input) @ gl_FragColor @ stage_entry {
         return input.color;
     }
 

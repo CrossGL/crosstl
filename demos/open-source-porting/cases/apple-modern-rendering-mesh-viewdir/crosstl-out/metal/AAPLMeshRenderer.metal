@@ -12,6 +12,11 @@ struct Output {
     half3 viewDir;
 };
 // Vertex Shader
-vertex Output main_vertex(Input in_ [[stage_in]], constant Camera& camera [[buffer(0)]]) {
+struct main_vertex_Input {
+    constant Camera& camera [[buffer(0)]];
+};
+
+vertex Output main_vertex(Input in_ [[stage_in]], main_vertex_Input _crossglInput [[stage_in]]) {
+    constant Camera& camera = _crossglInput.camera;
     return Output() /* fallback for unmatched generated control flow */;
 }

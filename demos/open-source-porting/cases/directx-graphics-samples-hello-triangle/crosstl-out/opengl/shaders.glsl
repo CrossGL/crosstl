@@ -1,13 +1,16 @@
 
 #version 450 core
 #ifdef GL_VERTEX_SHADER
-out vec4 out_color;
+layout(location = 13) out vec4 out_color;
+#endif
+#ifdef GL_FRAGMENT_SHADER
+layout(location = 13) in vec4 in_out_color;
 #endif
 #ifdef GL_VERTEX_SHADER
-in vec4 position;
+layout(location = 0) in vec4 position;
 #endif
 #ifdef GL_VERTEX_SHADER
-in vec4 color;
+layout(location = 13) in vec4 color;
 #endif
 #ifdef GL_VERTEX_SHADER
 // Vertex Shader
@@ -20,11 +23,10 @@ void main() {
 #endif
 #ifdef GL_FRAGMENT_SHADER
 // Fragment Shader
-vec4 PSMain(PSInput input) {
-    return input.color;
-}
-
+layout(location = 0) out vec4 fragColor;
 void main() {
+    fragColor = in_out_color;
+    return;
 }
 
 #endif

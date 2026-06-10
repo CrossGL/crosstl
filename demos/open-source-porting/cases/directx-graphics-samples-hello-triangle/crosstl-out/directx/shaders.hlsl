@@ -11,10 +11,7 @@ PSInput VSMain(float4 position : Position, float4 color : Color) {
     return result;
 }
 
+// Fragment Shader
 float4 PSMain(PSInput input): SV_TARGET {
     return input.color;
-}
-
-// Fragment Shader
-void PSMain_2() {
 }

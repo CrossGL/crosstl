@@ -12,4 +12,3 @@ void main() {
     int gid = int(gl_GlobalInvocationID.x);
     y[gid] = fma(a, x[gid], y[gid]);
 }
-
