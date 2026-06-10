@@ -43,6 +43,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
+from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .array_utils import (
     collect_literal_int_constants,
     evaluate_literal_int_expression,
@@ -20956,9 +20957,16 @@ class VulkanSPIRVCodeGen:
     def get_function_qualifier(self, func) -> Optional[str]:
         """Return the shader-stage qualifier from old or new function AST shapes."""
         if hasattr(func, "qualifiers") and func.qualifiers:
-            return func.qualifiers[0] if func.qualifiers else None
+            return normalize_stage_name(func.qualifiers[0]) if func.qualifiers else None
         if hasattr(func, "qualifier"):
-            return func.qualifier
+            qualifier = normalize_stage_name(func.qualifier)
+            if qualifier in STAGE_QUALIFIER_NAMES:
+                return qualifier
+
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = normalize_stage_name(getattr(attr, "name", attr))
+            if attr_name in STAGE_QUALIFIER_NAMES:
+                return attr_name
         return None
 
     def stage_key(self, stage_type) -> str:

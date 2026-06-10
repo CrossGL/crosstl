@@ -307,6 +307,7 @@ from .stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    function_stage_name,
     normalize_stage_name,
     order_functions_by_dependencies,
     should_emit_qualified_function,
@@ -706,6 +707,7 @@ class MetalCodeGen:
         self.current_unused_local_declaration_names = set()
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
+        self.current_metal_compute_builtin_parameter_names = {}
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
@@ -2130,11 +2132,7 @@ class MetalCodeGen:
         functions = getattr(ast, "functions", [])
         functions_code = ""
         for func in functions:
-            if hasattr(func, "qualifiers") and func.qualifiers:
-                qualifier = func.qualifiers[0] if func.qualifiers else None
-            else:
-                qualifier = getattr(func, "qualifier", None)
-            qualifier_name = normalize_stage_name(qualifier)
+            qualifier_name = function_stage_name(func)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
                 continue
@@ -3380,6 +3378,9 @@ class MetalCodeGen:
         previous_metal_wave_lane_count_parameter = (
             self.current_metal_wave_lane_count_parameter
         )
+        previous_metal_compute_builtin_parameter_names = (
+            self.current_metal_compute_builtin_parameter_names
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -3416,6 +3417,7 @@ class MetalCodeGen:
         self.current_readonly_metal_parameter_reasons = {}
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
+        self.current_metal_compute_builtin_parameter_names = {}
         self.local_variable_types = {}
         self.current_address_space_variables = {}
         for p in param_list:
@@ -3563,6 +3565,16 @@ class MetalCodeGen:
             explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
                 param_list
             )
+            self.current_metal_compute_builtin_parameter_names.update(
+                {
+                    builtin_name: explicit_stage_builtins[attribute]
+                    for builtin_name, _param_type, attribute in (
+                        self.compute_builtin_parameter_specs()
+                    )
+                    if attribute in explicit_stage_builtins
+                    and explicit_stage_builtins[attribute]
+                }
+            )
             self.current_metal_wave_lane_index_parameter = explicit_stage_builtins.get(
                 "thread_index_in_simdgroup"
             )
@@ -3579,6 +3591,11 @@ class MetalCodeGen:
                 if name not in existing_param_names:
                     params.append(f"{param_type} {name} [[{attribute}]]")
                     reserved_parameter_names.add(name)
+                builtin_name = self.compute_builtin_name_for_metal_attribute(attribute)
+                if builtin_name is not None:
+                    self.current_metal_compute_builtin_parameter_names[builtin_name] = (
+                        name
+                    )
                 if attribute == "thread_index_in_simdgroup":
                     self.current_metal_wave_lane_index_parameter = name
                 elif attribute == "threads_per_simdgroup":
@@ -3722,6 +3739,9 @@ class MetalCodeGen:
             self.current_metal_wave_lane_count_parameter = (
                 previous_metal_wave_lane_count_parameter
             )
+            self.current_metal_compute_builtin_parameter_names = (
+                previous_metal_compute_builtin_parameter_names
+            )
             return code
 
         body = getattr(func, "body", None)
@@ -3805,6 +3825,9 @@ class MetalCodeGen:
             )
             self.current_metal_wave_lane_count_parameter = (
                 previous_metal_wave_lane_count_parameter
+            )
+            self.current_metal_compute_builtin_parameter_names = (
+                previous_metal_compute_builtin_parameter_names
             )
             return code
 
@@ -4087,6 +4110,9 @@ class MetalCodeGen:
         self.current_glsl_buffer_block_parameter_struct_failures = (
             previous_glsl_buffer_block_parameter_struct_failures
         )
+        self.current_metal_compute_builtin_parameter_names = (
+            previous_metal_compute_builtin_parameter_names
+        )
 
         code += "}\n\n"
         return code
@@ -4104,6 +4130,54 @@ class MetalCodeGen:
             return True
         return not isinstance(statements[-1], ReturnNode)
 
+    def compute_builtin_parameter_specs(self):
+        return [
+            ("gl_GlobalInvocationID", "uint3", "thread_position_in_grid"),
+            ("gl_LocalInvocationID", "uint3", "thread_position_in_threadgroup"),
+            ("gl_WorkGroupID", "uint3", "threadgroup_position_in_grid"),
+            ("gl_LocalInvocationIndex", "uint", "thread_index_in_threadgroup"),
+            ("gl_WorkGroupSize", "uint3", "threads_per_threadgroup"),
+            ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
+        ]
+
+    def compute_builtin_name_for_metal_attribute(self, attribute):
+        for (
+            builtin_name,
+            _param_type,
+            metal_attribute,
+        ) in self.compute_builtin_parameter_specs():
+            if metal_attribute == attribute:
+                return builtin_name
+        return None
+
+    def metal_compute_builtin_expression_name(self, name):
+        if name is None:
+            return name
+        return self.current_metal_compute_builtin_parameter_names.get(name, name)
+
+    def metal_compute_builtin_result_type(self, name):
+        if name is None:
+            return None
+        if name in self.current_metal_compute_builtin_parameter_names:
+            for (
+                builtin_name,
+                param_type,
+                _attribute,
+            ) in self.compute_builtin_parameter_specs():
+                if builtin_name == name:
+                    return param_type
+        return None
+
+    def metal_compute_builtin_parameter_base_name(self, builtin_name, attribute):
+        return {
+            "gl_GlobalInvocationID": "thread_position_in_grid",
+            "gl_LocalInvocationID": "thread_position_in_threadgroup",
+            "gl_WorkGroupID": "threadgroup_position_in_grid",
+            "gl_LocalInvocationIndex": "thread_index_in_threadgroup",
+            "gl_WorkGroupSize": "threads_per_threadgroup",
+            "gl_NumWorkGroups": "threadgroups_per_grid",
+        }.get(builtin_name, attribute)
+
     def required_compute_builtin_parameters(
         self, func, reserved_names=None, explicit_stage_builtins=None
     ):
@@ -4118,17 +4192,20 @@ class MetalCodeGen:
             )
         reserved_names = set(reserved_names or ())
         explicit_stage_builtins = explicit_stage_builtins or {}
-        builtin_parameters = [
-            ("gl_GlobalInvocationID", "uint3", "thread_position_in_grid"),
-            ("gl_LocalInvocationID", "uint3", "thread_position_in_threadgroup"),
-            ("gl_WorkGroupID", "uint3", "threadgroup_position_in_grid"),
-            ("gl_LocalInvocationIndex", "uint", "thread_index_in_threadgroup"),
-            ("gl_WorkGroupSize", "uint3", "threads_per_threadgroup"),
-            ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
-        ]
-        required_parameters = [
-            parameter for parameter in builtin_parameters if parameter[0] in used_names
-        ]
+        required_parameters = []
+        for (
+            builtin_name,
+            param_type,
+            attribute,
+        ) in self.compute_builtin_parameter_specs():
+            if builtin_name not in used_names or attribute in explicit_stage_builtins:
+                continue
+            name = self.unique_metal_generated_name(
+                self.metal_compute_builtin_parameter_base_name(builtin_name, attribute),
+                reserved_names,
+            )
+            reserved_names.add(name)
+            required_parameters.append((name, param_type, attribute))
         wave_builtin_parameters = [
             (
                 "WaveGetLaneIndex",
@@ -4191,10 +4268,16 @@ class MetalCodeGen:
 
     def explicit_compute_stage_builtin_parameters(self, parameters):
         stage_parameters = {}
+        builtin_attributes = {
+            attribute
+            for _builtin_name, _param_type, attribute in (
+                self.compute_builtin_parameter_specs()
+            )
+        }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
             metal_semantic = self.canonical_metal_semantic(semantic)
-            if metal_semantic in {
+            if metal_semantic in builtin_attributes or metal_semantic in {
                 "thread_index_in_simdgroup",
                 "threads_per_simdgroup",
             }:
@@ -6305,8 +6388,18 @@ class MetalCodeGen:
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if isinstance(expr, IdentifierNode):
+            builtin_type = self.metal_compute_builtin_result_type(expr.name)
+            if builtin_type is not None:
+                return builtin_type
+            return self.local_variable_types.get(
+                expr.name
+            ) or self.metal_program_scope_value_global_types.get(expr.name)
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
+            builtin_type = self.metal_compute_builtin_result_type(name)
+            if builtin_type is not None:
+                return builtin_type
             return self.local_variable_types.get(
                 name
             ) or self.metal_program_scope_value_global_types.get(name)
@@ -7393,7 +7486,32 @@ class MetalCodeGen:
         if expr is None:
             return ""
         elif isinstance(expr, str):
-            return expr
+            return self.metal_compute_builtin_expression_name(expr)
+        elif isinstance(expr, IdentifierNode):
+            name = expr.name
+            builtin_name = self.metal_compute_builtin_expression_name(name)
+            if builtin_name != name:
+                return builtin_name
+            buffer_block_value = self.unsupported_glsl_buffer_block_access_value(expr)
+            if buffer_block_value is not None:
+                return buffer_block_value
+            if name in self.METAL_RAY_FLAG_VALUES:
+                return f"{self.METAL_RAY_FLAG_VALUES[name]}u"
+            if name in getattr(self, "enum_variant_constants", {}):
+                return enum_value_expression(self, name)
+            if (
+                name not in self.local_variable_types
+                and name in self.ambiguous_cbuffer_members
+            ):
+                raise ValueError(
+                    f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
+                )
+            if (
+                name not in self.local_variable_types
+                and name in self.cbuffer_member_references
+            ):
+                return self.cbuffer_member_references[name]
+            return name
         elif isinstance(expr, bool):
             return "true" if expr else "false"
         elif isinstance(expr, int) or isinstance(expr, float):
@@ -7414,6 +7532,9 @@ class MetalCodeGen:
             if unsupported_value is not None:
                 return unsupported_value
             if hasattr(expr, "name"):
+                builtin_name = self.metal_compute_builtin_expression_name(expr.name)
+                if builtin_name != expr.name:
+                    return builtin_name
                 if expr.name in self.METAL_RAY_FLAG_VALUES:
                     return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
                 return enum_value_expression(self, expr.name)
@@ -11533,6 +11654,10 @@ class MetalCodeGen:
             for qualifier in getattr(node, "qualifiers", []) or []
         }
         qualifiers.update(
+            str(qualifier).lower()
+            for qualifier in getattr(node, "resource_qualifiers", []) or []
+        )
+        qualifiers.update(
             str(getattr(attribute, "name", "")).lower()
             for attribute in getattr(node, "attributes", []) or []
         )
@@ -12629,12 +12754,7 @@ class MetalCodeGen:
 
         functions = []
         for func in getattr(ast, "functions", []) or []:
-            qualifier = (
-                func.qualifiers[0]
-                if getattr(func, "qualifiers", None)
-                else getattr(func, "qualifier", None)
-            )
-            if normalize_stage_name(qualifier) == expected_stage_name:
+            if function_stage_name(func) == expected_stage_name:
                 functions.append(func)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
@@ -16020,6 +16140,7 @@ class MetalCodeGen:
         return str(attr_name).lower() in {
             "binding",
             "buffer",
+            "group",
             "packoffset",
             "register",
             "sampler",
