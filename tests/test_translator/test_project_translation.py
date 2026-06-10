@@ -4527,6 +4527,83 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert_spirv_asm_validates_if_available(vulkan, tmp_path)
 
 
+def test_translate_project_glsl_usampler_texel_fetch_lowers_to_uint_spirv(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "alpha_stitch.glsl").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+            layout(binding = 0) uniform usampler2D srcRGB;
+            layout(binding = 1) uniform usampler2D srcAlpha;
+            layout(binding = 2, rgba32ui) uniform restrict writeonly uimage2D dstTexture;
+
+            void main() {
+                uvec2 rgbBlock = texelFetch(
+                    srcRGB,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                uvec2 alphaBlock = texelFetch(
+                    srcAlpha,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    0
+                ).xy;
+                imageStore(
+                    dstTexture,
+                    ivec2(gl_GlobalInvocationID.xy),
+                    uvec4(rgbBlock.xy, alphaBlock.xy)
+                );
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {("vulkan", "translated")}
+
+    vulkan = (repo / "out" / "vulkan" / "alpha_stitch.spvasm").read_text(
+        encoding="utf-8"
+    )
+    uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", vulkan)
+    assert uint_type is not None
+    sampled_image = re.search(
+        rf"(%\d+) = OpTypeImage {re.escape(uint_type.group(1))} "
+        r"2D 0 0 0 1 Unknown",
+        vulkan,
+    )
+    uvec4_type = re.search(
+        rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4",
+        vulkan,
+    )
+    assert sampled_image is not None
+    assert uvec4_type is not None
+    assert "OpTypeSampledImage" in vulkan
+    assert vulkan.count("OpImageFetch") == 2
+    assert vulkan.count(f"OpImageFetch {uvec4_type.group(1)}") == 2
+    assert re.search(r'OpName %\d+ "srcRGB"', vulkan)
+    assert re.search(r'OpName %\d+ "srcAlpha"', vulkan)
+    assert "DescriptorSet 0" in vulkan
+    for binding in ("Binding 0", "Binding 1", "Binding 2"):
+        assert binding in vulkan
+    assert "Unknown type usampler2D" not in vulkan
+    assert "texelFetch requires a sampled image operand" not in vulkan
+    assert "Could not find member xy" not in vulkan
+    assert "WARNING" not in vulkan
+    assert_spirv_asm_validates_if_available(vulkan, tmp_path)
+
+
 def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
