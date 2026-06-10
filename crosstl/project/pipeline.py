@@ -6276,6 +6276,20 @@ def _has_error_diagnostic(diagnostics: Sequence[ProjectDiagnostic], code: str) -
     )
 
 
+def _translation_failure_diagnostic_code(exc: Exception) -> str:
+    code = getattr(exc, "project_diagnostic_code", None)
+    return code if _is_non_empty_string(code) else "project.translate.failed"
+
+
+def _translation_failure_missing_capabilities(exc: Exception) -> list[str]:
+    capabilities = getattr(exc, "missing_capabilities", None)
+    if isinstance(capabilities, str):
+        return [capabilities]
+    if capabilities:
+        return [str(capability) for capability in capabilities]
+    return ["batch.translation"]
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -6456,13 +6470,15 @@ def translate_project(
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
-                            code="project.translate.failed",
+                            code=_translation_failure_diagnostic_code(exc),
                             message=str(exc),
                             location=SourceLocation(file=unit.relative_path),
                             target=target,
                             source_backend=unit.source_backend,
                             variant=variant,
-                            missing_capabilities=["batch.translation"],
+                            missing_capabilities=_translation_failure_missing_capabilities(
+                                exc
+                            ),
                         )
                     )
                 artifacts.append(artifact)
