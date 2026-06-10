@@ -68,6 +68,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -130,6 +137,13 @@
           "evidence": [
             "tests/test_backend/test_slang/test_parser.py::def test_"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -191,6 +205,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_backend/test_slang/test_lexer.py::def test_"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -297,6 +318,13 @@
             "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_error_directive_raises",
             "tests/test_backend/test_slang/test_preprocessor.py::def test_parser_uses_preprocessed_conditionals"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -383,6 +411,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_only_shader_emits_slang_entry_point"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -467,6 +502,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_output_assignments_rewrite_to_slang_return_semantics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -530,6 +572,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_emits_default_numthreads",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_uses_execution_layout_numthreads"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -614,6 +663,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stream_signature_and_method_validation",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -702,6 +758,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_mismatch_raises_diagnostic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_stage_attributes_raise",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -849,6 +912,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_signature_validates_roles_counts_and_topology",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dispatch_mesh_payload_argument_matches_mesh_payload_parameter",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1018,6 +1088,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_tracing_pipeline_if_available"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1107,6 +1184,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_entry_parameters_reject_non_mesh_stages"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1194,6 +1278,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1284,6 +1375,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1364,6 +1462,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_metadata_raises",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1454,6 +1559,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_metadata_raises"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1615,6 +1727,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_glsl_buffer_array_declarations_lower_to_slang_resources",
             "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1756,6 +1875,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1857,6 +1983,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2029,6 +2162,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_glsl_buffer_block_offsets_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2139,6 +2279,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2225,6 +2372,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_malformed_sampled_texture_ops_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2330,6 +2484,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs",
             "tests/test_backend/test_slang/test_external_fixtures.py::slang_hlsl_intrinsic_sample_cmp_bias"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2432,6 +2593,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_projected_texture_builtins_validate_target_result_types"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2524,6 +2692,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2615,6 +2790,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
             "tests/test_backend/test_slang/test_external_fixtures.py::slang_hlsl_intrinsic_sample_cmp_bias"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2717,6 +2899,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_resource_query_combinations_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_query_helpers_avoid_user_symbol_collisions"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2822,6 +3011,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_control_flow_emit_slang_operations",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_loops_emit_slang_operations"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2913,6 +3109,13 @@
           "notes": "Covers multisample texture fetches, sample-count and size queries, valid sample index handling, and deterministic diagnostics for unsupported multisample sampling, LOD/query-LOD, gather, and compare forms.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_texture_multisample_backlog_fetch_queries_and_diagnostics"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3025,6 +3228,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_query_lod_emits_slang_lod_methods"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3125,6 +3335,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3217,6 +3434,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_float_image_atomics_emit_slang_diagnostic_stubs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3306,6 +3530,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_multisample_storage_backlog_load_store_queries_and_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3372,6 +3603,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_struct"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3437,6 +3675,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_array_access_and_ternary_expressions_emit_slang_syntax"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3515,6 +3760,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit",
             "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3580,6 +3832,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_if_else_control_flow_emits_slang_blocks"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3683,6 +3942,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_workgroup_barrier_lowers_to_slang_group_sync",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_synchronization_intrinsics_lower_to_slang_barriers"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3796,6 +4062,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_compile_with_slangc_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3897,6 +4170,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_match_payload_enum_patterns_lower_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_generic_enum_match_expression_lowers_for_slang"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3981,6 +4261,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_matrix_and_non_float_vector_types_emit_slang_names"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -4049,6 +4336,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_bitwise_operators_emit_slang_syntax"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -4197,6 +4491,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_validate_target_result_types",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -4608,6 +4909,56 @@
           ]
         },
         "slang": {
+          "status": "supported",
+          "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, applies repository-relative explicit include and source override patterns from the repository root before source-root visibility filtering, records unsupported explicit includes, records extensionless unsupported explicit includes in skipped-extension rollups with source.discovery diagnostics, records known unsupported shader artifacts and source formats with specific scan diagnostics, reports invalid roots, records source-root status counts with expected/actual source-root status, resolved-path, and scan-visibility validation context, rejects unexpected generated source-root status fields, records scan/report CLI source-root overrides and source override rollups, validation rejects missing scan summary rollups, rejects reports that omit currently scanned units or skipped sources, rejects roots that resolve to non-directory paths, and reports non-repository-relative include, source override, and exclude patterns that leave valid units visible, including drive-qualified Windows paths, resolves explicit relative config paths from the repository root with normalized repository-relative separators and rejects missing explicit config paths, normalizes repository-relative source-root, include-pattern, exclude-pattern, source-override, include-directory, output-directory, external-corpus manifest, and CLI source-root, include-directory, and source-override separators while preserving drive-qualified paths for outside-project diagnostics, rejects malformed project configuration scalar, list, and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance with expected/actual source override provenance mismatch context, rejects unexpected generated unit and skipped record fields, text inspection identifies inactive source roots by path, resolved path, and scan visibility, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_extensionless_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_skips_known_unsupported_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_unsupported_source_override_without_matches",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_accepts_repository_relative_include_patterns",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_relative_include_patterns",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_exclude_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_relative_exclude_patterns",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_applies_source_override_patterns_from_repository_root",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_relative_source_override_patterns",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_configured_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_output_dir_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_applies_source_root_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_source_root_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_config_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_missing_explicit_config_path",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_missing_explicit_config_path",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_resolves_relative_config_path_from_root",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_roots_that_are_not_directories",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_source_root_resolved_path",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_source_root_scan_visibility",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_scan_summary_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_scan_units",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_scan_skipped_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_ignores_new_output_dir_artifacts_in_current_scan",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_project_status_fields",
+            "tests/test_translator/test_project_translation.py::def test_project_config_normalizes_relative_path_separators",
+            "tests/test_translator/test_project_translation.py::def test_project_config_normalizes_explicit_config_path_separators",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_normalizes_explicit_config_path_separators",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_normalizes_path_override_separators"
+          ]
+        },
+        "webgl": {
           "status": "supported",
           "notes": "The project scanner discovers registered shader/GPU source files across configured source roots, includes configured and CLI source override patterns during default discovery, applies repository-relative explicit include and source override patterns from the repository root before source-root visibility filtering, records unsupported explicit includes, records extensionless unsupported explicit includes in skipped-extension rollups with source.discovery diagnostics, records known unsupported shader artifacts and source formats with specific scan diagnostics, reports invalid roots, records source-root status counts with expected/actual source-root status, resolved-path, and scan-visibility validation context, rejects unexpected generated source-root status fields, records scan/report CLI source-root overrides and source override rollups, validation rejects missing scan summary rollups, rejects reports that omit currently scanned units or skipped sources, rejects roots that resolve to non-directory paths, and reports non-repository-relative include, source override, and exclude patterns that leave valid units visible, including drive-qualified Windows paths, resolves explicit relative config paths from the repository root with normalized repository-relative separators and rejects missing explicit config paths, normalizes repository-relative source-root, include-pattern, exclude-pattern, source-override, include-directory, output-directory, external-corpus manifest, and CLI source-root, include-directory, and source-override separators while preserving drive-qualified paths for outside-project diagnostics, rejects malformed project configuration scalar, list, and source override metadata before scan, reports unsupported source override backends even when no files match, validates skipped source override provenance with expected/actual source override provenance mismatch context, rejects unexpected generated unit and skipped record fields, text inspection identifies inactive source roots by path, resolved path, and scan visibility, and makes scan/report CLI commands exit nonzero when the generated report contains error diagnostics.",
           "evidence": [
@@ -5317,6 +5668,78 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_vulkan_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_include_scan_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "partial",
+          "notes": "The project pipeline records include directories, records per-include directory status records and status counts, validates current include-directory resolved paths with expected/actual include-directory status, resolved-path, and frontend-visibility validation context, rejects unexpected generated include-directory status fields, reports missing include directories, reports include entries that resolve to files or other non-directory paths, reports include directories that resolve outside the repository, recursively scans #include directives into per-unit includeDependencies records, ignores block-commented preprocessor directives while still recognizing directives after same-line block comments with optional nested source paths while honoring simple #if, #ifdef, #ifndef, #elif, #else, and #endif branches with project and variant defines, including defined checks, boolean operators, parentheses, integer and boolean define values, and simple integer comparisons, local, system, or dynamic kind, line and column, resolved, missing, system, dynamic, or outside-project status, repository-relative resolved paths, resolved include SHA-256 hashes and byte sizes, source/include-dir resolution source, and project-define plus variant provenance for define-backed include targets, emits structured diagnostics for missing local, dynamic, outside-project, and cyclic include directives with project-define and variant provenance, including structured variant fields and diagnostic variant rollups for missing, dynamic, and cyclic include diagnostics when applicable, validates include dependency record shape including unexpected generated include dependency fields, summary rollups including source-backend, source-backend status, resolution-source, and variant counts, missing current include-scan diagnostics, missing include dependency summary rollups, missing and extra current-scan dependency records, current status, resolved path, resolved include hash, resolved include size, expected/actual include status, path, source, hash, and byte-size mismatch context, source/include-dir resolution source, project-define plus variant include provenance, and current-scan mismatch labels include resolved path, resolution source, and project-define provenance, applies CLI include-directory overrides with normalized repository-relative separators and rejects empty CLI include-directory overrides, passes only active existing repository-contained resolved paths to source frontends that expose include-path preprocessor options, resolves CrossGL quoted includes relative to the current source file and configured include paths, applies named-variant define maps and project include directories to OpenGL/GLSL translation with a resolved angle include and variant-specific conditional output, preserves unresolved CrossGL includes for reporting and downstream handling, rejects CrossGL include cycles, records each artifact include-path processing status (forwarded, not-requested, or not-supported) with source frontend support metadata, verifies include-path forwarding metadata for every registered source frontend, emits warning diagnostics and missing-capability rollups when active include paths cannot be forwarded by a source frontend, and includes include-path processing rollups by status, target, source backend, and variant, reports resolved include read failures with project.scan.include-read-failed diagnostics while preserving the already discovered include dependency, validates malformed or forged artifact include-path processing metadata including unexpected generated processing fields and include-path processing summary rollup mismatches including target and variant rollups, missing include-path processing target and variant rollups, and text inspection identifies inactive include directories by path, resolved path, and frontend visibility, include dependency status, kind, source-backend, source-backend status, resolution-source, variant, and include-path processing rollups by status, target, source backend, and variant, resolved include dependency samples, system include dependency samples, and unresolved include dependency samples with source-backend labels, project-define provenance, variant names, unit source hash and byte-size metadata, and resolved include hash and byte-size metadata, sampled include-path processing artifact metadata, and include-path processing inspection summaries include configured include-directory status records plus frontend-visible and inactive directory counts. It applies named-variant define maps and project include directories to DirectX/HLSL and Metal/MSL project translation with resolved local headers and variant-specific conditional output, Slang project translation with resolved local headers and variant-specific conditional output, Vulkan project translation with a resolved angle include and variant-specific conditional output, and to CUDA/HIP project translation with unresolved runtime system includes, resolved local headers, and variant-specific conditional output. Include semantics remain backend-dependent, so this remains partial project support. Resolved include dependency reports and inspection samples include byte-size metadata.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dir_resolved_path",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dir_frontend_visibility",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_include_forwarding_for_all_source_frontends",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_include_path_processing_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_include_path_processing_summary_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_processing_variant_rollups",
+            "tests/test_translator/test_translation_pipeline.py::def test_source_registry_reports_lexer_option_support",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_missing_include_dirs_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dirs_outside_project_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_dir_files_without_hiding_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_include_dir_override",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_normalizes_path_override_separators",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_skips_inactive_ifdef_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_conditional_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_limits_named_variants_to_selected",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_honors_ifndef_else_in_nested_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_keeps_includes_for_unsupported_conditional_expressions",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_nested_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_nested_include_read_failures",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_nested_include_cycles",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_nested_include_cycle_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dependency_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dependency_resolution",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dependency_hashes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dependency_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_include_dependency_resolution_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_define_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_scan_summary_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_scan_units",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_scan_skipped_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_ignores_new_output_dir_artifacts_in_current_scan",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_processing_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_project_status_fields",
+            "tests/test_translator/test_lexer.py::def test_include_preprocessing_uses_file_path_and_include_dirs",
+            "tests/test_translator/test_lexer.py::def test_include_preprocessing_preserves_unresolved_include",
+            "tests/test_translator/test_lexer.py::def test_include_preprocessing_preserves_conditionals_without_defines",
+            "tests/test_translator/test_lexer.py::def test_include_preprocessing_rejects_cycles",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_records_variant_define_backed_include_resolution",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_define_backed_include_resolution_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_dynamic_include_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_undeclared_include_dependency_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_metal_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_extra_current_include_dependencies",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_labels_forged_define_include_provenance",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_evaluates_integer_comparison_include_conditions",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_slang_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_vulkan_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_current_include_scan_diagnostics"
+          ]
         }
       }
     },
@@ -5825,6 +6248,61 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_slang_preprocessor",
             "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_vulkan_preprocessor"
           ]
+        },
+        "webgl": {
+          "status": "partial",
+          "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, selected-variant lists, and per-variant define counts, records report CLI variant metadata, records each artifact applied define map and define-processing status (forwarded, not-requested, or not-supported) with source frontend support metadata, emits warning diagnostics and missing-capability rollups when configured defines cannot be forwarded by a source frontend, emits scan-time diagnostics for active #error and #warning directives scoped by project and selected variant conditionals, emits warning diagnostics when active #define or #undef directives in translation units or resolved include files shadow configured project or selected variant define names while ignoring block-commented directives, inspection summaries and text output expose variant names, selected-variant summaries for scoped runs, and per-variant define counts without define values plus define-processing status, target, source-backend, and variant rollups plus sampled define-processing artifact metadata with define names, deterministic define fingerprints, and without define values, validates malformed define/variant metadata including empty mapping keys, punctuation-bearing variant keys in config/report diagnostics, and forged variant define counts, duplicate selected variant metadata, undeclared artifact and validation-record variants, missing artifact define maps, artifact define maps that do not match base defines merged with the artifact variant, malformed or forged artifact define-processing metadata including unexpected generated processing fields, and define-processing summary rollup mismatches including target and variant rollups, missing define-processing target and variant rollups, rejects malformed define, variant, and selected-variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, verifies define-forwarding metadata for every registered source frontend, applies object-like define expansion and #if/#ifdef/#ifndef/#elif/#else/#endif branch selection in the CrossGL source frontend when defines are provided, applies named-variant define maps through OpenGL/GLSL native preprocessing during project translation, applies named-variant define maps through DirectX/HLSL native preprocessing during project translation, applies named-variant define maps through Metal/MSL native preprocessing during project translation, applies named-variant define maps through CUDA/HIP native preprocessing during project translation, applies named-variant define maps through Slang native preprocessing during project translation, applies named-variant define maps through Vulkan native preprocessing during project translation, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides, and supports configured selected_variants defaults plus API, scan/report CLI, and translation CLI scoped runs for selected declared variants, de-duplicates repeated selections before scan or artifact planning, and does not claim omitted variants as attempted, and sanitizes unsafe variant names into stable output path segments while retaining original variant labels in reports and validation rollups. Native preprocessor semantics remain backend-dependent, so this remains partial project support. Project inspection exposes project-level define names and deterministic define fingerprints, variant define names, and deterministic per-variant define fingerprints without define values. Define-processing inspection summaries expose redacted project define names, deterministic define fingerprints, selected variant names, per-variant define records, and artifact effective define fingerprints without define values.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_applies_include_dirs_and_defines",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_expands_named_variants_with_merged_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_limits_named_variants_to_selected",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_limits_named_variants_to_selected",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_uses_configured_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_sanitizes_variant_output_segments",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_limits_named_variants_to_selected",
+            "tests/test_translator/test_lexer.py::def test_preprocessor_directives_are_preserved_without_defines",
+            "tests/test_translator/test_lexer.py::def test_define_preprocessing_selects_active_branch_and_expands_macros",
+            "tests/test_translator/test_lexer.py::def test_define_preprocessing_supports_elif_and_undefined_macros",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_crossgl_defines",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_forwarding_for_all_source_frontends",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_translation_pipeline.py::def test_source_registry_reports_lexer_option_support",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_records_with_undeclared_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_defines",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_processing_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_define_processing_summary_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_processing_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_include_dir_and_define_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_limits_named_variants_to_selected",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_define_override",
+            "tests/test_translator/test_project_translation.py::def test_project_config_rejects_malformed_string_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_project_mapping_keys",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_quotes_variant_keys_with_punctuation",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_processing_fields",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_opengl_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_cuda_hip_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_directx_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_metal_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_configured_define_shadowing",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_active_preprocessor_diagnostics_by_variant",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_preprocessor_diagnostics_from_resolved_includes",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_include_dependency_variant_when_variants_declared",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_slang_preprocessor",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_named_variants_apply_native_vulkan_preprocessor"
+          ]
         }
       }
     },
@@ -5979,6 +6457,24 @@
           ]
         },
         "slang": {
+          "status": "supported",
+          "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, rejects empty CLI target overrides, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_and_deduplicates_targets",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_rejects_empty_target_override",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_artifact_matrix_metadata",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_batches_real_units_targets_and_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
+          ]
+        },
+        "webgl": {
           "status": "supported",
           "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, rejects empty CLI target overrides, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
           "evidence": [
@@ -7455,6 +7951,168 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_toolchain_run_argv_mismatch",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_available"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "Project validation checks report contract shape, fixed generated report, summary, migration, diagnostic, artifact, artifact processing, artifact metadata, unit, skipped, include dependency, and validation field sets, rejects malformed generated timestamp and generator metadata, project/config metadata including config hash freshness, output directory containment, and expected/actual project-config count mismatch context, scan-scope count consistency with expected/actual report count and rollup mismatch context, non-empty scan-scope list entries, source-root status record and count consistency, include-directory status record and count consistency, and expected/actual project status record mismatch context, plus source-root and include-directory status field sets, unit and skipped records including canonical source backend declarations, unit and skipped source override provenance, and unit source hash checks, unit extension/path consistency, duplicate scan paths, and drive-qualified Windows paths, artifact records including artifactMatrix metadata, scan-only artifactMatrix plans, and artifact matrix coverage, applied define map consistency, repository-relative source paths, output paths under project.outputDir with target/variant directory containment, source-relative layout, and artifact target suffix consistency, and drive-qualified Windows path rejection, declared translation-unit sources, duplicate artifact identities, required full-report artifact source hashes, required current translated artifact generated hashes, expected/actual hash and byte-size mismatch context, failed artifact error metadata, translated artifact error metadata rejection, failed artifact generated metadata rejection, required and canonical artifact provenance, required translated artifact source maps, canonical artifact target records, source-map records, source-map summary rollups, artifact provenance source-backend, target, and variant rollups, non-empty source-map mappings, file-level source-map mapping cardinality, fine-grained positive-length source-map mappings, fine-grained source-map byte and line/column span containment, span consistency, and anchor consistency, external corpus records including drive-qualified Windows paths, duplicate entry identities, manifest and status consistency, entry presence/discovery/source-backend consistency, per-entry artifact counts, required manifest-entry accounting, and summaries, summary rollups including source override counts, migration scope, non-goals, required action count and kind, severity, and target rollups, non-empty action targets, translated artifact target references, and canonical target declarations, and preserved diagnostics including repository-relative file paths, location span shape, consistency, canonical target records, and target declarations, deduplicates regenerated validation diagnostics before validation rollups, accepts reports that skip malformed or duplicate external corpus manifest entries with warnings, rejects artifacts whose sources are not declared translation units, rejects artifacts, preserved diagnostics, and validation records for targets not declared by the report or noncanonical in full reports, rejects artifacts and validation records for variants not declared by the report, rejects validation records with non-repository-relative paths, rejects validation records that do not reference declared artifacts, rejects duplicate validation artifact identities, toolchain targets, tool names, and toolchain run identities and inconsistent validation status fields with expected/actual validation status mismatch context, records failed artifacts, checks translated artifact existence, skips missing or escaped artifacts before opt-in toolchain smoke checks, reports unavailable optional tools deterministically, validates validation result, emits validate-project JSON, text, and SARIF summaries with validation report schema/kind/generated-at and source-report-hash metadata, validation diagnostic-code and missing-capability rollups, direct validation report artifact target, artifact source backend, artifact variant, required validation-record source backend metadata, canonical validation target records, toolchain status, toolchain run status, toolchain run target, toolchain run source backend, toolchain run check-kind, toolchain run tool, toolchain run variant, source-size status, generated-size status, and validation status rollups, validation artifact coverage, required summarized validation toolchain target coverage, required summarized validation artifact hash, source-size, generated-size, source-map, and source-remap status fields, validation status consistency, aggregate validation summaries including source-size and generated-size status counts, and toolchain run records including non-empty command argv metadata, check-kind metadata, and target-tool command consistency, target check-kind consistency, artifact command argv consistency, and availability command argv consistency, validates the closed standalone validation-report field set, exposes inspect-report JSON/text summaries with validation-failed artifact lists, failed artifact-provenance validation metadata including source-size and generated-size status, diagnostic, failed-artifact, validation artifact, and validation toolchain-run truncation counts, diagnostic-code, missing-capability, validation status, bounded validation artifact samples, bounded validation toolchain-run samples, bounded migration action samples, and external-corpus, scan-scope, project-config path, and project-config count rollups plus nonzero status for validation errors, and turns opt-in toolchain smoke failures and timeouts into structured diagnostics while running OpenGL glslangValidator stdin smoke checks with an explicit inferred stage. translate-project can embed artifact validation and opt-in artifact or availability-only toolchain smoke runs in generated portability reports. Full target compiler invocation remains opt-in and is not required for basic translation. Report validation rejects embedded toolchain runs that reference failed artifact records.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_unavailable_toolchains_deterministically",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_run_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_marks_availability_only_toolchain_runs",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_toolchain_timeouts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_records_failed_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_deduplicates_regenerated_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_invalid_report_shape",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_failed_artifacts_without_error",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_translated_artifacts_with_error_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_failed_artifacts_without_source_hash",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_failed_artifacts_with_generated_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_source_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_drive_relative_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_output_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_current_translated_artifacts_without_hashes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_current_translated_artifacts_without_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_source_map_mappings",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_multiple_file_level_source_map_mappings",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_skips_toolchain_smoke_for_missing_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_diagnostic_location_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_diagnostic_locations_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_diagnostics_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_diagnostic_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_full_report_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_altered_migration_non_goals",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_migration_action_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_migration_action_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_without_translated_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_blank_project_config_list_entries",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_project_config_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_and_skipped_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unit_extension_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_drive_relative_unit_and_skipped_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_unit_and_skipped_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_generator_and_validation_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_records_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_records_with_undeclared_variants",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_records_with_undeclared_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_summary_missing_artifact_checks",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_summary_missing_toolchain_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_records_with_escaped_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_validation_record_identities",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_toolchain_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_toolchain_tool_names",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_tools_that_do_not_match_target",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_toolchain_status",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_validation_artifact_status",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_summarized_validation_without_status_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_ok_for_failed_report_artifact",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_status_metadata_for_failed_report_artifact",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_external_corpus_entry_state_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_drive_relative_external_corpus_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_mismatched_external_corpus_manifest",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_non_ok_external_corpus_with_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_rejects_negative_sample_limits",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_applies_custom_sample_limits",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_sarif_reports_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_artifact_identities",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_output_dir_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_paths_outside_output_dir",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_paths_outside_target_dir",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_path_source_layout_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_path_suffix_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_external_corpus_entry_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_or_forged_artifact_provenance",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_include_dir_status_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_include_dir_status_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_include_dir_frontend_visibility",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_defines",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_unit_source_hashes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_unit_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_root_status_records",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_root_status_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_source_root_status",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_source_root_resolved_path",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_source_root_scan_visibility",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_target_artifact_matrix_entries",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_variant_artifact_matrix_entries",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_allows_scan_reports_without_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_artifact_matrix_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_translated_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_variant_mode_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_unit_source_backends",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_project_mapping_keys",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_unit_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_groups_artifact_status_by_source_backend",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_migration_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_external_corpus_accounting",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_toolchain_run_command",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_command_target_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_validation_source_backend_omissions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_validation_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_report_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_diagnostic_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_artifact_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_processing_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_artifact_metadata_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_project_status_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_runs_for_failed_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_line_out_of_anchor_fine_grained_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_emits_closed_validation_report_schema",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_can_embed_toolchain_smoke_runs",
+            "tests/test_translator/test_project_translation.py::def test_opengl_toolchain_smoke_command_selects_glslang_stage",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_validate_records_artifact_checks",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_run_toolchains_records_validation",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_scan_only_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_project_config_hash",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_toolchain_run_check_kind_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_availability_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_toolchain_run_argv_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_runs_vulkan_assembly_when_only_assembler_available"
+          ]
         }
       }
     },
@@ -7609,6 +8267,24 @@
           ]
         },
         "slang": {
+          "status": "supported",
+          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, and action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_documented_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_altered_migration_non_goals",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_migration_action_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_migration_action_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_without_translated_targets",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_migration_rollups"
+          ]
+        },
+        "webgl": {
           "status": "supported",
           "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, and action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "evidence": [
@@ -7963,6 +8639,47 @@
           ]
         },
         "slang": {
+          "status": "supported",
+          "notes": "Project report inspection exposes JSON, text, and SARIF summaries with inspection identity, SARIF invocation metadata, and source report schema/kind and hash metadata, source report generation metadata, a closed inspection-report field set for generated portability reports, unavailable optional sections marked with available=false, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata with negative sample-limit rejection, invalid-report markers, diagnostic location, target, and missing-capability context in text output, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override mappings and rollups, skipped-reason, skipped-extension including extensionless skipped-extension rollups in text inspection output, skipped source-override, sampled skipped-source paths with reason, extension, and source-override metadata, and artifact target rollups, validation status, diagnostic-code, missing-capability, toolchain-status, toolchain-run target, source-backend, check-kind, tool, and variant rollups plus artifact target, source-backend, and variant rollups, bounded source-map, source-remap, provenance, define-processing, include-path-processing, include-dependency, validation artifact, validation toolchain-run, and skipped-source samples with custom limits, invalid toolchain-run command omission, failure-reason samples for failed toolchain runs, and truncation metadata, source-map count, source-map artifact samples, source-remap artifact samples with sidecar hash metadata, failed validation metadata in JSON and text samples, and provenance rollups, artifact matrix completion counts and target, source-backend, and variant rollups with report-or-translation-artifact-derived metadata source, text inspection of artifact-matrix source provenance, does not derive artifact-matrix gaps for scan-only reports, plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project root, output directory, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status, kind, and resolution-source rollups plus unit source hash and byte-size metadata plus resolved include hash and byte-size metadata, inactive source-root and include-directory record details, migration scope and non-goal text output, action count and kind, severity, and target rollups, bounded migration action samples with custom limits, target lists, and truncation metadata, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_generated_report",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_emits_closed_inspection_report_schema",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_records_truncation_metadata",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_applies_custom_sample_limits",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_applies_artifact_matrix_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_applies_include_dependency_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_writes_json_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_sarif_reports_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_marks_invalid_reports",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_project_config_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_report_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_skipped_reason_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_toolchain_run_failures",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_sections",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_rejects_negative_sample_limits",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dir_status",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_root_status",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_detects_count_balanced_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_derives_missing_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_derives_malformed_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_derives_missing_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_scan_only_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_scan_only_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_include_dependency_rollups",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_omits_invalid_toolchain_run_commands",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_marks_source_map_validation_failures"
+          ]
+        },
+        "webgl": {
           "status": "supported",
           "notes": "Project report inspection exposes JSON, text, and SARIF summaries with inspection identity, SARIF invocation metadata, and source report schema/kind and hash metadata, source report generation metadata, a closed inspection-report field set for generated portability reports, unavailable optional sections marked with available=false, validation results, failed-artifact variant labels, configurable diagnostic and failed-artifact truncation metadata with negative sample-limit rejection, invalid-report markers, diagnostic location, target, and missing-capability context in text output, report diagnostic-code and missing-capability rollups, report source-backend, source-extension, source-override mappings and rollups, skipped-reason, skipped-extension including extensionless skipped-extension rollups in text inspection output, skipped source-override, sampled skipped-source paths with reason, extension, and source-override metadata, and artifact target rollups, validation status, diagnostic-code, missing-capability, toolchain-status, toolchain-run target, source-backend, check-kind, tool, and variant rollups plus artifact target, source-backend, and variant rollups, bounded source-map, source-remap, provenance, define-processing, include-path-processing, include-dependency, validation artifact, validation toolchain-run, and skipped-source samples with custom limits, invalid toolchain-run command omission, failure-reason samples for failed toolchain runs, and truncation metadata, source-map count, source-map artifact samples, source-remap artifact samples with sidecar hash metadata, failed validation metadata in JSON and text samples, and provenance rollups, artifact matrix completion counts and target, source-backend, and variant rollups with report-or-translation-artifact-derived metadata source, text inspection of artifact-matrix source provenance, does not derive artifact-matrix gaps for scan-only reports, plus sampled missing and extra artifact identities, external-corpus rollups and sampled missing or undiscovered entries, scan-scope, project-config path, project root, output directory, project-config count, variant-name summaries, source-root status, include-directory status rollups, and include dependency status, kind, and resolution-source rollups plus unit source hash and byte-size metadata plus resolved include hash and byte-size metadata, inactive source-root and include-directory record details, migration scope and non-goal text output, action count and kind, severity, and target rollups, bounded migration action samples with custom limits, target lists, and truncation metadata, and nonzero status for validation errors. Inspection is report triage only; target compiler invocation remains opt-in through validation tooling.",
           "evidence": [
@@ -8500,6 +9217,67 @@
           ]
         },
         "slang": {
+          "status": "supported",
+          "notes": "The portability report records report generation time, generator package version, a closed top-level report field set, and fixed generator/project/artifact metadata field sets including project status, unit, skipped, include dependency, artifact processing, hash, provenance, and source-remap metadata, and records discovered units with source hashes and byte sizes, scan-only artifactMatrix plans with expected target, source-backend, and variant rollups before artifact generation, translated artifactMatrix metadata including emitted target, source-backend, and variant completion rollups, and every attempted artifact with source backend, target backend, output path with target backend suffix, translation status, applied define map, source hash, source byte size, generated artifact hash, basic pipeline provenance, and failed records with error metadata for artifact writes blocked by invalid project output paths, and normalizes repository-relative output-directory separators before artifact planning. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative including drive-qualified Windows paths, artifact source, output, unit, and skipped paths that are not stable repository-relative POSIX paths, and diagnostic location paths that are not canonical repository-relative paths, artifact output paths that are outside project.outputDir, do not match the source-relative target/variant layout, or use a suffix that does not match the target backend, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, with expected/actual artifact identity mismatch context, duplicate artifact identities, artifact records whose targets are not declared by the report or noncanonical in full reports, full reports with malformed artifactMatrix metadata, forged artifactMatrix rollups with expected/actual boolean rollup mismatch context, or missing expected unit-target-variant artifact matrix entries, full reports whose project target lists are not normalized and deduplicated, full reports with units or artifacts missing source hashes, units missing source byte sizes, or artifacts missing source byte sizes, current translated artifacts without generated hashes, current translated artifacts without source-map records, full reports with failed artifacts missing error metadata or generated metadata, translated artifacts with error metadata, malformed source backend, artifact define map, source hash, generated hash, or provenance metadata, full reports with missing or mismatched artifact define maps, full reports with missing provenance, forged artifact pipeline provenance, intermediate provenance that does not match source and target backends, unit source files or source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields, aggregate summary counts, and bounded report-inspection samples.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_emits_closed_portability_report_schema",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_writes_report",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_output_dir_outside_project_without_writing",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_project_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_full_report_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_source_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_drive_relative_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_generated_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_or_forged_artifact_provenance",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_current_translated_artifacts_without_hashes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_current_translated_artifacts_without_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_duplicate_artifact_identities",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_output_dir_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_path_suffix_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_failed_artifacts_without_error",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_translated_artifacts_with_error_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_failed_artifacts_without_source_hash",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_failed_artifacts_with_generated_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_path_source_layout_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_defines",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_define_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_unit_source_hashes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_unit_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_discovered_unit_source_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_target_artifact_matrix_entries",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_variant_artifact_matrix_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_artifact_matrix_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_translated_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_variant_mode_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_artifact_matrix_rolls_up_source_backends",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_matrix_rollup_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_metadata_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_artifact_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_processing_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_artifact_metadata_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_unit_and_skipped_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_project_status_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_backslash_report_identity_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_allows_scan_reports_without_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_summarizes_scan_only_artifact_matrix",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_records_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_limits_named_variants_to_selected",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_normalizes_output_dir_separators",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_qualified_output_dir_outside_project"
+          ]
+        },
+        "webgl": {
           "status": "supported",
           "notes": "The portability report records report generation time, generator package version, a closed top-level report field set, and fixed generator/project/artifact metadata field sets including project status, unit, skipped, include dependency, artifact processing, hash, provenance, and source-remap metadata, and records discovered units with source hashes and byte sizes, scan-only artifactMatrix plans with expected target, source-backend, and variant rollups before artifact generation, translated artifactMatrix metadata including emitted target, source-backend, and variant completion rollups, and every attempted artifact with source backend, target backend, output path with target backend suffix, translation status, applied define map, source hash, source byte size, generated artifact hash, basic pipeline provenance, and failed records with error metadata for artifact writes blocked by invalid project output paths, and normalizes repository-relative output-directory separators before artifact planning. Validation rejects report output directories that resolve outside the project root, artifact source paths that are not repository-relative including drive-qualified Windows paths, artifact source, output, unit, and skipped paths that are not stable repository-relative POSIX paths, and diagnostic location paths that are not canonical repository-relative paths, artifact output paths that are outside project.outputDir, do not match the source-relative target/variant layout, or use a suffix that does not match the target backend, artifact records whose sources are not declared translation units, artifact source backend names that do not match declared units, with expected/actual artifact identity mismatch context, duplicate artifact identities, artifact records whose targets are not declared by the report or noncanonical in full reports, full reports with malformed artifactMatrix metadata, forged artifactMatrix rollups with expected/actual boolean rollup mismatch context, or missing expected unit-target-variant artifact matrix entries, full reports whose project target lists are not normalized and deduplicated, full reports with units or artifacts missing source hashes, units missing source byte sizes, or artifacts missing source byte sizes, current translated artifacts without generated hashes, current translated artifacts without source-map records, full reports with failed artifacts missing error metadata or generated metadata, translated artifacts with error metadata, malformed source backend, artifact define map, source hash, generated hash, or provenance metadata, full reports with missing or mismatched artifact define maps, full reports with missing provenance, forged artifact pipeline provenance, intermediate provenance that does not match source and target backends, unit source files or source artifacts whose current file hash no longer matches the report, missing source artifacts with recorded hashes, and generated artifacts whose current file hash no longer matches the report. Validation artifact checks also expose source and generated hash status fields, aggregate summary counts, and bounded report-inspection samples.",
           "evidence": [
@@ -9265,6 +10043,83 @@
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_remap_size_mismatches",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_marks_source_map_validation_failures"
           ]
+        },
+        "webgl": {
+          "status": "partial",
+          "notes": "Project reports include configured source override maps, unit source hashes and byte sizes, artifact source hashes and byte sizes, generated artifact hashes and byte sizes, relative paths, source backend names, intermediate CrossGL provenance, file-span artifact source-map anchors, line-preserving source-map mappings, and line-preserving source-map validation with expected/actual line-preserving mapping mismatch context, compiler source-remap sidecar metadata for generated CrossGL artifacts, source-map summary rollups by granularity, target, source backend, and variant, including fine-grained totals derived from non-file map granularity, source-remap summary totals for artifact count and mapping count plus rollups by granularity, target, source backend, and variant, sanitized variant output segments in source-map and source-remap paths while retaining original variant labels in reports, stable repository-relative POSIX report identity paths for source provenance and source-remap metadata, canonical source-map and source-remap target metadata, source-map, source-remap target, source-remap mapping-count, and source-remap sidecar hash and byte-size metadata inspection, bounded source-map and source-remap artifact inspection samples with source/generated span, mapping-count, source and generated hash and byte-size metadata, sidecar hash plus byte-size metadata, failed validation status metadata, and custom limits, and text inspection derives file-level source-map counts from total and fine-grained source-map totals and reports aggregate source-remap mapping counts, artifact provenance summary rollups by pipeline, intermediate marker, source backend with intermediate marker, target with intermediate marker, and variant with intermediate marker, bounded direct, bridged, and combined artifact provenance inspection samples with source hash and byte-size metadata plus generated hash and byte-size metadata, failed validation status metadata, and custom limits, plus unit and skipped source override rollups. CrossGL target artifacts write schema-1 source-remap sidecars with generatedFile and source-map-derived generated/original mappings for compiler --source-remap consumers. Report validation accepts generated source maps and source remaps, records per-artifact source hash, source-size, generated hash, generated-size, source-map, and source-remap statuses, includes non-OK status details in failed-artifact text, and records aggregate validation status counts including source-size and generated-size counts, and rejects malformed project config/source override metadata, invalid project config paths, inconsistent unit and skipped source override provenance with expected/actual source override provenance mismatch context, unit source hash records that are missing, malformed, or no longer match the current source file, unit source byte-size records that are missing, malformed, or no longer match the current source file, with expected/actual unit source hash and byte-size mismatch context, artifact source byte-size records that are missing, malformed, or inconsistent with declared units, with expected/actual artifact source hash and byte-size mismatch context, source-size validation records that no longer match the current source artifact, artifact generated byte-size records that are missing or malformed, generated-size validation records that no longer match the current generated artifact, artifact source paths that are not repository-relative including drive-qualified Windows paths, artifact output paths that are outside project.outputDir or do not match the source-relative target/variant layout, artifact records whose sources are not declared translation units, unregistered or non-canonical unit source backend names, artifact source backend names that do not match declared units, with expected/actual artifact identity mismatch context, source-map records, closed source-map field sets, non-empty source-map mappings, file-level source-map mapping cardinality, fine-grained positive-length source-map mappings, fine-grained source-map byte and line/column span containment, source-map span consistency, source-map anchor consistency, expected/actual source-map and source-remap mismatch context, current artifact-level source-map span coverage, source-map summary rollups including variant rollups, source-remap records, non-CrossGL target artifacts with source-remap metadata, source-remap summary rollups by granularity and including variant rollups, missing source-map and source-remap granularity or variant rollups, missing or malformed source-remap metadata for CrossGL artifacts, source-remap mapping-count summary mismatches, source-remap mapping-count mismatches, source-remap sidecar size mismatches, stale source-remap hashes, source-remap content mismatches, compiler-compatible source-remap sidecar semantics, closed compiler source-remap sidecar field sets, closed generated hash, artifact provenance, and source-remap field sets, artifact source hash records, artifact source hashes that do not match declared translation-unit source hashes, source artifacts whose current file hash does not match the report, missing source artifacts with recorded hashes, missing artifact provenance summary rollups, missing provenance in full reports, forged artifact pipeline provenance, intermediate provenance that does not match source and target backends, and provenance records before artifact validation. SARIF remapped diagnostics with sanitized diagnosticLocation and originalLocation result properties. Generated line source-map mappings are available for line-preserving artifacts; backend-generated line, statement, and token source-map mappings remain unavailable in the translator project pipeline.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_line_preserving_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_source_map_rollups_count_fine_grained_artifact_maps",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_source_maps_and_remaps_by_variant",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_sanitizes_variant_source_map_and_remap_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_accepts_generated_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_maps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_source_map_mappings",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_multiple_file_level_source_map_mappings",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_anchors",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_escaped_source_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_drive_relative_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_undeclared_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifacts_with_mismatched_source_backend",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_missing_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_artifact_metadata",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_relative_paths_and_reports_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_path_source_layout_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_or_forged_artifact_provenance",
+            "tests/test_translator/test_project_translation.py::def test_project_config_loads_overrides_and_variant_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_project_config_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_backend_overrides",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_unit_source_hashes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_source_hash_mismatches_unit_source_hash",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_source_size_mismatches_unit_source_size",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_generated_sizes",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_artifact_generated_size_mismatches_current_artifact",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_unit_sources",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_detects_modified_unit_source_sizes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_preserves_discovered_unit_source_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_unit_source_backends",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_unit_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_skipped_source_overrides",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_override_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_source_backend_rollup",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_source_map_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_current_crossgl_artifacts_without_source_remaps",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_source_remap_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_remap_mapping_count_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_source_remap_sidecar",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_remap_content_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_compiler_incompatible_source_remap_sidecar",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_incomplete_file_level_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_remap_sidecar_extra_fields",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_counts",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_applies_custom_sample_limits",
+            "tests/test_translator/test_project_translation.py::def test_inspect_project_report_groups_direct_and_bridged_artifact_provenance",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_source_map_counts_split_file_and_fine_grained_totals",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_map_extra_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_invalid_project_config_paths",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_artifact_metadata_fields",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_backslash_source_remap_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_non_crossgl_source_remap_metadata",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_out_of_anchor_fine_grained_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_line_out_of_anchor_fine_grained_source_map_spans",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_uses_file_source_maps_for_generated_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_line_source_map_spans_use_utf8_byte_offsets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_line_preserving_source_map_mappings",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_stale_line_preserving_source_map_span",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_source_remap_targets",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_source_map_target_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_artifact_provenance_variant_rollup",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_variant_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_source_remap_size_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_marks_source_map_validation_failures"
+          ]
         }
       }
     },
@@ -9723,6 +10578,56 @@
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_dynamic_include_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_nested_include_cycle_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "Project diagnostics use compiler-compatible severity, code, message, location, target, source-backend, variant, and missing-capability fields plus optional originalLocation fields for remapped spans, and text output carries diagnostic location, original source location, target, and missing-capability context plus source-backend and variant context, including variant-scoped include resolution and active preprocessor diagnostics, while keeping per-artifact failures in the report. SARIF output keeps generated or validation spans as primary diagnostic locations and links original source locations as SARIF related locations when originalLocation is present. Scan/report CLI commands return nonzero when project reports contain error diagnostics; unsupported target names, known unsupported source/artifact extensions matched by explicit scans, and non-repository-relative include, source override, and exclude scan patterns including drive-qualified Windows paths are reported before validation, while non-forwarded define/include-path frontend options are translation-time warnings surfaced in report summaries, and comment-aware scan-time translation-unit and include-file #define/#undef shadowing warnings are surfaced in report summaries; validation rejects malformed preserved diagnostics, unexpected generated diagnostic fields, non-repository-relative diagnostic locations including optional originalLocation fields, inconsistent diagnostic location spans including originalLocation spans, or diagnostics whose targets are not declared by the report or noncanonical in full reports before copying them into validation output. Report summaries include contract-checked rollups by severity, diagnostic code, target, source backend, variant, and missing capability, validation reports expose the same diagnostic context rollups, and validation rejects missing diagnostic severity, code, target, source-backend, variant, and missing-capability summary rollups or inconsistent diagnostic summary rollups, including duplicate external corpus manifest entry warnings.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_validation_records_artifacts_and_toolchains",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_preserves_source_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_returns_structured_invalid_report_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_discovers_supported_sources_and_ignores_default_unsupported",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_explicitly_included_unsupported_sources",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_skips_known_unsupported_source_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_diagnostic_location_spans",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_diagnostic_locations_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_diagnostics_with_undeclared_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_diagnostic_targets",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_report_writes_output_and_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_scan_reports_unsupported_targets",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_relative_include_patterns",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_source_override_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_relative_source_override_patterns",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_exclude_patterns_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_drive_relative_exclude_patterns",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_inconsistent_summary_counts",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_diagnostic_summary_rollups",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_top_level_diagnostic_counts",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_project_diagnostics_preserve_original_locations",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_unexpected_generated_diagnostic_fields",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_configured_define_shadowing",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_scopes_define_shadowing_to_selected_variants",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_include_define_shadowing",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_active_preprocessor_diagnostics_by_variant",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_preprocessor_diagnostics_from_resolved_includes",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_ignores_block_commented_preprocessor_directives",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_reports_failed_artifacts",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_validation_hash_rollups",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_define_backed_include_resolution_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_dynamic_include_diagnostics",
+            "tests/test_translator/test_project_translation.py::def test_scan_project_reports_variant_nested_include_cycle_diagnostics"
+          ]
         }
       }
     },
@@ -9985,6 +10890,36 @@
           "notes": "Project reports can attach a non-empty repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, normalized target lists, commit hash and source URL provenance consistency, and required manifest accounting, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries with retained repository, commit, and source URL provenance metadata and configurable inspection sample limits. A pinned Slang reduced fixture participates in a manifest-backed project translation run. The pinned reduced-corpus manifest includes a focused Slang reduction covered by backend fixture tests. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
           "evidence": [
             "tests/test_backend/test_slang/test_external_fixtures.py::def test_external_fixture_codegen_crossgl_reparse",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_defaults_external_corpus_source_backend_from_discovered_unit",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_warns_on_external_corpus_source_backend_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_missing_external_corpus_manifest",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_invalid_external_corpus_manifest",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_outside_project",
+            "tests/test_translator/test_project_translation.py::def test_support_external_corpus_manifest_documents_pinned_reductions",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_targets",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_source_backend",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_id",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_invalid_external_corpus_provenance",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_external_corpus_rollups",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_includes_invalid_external_corpus_state",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_external_corpus_entry_state_mismatches",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_skips_duplicate_external_corpus_entries",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_external_corpus_accounting",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_non_ok_external_corpus_accounting",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_targets",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_external_corpus_source_backend",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_external_corpus_provenance",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_empty_external_corpus_manifest",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_applies_external_corpus_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_runs_pinned_slang_external_corpus_fixture"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "Project reports can attach a non-empty repository-relative external corpus manifest, skip malformed or duplicate manifest entries with structured diagnostics, and summarize declared valid paths, present and missing entries, discovered translation units, source-backend, target, and artifact rollups for manifest-backed project runs. Validation checks entry presence/discovery/source-backend consistency, normalized target lists, commit hash and source URL provenance consistency, and required manifest accounting, and text inspection surfaces the same rollups plus sampled missing and present-but-undiscovered entries with retained repository, commit, and source URL provenance metadata and configurable inspection sample limits. A pinned Slang reduced fixture participates in a manifest-backed project translation run. This is a coverage and accounting layer only: CrossTL does not clone upstream repositories, run native build systems, or claim whole-corpus semantic parity from reduced backend fixtures.",
+          "evidence": [
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_external_corpus_manifest_summary",
             "tests/test_translator/test_project_translation.py::def test_translate_project_defaults_external_corpus_source_backend_from_discovered_unit",
             "tests/test_translator/test_project_translation.py::def test_translate_project_warns_on_external_corpus_source_backend_mismatch",

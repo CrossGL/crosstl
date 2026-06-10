@@ -2708,6 +2708,7 @@ def test_support_matrix_covers_all_cataloged_backends():
         "mojo",
         "rust",
         "slang",
+        "webgl",
     }
 
     assert matrix["summary"]["feature_count"] == len(matrix["features"])
