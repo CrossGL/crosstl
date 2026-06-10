@@ -82,13 +82,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          args=()
           if [ "$RUNNER_OS" = "Linux" ]; then
-            args+=(--require-vulkan-toolchain)
+            python integrations/mlx/run_mlx_porting.py \
+              --mlx-root mlx-upstream \
+              --require-vulkan-toolchain
+          else
+            python integrations/mlx/run_mlx_porting.py \
+              --mlx-root mlx-upstream
           fi
-          python integrations/mlx/run_mlx_porting.py \
-            --mlx-root mlx-upstream \
-            "${args[@]}"
 
       - name: Upload MLX project-porting reports
         if: always()
