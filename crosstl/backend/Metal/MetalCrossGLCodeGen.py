@@ -1985,6 +1985,8 @@ class MetalToCrossGLConverter:
         return f"{''.join(designators)} = {value}"
 
     def normalize_literal_string(self, value):
+        if "'" in value and re.match(r"^(?:0[xX][0-9a-fA-F]|0[bB][01]|\d|\.\d)", value):
+            value = value.replace("'", "")
         if re.fullmatch(r"(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[hH]", value):
             return value[:-1]
         for pattern in (

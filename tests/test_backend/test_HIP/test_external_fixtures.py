@@ -2785,6 +2785,26 @@ def test_current_cccl_pair_namespace_visibility_and_alias_macros_codegen_reparse
     assert "_CCCL_NODEBUG_ALIAS" not in crossgl
 
 
+def test_hip_kernel_register_storage_class_declaration_codegen_reparse():
+    # HIP C++ accepts the same C/C++ register storage-class spelling that
+    # appears in older CUDA/HIP sample-style local declarations.
+    source = """
+    __global__ void register_local_kernel(int* out) {
+        register int lane = threadIdx.x;
+        out[lane] = lane;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    declaration = ast.statements[0].body[0]
+
+    assert declaration.qualifiers == ["register"]
+    assert declaration.vtype == "int"
+    assert declaration.name == "lane"
+    assert "var lane: i32 = gl_LocalInvocationID.x;" in crossgl
+    assert "register int lane" not in crossgl
+
+
 def test_external_llvm_amdgpu_numeric_template_kernel_name_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/llvm/llvm-project

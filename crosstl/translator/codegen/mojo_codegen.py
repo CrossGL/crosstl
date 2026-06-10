@@ -8521,6 +8521,11 @@ class MojoCodeGen:
             vector_binary = self.generate_vector_binary_op(expr)
             if vector_binary is not None:
                 return vector_binary
+            numeric_vector_binary = self.generate_numeric_vector_binary_op(
+                expr, target_type, target_context
+            )
+            if numeric_vector_binary is not None:
+                return numeric_vector_binary
             left = self.generate_expression(expr.left)
             right = self.generate_expression(expr.right)
             op = self.map_operator(expr.op)
@@ -10319,6 +10324,8 @@ class MojoCodeGen:
 
         if target_vector is not None and source_vector is not None:
             if source_vector[:2] == target_vector[:2]:
+                return
+            if self.compatible_numeric_vector_target(source_vector, target_vector):
                 return
         elif target_matrix is not None and source_matrix is not None:
             if source_matrix == target_matrix:
@@ -14778,6 +14785,71 @@ class MojoCodeGen:
         if info is not None:
             return info[0]
         return MOJO_SCALAR_DTYPES.get(expr_type)
+
+    def compatible_numeric_vector_target(self, source_info, target_info):
+        if source_info is None or target_info is None:
+            return False
+        source_dtype, source_width, source_storage_width, _ = source_info
+        target_dtype, target_width, target_storage_width, _ = target_info
+        if source_width != target_width or source_storage_width != target_storage_width:
+            return False
+        if "DType.bool" in {source_dtype, target_dtype}:
+            return False
+        return source_dtype in MOJO_DTYPE_SUFFIX and target_dtype in MOJO_DTYPE_SUFFIX
+
+    def generate_numeric_vector_binary_op(self, expr, target_type, target_context=None):
+        op = self.map_operator(expr.op)
+        if op not in MOJO_VECTOR_ARITHMETIC_OPS or target_type is None:
+            return None
+
+        target_info = self.vector_type_info(target_type)
+        if target_info is None or target_info[0] == "DType.bool":
+            return None
+
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
+        if left_info is None and right_info is None:
+            return None
+        if left_info is not None and not self.compatible_numeric_vector_target(
+            left_info, target_info
+        ):
+            return None
+        if right_info is not None and not self.compatible_numeric_vector_target(
+            right_info, target_info
+        ):
+            return None
+
+        target_dtype = target_info[0]
+        context = target_context or "vector binary expression"
+        left = self.generate_numeric_vector_binary_operand(
+            expr.left,
+            target_dtype,
+            context,
+        )
+        right = self.generate_numeric_vector_binary_operand(
+            expr.right,
+            target_dtype,
+            context,
+        )
+        return f"({left} {op} {right})"
+
+    def generate_numeric_vector_binary_operand(self, expr, target_dtype, context):
+        expr_info = self.vector_type_info(self.expression_result_type(expr))
+        if expr_info is not None:
+            expr_text = self.generate_expression(expr)
+            source_dtype = expr_info[0]
+            if source_dtype == target_dtype:
+                return expr_text
+            return f"({expr_text}).cast[{target_dtype}]()"
+
+        scalar_type = MOJO_DTYPE_INFO[target_dtype][0]
+        return self.generate_constructor_scalar_expression(
+            expr,
+            target_dtype,
+            f"{context} scalar operand as {scalar_type}",
+        )
 
     def is_literal_expression(self, expr):
         return hasattr(expr, "__class__") and "Literal" in str(expr.__class__)

@@ -80,6 +80,24 @@ def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
     assert parse_crossgl(generated) is not None
 
 
+def test_codegen_preserves_hex_float_literals_from_msl_cxx_base():
+    # MSL is C++14 based, so hexadecimal floating literals use a p/P exponent.
+    code = """
+    kernel void main(device float* out [[buffer(0)]]) {
+        float tiny = 0x1.0p-14f;
+        half one = 0x1p+0h;
+        float separated = 0x1'0.8p+2f;
+        out[0] = tiny + float(one) + separated;
+    }
+    """
+    generated = convert(code)
+
+    assert "float tiny = 0x1.0p-14f;" in generated
+    assert "float16 one = 0x1p+0h;" in generated
+    assert "float separated = 0x10.8p+2f;" in generated
+    assert parse_crossgl(generated) is not None
+
+
 def test_codegen_emits_shader_and_stages():
     code = """
     #include <metal_stdlib>

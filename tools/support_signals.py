@@ -2010,6 +2010,20 @@ def docs_report_source(docs_report: dict[str, Any] | None) -> str | None:
     return docs_report.get("path") or relpath(DEFAULT_DOCS_REPORT_PATH)
 
 
+def resolve_docs_report_path(
+    command: str, docs_report_path: Path | None
+) -> Path | None:
+    if docs_report_path is not None:
+        return (
+            docs_report_path
+            if docs_report_path.is_absolute()
+            else ROOT / docs_report_path
+        )
+    if command in {"extract", "update", "check"} and DEFAULT_DOCS_REPORT_PATH.exists():
+        return DEFAULT_DOCS_REPORT_PATH
+    return None
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2082,9 +2096,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1 if args.strict and report["summary"]["failed"] else 0
 
-    docs_report_path = args.docs_report
-    if docs_report_path is not None and not docs_report_path.is_absolute():
-        docs_report_path = ROOT / docs_report_path
+    docs_report_path = resolve_docs_report_path(args.command, args.docs_report)
     pytest_failure_paths = []
     for path in args.pytest_failure_summary:
         pytest_failure_paths.append(path if path.is_absolute() else ROOT / path)

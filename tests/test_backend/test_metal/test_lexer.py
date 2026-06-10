@@ -313,6 +313,22 @@ def test_tokenizes_cxx14_digit_separator_numeric_literals_from_msl_spec():
     assert_literal_present(values, "12'345.f")
 
 
+def test_tokenizes_hex_float_literals_from_msl_cxx_base():
+    # MSL is C++14 based, so hexadecimal floating literals use a p/P exponent.
+    code = """
+    void main() {
+        float tiny = 0x1.0p-14f;
+        half one = 0x1p+0h;
+        float separated = 0x1'0.8p+2f;
+    }
+    """
+    values = token_values(tokenize_code(code))
+
+    assert_literal_present(values, "0x1.0p-14f")
+    assert_literal_present(values, "0x1p+0h")
+    assert_literal_present(values, "0x1'0.8p+2f")
+
+
 def test_tokenizes_char_literals_from_public_metal_samples():
     code = "constant char pattern[] = { 'M', '\\n' };"
 

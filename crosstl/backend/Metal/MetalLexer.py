@@ -12,7 +12,12 @@ _DECIMAL_DIGITS = r"\d(?:'?\d)*"
 _HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
 _BINARY_DIGITS = r"[01](?:'?[01])*"
 _FLOAT_SUFFIX = r"(?:[fFhH]|[bB][fF])?"
+_HEX_FLOAT = (
+    rf"0[xX](?:{_HEX_DIGITS}\.?(?:{_HEX_DIGITS})?|\.{_HEX_DIGITS})"
+    rf"[pP][+-]?{_DECIMAL_DIGITS}{_FLOAT_SUFFIX}"
+)
 _NUMBER_PATTERN = (
+    rf"{_HEX_FLOAT}|"
     rf"0[xX]{_HEX_DIGITS}[uUlL]*|"
     rf"0[bB]{_BINARY_DIGITS}[uUlL]*|"
     rf"(?:{_DECIMAL_DIGITS}\.(?:{_DECIMAL_DIGITS})?|\.{_DECIMAL_DIGITS})"

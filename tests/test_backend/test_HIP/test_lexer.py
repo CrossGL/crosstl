@@ -7,7 +7,7 @@ class TestHipLexer:
         code = """
         __global__ __device__ __host__ __shared__ __constant__ __restrict __restrict__
         __forceinline__ __noinline__ __launch_bounds__ inline __inline__ template typename class
-        struct union enum namespace using extern static const
+        struct union enum namespace using extern static register const
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -28,6 +28,7 @@ class TestHipLexer:
         assert "TYPENAME" in token_types
         assert "CLASS" in token_types
         assert "STRUCT" in token_types
+        assert "REGISTER" in token_types
 
     def test_launch_bounds_attribute_tokenization(self):
         code = """

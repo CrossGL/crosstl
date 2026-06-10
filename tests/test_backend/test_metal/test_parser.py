@@ -2040,6 +2040,24 @@ def test_parse_cxx14_digit_separator_numeric_literals_from_msl_spec():
     assert body[3].right == "1.602'176e-19f"
 
 
+def test_parse_hex_float_literals_from_msl_cxx_base():
+    # MSL is C++14 based, so hexadecimal floating literals use a p/P exponent.
+    code = """
+    kernel void main(device float* out [[buffer(0)]]) {
+        float tiny = 0x1.0p-14f;
+        half one = 0x1p+0h;
+        float separated = 0x1'0.8p+2f;
+        out[0] = tiny + float(one) + separated;
+    }
+    """
+    ast = parse_ok(code)
+    body = ast.functions[0].body
+
+    assert body[0].right == "0x1.0p-14f"
+    assert body[1].right == "0x1p+0h"
+    assert body[2].right == "0x1'0.8p+2f"
+
+
 def test_parse_bfloat_literal_suffixes_from_msl_spec():
     # Apple MSL Specification, section 2.2, documents 0.5bf and 0.5BF.
     code = """
