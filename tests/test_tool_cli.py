@@ -31,6 +31,7 @@ TOOLS = [
                 "inspect-report",
                 "plan-runtime",
                 "runtime-manifest",
+                "package-runtime",
                 "report",
             ),
         ),
@@ -111,6 +112,15 @@ TOOLS = [
             ("runtime-manifest",),
             (
                 "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("package-runtime",),
+            (
+                "usage:",
+                "--package-dir",
                 "--format",
                 "--output",
             ),
