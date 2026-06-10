@@ -411,11 +411,16 @@ class WebGLCodeGen(GLSLCodeGen):
         self.validate_webgl_stage_support(ast, target_stage)
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
         self.validate_webgl_resource_support(supported_ast)
+        codegen_ast = ast if target_stage is not None else supported_ast
         code = super().generate_program(
-            supported_ast,
+            codegen_ast,
             target_stage=target_stage,
         )
         return self._with_default_precision(code)
+
+    def combined_fragment_input_member_name(self, input_name):
+        # Guarded WebGL sections are compiled per stage, so varyings must link by name.
+        return input_name
 
     def validate_webgl_resource_support(self, ast):
         for node in self.walk_ast(ast):

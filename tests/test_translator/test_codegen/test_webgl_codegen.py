@@ -204,6 +204,46 @@ def test_webgl_codegen_omits_vertex_output_location_layouts():
     assert "out vec2 out_uv;" in generated
 
 
+def test_webgl_codegen_aligns_split_stage_varying_names_without_locations():
+    shader = """
+    shader WebGLLinkedVaryings {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                return VSOutput(vec4(input.position, 1.0), input.uv);
+            }
+        }
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    ast = parse_shader(shader)
+    generator = WebGLCodeGen()
+
+    vertex_code = generator.generate_stage(ast, "vertex")
+    fragment_code = generator.generate_stage(ast, "fragment")
+    combined_code = WebGLCodeGen().generate(ast)
+
+    assert "out vec2 out_uv;" in vertex_code
+    assert "in vec2 out_uv;" in fragment_code
+    assert "fragColor = vec4(out_uv, 0.0, 1.0);" in fragment_code
+    assert "layout(location = 5) out vec2 out_uv;" not in vertex_code
+    assert "layout(location = 5) in vec2 out_uv;" not in fragment_code
+    assert "out vec2 out_uv;" in combined_code
+    assert "in vec2 out_uv;" in combined_code
+    assert "in_out_uv" not in combined_code
+
+
 def test_webgl_codegen_casts_texture_size_for_float_vector_arithmetic():
     shader = """
     shader WebGLTextureSizeCast {
