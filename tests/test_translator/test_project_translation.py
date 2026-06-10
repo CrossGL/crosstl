@@ -61,6 +61,19 @@ def test_project_package_exposes_public_api_surface():
         assert hasattr(project_api, name)
 
 
+def test_project_report_write_json_accepts_path_like_strings(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = tmp_path / "reports" / "scan-report.json"
+
+    scan_project(repo).to_report(targets=["cgl"]).write_json(str(report_path))
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.REPORT_KIND
+    assert payload["summary"]["unitCount"] == 1
+
+
 def _source_hash_status_counts(**overrides):
     counts = {
         "missing": 0,

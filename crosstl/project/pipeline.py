@@ -3949,7 +3949,8 @@ class ProjectPortabilityReport:
             payload["externalCorpus"] = external_corpus
         return payload
 
-    def write_json(self, path: Path) -> None:
+    def write_json(self, path: str | os.PathLike[str]) -> None:
+        path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self.to_json(), indent=2, sort_keys=True) + "\n")
 
