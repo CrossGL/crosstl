@@ -36,6 +36,9 @@ RUNTIME_PACKAGE_INSPECTION_KIND = "crosstl-runtime-package-inspection"
 RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
 RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
 RUNTIME_HOST_LOADER_SCAFFOLDS_KIND = "crosstl-runtime-host-loader-scaffolds"
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND = (
+    "crosstl-runtime-host-loader-scaffolds-inspection"
+)
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
 RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
@@ -48,6 +51,9 @@ RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
 RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
 RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE = "host-loader-scaffold-generation"
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
+    "host-loader-scaffold-readiness-inspection"
+)
 RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
@@ -89,6 +95,12 @@ RUNTIME_LOADER_MANIFEST_NON_GOALS = (
     "target-sdk-installation",
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "runtime-framework-generation",
+    "target-sdk-installation",
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_NON_GOALS = (
     "host-code-rewriting",
     "device-execution",
     "runtime-framework-generation",
@@ -615,6 +627,59 @@ RUNTIME_HOST_LOADER_SCAFFOLDS_SCAFFOLD_FIELDS = frozenset(
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_GENERATED_FILE_FIELDS = frozenset(
     ("path", "kind", "target")
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceScaffoldManifest",
+        "sourceScaffoldManifestHash",
+        "generatedAt",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "scaffoldRoot",
+        "project",
+        "summary",
+        "targets",
+        "scaffolds",
+        "generatedFiles",
+        "loaderManifest",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "scaffoldCount",
+        "readyScaffoldCount",
+        "blockedScaffoldCount",
+        "failedScaffoldCount",
+        "generatedFileCount",
+        "packagePaths",
+        "scaffoldFiles",
+    )
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCAFFOLD_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "status",
+        "manifestStatus",
+        "outputPath",
+        "packagePath",
+        "fileStatus",
+        "unitKind",
+        "unitStatus",
+        "blockerCount",
+        "diagnostics",
+    )
+)
+RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_GENERATED_FILE_FIELDS = frozenset(
+    ("path", "kind", "target", "status", "diagnostics")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -11094,6 +11159,613 @@ def build_runtime_host_loader_scaffolds(
             encoding="utf-8",
         )
     return payload
+
+
+def _runtime_host_loader_scaffold_inspection_load_manifest(
+    path: Path,
+) -> tuple[Mapping[str, Any], list[ProjectDiagnostic]]:
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "manifest-read-failed"
+                ),
+                message=f"Host loader scaffold manifest could not be read: {exc}",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "manifest-json-invalid"
+                ),
+                message=f"Host loader scaffold manifest is not valid JSON: {exc}",
+                location=SourceLocation(
+                    file=str(path), line=exc.lineno, column=exc.colno
+                ),
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        ]
+    if not isinstance(manifest, Mapping):
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "manifest-invalid"
+                ),
+                message="Host loader scaffold manifest must be a JSON object.",
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        ]
+    return manifest, []
+
+
+def _runtime_host_loader_scaffold_inspection_manifest_diagnostics(
+    path: Path, manifest: Mapping[str, Any]
+) -> list[ProjectDiagnostic]:
+    diagnostics: list[ProjectDiagnostic] = []
+    if manifest.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "manifest-schema-invalid"
+                ),
+                message=(
+                    "Host loader scaffold manifest schemaVersion must be "
+                    f"{REPORT_SCHEMA_VERSION}."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        )
+    if manifest.get("kind") != RUNTIME_HOST_LOADER_SCAFFOLDS_KIND:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "manifest-kind-invalid"
+                ),
+                message=(
+                    "Host loader scaffold inspection input must be a "
+                    f"{RUNTIME_HOST_LOADER_SCAFFOLDS_KIND} document."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        )
+    if manifest.get("success") is not True:
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "manifest-failed"
+                ),
+                message=(
+                    "Host loader scaffold manifest must be successful before "
+                    "it can be inspected as runtime-ready metadata."
+                ),
+                location=SourceLocation(file=str(path)),
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        )
+    for field_name in ("scaffolds", "generatedFiles"):
+        if not isinstance(manifest.get(field_name), list):
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code=(
+                        "project.runtime-host-loader-scaffolds-inspection."
+                        f"{field_name}-invalid"
+                    ),
+                    message=(
+                        "Host loader scaffold manifest " f"{field_name} must be a list."
+                    ),
+                    location=SourceLocation(file=str(path)),
+                    check_kind="runtime-host-loader-scaffolds-inspection",
+                )
+            )
+    return diagnostics
+
+
+def _runtime_host_loader_scaffold_inspection_path_diagnostic(
+    manifest_path: Path,
+    code: str,
+    message: str,
+    *,
+    target: Any = None,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code=f"project.runtime-host-loader-scaffolds-inspection.{code}",
+        message=message,
+        location=SourceLocation(file=str(manifest_path)),
+        target=target if _is_non_empty_string(target) else None,
+        check_kind="runtime-host-loader-scaffolds-inspection",
+    )
+
+
+def _runtime_host_loader_scaffold_inspection_resolve_path(
+    manifest_path: Path,
+    root: Path,
+    relative_path: Any,
+    *,
+    field_name: str,
+    code_prefix: str,
+    target: Any = None,
+) -> tuple[Path | None, list[ProjectDiagnostic]]:
+    if not _is_non_empty_string(relative_path):
+        return None, [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                f"{code_prefix}-path-missing",
+                f"{field_name} must be a non-empty relative path.",
+                target=target,
+            )
+        ]
+    if _is_absolute_or_windows_drive_path(relative_path):
+        return None, [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                f"{code_prefix}-path-absolute",
+                f"{field_name} must be relative to the scaffold manifest.",
+                target=target,
+            )
+        ]
+    candidate = root / Path(relative_path)
+    if not _is_relative_to(candidate, root):
+        return None, [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                f"{code_prefix}-path-outside-root",
+                f"{field_name} resolves outside the scaffold root.",
+                target=target,
+            )
+        ]
+    return candidate, []
+
+
+def _runtime_host_loader_scaffold_inspection_file_diagnostics(
+    manifest_path: Path,
+    path: Path,
+    *,
+    relative_path: str,
+    code_prefix: str,
+    target: Any = None,
+) -> list[ProjectDiagnostic]:
+    if not path.exists():
+        return [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                f"{code_prefix}-missing",
+                f"Host loader scaffold file is missing: {relative_path}.",
+                target=target,
+            )
+        ]
+    if not path.is_file():
+        return [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                f"{code_prefix}-not-file",
+                f"Host loader scaffold path is not a file: {relative_path}.",
+                target=target,
+            )
+        ]
+    return []
+
+
+def _runtime_host_loader_scaffold_inspection_load_unit(
+    manifest_path: Path,
+    unit_path: Path,
+    *,
+    relative_path: str,
+    scaffold: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, list[ProjectDiagnostic]]:
+    target = scaffold.get("target")
+    try:
+        unit = json.loads(unit_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return None, [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                "unit-read-failed",
+                f"Host loader unit could not be read: {relative_path}: {exc}",
+                target=target,
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return None, [
+            ProjectDiagnostic(
+                severity="error",
+                code=(
+                    "project.runtime-host-loader-scaffolds-inspection."
+                    "unit-json-invalid"
+                ),
+                message=(
+                    "Host loader unit is not valid JSON: " f"{relative_path}: {exc}"
+                ),
+                location=SourceLocation(
+                    file=str(unit_path), line=exc.lineno, column=exc.colno
+                ),
+                target=target if _is_non_empty_string(target) else None,
+                check_kind="runtime-host-loader-scaffolds-inspection",
+            )
+        ]
+    if not isinstance(unit, Mapping):
+        return None, [
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                "unit-invalid",
+                f"Host loader unit must be a JSON object: {relative_path}.",
+                target=target,
+            )
+        ]
+
+    diagnostics: list[ProjectDiagnostic] = []
+    expected_fields = (
+        ("schemaVersion", REPORT_SCHEMA_VERSION, "unit-schema-invalid"),
+        ("kind", "crosstl-runtime-host-loader-unit", "unit-kind-invalid"),
+        ("scaffold", scaffold.get("id"), "unit-scaffold-mismatch"),
+        ("status", "ready", "unit-status-invalid"),
+        ("target", scaffold.get("target"), "unit-target-mismatch"),
+        ("adapterKind", scaffold.get("adapterKind"), "unit-adapter-kind-mismatch"),
+        ("packagePath", scaffold.get("packagePath"), "unit-package-path-mismatch"),
+    )
+    for field_name, expected_value, code in expected_fields:
+        if unit.get(field_name) != expected_value:
+            diagnostics.append(
+                _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                    manifest_path,
+                    code,
+                    (
+                        f"Host loader unit {relative_path} has invalid "
+                        f"{field_name}: expected {expected_value!r}, got "
+                        f"{unit.get(field_name)!r}."
+                    ),
+                    target=target,
+                )
+            )
+    return unit, diagnostics
+
+
+def _runtime_host_loader_scaffold_inspection_generated_file(
+    manifest_path: Path,
+    root: Path,
+    generated_file: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    relative_path = generated_file.get("path")
+    target = generated_file.get("target")
+    diagnostics: list[ProjectDiagnostic] = []
+    resolved_path, path_diagnostics = (
+        _runtime_host_loader_scaffold_inspection_resolve_path(
+            manifest_path,
+            root,
+            relative_path,
+            field_name="generated file path",
+            code_prefix="generated-file",
+            target=target,
+        )
+    )
+    diagnostics.extend(path_diagnostics)
+    if resolved_path is not None:
+        diagnostics.extend(
+            _runtime_host_loader_scaffold_inspection_file_diagnostics(
+                manifest_path,
+                resolved_path,
+                relative_path=relative_path,
+                code_prefix="generated-file",
+                target=target,
+            )
+        )
+    return {
+        "path": relative_path,
+        "kind": generated_file.get("kind"),
+        "target": target,
+        "status": "ready" if not diagnostics else "failed",
+        "diagnostics": [diagnostic.code for diagnostic in diagnostics],
+    }, diagnostics
+
+
+def _runtime_host_loader_scaffold_inspection_scaffold(
+    manifest_path: Path,
+    root: Path,
+    scaffold: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[ProjectDiagnostic]]:
+    manifest_status = scaffold.get("status")
+    output_path = scaffold.get("outputPath")
+    target = scaffold.get("target")
+    blockers = [
+        blocker
+        for blocker in _record_sequence(scaffold.get("blockers"))
+        if isinstance(blocker, Mapping)
+    ]
+    diagnostics: list[ProjectDiagnostic] = []
+    file_status = "not-expected"
+    unit_kind = None
+    unit_status = None
+    if manifest_status == "ready":
+        resolved_path, path_diagnostics = (
+            _runtime_host_loader_scaffold_inspection_resolve_path(
+                manifest_path,
+                root,
+                output_path,
+                field_name="scaffold outputPath",
+                code_prefix="scaffold",
+                target=target,
+            )
+        )
+        diagnostics.extend(path_diagnostics)
+        if resolved_path is not None:
+            file_diagnostics = (
+                _runtime_host_loader_scaffold_inspection_file_diagnostics(
+                    manifest_path,
+                    resolved_path,
+                    relative_path=output_path,
+                    code_prefix="scaffold",
+                    target=target,
+                )
+            )
+            diagnostics.extend(file_diagnostics)
+            if not file_diagnostics:
+                unit, unit_diagnostics = (
+                    _runtime_host_loader_scaffold_inspection_load_unit(
+                        manifest_path,
+                        resolved_path,
+                        relative_path=output_path,
+                        scaffold=scaffold,
+                    )
+                )
+                diagnostics.extend(unit_diagnostics)
+                if isinstance(unit, Mapping):
+                    unit_kind = unit.get("kind")
+                    unit_status = unit.get("status")
+        file_status = "ready" if not diagnostics else "failed"
+    elif manifest_status == "blocked":
+        if _is_non_empty_string(output_path):
+            diagnostics.append(
+                _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                    manifest_path,
+                    "blocked-output-path-unexpected",
+                    "Blocked host loader scaffold records must not declare outputPath.",
+                    target=target,
+                )
+            )
+        file_status = "blocked"
+    else:
+        diagnostics.append(
+            _runtime_host_loader_scaffold_inspection_path_diagnostic(
+                manifest_path,
+                "scaffold-status-invalid",
+                f"Host loader scaffold status is invalid: {manifest_status!r}.",
+                target=target,
+            )
+        )
+        file_status = "failed"
+
+    if diagnostics:
+        status = "failed"
+    elif manifest_status == "blocked":
+        status = "blocked"
+    else:
+        status = "ready"
+    return {
+        "id": scaffold.get("id"),
+        "target": target,
+        "status": status,
+        "manifestStatus": manifest_status,
+        "outputPath": output_path,
+        "packagePath": scaffold.get("packagePath"),
+        "fileStatus": file_status,
+        "unitKind": unit_kind,
+        "unitStatus": unit_status,
+        "blockerCount": len(blockers),
+        "diagnostics": [diagnostic.code for diagnostic in diagnostics],
+    }, diagnostics
+
+
+def _runtime_host_loader_scaffold_inspection_status(
+    ready_count: int, blocked_count: int, failed_count: int
+) -> str:
+    if failed_count:
+        return "failed"
+    return _runtime_host_loader_scaffold_status(ready_count, blocked_count)
+
+
+def _runtime_host_loader_scaffold_inspection_target(
+    target_name: Any,
+    scaffolds: Sequence[Mapping[str, Any]],
+    generated_files: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    target_scaffolds = [
+        scaffold for scaffold in scaffolds if scaffold.get("target") == target_name
+    ]
+    target_generated_files = [
+        generated_file
+        for generated_file in generated_files
+        if generated_file.get("target") == target_name
+    ]
+    ready_count = sum(
+        1 for scaffold in target_scaffolds if scaffold.get("status") == "ready"
+    )
+    blocked_count = sum(
+        1 for scaffold in target_scaffolds if scaffold.get("status") == "blocked"
+    )
+    failed_count = sum(
+        1 for scaffold in target_scaffolds if scaffold.get("status") == "failed"
+    )
+    return {
+        "target": target_name,
+        "status": _runtime_host_loader_scaffold_inspection_status(
+            ready_count, blocked_count, failed_count
+        ),
+        "scaffoldCount": len(target_scaffolds),
+        "readyScaffoldCount": ready_count,
+        "blockedScaffoldCount": blocked_count,
+        "failedScaffoldCount": failed_count,
+        "generatedFileCount": len(target_generated_files),
+        "packagePaths": [
+            scaffold.get("packagePath")
+            for scaffold in target_scaffolds
+            if _is_non_empty_string(scaffold.get("packagePath"))
+        ],
+        "scaffoldFiles": [
+            scaffold.get("outputPath")
+            for scaffold in target_scaffolds
+            if _is_non_empty_string(scaffold.get("outputPath"))
+        ],
+    }
+
+
+def inspect_runtime_host_loader_scaffolds(
+    scaffold_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Inspect host loader scaffold files before runtime tooling consumes them."""
+
+    manifest_path = _filesystem_path_arg(
+        scaffold_manifest_path, field_name="Host loader scaffold manifest path"
+    )
+    scaffold_root = manifest_path.parent
+    manifest, diagnostics = _runtime_host_loader_scaffold_inspection_load_manifest(
+        manifest_path
+    )
+    if manifest:
+        diagnostics.extend(
+            _runtime_host_loader_scaffold_inspection_manifest_diagnostics(
+                manifest_path, manifest
+            )
+        )
+
+    generated_file_records: list[dict[str, Any]] = []
+    generated_file_diagnostics: list[ProjectDiagnostic] = []
+    scaffold_records: list[dict[str, Any]] = []
+    scaffold_diagnostics: list[ProjectDiagnostic] = []
+    if not any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        generated_file_records = []
+        for generated_file in _record_sequence(manifest.get("generatedFiles")):
+            if not isinstance(generated_file, Mapping):
+                continue
+            record, record_diagnostics = (
+                _runtime_host_loader_scaffold_inspection_generated_file(
+                    manifest_path, scaffold_root, generated_file
+                )
+            )
+            generated_file_records.append(record)
+            generated_file_diagnostics.extend(record_diagnostics)
+        for scaffold in _record_sequence(manifest.get("scaffolds")):
+            if not isinstance(scaffold, Mapping):
+                continue
+            record, record_diagnostics = (
+                _runtime_host_loader_scaffold_inspection_scaffold(
+                    manifest_path, scaffold_root, scaffold
+                )
+            )
+            scaffold_records.append(record)
+            scaffold_diagnostics.extend(record_diagnostics)
+    diagnostics.extend(generated_file_diagnostics)
+    diagnostics.extend(scaffold_diagnostics)
+
+    ready_count = sum(
+        1 for scaffold in scaffold_records if scaffold.get("status") == "ready"
+    )
+    blocked_count = sum(
+        1 for scaffold in scaffold_records if scaffold.get("status") == "blocked"
+    )
+    failed_count = sum(
+        1 for scaffold in scaffold_records if scaffold.get("status") == "failed"
+    )
+    verified_generated_count = sum(
+        1
+        for generated_file in generated_file_records
+        if generated_file.get("status") == "ready"
+    )
+    failed_generated_count = sum(
+        1
+        for generated_file in generated_file_records
+        if generated_file.get("status") != "ready"
+    )
+    target_names = sorted(
+        {
+            scaffold.get("target")
+            for scaffold in scaffold_records
+            if _is_non_empty_string(scaffold.get("target"))
+        }
+    )
+    manifest_summary = (
+        manifest.get("summary") if isinstance(manifest.get("summary"), Mapping) else {}
+    )
+    failed = any(diagnostic.severity == "error" for diagnostic in diagnostics)
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND,
+        "sourceScaffoldManifest": str(manifest_path),
+        "sourceScaffoldManifestHash": _optional_source_hash(manifest_path),
+        "generatedAt": int(time.time()),
+        "success": not failed,
+        "status": (
+            _runtime_host_loader_scaffold_inspection_status(
+                ready_count, blocked_count, failed_count
+            )
+            if not failed
+            else "failed"
+        ),
+        "scope": RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE,
+        "nonGoals": list(RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_NON_GOALS),
+        "scaffoldRoot": str(scaffold_root),
+        "project": (
+            dict(manifest.get("project"))
+            if isinstance(manifest.get("project"), Mapping)
+            else {"targets": []}
+        ),
+        "summary": {
+            "targetCount": len(target_names),
+            "scaffoldCount": len(scaffold_records),
+            "readyScaffoldCount": ready_count,
+            "blockedScaffoldCount": blocked_count,
+            "failedScaffoldCount": failed_count,
+            "generatedFileCount": len(generated_file_records),
+            "verifiedGeneratedFileCount": verified_generated_count,
+            "failedGeneratedFileCount": failed_generated_count,
+            "blockerCount": sum(
+                scaffold.get("blockerCount", 0) for scaffold in scaffold_records
+            ),
+            "actionCount": (
+                len(manifest.get("actions"))
+                if isinstance(manifest.get("actions"), list)
+                else 0
+            ),
+            "runtimeReferenceCount": manifest_summary.get("runtimeReferenceCount", 0),
+        },
+        "targets": [
+            _runtime_host_loader_scaffold_inspection_target(
+                target_name, scaffold_records, generated_file_records
+            )
+            for target_name in target_names
+        ],
+        "scaffolds": scaffold_records,
+        "generatedFiles": generated_file_records,
+        "loaderManifest": {
+            "kind": manifest.get("kind"),
+            "success": manifest.get("success"),
+            "status": manifest.get("status"),
+            "scaffoldCount": manifest_summary.get("scaffoldCount", 0),
+            "generatedFileCount": manifest_summary.get("generatedFileCount", 0),
+        },
+        "diagnosticCounts": _diagnostic_counts(diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
 
 
 def _inspection_artifact_matrix_summary(
