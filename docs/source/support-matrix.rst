@@ -31,7 +31,7 @@ implicitly supported.
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "778", "194", "CUDA C++ programming guide"
    "HIP", "", "", ".hip", "crosstl/translator/codegen/hip_codegen.py", "native", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "826", "136", "ROCm HIP documentation"
    "Mojo", "", "", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "native", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "921", "98", "Mojo manual"
-   "Rust", "", "", ".rs", "crosstl/translator/codegen/rust_codegen.py", "native", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "982", "69", "Rust reference"
+   "Rust", "", "", ".rs", "crosstl/translator/codegen/rust_codegen.py", "native", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "983", "69", "Rust reference"
    "Slang", "", "", ".slang", "crosstl/translator/codegen/slang_codegen.py", "native", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "789", "410", "Slang user guide"
 
 .. csv-table:: Summary by backend

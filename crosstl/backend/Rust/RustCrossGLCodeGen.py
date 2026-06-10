@@ -246,8 +246,8 @@ class RustToCrossGLConverter:
         "u8::MIN": "0",
         "u16::MAX": "65535",
         "u16::MIN": "0",
-        "u32::MAX": "4294967295",
-        "u32::MIN": "0",
+        "u32::MAX": "4294967295u",
+        "u32::MIN": "0u",
         "i8::MAX": "127",
         "i8::MIN": "(-128)",
         "i16::MAX": "32767",
@@ -780,10 +780,13 @@ class RustToCrossGLConverter:
         self.current_function_return_type = None
         self.user_function_names = set()
         self.function_return_types = {}
+        self.function_definitions = {}
         self.function_type_signatures = {}
         self.impl_method_signatures = {}
         self.impl_receiver_method_names = set()
         self.impl_associated_function_names = set()
+        self.option_unwrap_or_helpers = {}
+        self.current_option_unwrap_fallback_name = None
         self.value_type_scopes = [{}]
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
@@ -853,6 +856,7 @@ class RustToCrossGLConverter:
         self.current_function_return_type = None
         self.user_function_names = self.collect_user_function_names(ast)
         self.function_return_types = self.collect_function_return_types(ast)
+        self.function_definitions = self.collect_function_definitions(ast)
         self.function_type_signatures = self.collect_function_type_signatures(ast)
         self.impl_method_signatures = self.collect_impl_method_signatures(ast)
         (
@@ -865,6 +869,8 @@ class RustToCrossGLConverter:
         self.local_function_item_counter = 0
         self.local_function_item_names = set()
         self.local_function_item_helper_names = {}
+        self.option_unwrap_or_helpers = {}
+        self.current_option_unwrap_fallback_name = None
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.reparseable_macro_expression_depth = 0
@@ -949,6 +955,7 @@ class RustToCrossGLConverter:
                     func, indent=1, struct_name=impl_block.struct_name
                 )
 
+        code += self.generate_option_unwrap_or_helpers(indent=1)
         code += "}\n"
         return code
 
@@ -1207,6 +1214,112 @@ class RustToCrossGLConverter:
             if name and return_type:
                 return_types[name] = return_type
         return return_types
+
+    def collect_function_definitions(self, ast):
+        definitions = {}
+        for func in getattr(ast, "functions", []):
+            name = getattr(func, "name", None)
+            if name:
+                definitions[name] = func
+        return definitions
+
+    def option_payload_type_name(self, type_name):
+        generic = self.parse_generic_type(type_name)
+        if generic is None:
+            return None
+
+        base_name, args = generic
+        if base_name.rsplit("::", 1)[-1] != "Option" or len(args) != 1:
+            return None
+        return args[0]
+
+    def lookup_option_payload_return_type(self, function_name):
+        if not isinstance(function_name, str):
+            return None
+
+        base_name, _ = self.split_function_type_arguments(function_name)
+        if "::" in base_name:
+            base_name = base_name.rsplit("::", 1)[-1]
+        return_type = self.lookup_user_function_return_type(base_name)
+        return self.option_payload_type_name(return_type)
+
+    def option_unwrap_or_helper_name(self, function_name):
+        base_name, _ = self.split_function_type_arguments(function_name)
+        base_name = base_name.rsplit("::", 1)[-1]
+        return self.crossgl_identifier(
+            f"{base_name}_unwrap_or",
+            forbidden=set(self.user_function_names),
+        )
+
+    def ensure_option_unwrap_or_helper(self, function_name):
+        payload_type = self.lookup_option_payload_return_type(function_name)
+        if payload_type is None:
+            return None
+
+        base_name, _ = self.split_function_type_arguments(function_name)
+        base_name = base_name.rsplit("::", 1)[-1]
+        source_func = self.function_definitions.get(base_name)
+        if source_func is None:
+            return None
+        if getattr(source_func, "generics", None):
+            return None
+
+        helper_name = self.option_unwrap_or_helper_name(base_name)
+        if helper_name not in self.option_unwrap_or_helpers:
+            self.option_unwrap_or_helpers[helper_name] = {
+                "function": source_func,
+                "payload_type": payload_type,
+                "fallback_name": self.crossgl_identifier("_rust_option_fallback"),
+            }
+        return helper_name
+
+    def generate_option_unwrap_or_helpers(self, indent=1):
+        code = ""
+        generated = set()
+        while True:
+            pending = [
+                (name, info)
+                for name, info in self.option_unwrap_or_helpers.items()
+                if name not in generated
+            ]
+            if not pending:
+                break
+
+            for helper_name, helper in pending:
+                code += self.generate_option_unwrap_or_helper(
+                    helper_name,
+                    helper,
+                    indent,
+                )
+                generated.add(helper_name)
+        return code
+
+    def generate_option_unwrap_or_helper(self, helper_name, helper, indent=1):
+        source_func = helper["function"]
+        payload_type = helper["payload_type"]
+        fallback_name = helper["fallback_name"]
+        fallback_param = VariableNode(payload_type, fallback_name)
+        helper_func = FunctionNode(
+            payload_type,
+            helper_name,
+            list(getattr(source_func, "params", []) or []) + [fallback_param],
+            source_func.body,
+            attributes=[],
+            visibility=getattr(source_func, "visibility", None),
+            generics=[],
+            where_clauses=[],
+            is_async=getattr(source_func, "is_async", False),
+            is_unsafe=getattr(source_func, "is_unsafe", False),
+            abi=getattr(source_func, "abi", None),
+            is_const=getattr(source_func, "is_const", False),
+        )
+
+        previous_fallback_name = self.current_option_unwrap_fallback_name
+        self.current_option_unwrap_fallback_name = fallback_name
+        try:
+            return self.generate_function(helper_func, indent=indent)
+        finally:
+            self.current_option_unwrap_fallback_name = previous_fallback_name
 
     def collect_function_type_signatures(self, ast):
         signatures = {}
@@ -2655,7 +2768,12 @@ class RustToCrossGLConverter:
                         stmt, indent, loop_contexts
                     )
                 elif isinstance(stmt, ReturnNode):
-                    if isinstance(stmt.value, LoopNode):
+                    option_value = self.generate_option_unwrap_return_expression(
+                        stmt.value
+                    )
+                    if option_value is not None:
+                        code += f"{indent_str}return {option_value};\n"
+                    elif isinstance(stmt.value, LoopNode):
                         code += self.generate_loop_expression_return(
                             stmt.value, indent, loop_contexts
                         )
@@ -4023,6 +4141,11 @@ class RustToCrossGLConverter:
                 loop_contexts,
             )
 
+        if result_target is self.return_result_target:
+            option_value = self.generate_option_unwrap_return_expression(expression)
+            if option_value is not None:
+                return f"{indent_str}return {option_value};\n"
+
         if self.expression_contains_try(expression):
             prelude, value = self.generate_try_expression(
                 expression,
@@ -4081,6 +4204,32 @@ class RustToCrossGLConverter:
             loop_contexts,
         )
         return code
+
+    def generate_option_unwrap_return_expression(self, expression):
+        fallback_name = self.current_option_unwrap_fallback_name
+        if fallback_name is None:
+            return None
+
+        if isinstance(expression, str):
+            value = self.resolve_imported_module_path(expression)
+            if value.rsplit("::", 1)[-1] == "None":
+                return fallback_name
+            return None
+
+        if not isinstance(expression, FunctionCallNode):
+            return None
+
+        name = expression.name
+        if isinstance(name, MemberAccessNode):
+            name = self.generate_expression(name)
+        if not isinstance(name, str):
+            return None
+        if name.rsplit("::", 1)[-1] != "Some":
+            return None
+
+        if not expression.args:
+            return fallback_name
+        return self.generate_reparseable_expression(expression.args[0])
 
     def generate_assignment_statement(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
@@ -4733,6 +4882,7 @@ class RustToCrossGLConverter:
             "reflect",
             "refract",
             "perp_dot",
+            "unwrap_or",
         }:
             return True
         if base_method_name in self.RUST_GPU_DERIVATIVE_METHOD_MAP:
@@ -9166,6 +9316,17 @@ class RustToCrossGLConverter:
         indent,
         loop_contexts=None,
     ):
+        if isinstance(expression.name, MemberAccessNode):
+            method_name = expression.name.member
+            if method_name == "unwrap_or" and len(expression.args) == 1:
+                option_unwrap = self.generate_materialized_option_unwrap_or_call(
+                    expression,
+                    indent,
+                    loop_contexts,
+                )
+                if option_unwrap is not None:
+                    return option_unwrap
+
         args_code, args = self.generate_materialized_expression_list(
             expression.args,
             indent,
@@ -9229,6 +9390,35 @@ class RustToCrossGLConverter:
             loop_contexts,
         )
         return name_code + args_code, f"{func_name}({', '.join(args)})"
+
+    def generate_materialized_option_unwrap_or_call(
+        self,
+        expression,
+        indent,
+        loop_contexts=None,
+    ):
+        receiver = expression.name.object
+        if not isinstance(receiver, FunctionCallNode):
+            return None
+        if not isinstance(receiver.name, str):
+            return None
+
+        helper_name = self.ensure_option_unwrap_or_helper(receiver.name)
+        if helper_name is None:
+            return None
+
+        receiver_code, receiver_args = self.generate_materialized_expression_list(
+            receiver.args,
+            indent,
+            loop_contexts,
+        )
+        fallback_code, fallback = self.generate_materialized_expression(
+            expression.args[0],
+            indent,
+            loop_contexts,
+        )
+        args = receiver_args + [fallback]
+        return receiver_code + fallback_code, f"{helper_name}({', '.join(args)})"
 
     def generate_expression(self, expr):
         """Render a Rust backend expression node as CrossGL syntax."""
@@ -10418,6 +10608,9 @@ class RustToCrossGLConverter:
         if not self.method_call_may_need_special_format(method_name, expr.args):
             return None
 
+        if method_name == "unwrap_or" and len(expr.args) == 1:
+            return self.format_option_unwrap_or_call(expr.name.object, expr.args[0])
+
         obj = self.generate_expression(expr.name.object)
         receiver_type = self.infer_value_type(expr.name.object)
 
@@ -10459,6 +10652,20 @@ class RustToCrossGLConverter:
             expr.args,
             receiver_type,
         )
+
+    def format_option_unwrap_or_call(self, receiver, fallback):
+        if not isinstance(receiver, FunctionCallNode):
+            return None
+        if not isinstance(receiver.name, str):
+            return None
+
+        helper_name = self.ensure_option_unwrap_or_helper(receiver.name)
+        if helper_name is None:
+            return None
+
+        args = [self.generate_expression(arg) for arg in receiver.args]
+        args.append(self.generate_expression(fallback))
+        return f"{helper_name}({', '.join(args)})"
 
     def format_unary_expression_intrinsic_call(self, function_name, args):
         if len(args) != 1 or not isinstance(function_name, str):
