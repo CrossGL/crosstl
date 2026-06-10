@@ -86,6 +86,29 @@ NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS = {
     ),
 }
 
+WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS = frozenset({"cuda", "hip", "opencl"})
+WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS = frozenset(
+    {"cuda_header", "cuda_long", "opencl_long"}
+)
+NATIVE_SOURCE_TO_TARGET_PIPELINE_CASES = tuple(
+    (source_name, target_backend)
+    for source_name in sorted(NATIVE_SOURCE_SNIPPETS)
+    for target_backend in codegen.backend_names()
+    if not (
+        target_backend == "webgl"
+        and source_name in WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS
+    )
+)
+NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES = tuple(
+    (alias_name, target_backend)
+    for alias_name in sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS)
+    for target_backend in codegen.backend_names()
+    if not (
+        target_backend == "webgl"
+        and alias_name in WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS
+    )
+)
+
 
 def _write_source(tmp_path, filename, source):
     path = tmp_path / filename
@@ -680,8 +703,9 @@ def test_hlsl_compute_scalar_splat_swizzle_lowers_for_vulkan_and_metal(tmp_path)
     assert "unsupported Metal program-scope groupshared store" in metal
 
 
-@pytest.mark.parametrize("source_name", sorted(NATIVE_SOURCE_SNIPPETS))
-@pytest.mark.parametrize("target_backend", codegen.backend_names())
+@pytest.mark.parametrize(
+    "source_name,target_backend", NATIVE_SOURCE_TO_TARGET_PIPELINE_CASES
+)
 def test_native_source_to_registered_target_pipeline_is_total(
     tmp_path, source_name, target_backend
 ):
@@ -695,8 +719,10 @@ def test_native_source_to_registered_target_pipeline_is_total(
     _assert_generated_output_is_usable(generated)
 
 
-@pytest.mark.parametrize("alias_name", sorted(NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS))
-@pytest.mark.parametrize("target_backend", codegen.backend_names())
+@pytest.mark.parametrize(
+    "alias_name,target_backend",
+    NATIVE_SOURCE_EXTENSION_ALIAS_TO_TARGET_PIPELINE_CASES,
+)
 def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
     tmp_path, alias_name, target_backend
 ):
@@ -708,3 +734,31 @@ def test_native_source_extension_alias_to_registered_target_pipeline_is_total(
     )
 
     _assert_generated_output_is_usable(generated)
+
+
+@pytest.mark.parametrize("source_name", sorted(WEBGL_NATIVE_COMPUTE_SOURCE_DIAGNOSTICS))
+def test_native_compute_sources_report_webgl_diagnostics(tmp_path, source_name):
+    filename, source = NATIVE_SOURCE_SNIPPETS[source_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support shader stage\\(s\\): compute",
+    ):
+        crosstl.translate(str(source_path), backend="webgl", format_output=False)
+
+
+@pytest.mark.parametrize(
+    "alias_name", sorted(WEBGL_NATIVE_COMPUTE_EXTENSION_ALIAS_DIAGNOSTICS)
+)
+def test_native_compute_extension_aliases_report_webgl_diagnostics(
+    tmp_path, alias_name
+):
+    filename, source = NATIVE_SOURCE_EXTENSION_ALIAS_SNIPPETS[alias_name]
+    source_path = _write_source(tmp_path, filename, source)
+
+    with pytest.raises(
+        ValueError,
+        match="WebGL target does not support shader stage\\(s\\): compute",
+    ):
+        crosstl.translate(str(source_path), backend="webgl", format_output=False)

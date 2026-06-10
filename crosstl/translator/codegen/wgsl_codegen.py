@@ -219,6 +219,13 @@ class WGSLCodeGen:
         "uimagecube",
         "uimagecubearray",
     }
+    STRUCTURED_BUFFER_TYPE_NAMES = {
+        "rwstructuredbuffer",
+        "structuredbuffer",
+    }
+    WRITABLE_STRUCTURED_BUFFER_TYPE_NAMES = {
+        "rwstructuredbuffer",
+    }
     TEXTURE_FUNCTION_NAMES = {
         "texture",
         "texturecompare",
@@ -590,7 +597,14 @@ class WGSLCodeGen:
         address_space = "private"
         access = ""
         attributes = ""
-        if "uniform" in qualifier_names:
+        storage_buffer_access = self.structured_buffer_access(node.var_type)
+        if storage_buffer_access:
+            address_space = "storage"
+            access = f", {storage_buffer_access}"
+            attributes = (
+                self.explicit_binding_attributes(node) or self.next_binding_attributes()
+            )
+        elif "uniform" in qualifier_names:
             address_space = "uniform"
             attributes = self.next_binding_attributes()
         elif "buffer" in qualifier_names or "storage" in qualifier_names:
@@ -868,6 +882,9 @@ class WGSLCodeGen:
             )
             return f"array<{element}, {size}>"
         if isinstance(vtype, NamedType):
+            storage_element = self.structured_buffer_element_type(vtype)
+            if storage_element is not None:
+                return f"array<{self.type_name_string(storage_element)}>"
             if vtype.generic_args:
                 raise ValueError("WGSL target does not support generic named types yet")
             return self.type_name_string(vtype.name)
@@ -914,6 +931,27 @@ class WGSLCodeGen:
 
     def is_resource_type_name(self, lower_type_name):
         return lower_type_name in self.RESOURCE_TYPE_NAMES
+
+    def structured_buffer_element_type(self, vtype):
+        if not isinstance(vtype, NamedType):
+            return None
+        base_name = str(vtype.name).lower()
+        if base_name not in self.STRUCTURED_BUFFER_TYPE_NAMES:
+            return None
+        if len(vtype.generic_args) != 1:
+            raise ValueError(
+                "WGSL target requires StructuredBuffer resources to declare one "
+                "element type"
+            )
+        return vtype.generic_args[0]
+
+    def structured_buffer_access(self, vtype):
+        if self.structured_buffer_element_type(vtype) is None:
+            return None
+        base_name = str(vtype.name).lower()
+        if base_name in self.WRITABLE_STRUCTURED_BUFFER_TYPE_NAMES:
+            return "read_write"
+        return "read"
 
     def is_type_constructor_name(self, name):
         lower = str(name).lower()
@@ -1011,6 +1049,26 @@ class WGSLCodeGen:
         binding = self._global_binding_index
         self._global_binding_index += 1
         return f"@group(0) @binding({binding})"
+
+    def explicit_binding_attributes(self, node):
+        group = "0"
+        binding = None
+        for attr in getattr(node, "attributes", []) or []:
+            key = self.semantic_key(str(getattr(attr, "name", attr)))
+            arguments = getattr(attr, "arguments", []) or []
+            if key == "group" and arguments:
+                group = self.generate_attribute_argument(arguments[0])
+            elif key == "binding" and arguments:
+                binding = self.generate_attribute_argument(arguments[0])
+
+        if binding is None:
+            return ""
+        try:
+            next_binding = int(str(binding), 0) + 1
+        except ValueError:
+            next_binding = self._global_binding_index
+        self._global_binding_index = max(self._global_binding_index, next_binding)
+        return f"@group({group}) @binding({binding})"
 
     def _collect_structs(self, ast, target_stage):
         structs = list(getattr(ast, "structs", []) or [])

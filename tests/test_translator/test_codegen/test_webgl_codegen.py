@@ -24,6 +24,26 @@ shader WebGLSmoke {
 }
 """
 
+WEBGL_MIXED_STAGE_SHADER = """
+shader WebGLMixedStages {
+    vertex {
+        vec4 main(vec3 position @ POSITION) @ gl_Position {
+            return vec4(position, 1.0);
+        }
+    }
+    fragment {
+        vec4 main() @ gl_FragColor {
+            return vec4(1.0);
+        }
+    }
+    compute {
+        void main() {
+            return;
+        }
+    }
+}
+"""
+
 
 def parse_shader(source):
     return Parser(Lexer(source).get_tokens()).parse()
@@ -109,6 +129,27 @@ def test_webgl_codegen_rejects_non_webgl_stages():
         match="WebGL target does not support shader stage\\(s\\): compute",
     ):
         WebGLCodeGen().generate(parse_shader(shader))
+
+
+def test_webgl_codegen_filters_unsupported_stages_when_graphics_stages_exist():
+    generated = WebGLCodeGen().generate(parse_shader(WEBGL_MIXED_STAGE_SHADER))
+
+    assert "#version 300 es" in generated
+    assert "// Vertex Shader" in generated
+    assert "// Fragment Shader" in generated
+    assert "// Compute Shader" not in generated
+
+
+def test_webgl_codegen_explicit_graphics_stage_ignores_unsupported_siblings():
+    generated = WebGLCodeGen().generate_program(
+        parse_shader(WEBGL_MIXED_STAGE_SHADER),
+        target_stage="fragment",
+    )
+
+    assert "#version 300 es" in generated
+    assert "// Fragment Shader" in generated
+    assert "// Vertex Shader" not in generated
+    assert "// Compute Shader" not in generated
 
 
 @pytest.mark.parametrize(

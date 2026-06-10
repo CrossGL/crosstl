@@ -27,6 +27,8 @@ The first WebGL target surface focuses on portable graphics shaders:
 * GLSL ES 3.00 version and precision handling
 * stage parameters, return semantics, and struct member semantics inherited
   from the GLSL emitter
+* mixed graphics and compute inputs emit the supported vertex/fragment stages
+  when present while pure compute inputs still report deterministic diagnostics
 * deterministic diagnostics for compute, geometry, tessellation, mesh/task, and
   ray-tracing stages
 

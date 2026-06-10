@@ -275,7 +275,7 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 6,
+        "unsupported_marker_count": 8,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
@@ -296,6 +296,14 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "+ \", \".join(unsupported)"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "if stage_name in self.UNSUPPORTED_STAGE_NAMES:"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "if stage_name in self.UNSUPPORTED_STAGE_NAMES:"
           }
         ]
       },
@@ -307,7 +315,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 7
+        "test_count": 9
       },
       "translator_codegen": {
         "exists": true,
@@ -1528,24 +1536,6 @@
       "next_scope": "Document and expand backend-native macro semantic coverage, including macro forms that are translated, preserved, or rejected with diagnostics for each source frontend.",
       "notes": "The project pipeline records define sets and named variant metadata in portability reports, preserves define and variant maps alongside counts, selected-variant lists, and per-variant define counts, records report CLI variant metadata, records each artifact applied define map and define-processing status (forwarded, not-requested, or not-supported) with source frontend support metadata, emits warning diagnostics and missing-capability rollups when configured defines cannot be forwarded by a source frontend, emits scan-time diagnostics for active #error and #warning directives scoped by project and selected variant conditionals, emits warning diagnostics when active #define or #undef directives in translation units or resolved include files shadow configured project or selected variant define names while ignoring block-commented directives, inspection summaries and text output expose variant names, selected-variant summaries for scoped runs, and per-variant define counts without define values plus define-processing status, target, source-backend, and variant rollups plus sampled define-processing artifact metadata with define names, deterministic define fingerprints, and without define values, validates malformed define/variant metadata including empty mapping keys, punctuation-bearing variant keys in config/report diagnostics, and forged variant define counts, duplicate selected variant metadata, undeclared artifact and validation-record variants, missing artifact define maps, artifact define maps that do not match base defines merged with the artifact variant, malformed or forged artifact define-processing metadata including unexpected generated processing fields, and define-processing summary rollup mismatches including target and variant rollups, missing define-processing target and variant rollups, rejects malformed define, variant, and selected-variant TOML values before scan, applies CLI define overrides, passes defines to source frontends that expose preprocessor options, verifies define-forwarding metadata for every registered source frontend, applies object-like define expansion and #if/#ifdef/#ifndef/#elif/#else/#endif branch selection in the CrossGL source frontend when defines are provided, applies named-variant define maps through OpenGL/GLSL native preprocessing during project translation, applies named-variant define maps through DirectX/HLSL native preprocessing during project translation, applies named-variant define maps through Metal/MSL native preprocessing during project translation, applies named-variant define maps through CUDA/HIP native preprocessing during project translation, applies named-variant define maps through Slang native preprocessing during project translation, applies named-variant define maps through Vulkan native preprocessing during project translation, and expands configured named variants into separate artifact attempts with base defines merged with variant overrides, and supports configured selected_variants defaults plus API, scan/report CLI, and translation CLI scoped runs for selected declared variants, de-duplicates repeated selections before scan or artifact planning, and does not claim omitted variants as attempted, and sanitizes unsafe variant names into stable output path segments while retaining original variant labels in reports and validation rollups. Native preprocessor semantics remain backend-dependent, so this remains partial project support. Project inspection exposes project-level define names and deterministic define fingerprints, variant define names, and deterministic per-variant define fingerprints without define values. Define-processing inspection summaries expose redacted project define names, deterministic define fingerprints, selected variant names, per-variant define records, and artifact effective define fingerprints without define values.",
       "status": "partial"
-    },
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "project",
-      "feature": "Runtime package inspection",
-      "feature_id": "project.runtime_package_inspection",
-      "notes": "No support status has been audited for this backend.",
-      "status": "unknown"
-    },
-    {
-      "backend": "WebGPU / WGSL",
-      "backend_id": "wgsl",
-      "category": "project",
-      "feature": "Runtime host binding plan",
-      "feature_id": "project.runtime_host_binding_plan",
-      "notes": "No support status has been audited for this backend.",
-      "status": "unknown"
     },
     {
       "backend": "WebGPU / WGSL",
@@ -11378,9 +11368,17 @@
           "status": "supported"
         },
         "wgsl": {
-          "evidence": [],
-          "notes": "No support status has been audited for this backend.",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
         }
       }
     },
@@ -11521,9 +11519,14 @@
           "status": "supported"
         },
         "wgsl": {
-          "evidence": [],
-          "notes": "No support status has been audited for this backend.",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
+          ],
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
         }
       }
     },
@@ -14592,7 +14595,7 @@
   },
   "summary": {
     "backend_count": 11,
-    "backlog_count": 36,
+    "backlog_count": 34,
     "feature_count": 60,
     "status_counts": {
       "cuda": {
@@ -14678,8 +14681,8 @@
       "wgsl": {
         "diagnostic": 25,
         "partial": 3,
-        "supported": 22,
-        "unknown": 3,
+        "supported": 24,
+        "unknown": 1,
         "unsupported": 0,
         "validated_rejection": 7
       }

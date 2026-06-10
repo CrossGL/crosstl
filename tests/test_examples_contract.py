@@ -39,12 +39,15 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("advanced/GenericPatternMatching.cgl", "directx"),
     ("advanced/GenericPatternMatching.cgl", "metal"),
     ("advanced/GenericPatternMatching.cgl", "opengl"),
+    ("advanced/GenericPatternMatching.cgl", "webgl"),
     ("cross_platform/UniversalPBRShader.cgl", "directx"),
     ("cross_platform/UniversalPBRShader.cgl", "metal"),
     ("cross_platform/UniversalPBRShader.cgl", "opengl"),
+    ("cross_platform/UniversalPBRShader.cgl", "webgl"),
     ("graphics/ComplexShader.cgl", "directx"),
     ("graphics/ComplexShader.cgl", "metal"),
     ("graphics/ComplexShader.cgl", "opengl"),
+    ("graphics/ComplexShader.cgl", "webgl"),
 )
 
 ADDITIONAL_FIXED_CASES = (
