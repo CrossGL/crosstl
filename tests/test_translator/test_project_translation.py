@@ -1,5 +1,6 @@
 import copy
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -44,6 +45,14 @@ SIMPLE_CROSSL = textwrap.dedent("""
     """).strip()
 
 
+class ProjectReportPath:
+    def __init__(self, path):
+        self.path = path
+
+    def __fspath__(self):
+        return os.fspath(self.path)
+
+
 def test_project_package_exposes_public_api_surface():
     assert set(project_api.__all__) == {
         "ProjectConfig",
@@ -70,6 +79,19 @@ def test_project_report_write_json_accepts_path_like_strings(tmp_path):
     scan_project(repo).to_report(targets=["cgl"]).write_json(str(report_path))
 
     payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.REPORT_KIND
+    assert payload["summary"]["unitCount"] == 1
+
+
+def test_project_report_write_json_accepts_path_like_objects(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report_path = ProjectReportPath(tmp_path / "reports" / "scan-report.json")
+
+    scan_project(repo).to_report(targets=["cgl"]).write_json(report_path)
+
+    payload = json.loads(Path(os.fspath(report_path)).read_text(encoding="utf-8"))
     assert payload["kind"] == project_pipeline.REPORT_KIND
     assert payload["summary"]["unitCount"] == 1
 
