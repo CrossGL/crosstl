@@ -1047,6 +1047,16 @@ def _format_runtime_host_binding_plan(payload):
             f"{summary.get('runtimeReferenceCount', 0)} runtime references"
         )
 
+    package_inspection = payload.get("packageInspection")
+    if isinstance(package_inspection, Mapping):
+        status = "ok" if package_inspection.get("success") else "failed"
+        lines.append(
+            "Package inspection: "
+            f"{status}, "
+            f"{package_inspection.get('readyBindingCount', 0)} ready bindings, "
+            f"{package_inspection.get('failedBindingCount', 0)} failed bindings"
+        )
+
     targets = payload.get("targets", [])
     if targets:
         lines.append("Host binding targets:")
