@@ -97,6 +97,7 @@ jobs:
             --case raylib-base-fragment \
             --case raylib-base-vertex \
             --case raylib-lighting-shader-pair \
+            --case renderdoc-vktext-fragment \
             --case rust-gpu-graphics-stage-inputs \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \

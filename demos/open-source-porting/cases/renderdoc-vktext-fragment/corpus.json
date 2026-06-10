@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "RenderDoc Vulkan text fragment shader",
+  "description": "Pinned GLSL fragment shader used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "renderdoc-vktext-fragment",
+      "path": "vktext.frag",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "opengl", "vulkan"],
+      "repository": "https://github.com/baldurk/renderdoc",
+      "commit": "6660344c3d8024dc5107afa2115c5035ceb85533",
+      "sourceUrl": "https://github.com/baldurk/renderdoc/blob/6660344c3d8024dc5107afa2115c5035ceb85533/renderdoc/data/glsl/vktext.frag"
+    }
+  ]
+}

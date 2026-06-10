@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["vktext.frag"]
+targets = ["cgl", "opengl", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"

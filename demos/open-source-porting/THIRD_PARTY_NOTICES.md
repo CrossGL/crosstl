@@ -177,6 +177,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/LICENSE
 
+## baldurk/renderdoc
+
+- Repository: https://github.com/baldurk/renderdoc
+- Commit: `6660344c3d8024dc5107afa2115c5035ceb85533`
+- Source path: `renderdoc/data/glsl/vktext.frag`
+- License: MIT
+- License URL:
+  https://github.com/baldurk/renderdoc/blob/6660344c3d8024dc5107afa2115c5035ceb85533/LICENSE.md
+
 ## Rust-GPU/VulkanShaderExamples
 
 - Repository: https://github.com/Rust-GPU/VulkanShaderExamples

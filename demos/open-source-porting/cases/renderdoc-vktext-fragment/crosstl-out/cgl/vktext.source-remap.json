@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/vktext.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 24,
+        "endOffset": 722,
+        "file": "crosstl-out/cgl/vktext.cgl",
+        "length": 722,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 46,
+        "endOffset": 1800,
+        "file": "vktext.frag",
+        "length": 1800,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
