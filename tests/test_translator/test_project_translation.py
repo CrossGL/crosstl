@@ -8528,6 +8528,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
     assert set(artifact) == project_pipeline.REPORT_ARTIFACT_FIELDS - {
         "variant",
         "error",
+        "stage",
         "sourceRemap",
     }
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
@@ -10380,6 +10381,103 @@ def test_translate_project_webgl_smoke_validates_generated_artifact_with_glslang
             "stderr": "",
         }
     ]
+
+
+def test_translate_project_webgl_graphics_emits_runtime_stage_artifacts(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "graphics.cgl").write_text(DIRECTX_GRAPHICS_CROSSL, encoding="utf-8")
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        commands.append((command, kwargs))
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert "GL_VERTEX_SHADER" not in kwargs["input"]
+        assert "GL_FRAGMENT_SHADER" not in kwargs["input"]
+        if command[-1] == "vert":
+            assert "// Vertex Shader" in kwargs["input"]
+            assert "// Fragment Shader" not in kwargs["input"]
+        elif command[-1] == "frag":
+            assert "// Fragment Shader" in kwargs["input"]
+            assert "// Vertex Shader" not in kwargs["input"]
+        else:  # pragma: no cover - guarded by the exact command assertion below
+            raise AssertionError(command)
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["webgl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+
+    artifact_paths = {
+        artifact["stage"]: artifact["path"] for artifact in payload["artifacts"]
+    }
+    assert artifact_paths == {
+        "vertex": "out/webgl/graphics.vert.webgl.glsl",
+        "fragment": "out/webgl/graphics.frag.webgl.glsl",
+    }
+    assert not (repo / "out" / "webgl" / "graphics.webgl.glsl").exists()
+    vertex_source = (repo / artifact_paths["vertex"]).read_text(encoding="utf-8")
+    fragment_source = (repo / artifact_paths["fragment"]).read_text(encoding="utf-8")
+    assert "// Vertex Shader" in vertex_source
+    assert "// Fragment Shader" not in vertex_source
+    assert "// Fragment Shader" in fragment_source
+    assert "// Vertex Shader" not in fragment_source
+    assert "GL_VERTEX_SHADER" not in vertex_source + fragment_source
+    assert "GL_FRAGMENT_SHADER" not in vertex_source + fragment_source
+    assert payload["artifactMatrix"]["expectedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["emittedArtifactCount"] == 2
+    assert payload["artifactMatrix"]["missingArtifactCount"] == 0
+    assert payload["artifactMatrix"]["extraArtifactCount"] == 0
+    assert payload["artifactMatrix"]["complete"] is True
+    assert [command for command, _kwargs in commands] == [
+        ["glslangValidator", "--stdin", "-S", "vert"],
+        ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
+    assert [
+        (run["stage"], run["path"], run["command"], run["status"])
+        for run in payload["validation"]["toolchainRuns"]
+    ] == [
+        (
+            "vertex",
+            "out/webgl/graphics.vert.webgl.glsl",
+            ["glslangValidator", "--stdin", "-S", "vert"],
+            "ok",
+        ),
+        (
+            "fragment",
+            "out/webgl/graphics.frag.webgl.glsl",
+            ["glslangValidator", "--stdin", "-S", "frag"],
+            "ok",
+        ),
+    ]
+    assert [
+        (artifact["stage"], artifact["path"], artifact["status"])
+        for artifact in payload["validation"]["artifacts"]
+    ] == [
+        ("vertex", "out/webgl/graphics.vert.webgl.glsl", "ok"),
+        ("fragment", "out/webgl/graphics.frag.webgl.glsl", "ok"),
+    ]
+    assert validation["success"] is True
 
 
 def test_translate_project_wgsl_smoke_validates_generated_artifact_with_naga(
@@ -24983,6 +25081,49 @@ def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
     assert adapter["artifactFormat"] == "GLSL ES source"
     assert adapter["requiredTools"] == ["glslangValidator"]
     assert adapter["packagePath"] == "artifacts/out/webgl/simple.webgl.glsl"
+
+
+def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
+    _, package_dir, package = _build_runtime_package_fixture(
+        tmp_path,
+        source=DIRECTX_GRAPHICS_CROSSL,
+        source_name="graphics.cgl",
+        targets=("webgl",),
+    )
+
+    assert [
+        (artifact["stage"], artifact["packagePath"])
+        for artifact in package["artifacts"]
+    ] == [
+        ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
+        ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
+    ]
+
+    adapter_plan = plan_runtime_adapters(package_dir / "runtime-package.json")
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
+
+    assert [
+        (adapter["stage"], adapter["packagePath"])
+        for adapter in adapter_plan["adapters"]
+    ] == [
+        ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
+        ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
+    ]
+    assert adapter_plan["summary"]["adapterCount"] == 2
+    assert adapter_plan["targets"][0]["packagePaths"] == [
+        "artifacts/out/webgl/graphics.vert.webgl.glsl",
+        "artifacts/out/webgl/graphics.frag.webgl.glsl",
+    ]
+    assert [
+        (load_unit["stage"], load_unit["packagePath"])
+        for load_unit in loader_manifest["loadUnits"]
+    ] == [
+        ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
+        ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
+    ]
+    assert loader_manifest["summary"]["loadUnitCount"] == 2
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):

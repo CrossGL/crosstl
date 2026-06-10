@@ -229,6 +229,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "path",
         "target",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "sourceHash",
@@ -295,6 +296,7 @@ RUNTIME_PACKAGE_ARTIFACT_FIELDS = frozenset(
         "packagePath",
         "target",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "hash",
@@ -404,6 +406,7 @@ RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
         "packagePath",
         "sourcePath",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "hash",
@@ -460,6 +463,7 @@ RUNTIME_ADAPTER_PLAN_ADAPTER_FIELDS = frozenset(
         "packagePath",
         "sourcePath",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "sourceRemap",
@@ -526,6 +530,7 @@ RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
         "packagePath",
         "sourcePath",
         "sourceBackend",
+        "stage",
         "variant",
         "defines",
         "sourceRemap",
@@ -736,6 +741,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "source",
         "sourceBackend",
         "target",
+        "stage",
         "path",
         "status",
         "defines",
@@ -752,6 +758,13 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "sourceRemap",
     )
 )
+WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
+    "vert": "vertex",
+    "frag": "fragment",
+}
+WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL = {
+    label: stage for stage, label in WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG.items()
+}
 REPORT_ARTIFACT_DEFINE_PROCESSING_FIELDS = frozenset(
     ("status", "frontend", "supportsDefines", "defineCount")
 )
@@ -860,6 +873,7 @@ VALIDATION_ARTIFACT_FIELDS = frozenset(
         "path",
         "exists",
         "status",
+        "stage",
         "variant",
         "sourceBackend",
         "sourceHashStatus",
@@ -888,6 +902,7 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
         "source",
         "target",
         "path",
+        "stage",
         "variant",
         "sourceBackend",
         "command",
@@ -5352,6 +5367,22 @@ def _artifact_path_matches_target_extension(
     )
 
 
+def _webgl_stage_path(path: Path, stage: str) -> Path:
+    suffix = _artifact_target_extension("webgl")
+    name = path.name
+    if name.lower().endswith(suffix):
+        base = name[: -len(suffix)]
+        return path.with_name(f"{base}.{stage}{suffix}")
+    return path.with_name(f"{path.stem}.{stage}{path.suffix}")
+
+
+def _webgl_stage_relative_path(relative_path: Path, stage_label: str) -> Path:
+    stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(stage_label)
+    if stage is None:
+        return relative_path
+    return _webgl_stage_path(relative_path, stage)
+
+
 def _variant_jobs(
     config: ProjectConfig,
 ) -> list[tuple[str | None, dict[str, str]]]:
@@ -5426,7 +5457,6 @@ def _artifact_matrix_report(
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
         "variantMode": "named" if variant_count else "none",
-        "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
     }
     artifact_identities = {
         identity
@@ -5437,27 +5467,16 @@ def _artifact_matrix_report(
     }
     preserve_source_suffix = _artifact_source_suffix_pairs(units, normalized_targets)
     variant_names: list[str | None] = sorted(variants) if variants else [None]
-    expected_identities = {
-        identity
-        for unit in units
-        for target in normalized_targets
-        for variant in variant_names
-        for identity in (
-            _expected_artifact_identity(
-                config.root,
-                config.output_path,
-                unit.relative_path,
-                target,
-                variant,
-                preserve_source_suffix=(
-                    unit.relative_path,
-                    target,
-                )
-                in preserve_source_suffix,
-            ),
-        )
-        if identity is not None
-    }
+    expected_identities = _expected_artifact_identities(
+        config.root,
+        config.output_path,
+        units,
+        normalized_targets,
+        variant_names,
+        preserve_source_suffix,
+        artifacts=artifacts,
+    )
+    payload["expectedArtifactCount"] = len(expected_identities)
     missing_identities = expected_identities - artifact_identities
     extra_identities = artifact_identities - expected_identities
     source_backend_by_identity = _artifact_matrix_source_backend_by_identity(
@@ -5736,6 +5755,56 @@ def _artifact_source_remap(
         "sizeBytes": remap_path.stat().st_size,
         "hash": _source_hash(remap_path),
     }
+
+
+def _webgl_split_stage_artifacts(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    artifact: Mapping[str, Any],
+    output_path: Path,
+) -> list[dict[str, Any]] | None:
+    if artifact.get("target") != "webgl":
+        return None
+
+    stages = _glslang_guarded_stages(output_path)
+    if len(stages) <= 1:
+        return None
+
+    try:
+        source = output_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+    stage_artifacts = []
+    for stage in stages:
+        stage_label = WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG.get(stage)
+        macro = GLSLANG_GUARD_MACRO_BY_STAGE.get(stage)
+        if stage_label is None or macro is None:
+            continue
+        stage_source = _filter_glslang_guarded_stage_source(source, macro)
+        if not stage_source.strip():
+            continue
+
+        stage_path = _webgl_stage_path(output_path, stage)
+        stage_path.write_text(stage_source, encoding="utf-8", newline="")
+        stage_artifact = dict(artifact)
+        stage_artifact["stage"] = stage_label
+        stage_artifact["path"] = _artifact_report_path(stage_path, config)
+        stage_artifact["generatedHash"] = _source_hash(stage_path)
+        stage_artifact["generatedSizeBytes"] = stage_path.stat().st_size
+        stage_artifact["sourceMap"] = _artifact_source_map(
+            config, unit, str(artifact["target"]), stage_path
+        )
+        stage_artifacts.append(stage_artifact)
+
+    if len(stage_artifacts) <= 1:
+        return None
+
+    try:
+        output_path.unlink()
+    except OSError:
+        pass
+    return stage_artifacts
 
 
 def _unsupported_mapping_field_reasons(
@@ -6159,6 +6228,7 @@ def translate_project(
                     )
                     artifacts.append(artifact)
                     continue
+                artifact_records = [artifact]
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     translate(
@@ -6175,6 +6245,11 @@ def translate_project(
                     artifact["sourceMap"] = _artifact_source_map(
                         config, unit, target, output_path
                     )
+                    split_artifacts = _webgl_split_stage_artifacts(
+                        config, unit, artifact, output_path
+                    )
+                    if split_artifacts is not None:
+                        artifact_records = split_artifacts
                     if _is_crossgl_target(target):
                         remap_path = _source_remap_path(output_path)
                         remap_payload = _source_remap_payload(artifact["sourceMap"])
@@ -6196,6 +6271,7 @@ def translate_project(
                     artifact.pop("generatedSizeBytes", None)
                     artifact.pop("sourceMap", None)
                     artifact.pop("sourceRemap", None)
+                    artifact_records = [artifact]
                     diagnostics.append(
                         ProjectDiagnostic(
                             severity="error",
@@ -6208,7 +6284,7 @@ def translate_project(
                             missing_capabilities=["batch.translation"],
                         )
                     )
-                artifacts.append(artifact)
+                artifacts.extend(artifact_records)
 
     validation = (
         _validate_artifacts(artifacts, selected_targets, config)
@@ -7102,6 +7178,8 @@ def _validate_artifacts(
             artifact_check["variant"] = artifact["variant"]
         if artifact.get("sourceBackend") is not None:
             artifact_check["sourceBackend"] = artifact["sourceBackend"]
+        if artifact.get("stage") is not None:
+            artifact_check["stage"] = artifact["stage"]
         artifact_checks.append(artifact_check)
 
     for toolchain in toolchains:
@@ -8040,6 +8118,7 @@ def _runtime_manifest_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         "path": artifact.get("path"),
         "target": artifact.get("target"),
         "sourceBackend": artifact.get("sourceBackend"),
+        "stage": artifact.get("stage"),
         "variant": artifact.get("variant"),
         "defines": (
             dict(artifact.get("defines"))
@@ -8581,6 +8660,7 @@ def _runtime_package_artifact_payload(
         "packagePath": package_path if status == "packaged" else None,
         "target": artifact.get("target"),
         "sourceBackend": artifact.get("sourceBackend"),
+        "stage": artifact.get("stage"),
         "variant": artifact.get("variant"),
         "defines": (
             dict(artifact.get("defines"))
@@ -8720,6 +8800,7 @@ def build_runtime_package(
                     "packagePath": None,
                     "target": artifact.get("target"),
                     "sourceBackend": artifact.get("sourceBackend"),
+                    "stage": artifact.get("stage"),
                     "variant": artifact.get("variant"),
                     "defines": (
                         dict(artifact.get("defines"))
@@ -9750,6 +9831,7 @@ def _runtime_package_inspection_binding(
         "packagePath": artifact.get("packagePath"),
         "sourcePath": artifact.get("sourcePath"),
         "sourceBackend": artifact.get("sourceBackend"),
+        "stage": artifact.get("stage"),
         "variant": artifact.get("variant"),
         "defines": (
             dict(artifact.get("defines"))
@@ -9968,6 +10050,7 @@ def _runtime_adapter_entry(binding: Mapping[str, Any]) -> dict[str, Any]:
         "packagePath": binding.get("packagePath"),
         "sourcePath": binding.get("sourcePath"),
         "sourceBackend": binding.get("sourceBackend"),
+        "stage": binding.get("stage"),
         "variant": binding.get("variant"),
         "defines": (
             dict(binding.get("defines"))
@@ -10346,6 +10429,7 @@ def _runtime_loader_manifest_load_unit(
         "packagePath": adapter.get("packagePath"),
         "sourcePath": adapter.get("sourcePath"),
         "sourceBackend": adapter.get("sourceBackend"),
+        "stage": adapter.get("stage"),
         "variant": adapter.get("variant"),
         "defines": (
             dict(adapter.get("defines"))
@@ -10552,7 +10636,9 @@ def _inspection_artifact_matrix_summary(
                 break
         if matrix_source == "derived" or not isinstance(project, Mapping):
             return {"available": False}
-        artifact_matrix = _expected_artifact_matrix_metadata(project, units)
+        artifact_matrix = _expected_artifact_matrix_metadata(
+            project, units, artifact_records
+        )
         matrix_source = "derived"
     else:  # pragma: no cover - loop always returns or breaks within two attempts
         return {"available": False}
@@ -10657,6 +10743,7 @@ def _inspection_validation_artifact(artifact: Any) -> dict[str, Any] | None:
         "sourceBackend": artifact.get("sourceBackend"),
         "target": artifact.get("target"),
         "path": artifact.get("path"),
+        "stage": artifact.get("stage"),
         "status": artifact.get("status"),
         "exists": artifact.get("exists"),
         "sourceHashStatus": artifact.get("sourceHashStatus"),
@@ -10680,6 +10767,7 @@ def _inspection_validation_toolchain_run(run: Any) -> dict[str, Any] | None:
         "sourceBackend": run.get("sourceBackend"),
         "target": run.get("target"),
         "path": run.get("path"),
+        "stage": run.get("stage"),
         "checkKind": run.get("checkKind"),
         "status": run.get("status"),
         "returncode": run.get("returncode"),
@@ -10731,25 +10819,15 @@ def _inspection_artifact_matrix_identity_sets(
     project_output_path = _project_output_path(root_path, output_dir).resolve()
     variant_names: list[str | None] = sorted(variants) if variants else [None]
     preserve_source_suffix = _artifact_source_suffix_pairs(units, targets)
-    expected_identities = set()
-    for unit in units:
-        if not isinstance(unit, Mapping):
-            continue
-        source = unit.get("path")
-        if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
-            continue
-        for target in _normalized_targets(targets):
-            for variant in variant_names:
-                identity = _expected_artifact_identity(
-                    root_path,
-                    project_output_path,
-                    source,
-                    target,
-                    variant,
-                    preserve_source_suffix=(source, target) in preserve_source_suffix,
-                )
-                if identity is not None:
-                    expected_identities.add(identity)
+    expected_identities = _expected_artifact_identities(
+        root_path,
+        project_output_path,
+        units,
+        _normalized_targets(targets),
+        variant_names,
+        preserve_source_suffix,
+        artifacts=artifact_records,
+    )
 
     emitted_identities = {
         identity
@@ -12990,6 +13068,7 @@ def _expected_artifact_identity(
     variant: str | None,
     *,
     preserve_source_suffix: bool = False,
+    stage: str | None = None,
 ) -> ArtifactIdentity | None:
     normalized_target = _normalized_targets([target])[0]
     output_base = project_output_path / normalized_target
@@ -13000,10 +13079,84 @@ def _expected_artifact_identity(
         normalized_target,
         preserve_source_suffix=preserve_source_suffix,
     )
+    if normalized_target == "webgl" and stage in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL:
+        expected_relative = _webgl_stage_relative_path(expected_relative, stage)
     expected_path = (output_base / expected_relative).resolve()
     if not _is_relative_to(expected_path, root_path):
         return None
     return source, normalized_target, _relpath(expected_path, root_path), variant
+
+
+def _artifact_variant_identity(record: Mapping[str, Any]) -> str | None:
+    variant = record.get("variant")
+    if "variant" not in record:
+        return None
+    return variant if _is_non_empty_string(variant) else ""
+
+
+def _webgl_expected_stages_from_artifacts(
+    artifacts: Sequence[Mapping[str, Any]],
+    source: str,
+    target: str,
+    variant: str | None,
+) -> tuple[str | None, ...]:
+    if target != "webgl":
+        return (None,)
+
+    stages = {
+        artifact.get("stage")
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == source
+        and _is_non_empty_string(artifact.get("target"))
+        and _normalized_targets([str(artifact["target"])])[0] == target
+        and _artifact_variant_identity(artifact) == variant
+        and artifact.get("stage") in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL
+    }
+    if not stages:
+        return (None,)
+    return tuple(
+        sorted(stages, key=lambda stage: WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL[stage])
+    )
+
+
+def _expected_artifact_identities(
+    root_path: Path,
+    project_output_path: Path,
+    units: Sequence[Any],
+    targets: Sequence[str],
+    variants: Sequence[str | None],
+    preserve_source_suffix: set[tuple[str, str]],
+    *,
+    artifacts: Sequence[Mapping[str, Any]] = (),
+) -> set[ArtifactIdentity]:
+    expected_identities = set()
+    for unit in units:
+        source = (
+            unit.relative_path
+            if isinstance(unit, ProjectTranslationUnit)
+            else unit.get("path") if isinstance(unit, Mapping) else None
+        )
+        if not (_is_non_empty_string(source) and _is_report_identity_path(source)):
+            continue
+        for target in _normalized_targets(targets):
+            for variant in variants:
+                for stage in _webgl_expected_stages_from_artifacts(
+                    artifacts, source, target, variant
+                ):
+                    identity = _expected_artifact_identity(
+                        root_path,
+                        project_output_path,
+                        source,
+                        target,
+                        variant,
+                        preserve_source_suffix=(source, target)
+                        in preserve_source_suffix,
+                        stage=stage,
+                    )
+                    if identity is not None:
+                        expected_identities.add(identity)
+    return expected_identities
 
 
 def _artifact_matrix_contract_reasons(
@@ -13046,6 +13199,15 @@ def _artifact_matrix_contract_reasons(
         for identity in (_artifact_identity(artifact),)
         if identity is not None
     }
+    expected_identities = _expected_artifact_identities(
+        root_path,
+        project_output_path,
+        units,
+        normalized_targets,
+        variant_names,
+        preserve_source_suffix,
+        artifacts=[artifact for artifact in artifacts if isinstance(artifact, Mapping)],
+    )
     reasons = []
     for unit_index, unit in enumerate(units):
         if not isinstance(unit, Mapping):
@@ -13055,15 +13217,15 @@ def _artifact_matrix_contract_reasons(
             continue
         for target in normalized_targets:
             for variant in variant_names:
-                identity = _expected_artifact_identity(
-                    root_path,
-                    project_output_path,
-                    source,
-                    target,
-                    variant,
-                    preserve_source_suffix=(source, target) in preserve_source_suffix,
-                )
-                if identity is not None and identity not in artifact_identities:
+                for identity in (
+                    expected
+                    for expected in expected_identities
+                    if expected[0] == source
+                    and expected[1] == target
+                    and expected[3] == variant
+                ):
+                    if identity in artifact_identities:
+                        continue
                     suffix = f" target {target}"
                     if variant is not None:
                         suffix = f"{suffix} variant {variant}"
@@ -13077,6 +13239,7 @@ def _artifact_matrix_contract_reasons(
 def _expected_artifact_matrix_metadata(
     project: Mapping[str, Any],
     units: Any,
+    artifacts: Any = None,
 ) -> dict[str, Any] | None:
     if not isinstance(units, list):
         return None
@@ -13096,12 +13259,34 @@ def _expected_artifact_matrix_metadata(
     variant_count = len(variants)
     variant_factor = variant_count if variant_count else 1
     normalized_targets = _normalized_targets(targets)
+    expected_artifact_count = len(units) * len(normalized_targets) * variant_factor
+    root = project.get("root")
+    output_dir = project.get("outputDir")
+    if _is_non_empty_string(root) and _is_non_empty_string(output_dir):
+        root_path = Path(root).resolve()
+        project_output_path = _project_output_path(root_path, output_dir).resolve()
+        variant_names: list[str | None] = sorted(variants) if variants else [None]
+        expected_artifact_count = len(
+            _expected_artifact_identities(
+                root_path,
+                project_output_path,
+                units,
+                normalized_targets,
+                variant_names,
+                _artifact_source_suffix_pairs(units, normalized_targets),
+                artifacts=[
+                    artifact
+                    for artifact in _record_sequence(artifacts)
+                    if isinstance(artifact, Mapping)
+                ],
+            )
+        )
     return {
         "unitCount": len(units),
         "targetCount": len(normalized_targets),
         "variantCount": variant_count,
         "variantMode": "named" if variant_count else "none",
-        "expectedArtifactCount": len(units) * len(normalized_targets) * variant_factor,
+        "expectedArtifactCount": expected_artifact_count,
     }
 
 
@@ -13118,7 +13303,7 @@ def _artifact_matrix_metadata_contract_reasons(
     if not isinstance(artifact_matrix, Mapping):
         return ["artifactMatrix must be an object"]
 
-    expected = _expected_artifact_matrix_metadata(project, units)
+    expected = _expected_artifact_matrix_metadata(project, units, artifacts)
     if expected is None:
         return []
 
@@ -17871,6 +18056,12 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         preserve_source_suffix=(source, normalized_target)
                         in preserve_source_suffix,
                     )
+                    if normalized_target == "webgl" and _is_non_empty_string(
+                        artifact.get("stage")
+                    ):
+                        expected_relative = _webgl_stage_relative_path(
+                            expected_relative, str(artifact["stage"])
+                        )
                     expected_path = (expected_output_base / expected_relative).resolve()
                     if (root_path / path).resolve() != expected_path:
                         reasons.append(
@@ -17950,6 +18141,27 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     f"artifacts[{index}].variant must be recorded "
                     "when project.variants is non-empty"
                 )
+            if "stage" in artifact:
+                stage = artifact.get("stage")
+                normalized_target = (
+                    _normalized_targets([target])[0]
+                    if _is_non_empty_string(target)
+                    else None
+                )
+                if not _is_non_empty_string(stage):
+                    reasons.append(f"artifacts[{index}].stage must be a string")
+                elif normalized_target != "webgl":
+                    reasons.append(
+                        f"artifacts[{index}].stage is only supported for webgl artifacts"
+                    )
+                elif stage not in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL:
+                    reasons.append(
+                        _allowed_value_reason(
+                            f"artifacts[{index}].stage",
+                            frozenset(WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL),
+                            stage,
+                        )
+                    )
             if isinstance(project, Mapping):
                 reasons.extend(
                     _artifact_defines_contract_reasons(
@@ -18308,6 +18520,8 @@ def _run_toolchain_smoke(
             }
             if _is_non_empty_string(artifact.get("sourceBackend")):
                 run["sourceBackend"] = artifact["sourceBackend"]
+            if _is_non_empty_string(artifact.get("stage")):
+                run["stage"] = artifact["stage"]
             if artifact.get("variant") is not None:
                 run["variant"] = artifact["variant"]
             runs.append(run)
