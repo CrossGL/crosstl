@@ -465,6 +465,29 @@ diagnostics and runtime-reference review actions forward, and it remains a
 metadata contract only: it does not rewrite host application code, execute
 device code, generate runtime framework code, or install target SDKs.
 
+Build deterministic host loader scaffold metadata from a runtime loader
+manifest:
+
+.. code-block:: bash
+
+   python -m crosstl scaffold-host-loaders \
+     crosstl-runtime-package/runtime-loader-manifest.json \
+     --scaffold-dir crosstl-host-loaders \
+     --format text
+
+Host loader scaffolds emit a ``crosstl-runtime-host-loader-scaffolds`` JSON
+document and write a small metadata bundle with ``host-loader-scaffolds.json``,
+``HOST_LOADERS.md``, and one target-scoped ``*.loader.json`` file for each
+ready load unit. The scaffold files preserve the loader manifest's artifact
+paths, source-remap handoff paths, host interface metadata, required tools,
+host responsibilities, and ordered load steps so host loader or build-system
+tooling can consume the package contract deterministically. Load units with
+unresolved blockers, such as missing host interface reflection metadata, remain
+listed in the scaffold report and guide but do not get target loader files.
+The bundle is metadata for integration tooling only: it does not rewrite host
+application code, execute device code, generate runtime framework code, or
+install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
