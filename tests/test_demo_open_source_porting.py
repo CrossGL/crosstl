@@ -78,11 +78,23 @@ def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path)
     lf_text.write_bytes(b"void main() {\n}\n")
     crlf_text.write_bytes(b"void main() {\r\n}\r\n\r\n")
     lf_source_map.write_text(
-        json.dumps({"generatedFile": "crosstl-out/cgl/shader.cgl"}) + "\n",
+        json.dumps(
+            {
+                "generatedFile": "crosstl-out/cgl/shader.cgl",
+                "mappings": [{"generated": {"line": 1, "offset": 0}}],
+            }
+        )
+        + "\n",
         encoding="utf-8",
     )
     windows_source_map.write_text(
-        json.dumps({"generatedFile": r"crosstl-out\cgl\shader.cgl"}) + "\r\n",
+        json.dumps(
+            {
+                "generatedFile": r"crosstl-out\cgl\shader.cgl",
+                "mappings": [{"generated": {"line": 1, "offset": 3}}],
+            }
+        )
+        + "\r\n",
         encoding="utf-8",
     )
 

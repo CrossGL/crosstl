@@ -183,6 +183,8 @@ def _comparison_bytes(path: Path) -> bytes:
             payload = json.loads(data.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return data
+        if path.name.endswith(".source-remap.json"):
+            payload = _drop_source_map_offsets(payload)
         return json.dumps(
             _normalize_json_paths(payload),
             separators=(",", ":"),
@@ -198,6 +200,18 @@ def _normalize_json_paths(value: object) -> object:
         return [_normalize_json_paths(item) for item in value]
     if isinstance(value, dict):
         return {key: _normalize_json_paths(item) for key, item in value.items()}
+    return value
+
+
+def _drop_source_map_offsets(value: object) -> object:
+    if isinstance(value, list):
+        return [_drop_source_map_offsets(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _drop_source_map_offsets(item)
+            for key, item in value.items()
+            if key not in {"endOffset", "length", "offset"}
+        }
     return value
 
 
