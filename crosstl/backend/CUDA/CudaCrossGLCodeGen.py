@@ -227,7 +227,7 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "var"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "precision", "var"}
 
     def __init__(self):
         self.indent_level = 0

@@ -1021,6 +1021,31 @@ def test_cuda_samples_interval_buffer_parameter_keyword_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
+def test_tiny_cuda_nn_precision_parameter_keyword_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVlabs/tiny-cuda-nn
+    # commit: 749dd70c5afc5a9dadb85e5652ed65d55e0ba187
+    # path: include/tiny-cuda-nn/common_device.h
+    source = """
+    template <typename T>
+    __global__ void cast_from(const uint32_t num_elements,
+                              const T* __restrict__ precision,
+                              float* __restrict__ full_precision) {
+        const uint32_t i = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i >= num_elements) return;
+
+        full_precision[i] = (float)precision[i];
+    }
+    """
+
+    crossgl = cuda_to_crossgl(source)
+
+    assert "var<storage, read_write> precision_: array<T>" in crossgl
+    assert "full_precision[i] = f32(precision_[i]);" in crossgl
+    assert " precision:" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
 def test_cuda_samples_nvrtc_char_escape_literals_codegen_reparse():
     # Upstream source:
     # repo: https://github.com/NVIDIA/cuda-samples

@@ -9520,6 +9520,10 @@ class GLSLCodeGen:
             return f"{{ {elements} }}"
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            if literal_type == "string":
+                return f'"{expr.value}"'
+            if literal_type == "char":
+                return f"'{expr.value}'"
             if (
                 literal_type == "uint"
                 and isinstance(expr.value, int)

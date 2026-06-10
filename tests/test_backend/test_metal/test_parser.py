@@ -2968,6 +2968,26 @@ def test_parse_template_id_value_expression_with_member_args_from_mlx_gemm_gathe
     assert if_node.condition.member == "value"
 
 
+def test_parse_raw_string_view_shader_template_from_mlx_jit_indexing_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = """
+    constexpr std::string_view masked_assign_kernel = R"(
+    template [[host_name("{0}")]] [[kernel]]
+    decltype(masked_assign_impl<{1}, {2}>) masked_assign_impl<{1}, {2}>;
+    )";
+    """
+    ast = parse_ok(code)
+    assignment = ast.global_variables[0]
+
+    assert isinstance(assignment, AssignmentNode)
+    assert assignment.left.vtype == "std::string_view"
+    assert assignment.left.name == "masked_assign_kernel"
+    assert str(assignment.right).startswith('R"(')
+
+
 def test_parse_preprocessor_define():
     code = """
     #define FOO 1

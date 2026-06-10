@@ -1927,6 +1927,30 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     ) in crossgl
 
 
+def test_public_cuda_precision_parameter_keyword_hip_parity_codegen_reparse():
+    # HIP parity for NVlabs/tiny-cuda-nn@749dd70c5afc5a9dadb85e5652ed65d55e0ba187,
+    # include/tiny-cuda-nn/common_device.h.
+    source = """
+    template <typename T>
+    __global__ void cast_from(const unsigned int num_elements,
+                              const T* __restrict__ precision,
+                              float* __restrict__ full_precision) {
+        const unsigned int i = threadIdx.x + blockIdx.x * blockDim.x;
+        if (i >= num_elements) return;
+
+        full_precision[i] = (float)precision[i];
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+    kernel = ast.statements[0]
+
+    assert kernel.params[1]["name"] == "precision"
+    assert "var<storage, read_write> precision_: array<T>" in crossgl
+    assert "full_precision[i] = f32(precision_[i]);" in crossgl
+    assert " precision:" not in crossgl
+
+
 def test_external_rocm_histogram_ffs_codegen_reparse():
     source = """
     __global__ void histogram(unsigned int* bins,

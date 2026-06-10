@@ -44,6 +44,37 @@ def test_pocl_style_kernel_qualifier_after_return_type_parses():
     assert kernel.name == "memfill"
 
 
+def test_hashcat_kernel_specifier_macros_parse_as_kernel():
+    ast = parse_code("""
+        KERNEL_FQ KERNEL_FA void amp(global ulong *pws, const ulong gid_max) {
+            const ulong gid = get_global_id(0);
+            if (gid >= gid_max) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "amp"
+    assert kernel.params[0]["type"] == "__global__ ulong *"
+    assert kernel.params[1]["type"] == "const ulong"
+
+
+def test_hashcat_opaque_kernel_parameter_pack_macro_parses():
+    ast = parse_code("""
+        KERNEL_FQ KERNEL_FA void m00000_m04(KERN_ATTR_RULES ()) {
+            const ulong gid = get_global_id(0);
+            if (gid >= GID_CNT) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "m00000_m04"
+    assert kernel.params == []
+
+
 def test_local_memory_and_barrier_parse_from_arrayfire_pattern():
     ast = parse_code("""
         kernel void reduce_first_kernel(global float *out, const global float *in) {

@@ -266,7 +266,7 @@ class HipToCrossGLConverter:
         "lastMipmapLevel",
         "width",
     }
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "precision"}
     CPP_OPERATOR_FUNCTION_NAME_PARTS = {
         "+": "plus",
         "-": "minus",

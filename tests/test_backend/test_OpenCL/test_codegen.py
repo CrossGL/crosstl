@@ -29,6 +29,34 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
 
 
+def test_hashcat_kernel_specifier_macros_codegen_reparse():
+    crossgl = generate_crossgl("""
+        KERNEL_FQ KERNEL_FA void amp(global ulong *pws, const ulong gid_max) {
+            const ulong gid = get_global_id(0);
+            if (gid >= gid_max) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    assert "@compute" in crossgl
+    assert "fn amp(" in crossgl
+    assert "var gid: u64 = gl_GlobalInvocationID.x;" in crossgl
+
+
+def test_hashcat_opaque_kernel_parameter_pack_macro_codegen_reparse():
+    crossgl = generate_crossgl("""
+        KERNEL_FQ KERNEL_FA void m00000_m04(KERN_ATTR_RULES ()) {
+            const ulong gid = get_global_id(0);
+            if (gid >= GID_CNT) return;
+            pws[gid] = gid;
+        }
+        """)
+
+    assert "@compute" in crossgl
+    assert "fn m00000_m04(" in crossgl
+    assert "GID_CNT" in crossgl
+
+
 def test_opencl_local_memory_and_barrier_codegen_reparse():
     crossgl = generate_crossgl("""
         __attribute__((reqd_work_group_size(256, 1, 1)))

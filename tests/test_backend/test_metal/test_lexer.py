@@ -113,6 +113,18 @@ def test_tokenizes_structs_functions_and_attributes():
     )
 
 
+def test_tokenizes_cpp_raw_string_literal_from_mlx_jit_header():
+    # Reduced from:
+    # Repo: https://github.com/ml-explore/mlx
+    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Path: mlx/backend/metal/jit/indexing.h
+    code = 'constexpr std::string_view kernel_src = R"(template [[host_name("{0}")]] [[kernel]] void k();)";'
+    tokens = tokenize_code(code)
+    strings = [value for token_type, value in tokens if token_type == "STRING"]
+
+    assert strings == ['R"(template [[host_name("{0}")]] [[kernel]] void k();)"']
+
+
 def test_tokenizes_control_flow_keywords():
     code = """
     void main() {

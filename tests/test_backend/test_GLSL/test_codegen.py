@@ -786,6 +786,34 @@ def test_codegen_inversesqrt_from_khronos_spec_preserves_glsl_spelling():
     assert "inverseSqrt(" not in glsl
 
 
+def test_codegen_debug_printf_string_literal_roundtrip_from_saschawillems():
+    # Reduced from SaschaWillems/Vulkan@2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade
+    # shaders/glsl/debugprintf/toon.vert. The GLSL emitter must keep quotes
+    # around printf format strings; otherwise the generated GLSL reparses as
+    # an invalid expression containing a bare '%' token.
+    code = textwrap.dedent("""
+        #version 450
+        #extension GL_EXT_debug_printf : enable
+
+        layout(location = 0) in vec3 inPos;
+        layout(location = 0) out vec4 outColor;
+
+        void main()
+        {
+            vec4 pos = vec4(inPos, 1.0);
+            debugPrintfEXT("Position = %v4f", pos);
+            outColor = pos;
+        }
+    """).strip()
+
+    crossgl = assert_roundtrip(code, "vertex", ShaderStage.VERTEX)
+    assert 'debugPrintfEXT("Position = %v4f", pos);' in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert 'debugPrintfEXT("Position = %v4f", pos);' in glsl
+    GLSLParser(GLSLLexer(glsl).tokenize(), "vertex").parse()
+
+
 def test_codegen_resource_function_descriptors():
     converter = GLSLToCrossGLConverter(shader_type="fragment")
 

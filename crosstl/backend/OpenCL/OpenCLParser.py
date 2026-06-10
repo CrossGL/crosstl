@@ -66,9 +66,16 @@ class OpenCLParser(HipParser):
         "_CL_OVERLOADABLE",
         "_CL_READNONE",
         "INLINE_FUNC",
+        "KERNEL_FA",
+        "KERNEL_FQ",
         "OPENCL_KERNEL",
     }
-    KERNEL_FUNCTION_SPECIFIER_VALUES = {"kernel", "__kernel", "OPENCL_KERNEL"}
+    KERNEL_FUNCTION_SPECIFIER_VALUES = {
+        "kernel",
+        "__kernel",
+        "KERNEL_FQ",
+        "OPENCL_KERNEL",
+    }
     DECLARATION_QUALIFIER_TOKENS = {
         *HipParser.DECLARATION_QUALIFIER_TOKENS,
         "__DEVICE__",
@@ -259,6 +266,21 @@ class OpenCLParser(HipParser):
             self.skip_cpp_attributes()
             self.parse_type_attribute_prefixes()
 
+    def is_opaque_parameter_pack_macro(self):
+        return bool(
+            self.current_token
+            and self.current_token.type == "IDENTIFIER"
+            and self.current_token.value.startswith("KERN_ATTR_")
+            and self.peek()
+            and self.peek().type == "LPAREN"
+        )
+
+    def skip_opaque_parameter_pack_macro(self):
+        self.advance()
+        self.skip_newlines()
+        if self.match("LPAREN"):
+            self.skip_balanced_parentheses()
+
     def parse_parameter_list(self):
         params = []
         previous_base_type = None
@@ -273,6 +295,15 @@ class OpenCLParser(HipParser):
         while True:
             self.skip_newlines()
             if self.match("RPAREN"):
+                break
+
+            if self.is_opaque_parameter_pack_macro():
+                self.skip_opaque_parameter_pack_macro()
+                self.skip_newlines()
+                if self.match("COMMA"):
+                    self.advance()
+                    self.skip_newlines()
+                    continue
                 break
 
             self.skip_parameter_attributes()

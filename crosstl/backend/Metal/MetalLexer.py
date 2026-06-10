@@ -31,6 +31,8 @@ TOKENS = tuple(
         ("PREPROCESSOR", r"#[^\n]*"),
         # Metal attributes (must come before LBRACKET)
         ("ATTRIBUTE", r"\[\[[\s\S]*?\]\]"),
+        # C++ raw string literals used by Metal JIT shader template headers.
+        ("STRING", r'R"(?P<raw_delim>[^\s()\\]{0,16})\([\s\S]*?\)(?P=raw_delim)"'),
         # Keywords - struct and type qualifiers
         ("STRUCT", r"\bstruct\b"),
         ("CONSTANT", r"\bconstant\b"),
