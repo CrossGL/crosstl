@@ -19808,6 +19808,75 @@ def test_project_cli_inspect_report_text_marks_invalid_reports(tmp_path):
     }
 
 
+def test_project_cli_inspect_report_sarif_marks_invalid_reports(tmp_path):
+    report_path = tmp_path / "invalid-report.json"
+    report_path.write_text(
+        json.dumps({"schemaVersion": 99, "kind": "not-a-report"}),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-report",
+            str(report_path),
+            "--format",
+            "sarif",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert payload["version"] == "2.1.0"
+    run = payload["runs"][0]
+    assert run["tool"]["driver"]["name"] == "CrossTL project report inspection"
+    assert run["invocations"][0]["executionSuccessful"] is False
+    invocation_properties = run["invocations"][0]["properties"]
+    source_report_hash = project_pipeline._source_hash(report_path)
+    assert invocation_properties["sourceReport"] == str(report_path)
+    assert invocation_properties["sourceReportHash"] == source_report_hash
+    assert (
+        invocation_properties["schemaVersion"] == project_pipeline.REPORT_SCHEMA_VERSION
+    )
+    assert invocation_properties["kind"] == project_pipeline.REPORT_INSPECTION_KIND
+    assert isinstance(invocation_properties["generatedAt"], int)
+    assert invocation_properties["sourceReportSchemaVersion"] == 99
+    assert invocation_properties["sourceReportKind"] == "not-a-report"
+    assert "projectRoot" not in invocation_properties
+    assert run["tool"]["driver"]["rules"] == [
+        {
+            "id": "project.validate.invalid-report",
+            "name": "project.validate.invalid-report",
+        }
+    ]
+    assert len(run["results"]) == 1
+    sarif_result = run["results"][0]
+    assert sarif_result["ruleId"] == "project.validate.invalid-report"
+    assert sarif_result["level"] == "error"
+    assert sarif_result["message"]["text"] == (
+        "Invalid project portability report: expected schemaVersion 1; "
+        "expected kind crosstl-project-portability-report; missing project object"
+    )
+    assert sarif_result["locations"][0]["physicalLocation"] == {
+        "artifactLocation": {"uri": str(report_path)},
+        "region": {
+            "endColumn": 1,
+            "endLine": 1,
+            "startColumn": 1,
+            "startLine": 1,
+        },
+    }
+    assert sarif_result["properties"] == {
+        "missingCapabilities": ["artifact.manifest"],
+    }
+
+
 def test_inspect_project_report_summarizes_generated_report(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
