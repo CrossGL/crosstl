@@ -10474,6 +10474,41 @@ def test_nested_try_expression_conversion():
         pytest.fail(f"Nested try expression conversion failed: {e}")
 
 
+def test_qualified_path_try_postfix_codegen_reparse_from_wgpu_deno_webgpu():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu.git
+    # Commit: 26e2525f8dea477ef356b80efb6eb1bc1dec120d
+    # Path: deno_webgpu/compute_pass.rs set_bind_group.
+    code = """
+    fn set_bind_group(
+        scope: Scope,
+        dynamic_offsets: Value,
+        prefix: Prefix,
+        context: Context,
+        options: Options,
+    ) -> Result<(), WebIdlError> {
+        let offsets = <Option<Vec<u32>>>::convert(
+            scope,
+            dynamic_offsets,
+            prefix,
+            context,
+            options,
+        )?.unwrap_or_default();
+        Ok(())
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "Option_Vec_u32_convert(scope, dynamic_offsets, prefix, context, options)"
+        in result
+    )
+    assert "?.unwrap_or_default" not in result
+    assert "offsets = _rust_try_value_0.unwrap_or_default();" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_try_pattern_subject_conversion():
     code = """
     fn decode(value: Result<Option<i32>, i32>) -> Result<i32, i32> {

@@ -1670,7 +1670,7 @@ class SlangToCrossGLConverter:
                     f"{self.map_type(expr.vtype)} {self.format_identifier(expr.name)}"
                     f"{self.format_array_suffixes(expr, is_main)}"
                 )
-            return self.format_identifier(expr.name)
+            return self.format_expression_identifier(expr.name)
         elif isinstance(expr, BinaryOpNode):
             return self.generate_binary_expression(expr, is_main)
         elif isinstance(expr, AssignmentNode):
@@ -1827,6 +1827,13 @@ class SlangToCrossGLConverter:
                 self.generate_expression(item, is_main) for item in index.expressions
             )
         return self.generate_expression(index, is_main)
+
+    def format_expression_identifier(self, name):
+        name = self.format_identifier(name)
+        return self.normalize_scoped_generic_expression_identifier(name)
+
+    def normalize_scoped_generic_expression_identifier(self, name):
+        return re.sub(r"(?<=>)::(?=[A-Za-z_])", ".", str(name))
 
     def normalize_numeric_literal(self, value):
         if not isinstance(value, str):

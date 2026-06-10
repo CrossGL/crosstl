@@ -5003,6 +5003,42 @@ def test_try_expression_parsing():
         pytest.fail(f"Try expression parsing failed: {e}")
 
 
+def test_qualified_path_try_postfix_parsing_from_wgpu_deno_webgpu():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu.git
+    # Commit: 26e2525f8dea477ef356b80efb6eb1bc1dec120d
+    # Path: deno_webgpu/compute_pass.rs set_bind_group.
+    code = """
+    fn set_bind_group(
+        scope: Scope,
+        dynamic_offsets: Value,
+        prefix: Prefix,
+        context: Context,
+        options: Options,
+    ) -> Result<(), WebIdlError> {
+        let offsets = <Option<Vec<u32>>>::convert(
+            scope,
+            dynamic_offsets,
+            prefix,
+            context,
+            options,
+        )?.unwrap_or_default();
+        Ok(())
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.functions[0].body[0].value
+
+    assert isinstance(value, FunctionCallNode)
+    assert isinstance(value.name, MemberAccessNode)
+    assert value.name.member == "unwrap_or_default"
+    assert isinstance(value.name.object, TryNode)
+    subject = value.name.object.expression
+    assert isinstance(subject, FunctionCallNode)
+    assert subject.name == "<Option<Vec<u32>>>::convert"
+
+
 def test_await_expression_parsing():
     code = """
     fn await_values(future: Result<i32, i32>, object: FutureObject) -> Result<i32, i32> {

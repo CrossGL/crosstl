@@ -28,9 +28,9 @@ implicitly supported.
    "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "971", "36", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "775", "194", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "815", "136", "ROCm HIP documentation"
-   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "910", "98", "Mojo manual"
-   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "962", "69", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "780", "410", "Slang user guide"
+   "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "912", "98", "Mojo manual"
+   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "964", "69", "Rust reference"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "781", "410", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"

@@ -375,6 +375,29 @@ def test_typealias_logical_not_generic_argument_codegen_reparse():
     cgl_translator.parse(generated_code)
 
 
+def test_generic_static_member_scope_codegen_reparse_from_upstream_diagnostic():
+    # Reduced from shader-slang/slang@4511c96d89ae80b211fd286040ce5032d716d98d
+    # tests/language-feature/generics/recursive-generic-eval-budget.slang.
+    code = """
+    struct Loop<let x : int>
+    {
+        static const int value = Loop<x + 1>::value;
+    }
+
+    int useValue = Loop<0>::value;
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "static const int value = Loop<x+1>.value;" in generated_code
+    assert "int useValue = Loop<0>.value;" in generated_code
+    assert "Loop<x+1>::value" not in generated_code
+    assert "Loop<0>::value" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
 def test_visibility_qualified_struct_codegen_from_mlp_training_adam_sample():
     code = """
     public struct AdamState

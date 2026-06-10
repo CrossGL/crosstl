@@ -2937,7 +2937,7 @@ class RustParser:
         if self.current_token[0] in {"RETURN", "BREAK", "CONTINUE"}:
             return self.parse_control_flow_expression()
         if self.current_token[0] == "LESS_THAN":
-            return self.parse_qualified_path_expression()
+            return self.parse_postfix_suffix(self.parse_qualified_path_expression())
         return self.parse_assignment_expression()
 
     def parse_assignment_expression(self):

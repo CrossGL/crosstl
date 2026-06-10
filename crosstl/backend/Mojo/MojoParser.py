@@ -2357,6 +2357,15 @@ class MojoParser:
             return BinaryOpNode(left, op, right)
         return left
 
+    def parse_grouped_expression_item(self):
+        self.expression_layout_depth += 1
+        try:
+            expr = self.parse_expression()
+            self.skip_layout_tokens()
+            return self.parse_adjacent_string_literals(expr)
+        finally:
+            self.expression_layout_depth -= 1
+
     def parse_primary(self):
         if self.is_binding_convention_target_expression_start():
             return self.parse_binding_convention_target_expression()
@@ -2403,13 +2412,7 @@ class MojoParser:
             if self.current_token[0] == "RPAREN":
                 self.eat("RPAREN")
                 return self.parse_postfix_suffixes(TupleNode([]))
-            self.expression_layout_depth += 1
-            try:
-                expr = self.parse_expression()
-            finally:
-                self.expression_layout_depth -= 1
-            self.skip_layout_tokens()
-            expr = self.parse_adjacent_string_literals(expr)
+            expr = self.parse_grouped_expression_item()
             self.skip_layout_tokens()
             if self.current_token[0] == "COMMA":
                 elements = [expr]
@@ -2418,11 +2421,7 @@ class MojoParser:
                     self.skip_layout_tokens()
                     if self.current_token[0] == "RPAREN":
                         break
-                    self.expression_layout_depth += 1
-                    try:
-                        elements.append(self.parse_expression())
-                    finally:
-                        self.expression_layout_depth -= 1
+                    elements.append(self.parse_grouped_expression_item())
                     self.skip_layout_tokens()
                 self.eat("RPAREN")
                 return self.parse_postfix_suffixes(TupleNode(elements))

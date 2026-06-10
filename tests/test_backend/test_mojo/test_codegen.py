@@ -1179,6 +1179,29 @@ def test_prefixed_adjacent_string_literals_in_call_codegen_from_modular_trace_ge
     parse_crossgl(generated_code)
 
 
+def test_multiline_parenthesized_prefixed_adjacent_string_codegen_from_modular_tstring():
+    # Reduced from https://github.com/modular/modular.git commit
+    # a86508a4e0084e1a53fc262b7f8257b38f0c558c,
+    # mojo/stdlib/test/format/test_tstring.mojo test_tstring_multiline_concatenation.
+    code = """
+    fn main():
+        var tstring = (
+            t"This is a multiline {x}"
+            t" tstring expression that will "
+            t"concatenate, {y}!"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        'var tstring = "This is a multiline {x} tstring expression that will '
+        'concatenate, {y}!";'
+    ) in generated_code
+    assert 't"' not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_adjacent_string_after_binary_string_codegen_from_modular_topk_gpu_fi():
     # Reduced from https://github.com/modular/modular.git commit
     # 9ddf207f42fc67a6f33bd7b4ccc94a6a52133c8f,
