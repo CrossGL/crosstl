@@ -171,6 +171,22 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE = textwrap.dedent("""
+    #version 450 core
+    #extension GL_EXT_fragment_invocation_density : require
+    layout(location = 0) out vec4 fragColor;
+
+    void main() {
+        float invocationArea = float(
+            gl_FragSizeEXT.x * gl_FragSizeEXT.y
+        );
+        float h = (
+            clamp(1.0 - 1.0 / invocationArea, 0.0, 1.0)
+        ) / 1.35;
+        fragColor = vec4(h);
+    }
+    """).strip()
+
 
 class ProjectPathLike:
     def __init__(self, path):
@@ -19992,6 +20008,62 @@ def test_translate_project_records_structured_diagnostics_for_failures(tmp_path)
     assert failed_artifact["target"] == "not-a-backend"
     assert failed_artifact["error"]
     assert payload["migration"]["actions"][0]["targets"] == ["opengl"]
+
+
+def test_translate_project_reports_glsl_fragment_invocation_density_as_unsupported(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "CubeFDM_fs.glsl").write_text(
+        GLSL_FRAGMENT_INVOCATION_DENSITY_SOURCE, encoding="utf-8"
+    )
+
+    report = translate_project(
+        repo,
+        targets=["metal", "directx", "vulkan"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 3
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 3
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.unsupported-feature": 3
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "glsl.builtin.gl_FragSizeEXT": 3,
+        "glsl.extension.GL_EXT_fragment_invocation_density": 3,
+    }
+    assert payload["summary"]["diagnosticsByTarget"] == {
+        "directx": 1,
+        "metal": 1,
+        "vulkan": 1,
+    }
+
+    diagnostics = payload["diagnostics"]
+    assert {diagnostic["code"] for diagnostic in diagnostics} == {
+        "project.translate.unsupported-feature"
+    }
+    for diagnostic in diagnostics:
+        assert diagnostic["sourceBackend"] == "opengl"
+        assert diagnostic["location"]["file"] == "CubeFDM_fs.glsl"
+        assert "GL_EXT_fragment_invocation_density" in diagnostic["message"]
+        assert "gl_FragSizeEXT" in diagnostic["message"]
+        assert diagnostic["missingCapabilities"] == [
+            "glsl.extension.GL_EXT_fragment_invocation_density",
+            "glsl.builtin.gl_FragSizeEXT",
+        ]
+
+    for artifact in payload["artifacts"]:
+        assert artifact["status"] == "failed"
+        assert artifact["sourceBackend"] == "opengl"
+        assert "GL_EXT_fragment_invocation_density" in artifact["error"]
+        assert "gl_FragSizeEXT" in artifact["error"]
+        assert "generatedHash" not in artifact
+        assert "generatedSizeBytes" not in artifact
+        assert not (repo / artifact["path"]).exists()
 
 
 def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):

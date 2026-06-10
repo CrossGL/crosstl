@@ -414,6 +414,23 @@ VERTEX_BUILTINS = {
 }
 TRANSFORM_FEEDBACK_DEFAULT_LAYOUT_KEYS = {"xfb_buffer", "xfb_stride"}
 TRANSFORM_FEEDBACK_LAYOUT_KEYS = TRANSFORM_FEEDBACK_DEFAULT_LAYOUT_KEYS | {"xfb_offset"}
+FRAGMENT_INVOCATION_DENSITY_EXTENSION = "GL_EXT_fragment_invocation_density"
+FRAGMENT_INVOCATION_DENSITY_BUILTIN = "gl_FragSizeEXT"
+FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
+    "glsl.extension.GL_EXT_fragment_invocation_density",
+    "glsl.builtin.gl_FragSizeEXT",
+)
+
+
+class UnsupportedGLSLFeatureError(ValueError):
+    """Raised when the GLSL frontend sees a feature it cannot safely lower."""
+
+    project_diagnostic_code = "project.translate.unsupported-feature"
+
+    def __init__(self, feature, message, *, missing_capabilities=()):
+        super().__init__(message)
+        self.feature = feature
+        self.missing_capabilities = tuple(missing_capabilities)
 
 
 class GLSLParser:
@@ -925,8 +942,42 @@ class GLSLParser:
         if self.current_token[0] == "NEWLINE":
             self.advance()
         if len(tokens) > 1:
-            return "#" + " ".join(tokens[1:]).strip()
+            directive = "#" + " ".join(tokens[1:]).strip()
+            self.reject_unsupported_preprocessor_directive(directive)
+            return directive
         return "#"
+
+    def reject_unsupported_preprocessor_directive(self, directive):
+        if not self.is_fragment_invocation_density_extension_directive(directive):
+            return
+        self.raise_unsupported_fragment_invocation_density(
+            FRAGMENT_INVOCATION_DENSITY_EXTENSION
+        )
+
+    def is_fragment_invocation_density_extension_directive(self, directive):
+        match = re.match(
+            r"#\s*extension\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\w+)",
+            str(directive),
+        )
+        if not match:
+            return False
+        extension, behavior = match.groups()
+        return extension == FRAGMENT_INVOCATION_DENSITY_EXTENSION and behavior in {
+            "require",
+            "enable",
+        }
+
+    def raise_unsupported_fragment_invocation_density(self, feature):
+        raise UnsupportedGLSLFeatureError(
+            feature,
+            (
+                "Unsupported GLSL fragment invocation density feature "
+                f"'{feature}': CrossTL does not lower "
+                f"{FRAGMENT_INVOCATION_DENSITY_EXTENSION} or "
+                f"{FRAGMENT_INVOCATION_DENSITY_BUILTIN} for target backends yet."
+            ),
+            missing_capabilities=FRAGMENT_INVOCATION_DENSITY_CAPABILITIES,
+        )
 
     def parse_precision_statement(self):
         parts = [self.current_token[1]]
@@ -2861,6 +2912,8 @@ class GLSLParser:
             return value
         if self.current_token[0] in TYPE_TOKENS or self.is_name_token():
             name = self.current_token[1]
+            if name == FRAGMENT_INVOCATION_DENSITY_BUILTIN:
+                self.raise_unsupported_fragment_invocation_density(name)
             self.advance()
             if name in TEMPLATE_TYPE_NAMES or self.is_template_call_suffix_start():
                 name += self.parse_type_template_suffix()
