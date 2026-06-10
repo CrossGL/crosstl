@@ -9677,6 +9677,29 @@ def test_translate_project_rejects_empty_output_dir_override(tmp_path):
     assert not (repo / "cgl").exists()
 
 
+@pytest.mark.parametrize(
+    "output_dir",
+    [
+        b"translated",
+        ProjectBytesPathLike("translated"),
+        object(),
+    ],
+)
+def test_translate_project_rejects_invalid_output_dir_override(tmp_path, output_dir):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="output_dir must be a string or path-like object returning str",
+    ):
+        translate_project(repo, targets=["cgl"], output_dir=output_dir)
+
+    assert not (repo / "translated").exists()
+    assert not (repo / "cgl").exists()
+
+
 def test_translate_project_accepts_path_like_output_dir(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

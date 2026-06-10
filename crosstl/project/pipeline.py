@@ -610,6 +610,20 @@ def _filesystem_path_arg(value: Any, *, field_name: str) -> Path:
         ) from exc
 
 
+def _path_string_arg(value: Any, *, field_name: str) -> str:
+    try:
+        path_value = os.fspath(value)
+    except TypeError as exc:
+        raise ValueError(
+            f"{field_name} must be a string or path-like object returning str"
+        ) from exc
+    if not isinstance(path_value, str):
+        raise ValueError(
+            f"{field_name} must be a string or path-like object returning str"
+        )
+    return path_value
+
+
 def _mapping_key_path(prefix: str, key: str) -> str:
     if REPORT_PATH_BARE_KEY_RE.match(key):
         return f"{prefix}.{key}"
@@ -4929,11 +4943,7 @@ def translate_project(
         else load_project_config(config_or_root)
     )
     if output_dir is not None:
-        output_dir = os.fspath(output_dir)
-        if not isinstance(output_dir, str):
-            raise TypeError(
-                "output_dir must be a string or path-like object returning str"
-            )
+        output_dir = _path_string_arg(output_dir, field_name="output_dir")
         if not output_dir.strip():
             raise ValueError("output_dir must be a non-empty string")
         config = ProjectConfig(
