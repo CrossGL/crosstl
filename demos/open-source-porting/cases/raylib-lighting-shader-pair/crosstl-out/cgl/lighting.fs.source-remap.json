@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/lighting.fs.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 61,
+        "endOffset": 1809,
+        "file": "crosstl-out/cgl/lighting.fs.cgl",
+        "length": 1809,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 79,
+        "endOffset": 1951,
+        "file": "lighting.fs",
+        "length": 1951,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

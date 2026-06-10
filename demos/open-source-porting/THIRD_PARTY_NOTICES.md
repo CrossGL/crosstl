@@ -80,6 +80,8 @@ should be treated with the same upstream license context when redistributed.
 - Source paths:
   - `examples/shaders/resources/shaders/glsl330/base.fs`
   - `examples/shaders/resources/shaders/glsl330/base.vs`
+  - `examples/shaders/resources/shaders/glsl330/lighting.fs`
+  - `examples/shaders/resources/shaders/glsl330/lighting.vs`
 - License: zlib/libpng
 - License URL:
   https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/LICENSE

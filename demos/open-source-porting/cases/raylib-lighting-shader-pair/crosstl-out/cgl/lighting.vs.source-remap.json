@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/lighting.vs.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 37,
+        "endOffset": 859,
+        "file": "crosstl-out/cgl/lighting.vs.cgl",
+        "length": 859,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 749,
+        "file": "lighting.vs",
+        "length": 749,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
