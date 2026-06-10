@@ -1465,6 +1465,9 @@ class GLSLCodeGen:
         if self.glsl_extension_enabled("GL_ARB_shading_language_420pack"):
             return True
 
+        if "es" in str(version_line or "").strip().split()[2:]:
+            return True
+
         version_number = self.glsl_version_number(version_line)
         if version_number is None:
             return True
