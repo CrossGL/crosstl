@@ -576,6 +576,46 @@ def test_int2_dispatch_thread_id_import_uses_glsl_builtin_cast_alias():
     assert "int x = tid.x;" in generated
 
 
+def test_codegen_promotes_uvec2_dispatch_thread_id_to_uint3_parameter():
+    crossgl = textwrap.dedent("""
+        shader main {
+            compute {
+                void main(uvec2 id @ gl_GlobalInvocationID) {
+                    uint row = id.y;
+                    uint col = id.x;
+                }
+            }
+        }
+    """).strip()
+
+    generated = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in generated
+    assert "uint2 id = id_dispatchThreadID.xy;" in generated
+    assert "uint row = id.y;" in generated
+    assert "uint col = id.x;" in generated
+    assert "uint2 id : SV_DispatchThreadID" not in generated
+
+
+def test_codegen_promotes_scalar_dispatch_thread_id_to_uint3_parameter():
+    crossgl = textwrap.dedent("""
+        shader main {
+            compute {
+                void main(uint index @ gl_GlobalInvocationID) {
+                    uint value = index;
+                }
+            }
+        }
+    """).strip()
+
+    generated = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "uint3 index_dispatchThreadID : SV_DispatchThreadID" in generated
+    assert "uint index = index_dispatchThreadID.x;" in generated
+    assert "uint value = index;" in generated
+    assert "uint index : SV_DispatchThreadID" not in generated
+
+
 def test_codegen_shaderlab_legacy_tex2d_imports_canonical_texture_call():
     shaderlab = textwrap.dedent("""
         Shader "Custom/LegacyTex2D"

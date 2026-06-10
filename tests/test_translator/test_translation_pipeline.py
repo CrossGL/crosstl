@@ -301,6 +301,58 @@ def test_metal_xhalf_vectors_do_not_leak_to_opengl(tmp_path):
     assert "f16vec3" not in generated
 
 
+def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mat-mul-dispatch-id.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void main(uint2 id [[thread_position_in_grid]]) {
+            uint row = id.y;
+            uint col = id.x;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in generated
+    assert "uint2 id = id_dispatchThreadID.xy;" in generated
+    assert "uint row = id.y;" in generated
+    assert "uint col = id.x;" in generated
+    assert "uint2 id : SV_DispatchThreadID" not in generated
+
+
+def test_metal_scalar_dispatch_id_promotes_to_directx_uint3(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "scalar-dispatch-id.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void main(uint index [[thread_position_in_grid]]) {
+            uint value = index;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "uint3 index_dispatchThreadID : SV_DispatchThreadID" in generated
+    assert "uint index = index_dispatchThreadID.x;" in generated
+    assert "uint value = index;" in generated
+    assert "uint index : SV_DispatchThreadID" not in generated
+
+
 def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     source_path = _write_source(
         tmp_path,
