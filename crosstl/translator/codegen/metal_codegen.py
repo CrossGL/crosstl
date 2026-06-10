@@ -6215,6 +6215,62 @@ class MetalCodeGen:
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
 
+    def option_payload_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not isinstance(type_name, str):
+            return None
+
+        base_name, generic_args = generic_type_parts(type_name.strip())
+        if base_name.rsplit("::", 1)[-1] != "Option" or len(generic_args) != 1:
+            return None
+        return generic_args[0]
+
+    def lowerable_option_payload_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        payload_type = self.option_payload_type_name(type_name)
+        if payload_type is None:
+            return None
+        if generic_enum_specialized_type_name(self, type_name) is not None:
+            return None
+        if generic_struct_specialized_type_name(self, type_name) is not None:
+            return None
+        return payload_type
+
+    def expected_option_payload_type_name(self):
+        expected_type = self.current_expression_expected_type
+        option_payload = self.lowerable_option_payload_type_name(
+            self.current_expression_expected_type
+        ) or self.lowerable_option_payload_type_name(self.current_function_return_type)
+        if option_payload is not None:
+            return option_payload
+        if self.option_payload_type_name(expected_type) is not None:
+            return None
+        return expected_type
+
+    def option_constructor_payload_expression(self, expr):
+        func_expr = getattr(expr, "function", None)
+        if func_expr is None:
+            func_expr = getattr(expr, "name", None)
+        func_name = getattr(func_expr, "name", func_expr)
+        if not isinstance(func_name, str):
+            return None
+        if func_name.rsplit("::", 1)[-1] != "Some":
+            return None
+
+        args = list(getattr(expr, "args", getattr(expr, "arguments", [])) or [])
+        payload_type = self.expected_option_payload_type_name()
+        if payload_type is None:
+            return None
+        if args:
+            return self.generate_expression_with_expected(args[0], payload_type)
+        return self.metal_default_value_expression(payload_type)
+
+    def option_none_default_expression(self):
+        payload_type = self.expected_option_payload_type_name()
+        if payload_type is None:
+            return None
+        return self.metal_default_value_expression(payload_type)
+
     def is_metal_ray_query_type_name(self, type_name):
         type_name = str(type_name or "").strip()
         return (
@@ -6522,6 +6578,13 @@ class MetalCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if isinstance(func_name, str) and func_name.rsplit("::", 1)[-1] == "Some":
+                payload_type = self.expected_option_payload_type_name()
+                if payload_type is not None:
+                    return payload_type
+                if self.option_payload_type_name(self.current_expression_expected_type):
+                    return None
+                return self.expression_result_type(args[0]) if args else None
             if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
                 func_name
             ):
@@ -7486,12 +7549,23 @@ class MetalCodeGen:
         if expr is None:
             return ""
         elif isinstance(expr, str):
-            return self.metal_compute_builtin_expression_name(expr)
+            builtin_name = self.metal_compute_builtin_expression_name(expr)
+            if builtin_name != expr:
+                return builtin_name
+            if expr.rsplit("::", 1)[-1] == "None":
+                option_default = self.option_none_default_expression()
+                if option_default is not None:
+                    return option_default
+            return expr
         elif isinstance(expr, IdentifierNode):
             name = expr.name
             builtin_name = self.metal_compute_builtin_expression_name(name)
             if builtin_name != name:
                 return builtin_name
+            if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
+                option_default = self.option_none_default_expression()
+                if option_default is not None:
+                    return option_default
             buffer_block_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if buffer_block_value is not None:
                 return buffer_block_value
@@ -7535,6 +7609,13 @@ class MetalCodeGen:
                 builtin_name = self.metal_compute_builtin_expression_name(expr.name)
                 if builtin_name != expr.name:
                     return builtin_name
+                if (
+                    isinstance(expr.name, str)
+                    and expr.name.rsplit("::", 1)[-1] == "None"
+                ):
+                    option_default = self.option_none_default_expression()
+                    if option_default is not None:
+                        return option_default
                 if expr.name in self.METAL_RAY_FLAG_VALUES:
                     return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
                 return enum_value_expression(self, expr.name)
@@ -7632,6 +7713,10 @@ class MetalCodeGen:
                 return f"{metal_type}({args})"
             return str(expr)
         elif isinstance(expr, FunctionCallNode):
+            option_payload = self.option_constructor_payload_expression(expr)
+            if option_payload is not None:
+                return option_payload
+
             func_expr = getattr(expr, "function", None)
             if func_expr is None:
                 func_expr = expr.name
@@ -8191,6 +8276,10 @@ class MetalCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             name = getattr(expr, "name", str(expr))
+            if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
+                option_default = self.option_none_default_expression()
+                if option_default is not None:
+                    return option_default
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
@@ -20899,6 +20988,10 @@ class MetalCodeGen:
         generic_struct_type = generic_struct_specialized_type_name(self, vtype_str)
         if generic_struct_type is not None:
             return generic_struct_type
+
+        option_payload = self.lowerable_option_payload_type_name(vtype_str)
+        if option_payload is not None:
+            return self.map_type(option_payload)
 
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"
