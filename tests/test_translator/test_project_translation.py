@@ -29,6 +29,7 @@ from crosstl.project import (
     load_project_config,
     plan_runtime_adapters,
     plan_runtime_host_bindings,
+    plan_runtime_host_loader_consumption,
     plan_runtime_integration,
     scan_project,
     translate_project,
@@ -173,6 +174,7 @@ def test_project_package_exposes_public_api_surface():
         "load_project_config",
         "plan_runtime_adapters",
         "plan_runtime_host_bindings",
+        "plan_runtime_host_loader_consumption",
         "plan_runtime_integration",
         "scan_project",
         "translate_project",
@@ -25221,6 +25223,169 @@ def test_project_cli_inspect_host_loader_scaffolds_json_writes_output(tmp_path):
     )
     assert payload["summary"]["readyScaffoldCount"] == 1
     assert payload["generatedFiles"][0]["status"] == "ready"
+
+
+def test_plan_runtime_host_loader_consumption_reports_ready_units(tmp_path):
+    _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(tmp_path)
+    before_files = sorted(
+        path.relative_to(scaffold_dir).as_posix()
+        for path in scaffold_dir.rglob("*")
+        if path.is_file()
+    )
+
+    payload = plan_runtime_host_loader_consumption(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+
+    after_files = sorted(
+        path.relative_to(scaffold_dir).as_posix()
+        for path in scaffold_dir.rglob("*")
+        if path.is_file()
+    )
+    assert after_files == before_files
+    assert set(payload) == project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND
+    assert payload["success"] is True
+    assert payload["status"] == "ready"
+    assert (
+        payload["scope"] == project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_SCOPE
+    )
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_NON_GOALS
+    )
+    assert payload["summary"]["targetCount"] == 1
+    assert payload["summary"]["loaderUnitCount"] == 1
+    assert payload["summary"]["readyLoaderUnitCount"] == 1
+    assert payload["summary"]["blockedLoaderUnitCount"] == 0
+    assert payload["summary"]["failedLoaderUnitCount"] == 0
+    assert payload["summary"]["actionCount"] == len(payload["actions"])
+    assert payload["summary"]["actionCount"] >= 2
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["status"] == "ready"
+    assert payload["targets"][0]["readyLoaderUnitCount"] == 1
+    assert len(payload["loaderUnits"]) == 1
+    unit = payload["loaderUnits"][0]
+    assert set(unit) == (
+        project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_LOADER_UNIT_FIELDS
+    )
+    assert unit["status"] == "ready"
+    assert unit["loadSteps"]
+    assert unit["blockers"] == []
+    action_kinds = {action["kind"] for action in payload["actions"]}
+    assert "consume-host-loader-unit" in action_kinds
+    assert "load-package-artifact" in action_kinds
+    for action in payload["actions"]:
+        assert set(action) == (
+            project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_ACTION_FIELDS
+        )
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+
+
+def test_plan_runtime_host_loader_consumption_carries_blocked_units(tmp_path):
+    _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(
+        tmp_path, targets=("vulkan",)
+    )
+
+    payload = plan_runtime_host_loader_consumption(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+
+    assert payload["success"] is True
+    assert payload["status"] == "blocked"
+    assert payload["summary"]["loaderUnitCount"] == 1
+    assert payload["summary"]["readyLoaderUnitCount"] == 0
+    assert payload["summary"]["blockedLoaderUnitCount"] == 1
+    assert payload["summary"]["failedLoaderUnitCount"] == 0
+    assert payload["loaderUnits"][0]["status"] == "blocked"
+    assert payload["loaderUnits"][0]["blockers"]
+    assert payload["actions"][0]["kind"] == "resolve-loader-scaffold-blockers"
+    assert payload["actions"][0]["severity"] == "warning"
+
+
+def test_plan_runtime_host_loader_consumption_rejects_failed_inspection(tmp_path):
+    _, scaffold_dir, scaffold_payload = _build_runtime_host_loader_scaffold_fixture(
+        tmp_path
+    )
+    unit_path = scaffold_dir / scaffold_payload["scaffolds"][0]["outputPath"]
+    unit_path.unlink()
+
+    payload = plan_runtime_host_loader_consumption(
+        scaffold_dir / "host-loader-scaffolds.json"
+    )
+
+    assert payload["success"] is False
+    assert payload["status"] == "failed"
+    assert payload["summary"]["loaderUnitCount"] == 0
+    assert payload["actions"] == []
+    assert payload["diagnosticCounts"]["error"] >= 1
+    assert any(
+        diagnostic["code"]
+        == "project.runtime-host-loader-scaffolds-inspection.scaffold-missing"
+        for diagnostic in payload["diagnostics"]
+    )
+
+
+def test_project_cli_plan_host_loader_consumption_text_outputs_actions(tmp_path):
+    _, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(tmp_path)
+    manifest_path = scaffold_dir / "host-loader-scaffolds.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-loader-consumption",
+            str(manifest_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime host loader consumption plan: {manifest_path}" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert "Consumption scope: host-loader-consumption-planning" in result.stdout
+    assert (
+        "Consumption non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 loader units, 1 ready, 0 blocked" in result.stdout
+    assert "Runtime host loader consumption actions:" in result.stdout
+    assert "consume-host-loader-unit" in result.stdout
+
+
+def test_project_cli_plan_host_loader_consumption_json_writes_output(tmp_path):
+    repo, scaffold_dir, _ = _build_runtime_host_loader_scaffold_fixture(tmp_path)
+    output_path = repo / "host-loader-consumption-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-host-loader-consumption",
+            str(scaffold_dir / "host-loader-scaffolds.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_HOST_LOADER_CONSUMPTION_PLAN_KIND
+    assert payload["summary"]["readyLoaderUnitCount"] == 1
+    assert payload["actions"][0]["kind"] == "consume-host-loader-unit"
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

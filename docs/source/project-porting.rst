@@ -508,6 +508,25 @@ loader or build-system tooling consumes the metadata. Inspection remains
 read-only and does not rewrite host application code, execute device code,
 generate runtime framework code, or install target SDKs.
 
+Build a read-only host loader consumption plan from scaffold metadata:
+
+.. code-block:: bash
+
+   python -m crosstl plan-host-loader-consumption \
+     crosstl-host-loaders/host-loader-scaffolds.json \
+     --format text
+
+Host loader consumption plans emit a
+``crosstl-runtime-host-loader-consumption-plan`` JSON document. Planning runs
+scaffold inspection first, reads only ready target-scoped host loader unit JSON
+files, carries required tools and host responsibilities forward, and promotes
+ordered ``loadSteps`` into actionable records for host build or runtime
+integration tooling. Blocked scaffold records remain actionable
+``resolve-loader-scaffold-blockers`` entries, and failed scaffold inspection
+diagnostics are reported without reading unsafe unit files. The plan remains
+metadata only: it does not rewrite host application code, execute device code,
+generate runtime framework code, or install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized

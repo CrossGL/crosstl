@@ -38,6 +38,7 @@ TOOLS = [
                 "runtime-loader-manifest",
                 "scaffold-host-loaders",
                 "inspect-host-loader-scaffolds",
+                "plan-host-loader-consumption",
                 "report",
             ),
         ),
@@ -174,6 +175,14 @@ TOOLS = [
         ),
         (
             ("inspect-host-loader-scaffolds",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("plan-host-loader-consumption",),
             (
                 "usage:",
                 "--format",
