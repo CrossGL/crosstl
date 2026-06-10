@@ -75,6 +75,22 @@ def test_hashcat_opaque_kernel_parameter_pack_macro_parses():
     assert kernel.params == []
 
 
+def test_hashcat_declspec_function_specifier_macro_parses():
+    ast = parse_code("""
+        DECLSPEC u32 MurmurHash64A_truncated(PRIVATE_AS const u32 *data,
+                                             const u32 len) {
+            u64 hash = len * 0xc6a4a7935bd1e995;
+            return (u32)(hash >> 32);
+        }
+        """)
+
+    helper = ast.statements[0]
+    assert helper.name == "MurmurHash64A_truncated"
+    assert helper.return_type == "u32"
+    assert helper.qualifiers == ["DECLSPEC"]
+    assert helper.params[0]["type"] == "__private__ const u32 *"
+
+
 def test_hashcat_parenthesized_array_access_shift_index_parses():
     ast = parse_code("""
         kernel void cast_lookup(global uint *out, global uint *x, global uint *table) {

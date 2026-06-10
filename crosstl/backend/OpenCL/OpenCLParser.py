@@ -65,6 +65,7 @@ class OpenCLParser(HipParser):
         "_CL_OPTNONE",
         "_CL_OVERLOADABLE",
         "_CL_READNONE",
+        "DECLSPEC",
         "INLINE_FUNC",
         "KERNEL_FA",
         "KERNEL_FQ",

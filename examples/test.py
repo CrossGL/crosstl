@@ -64,7 +64,15 @@ BACKEND_COMPATIBILITY = {
         "slang",
     ],
     "compute": ["metal", "directx", "opengl", "vulkan", "cuda", "hip"],
-    "cross_platform": ["metal", "directx", "opengl", "vulkan", "rust"],
+    "cross_platform": [
+        "metal",
+        "directx",
+        "opengl",
+        "vulkan",
+        "rust",
+        "mojo",
+        "slang",
+    ],
     "gpu_computing": ["cuda", "hip", "mojo", "rust"],
 }
 EXAMPLE_BACKEND_SKIPS = {

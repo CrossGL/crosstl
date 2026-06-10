@@ -6,6 +6,7 @@ from crosstl.backend.HIP.HipAst import (
     ArrayAccessNode,
     BinaryOpNode,
     DesignatedInitializerNode,
+    EnumNode,
     FunctionNode,
     KernelNode,
     StructNode,
@@ -15,7 +16,7 @@ from crosstl.backend.HIP.HipAst import (
 )
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
-from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLProgramNode
+from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 
 
 class OpenCLToCrossGLConverter(HipToCrossGLConverter):
@@ -310,11 +311,16 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
                 self.emit(f"// Function: {stmt.name}")
                 self.visit(stmt)
                 self.emit("")
-            elif isinstance(stmt, (StructNode, VariableNode, TypeAliasNode)):
+            elif isinstance(stmt, (StructNode, VariableNode, TypeAliasNode, EnumNode)):
+                self.visit(stmt)
+                self.emit("")
+            elif isinstance(stmt, OpenCLMacroBlockNode):
                 self.visit(stmt)
                 self.emit("")
             else:
-                self.visit(stmt)
+                self.emit(
+                    f"// skipped top-level OpenCL fragment: {type(stmt).__name__}"
+                )
 
     def visit_HipProgramNode(self, node):
         node.__class__ = OpenCLProgramNode

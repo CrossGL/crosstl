@@ -257,6 +257,11 @@ EXTERNAL_FIXTURE_SOURCES = {
         "commit": "2b3c2ede6ac9a05642ced265ec0d3653e113e455",
         "path": "test/AtomicBuiltins/atom_add_int.cl",
     },
+    "hashcat_declspec_helper_function_macro": {
+        "url": "https://github.com/hashcat/hashcat",
+        "commit": "2d71af3718ef76f69c675e933cb4900c40788c58",
+        "path": "OpenCL/m34211_a0-pure.cl",
+    },
 }
 
 
@@ -1685,3 +1690,49 @@ def test_external_clspv_post_return_reqd_work_group_size_codegen_reparse():
     assert kernel.name == "foo"
     assert kernel.attributes == ["__attribute__((reqd_work_group_size(1,1,1)))"]
     assert "@workgroup_size(1, 1, 1)" in crossgl
+
+
+def test_external_hashcat_declspec_helper_function_codegen_reparse():
+    source_info = EXTERNAL_FIXTURE_SOURCES["hashcat_declspec_helper_function_macro"]
+    assert source_info["commit"] == "2d71af3718ef76f69c675e933cb4900c40788c58"
+    assert source_info["path"] == "OpenCL/m34211_a0-pure.cl"
+
+    source = """
+    DECLSPEC u32 MurmurHash64A_truncated(PRIVATE_AS const u32 *data,
+                                         const u32 len) {
+        u64 hash = len * 0xc6a4a7935bd1e995;
+        return (u32)(hash >> 32);
+    }
+
+    KERNEL_FQ KERNEL_FA void m34211_mxx(KERN_ATTR_RULES ()) {
+        const u64 gid = get_global_id(0);
+        if (gid >= GID_CNT) return;
+        u32 hash = MurmurHash64A_truncated(pws[gid].i, pws[gid].pw_len);
+        out[gid] = hash;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert ast.statements[0].qualifiers == ["DECLSPEC"]
+    assert "u32 MurmurHash64A_truncated(ptr<u32> data, u32 len)" in crossgl
+    assert "fn m34211_mxx(" in crossgl
+
+
+def test_external_hashcat_top_level_include_fragment_is_inert():
+    source_info = EXTERNAL_FIXTURE_SOURCES["hashcat_declspec_helper_function_macro"]
+    assert source_info["url"] == "https://github.com/hashcat/hashcat"
+
+    source = """
+    for (int digest_pos = 0; digest_pos < DIGESTS_CNT; digest_pos++) {
+        const u32 final_hash_pos = DIGESTS_OFFSET_HOST + digest_pos;
+        GLOBAL_AS const digest_t *digest = digests_buf + final_hash_pos;
+        if (digest->digest_buf[0] == r0) continue;
+    }
+    """
+
+    ast, crossgl = assert_crossgl_reparses(source)
+
+    assert [type(stmt).__name__ for stmt in ast.statements] == ["ForNode"]
+    assert "// skipped top-level OpenCL fragment: ForNode" in crossgl
+    assert "final_hash_pos" not in crossgl
