@@ -81,7 +81,7 @@ def test_hashcat_address_space_macro_parameters_codegen_reparse():
         }
         """)
 
-    assert "@binding(0) var<storage, read_write> in_buf: array<u32>" in crossgl
+    assert "@binding(0) var<storage, read> in_buf: array<u32>" in crossgl
     assert "@binding(1) var<storage, read_write> out: array<u32>" in crossgl
     assert "var<workgroup> scratch: array<u32>" in crossgl
 

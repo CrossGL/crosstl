@@ -455,16 +455,33 @@ class OpenCLToCrossGLConverter(HipToCrossGLConverter):
         if self.is_opencl_local_pointer_type(raw_type):
             return f"var<workgroup> {output_name}: array<{element_type}>"
 
+        access = self.opencl_kernel_pointer_access(raw_type)
         return (
             "@group(0) "
             f"@binding({binding}) "
-            "var<storage, read_write> "
+            f"var<storage, {access}> "
             f"{output_name}: array<{element_type}>"
         )
 
     def is_opencl_local_pointer_type(self, raw_type):
         qualifiers = set(str(raw_type).split())
         return bool(qualifiers & {"__shared__", "__local", "__local__", "local"})
+
+    def opencl_kernel_pointer_access(self, raw_type):
+        qualifiers = set(str(raw_type).split())
+        if qualifiers & {"read_write"}:
+            return "read_write"
+        if qualifiers & {"write_only"}:
+            return "write"
+        if qualifiers & {
+            "const",
+            "read_only",
+            "__constant",
+            "__constant__",
+            "constant",
+        }:
+            return "read"
+        return "read_write"
 
     def visit_PreprocessorNode(self, node):
         content = self.format_preprocessor_content(node.content)

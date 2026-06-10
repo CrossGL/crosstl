@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from .backend.OpenCL.target_lowering import normalize_opencl_intermediate_for_target
 from .translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -173,6 +174,8 @@ def translate(
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
             cgl_ast = cgl_spec.parse(intermediate_code)
+            if source_spec.name == "opencl" and normalized_backend != "webgl":
+                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(normalized_backend)
             generated_code = codegen.generate(cgl_ast)
 
