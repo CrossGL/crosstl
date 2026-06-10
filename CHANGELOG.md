@@ -15,6 +15,7 @@ All notable changes to CrossTL are documented in this file.
 - Split target backend registration from native source frontend availability in the backend registry and support matrix.
 - Added target alias and target profile metadata to backend support inventory.
 - Documented target-only source rejection for WebGL and WGSL outputs.
+- Hardened WGSL output with explicit IO attribute preservation, direct compute builtin injection, compute barrier lowering, and deterministic diagnostics for CrossGL resource and texture calls that do not have safe WebGPU lowering yet.
 
 ## [2.0.0] - 2026-06-01
 

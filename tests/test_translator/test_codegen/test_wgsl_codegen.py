@@ -80,12 +80,170 @@ def test_wgsl_codegen_emits_vertex_and_fragment_entry_points():
     assert "return vec4<f32>(input.uv, 0.0, 1.0);" in generated
 
 
+def test_wgsl_codegen_preserves_explicit_io_attributes():
+    shader = """
+    shader WGSLExplicitAttributes {
+        struct FragmentInput {
+            vec4 position @builtin(position);
+            vec2 uv @location(3) @interpolate(flat);
+        };
+        fragment {
+            vec4 main(FragmentInput input) @location(1) {
+                return input.position;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@builtin(position) position: vec4<f32>," in generated
+    assert "@location(3) @interpolate(flat) uv: vec2<f32>," in generated
+    assert (
+        "fn fragment_main(input: FragmentInput) -> @location(1) vec4<f32>" in generated
+    )
+
+
 def test_wgsl_codegen_emits_compute_workgroup_size():
     generated = WGSLCodeGen().generate(parse_shader(WGSL_COMPUTE_SHADER))
 
     assert "@compute" in generated
     assert "@workgroup_size(8, 4, 1)" in generated
     assert "fn compute_main()" in generated
+
+
+def test_wgsl_codegen_emits_compute_builtin_parameter():
+    shader = """
+    shader WGSLComputeBuiltin {
+        compute {
+            layout(local_size_x = 4) in;
+            void main(uint3 gid @ gl_GlobalInvocationID) {
+                barrier();
+                uint lane = gid.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@workgroup_size(4, 1, 1)" in generated
+    assert "fn compute_main(@builtin(global_invocation_id) gid: vec3<u32>)" in generated
+    assert "workgroupBarrier();" in generated
+    assert "var lane: u32 = gid.x;" in generated
+
+
+def test_wgsl_codegen_injects_direct_compute_builtin_references():
+    shader = """
+    shader WGSLDirectComputeBuiltin {
+        compute {
+            layout(local_size_x = 4) in;
+            void main() {
+                uint lane = gl_GlobalInvocationID.x;
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) "
+        "global_invocation_id: vec3<u32>)"
+    ) in generated
+    assert "var lane: u32 = global_invocation_id.x;" in generated
+
+
+def test_wgsl_codegen_treats_attribute_compute_functions_as_entry_points():
+    shader = """
+    shader WGSLAttributeComputeEntry {
+        @compute
+        @workgroup_size(2, 3, 4)
+        void main() {
+            uint lane = gl_GlobalInvocationID.x;
+            uint3 block = gl_WorkGroupSize;
+            return;
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@compute" in generated
+    assert "@workgroup_size(2, 3, 4)" in generated
+    assert (
+        "fn compute_main(@builtin(global_invocation_id) "
+        "global_invocation_id: vec3<u32>)"
+    ) in generated
+    assert "var lane: u32 = global_invocation_id.x;" in generated
+    assert "var block: vec3<u32> = vec3<u32>(2u, 3u, 4u);" in generated
+
+
+def test_wgsl_codegen_does_not_treat_semantic_attributes_as_stage_entries():
+    shader = """
+    shader WGSLSemanticAttributeFunction {
+        vec4 main(vec4 pos @ Out_Position) @ Out_Color {
+            return pos;
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "fn main(" in generated
+    assert "@out_color" not in generated.lower()
+
+
+def test_wgsl_codegen_emits_resource_address_spaces_and_bindings():
+    shader = """
+    shader WGSLResources {
+        uniform vec4 tint;
+        buffer float values[4];
+        var<workgroup> scratch: float[4];
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(0) @binding(0)\nvar<uniform> tint: vec4<f32>;" in generated
+    assert (
+        "@group(0) @binding(1)\n" "var<storage, read_write> values: array<f32, 4>;"
+    ) in generated
+    assert "var<workgroup> scratch: array<f32, 4>;" in generated
+
+
+def test_wgsl_codegen_allows_resource_like_user_type_names():
+    shader = """
+    shader WGSLResourceLikeNames {
+        struct TextureInfo {
+            vec4 color;
+        };
+        TextureInfo makeInfo() {
+            TextureInfo info;
+            info.color = vec4(1.0);
+            return info;
+        }
+        fragment {
+            vec4 main() @ gl_FragColor {
+                TextureInfo info = makeInfo();
+                return info.color;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "struct TextureInfo" in generated
+    assert "fn makeInfo() -> TextureInfo" in generated
+    assert "var info: TextureInfo;" in generated
 
 
 def test_wgsl_aliases_format_as_noop_wgsl():
@@ -144,5 +302,181 @@ def test_wgsl_codegen_rejects_do_while_statement():
     with pytest.raises(
         ValueError,
         match="WGSL target does not support do-while statements",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    (
+        (
+            """
+            shader WGSLResource {
+                sampler2D colorTex;
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "WGSL target does not support CrossGL resource type sampler2D yet; "
+            "split texture/sampler/storage bindings are required",
+        ),
+        (
+            """
+            shader WGSLTextureCall {
+                fragment {
+                    vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                        return texture(colorTex, linearSampler, uv);
+                    }
+                }
+            }
+            """,
+            "WGSL target does not support CrossGL texture function texture yet; "
+            "split texture/sampler lowering is required",
+        ),
+    ),
+)
+def test_wgsl_codegen_rejects_unsupported_resource_texture_compute_constructs(
+    shader, message
+):
+    with pytest.raises(
+        ValueError,
+        match=message,
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier():
+    shader = """
+    shader WGSLBarrier {
+        compute {
+            layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                barrier();
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "workgroupBarrier();" in generated
+    assert "barrier();" not in generated
+
+
+def test_wgsl_codegen_rejects_barrier_outside_compute_stages():
+    shader = """
+    shader WGSLFragmentBarrier {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                barrier();
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"WGSL target only supports barrier\(\) inside compute stages",
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_direct_builtin_references_in_helpers():
+    shader = """
+    shader WGSLHelperBuiltin {
+        uint helper() {
+            return gl_GlobalInvocationID.x;
+        }
+        compute {
+            void main() {
+                uint lane = helper();
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target does not support direct builtin identifier\\(s\\) "
+            "in helper function helper: gl_GlobalInvocationID"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_compute_builtin_references_in_fragment_stage():
+    shader = """
+    shader WGSLFragmentComputeBuiltin {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint lane = gl_GlobalInvocationID.x;
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target does not support implicit builtin identifier\\(s\\) "
+            "in fragment stage: gl_GlobalInvocationID"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_implicit_builtin_parameter_name_collision():
+    shader = """
+    shader WGSLBuiltinNameCollision {
+        compute {
+            void main(uint3 global_invocation_id) {
+                uint lane = gl_GlobalInvocationID.x;
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target cannot inject builtin global_invocation_id because "
+            "an entry parameter already uses that name without "
+            "@builtin\\(global_invocation_id\\)"
+        ),
+    ):
+        WGSLCodeGen().generate(parse_shader(shader))
+
+
+def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
+    shader = """
+    shader WGSLHelperBarrier {
+        void sync() {
+            barrier();
+            return;
+        }
+        compute {
+            void main() {
+                sync();
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "WGSL target does not support barrier\\(\\) inside helper function "
+            "sync yet"
+        ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))

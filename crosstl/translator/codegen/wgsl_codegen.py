@@ -42,7 +42,7 @@ from ..ast import (
     VectorType,
     WhileNode,
 )
-from .stage_utils import normalize_stage_name
+from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 
 
 class WGSLCodeGen:
@@ -132,6 +132,16 @@ class WGSLCodeGen:
         "SV_GroupID": "workgroup_id",
         "gl_NumWorkGroups": "num_workgroups",
     }
+    WORKGROUP_SIZE_IDENTIFIER_ALIASES = {"gl_WorkGroupSize"}
+    INPUT_BUILTIN_TYPE_MAP = {
+        "vertex_index": "u32",
+        "instance_index": "u32",
+        "global_invocation_id": "vec3<u32>",
+        "local_invocation_id": "vec3<u32>",
+        "local_invocation_index": "u32",
+        "workgroup_id": "vec3<u32>",
+        "num_workgroups": "vec3<u32>",
+    }
     FUNCTION_NAME_MAP = {
         "atan2": "atan2",
         "fract": "fract",
@@ -143,9 +153,111 @@ class WGSLCodeGen:
         "rsqrt": "inverseSqrt",
         "saturate": "saturate",
     }
+    STAGE_INPUT_BUILTINS = {
+        "vertex": {"instance_index", "vertex_index"},
+        "fragment": set(),
+        "compute": {
+            "global_invocation_id",
+            "local_invocation_id",
+            "local_invocation_index",
+            "num_workgroups",
+            "workgroup_id",
+        },
+    }
+    RESOURCE_TYPE_NAMES = {
+        "image1d",
+        "image1darray",
+        "image2d",
+        "image2darray",
+        "image2dms",
+        "image2dmsarray",
+        "image3d",
+        "imagebuffer",
+        "imagecube",
+        "imagecubearray",
+        "iimage1d",
+        "iimage1darray",
+        "iimage2d",
+        "iimage2darray",
+        "iimage2dms",
+        "iimage2dmsarray",
+        "iimage3d",
+        "iimagebuffer",
+        "iimagecube",
+        "iimagecubearray",
+        "sampler",
+        "sampler1d",
+        "sampler1darray",
+        "sampler2d",
+        "sampler2darray",
+        "sampler2darrayshadow",
+        "sampler2dms",
+        "sampler2dmsarray",
+        "sampler2dshadow",
+        "sampler3d",
+        "samplercube",
+        "samplercubearray",
+        "samplerstate",
+        "samplercomparisonstate",
+        "texture1d",
+        "texture1darray",
+        "texture2d",
+        "texture2darray",
+        "texture2dms",
+        "texture2dmsarray",
+        "texture3d",
+        "texturecube",
+        "texturecubearray",
+        "uimage1d",
+        "uimage1darray",
+        "uimage2d",
+        "uimage2darray",
+        "uimage2dms",
+        "uimage2dmsarray",
+        "uimage3d",
+        "uimagebuffer",
+        "uimagecube",
+        "uimagecubearray",
+    }
+    TEXTURE_FUNCTION_NAMES = {
+        "texture",
+        "texturecompare",
+        "texturecomparegrad",
+        "texturecompareoffset",
+        "texturecomparelod",
+        "texturecomparelodoffset",
+        "texturecompareproj",
+        "texturecompareprojgrad",
+        "texturecompareprojoffset",
+        "texturegrad",
+        "texturegradoffset",
+        "texturegather",
+        "texturegathercompare",
+        "texturegathercompareoffset",
+        "texturegatheroffset",
+        "texturegatheroffsets",
+        "texturelod",
+        "texturelodoffset",
+        "textureoffset",
+        "textureproj",
+        "textureprojgrad",
+        "textureprojgradoffset",
+        "textureprojlod",
+        "textureprojlodoffset",
+        "textureprojoffset",
+        "texturequerylevels",
+        "texturequerylod",
+        "texturesize",
+    }
+    BARRIER_FUNCTION_NAMES = {
+        "barrier",
+        "groupmemorybarrierwithgroupsync",
+        "workgroupbarrier",
+    }
 
     def __init__(self):
         self._current_stage_name = None
+        self._current_workgroup_size = None
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
         self._global_binding_index = 0
 
@@ -249,7 +361,13 @@ class WGSLCodeGen:
 
         entry_point = stage_node.entry_point
         previous_stage = self._current_stage_name
+        previous_workgroup_size = self._current_workgroup_size
         self._current_stage_name = stage_name
+        self._current_workgroup_size = (
+            self.stage_workgroup_size_values(stage_node)
+            if stage_name == "compute"
+            else None
+        )
         try:
             attributes = [f"@{stage_name}"]
             if stage_name == "compute":
@@ -258,13 +376,24 @@ class WGSLCodeGen:
                 entry_point,
                 name=f"{stage_name}_main",
                 return_attributes=self.stage_return_attributes(stage_name, entry_point),
+                leading_parameters=self.stage_implicit_builtin_parameters(
+                    entry_point, stage_name
+                ),
             )
             body = self.generate_block(entry_point.body, indent=0)
             return "\n".join(attributes + [f"{signature} {body}"])
         finally:
             self._current_stage_name = previous_stage
+            self._current_workgroup_size = previous_workgroup_size
 
     def generate_workgroup_size_attribute(self, stage_node):
+        return (
+            "@workgroup_size("
+            + ", ".join(self.stage_workgroup_size_values(stage_node))
+            + ")"
+        )
+
+    def stage_workgroup_size_values(self, stage_node):
         config = getattr(stage_node, "execution_config", {}) or {}
         values = config.get("numthreads") or [
             config.get("local_size_x", "1"),
@@ -276,16 +405,20 @@ class WGSLCodeGen:
         values = list(values)[:3]
         while len(values) < 3:
             values.append("1")
-        return "@workgroup_size(" + ", ".join(str(value) for value in values) + ")"
+        return tuple(str(value) for value in values)
 
     def generate_function(self, func):
+        self.validate_helper_function_references(func)
         signature = self.generate_function_signature(func)
         return f"{signature} {self.generate_block(func.body, indent=0)}"
 
-    def generate_function_signature(self, func, name=None, return_attributes=()):
+    def generate_function_signature(
+        self, func, name=None, return_attributes=(), leading_parameters=()
+    ):
         function_name = name or func.name
         parameters = ", ".join(
-            self.generate_parameter(param) for param in func.parameters
+            list(leading_parameters)
+            + [self.generate_parameter(param) for param in func.parameters]
         )
         return_type = self.type_name_string(func.return_type)
         if return_type == "void":
@@ -299,6 +432,141 @@ class WGSLCodeGen:
         attributes = self.wgsl_attributes(node.attributes, direction="in")
         prefix = f"{attributes} " if attributes else ""
         return f"{prefix}{node.name}: {self.type_name_string(node.param_type)}"
+
+    def stage_implicit_builtin_parameters(self, function, stage_name):
+        referenced = self.stage_direct_builtin_references(function)
+        workgroup_size_references = self.direct_workgroup_size_references(function)
+        if not referenced and not workgroup_size_references:
+            return ()
+
+        if workgroup_size_references and stage_name != "compute":
+            raise ValueError(
+                "WGSL target does not support gl_WorkGroupSize outside compute stages"
+            )
+
+        existing = self.existing_parameter_builtin_names(function)
+
+        unsupported = sorted(
+            original
+            for original, builtin in referenced.items()
+            if builtin not in self.INPUT_BUILTIN_TYPE_MAP
+        )
+        if unsupported:
+            raise ValueError(
+                "WGSL target does not support implicit builtin identifier(s): "
+                + ", ".join(unsupported)
+                + "; model them as entry-point parameters or return values"
+            )
+
+        stage_allowed = self.STAGE_INPUT_BUILTINS.get(stage_name, set())
+        invalid_for_stage = sorted(
+            original
+            for original, builtin in referenced.items()
+            if builtin in self.INPUT_BUILTIN_TYPE_MAP and builtin not in stage_allowed
+        )
+        if invalid_for_stage:
+            raise ValueError(
+                "WGSL target does not support implicit builtin identifier(s) "
+                f"in {stage_name} stage: "
+                + ", ".join(invalid_for_stage)
+                + "; model them as entry-point parameters or return values"
+            )
+
+        parameter_names = {
+            getattr(param, "name", "") for param in getattr(function, "parameters", [])
+        }
+        colliding_builtins = sorted(
+            builtin
+            for builtin in set(referenced.values())
+            if builtin in parameter_names and builtin not in existing
+        )
+        if colliding_builtins:
+            builtin = colliding_builtins[0]
+            raise ValueError(
+                "WGSL target cannot inject builtin "
+                f"{builtin} because an entry parameter already uses that name "
+                f"without @builtin({builtin})"
+            )
+
+        parameters = []
+        for builtin, builtin_type in self.INPUT_BUILTIN_TYPE_MAP.items():
+            if builtin not in referenced.values() or builtin in existing:
+                continue
+            parameters.append(f"@builtin({builtin}) {builtin}: {builtin_type}")
+        return tuple(parameters)
+
+    def validate_helper_function_references(self, function):
+        builtin_references = self.stage_direct_builtin_references(function)
+        if builtin_references:
+            raise ValueError(
+                "WGSL target does not support direct builtin identifier(s) "
+                f"in helper function {function.name}: "
+                + ", ".join(sorted(builtin_references))
+                + "; pass builtin values through entry-point parameters instead"
+            )
+
+        workgroup_size_references = self.direct_workgroup_size_references(function)
+        if workgroup_size_references:
+            raise ValueError(
+                "WGSL target does not support gl_WorkGroupSize inside helper "
+                f"function {function.name}; keep it directly in compute entry points"
+            )
+
+        barrier_calls = self.function_barrier_call_names(function)
+        if barrier_calls:
+            raise ValueError(
+                "WGSL target does not support barrier() inside helper function "
+                f"{function.name} yet; keep barriers directly in compute entry points"
+            )
+
+    def direct_workgroup_size_references(self, function):
+        body = getattr(function, "body", None)
+        if body is None or not hasattr(body, "walk"):
+            return ()
+        references = []
+        for node in body.walk():
+            if (
+                isinstance(node, IdentifierNode)
+                and node.name in self.WORKGROUP_SIZE_IDENTIFIER_ALIASES
+            ):
+                references.append(node.name)
+        return tuple(references)
+
+    def function_barrier_call_names(self, function):
+        body = getattr(function, "body", None)
+        if body is None or not hasattr(body, "walk"):
+            return ()
+        calls = []
+        for node in body.walk():
+            if not isinstance(node, FunctionCallNode):
+                continue
+            function_name = self.expression_name(node.function)
+            if self.semantic_key(function_name) in self.BARRIER_FUNCTION_NAMES:
+                calls.append(function_name)
+        return tuple(calls)
+
+    def stage_direct_builtin_references(self, function):
+        body = getattr(function, "body", None)
+        if body is None or not hasattr(body, "walk"):
+            return {}
+        referenced = {}
+        for node in body.walk():
+            if not isinstance(node, IdentifierNode):
+                continue
+            builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(node.name)
+            if builtin:
+                referenced[node.name] = builtin
+        return referenced
+
+    def existing_parameter_builtin_names(self, function):
+        builtin_names = set()
+        for param in function.parameters:
+            for attr in getattr(param, "attributes", []) or []:
+                key = self.semantic_key(str(getattr(attr, "name", attr)))
+                builtin = self.BUILTIN_SEMANTICS.get(key)
+                if builtin:
+                    builtin_names.add(builtin)
+        return builtin_names
 
     def generate_struct(self, node):
         if getattr(node, "generic_params", None):
@@ -463,6 +731,8 @@ class WGSLCodeGen:
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
         if isinstance(expr, IdentifierNode):
+            if expr.name in self.WORKGROUP_SIZE_IDENTIFIER_ALIASES:
+                return self.generate_workgroup_size_literal()
             return self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name, expr.name)
         if isinstance(expr, BinaryOpNode):
             return (
@@ -530,13 +800,45 @@ class WGSLCodeGen:
             return f"{text}.0"
         return text
 
+    def generate_workgroup_size_literal(self):
+        values = self._current_workgroup_size or ("1", "1", "1")
+        return (
+            "vec3<u32>(" + ", ".join(self.u32_literal(value) for value in values) + ")"
+        )
+
+    def u32_literal(self, value):
+        text = str(value)
+        if re.fullmatch(r"\d+", text):
+            return f"{text}u"
+        return text
+
     def generate_function_call(self, node):
         function_name = self.expression_name(node.function)
+        normalized_name = self.semantic_key(function_name)
+        if normalized_name in self.TEXTURE_FUNCTION_NAMES:
+            raise ValueError(
+                "WGSL target does not support CrossGL texture function "
+                f"{function_name} yet; split texture/sampler lowering is required"
+            )
+        if normalized_name in self.BARRIER_FUNCTION_NAMES:
+            return self.generate_barrier_call(node, function_name)
+
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         if self.is_type_constructor_name(function_name):
             return f"{self.type_name_string(function_name)}({args})"
         mapped_name = self.FUNCTION_NAME_MAP.get(function_name, function_name)
         return f"{mapped_name}({args})"
+
+    def generate_barrier_call(self, node, function_name):
+        if node.arguments:
+            raise ValueError(
+                f"WGSL target does not support arguments for barrier function {function_name}"
+            )
+        if self._current_stage_name != "compute":
+            raise ValueError(
+                "WGSL target only supports barrier() inside compute stages"
+            )
+        return "workgroupBarrier()"
 
     def generate_constructor(self, node):
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
@@ -584,6 +886,11 @@ class WGSLCodeGen:
         lower = normalized.lower()
         if lower in self.PRIMITIVE_TYPE_MAP:
             return self.PRIMITIVE_TYPE_MAP[lower]
+        if self.is_resource_type_name(lower):
+            raise ValueError(
+                "WGSL target does not support CrossGL resource type "
+                f"{normalized} yet; split texture/sampler/storage bindings are required"
+            )
 
         vector_match = self.VECTOR_TYPE_RE.match(lower)
         if vector_match:
@@ -604,6 +911,9 @@ class WGSLCodeGen:
             return f"mat{columns}x{rows}<f32>"
 
         return normalized
+
+    def is_resource_type_name(self, lower_type_name):
+        return lower_type_name in self.RESOURCE_TYPE_NAMES
 
     def is_type_constructor_name(self, name):
         lower = str(name).lower()
@@ -627,6 +937,11 @@ class WGSLCodeGen:
         rendered = []
         for attr in attributes or []:
             semantic = str(getattr(attr, "name", attr))
+            explicit_attribute = self.explicit_wgsl_attribute(attr, semantic)
+            if explicit_attribute:
+                rendered.append(explicit_attribute)
+                continue
+
             key = self.semantic_key(semantic)
             builtin = self.BUILTIN_SEMANTICS.get(key)
             if builtin:
@@ -638,6 +953,32 @@ class WGSLCodeGen:
                 rendered.append(f"@location({location})")
 
         return " ".join(rendered)
+
+    def explicit_wgsl_attribute(self, attr, name):
+        key = self.semantic_key(name)
+        if key not in {
+            "builtin",
+            "invariant",
+            "interpolate",
+            "location",
+        }:
+            return None
+
+        arguments = getattr(attr, "arguments", []) or []
+        if not arguments:
+            if key in {"builtin", "interpolate", "location"}:
+                return None
+            return f"@{key}"
+
+        rendered_args = ", ".join(
+            self.generate_attribute_argument(arg) for arg in arguments
+        )
+        return f"@{key}({rendered_args})"
+
+    def generate_attribute_argument(self, argument):
+        if isinstance(argument, IdentifierNode):
+            return argument.name
+        return self.generate_expression(argument)
 
     def semantic_key(self, semantic):
         return re.sub(r"[^a-z0-9_]+", "", semantic.lower())
@@ -707,14 +1048,40 @@ class WGSLCodeGen:
                 continue
             if target_stage is not None and stage_name != target_stage:
                 continue
-            nodes.append(_FunctionStageNode(stage_name, func))
+            nodes.append(
+                _FunctionStageNode(
+                    stage_name,
+                    func,
+                    execution_config=self._function_execution_config(func),
+                )
+            )
         return nodes
 
     def _function_stage_name(self, func):
         qualifiers = getattr(func, "qualifiers", []) or []
-        if not qualifiers:
-            return None
-        return normalize_stage_name(qualifiers[0])
+        for qualifier in qualifiers:
+            stage_name = normalize_stage_name(qualifier)
+            if stage_name in STAGE_QUALIFIER_NAMES:
+                return stage_name
+        for attr in getattr(func, "attributes", []) or []:
+            stage_name = normalize_stage_name(getattr(attr, "name", ""))
+            if stage_name in STAGE_QUALIFIER_NAMES:
+                return stage_name
+        return None
+
+    def _function_execution_config(self, func):
+        config = {}
+        for attr in getattr(func, "attributes", []) or []:
+            key = str(getattr(attr, "name", "")).lower()
+            if key not in {"numthreads", "workgroup_size"}:
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 3:
+                continue
+            config["numthreads"] = [
+                self.generate_attribute_argument(argument) for argument in arguments
+            ]
+        return config
 
     def _dedupe_by_name(self, nodes):
         seen = set()
@@ -740,10 +1107,10 @@ class WGSLCodeGen:
 
 
 class _FunctionStageNode:
-    def __init__(self, stage, entry_point):
+    def __init__(self, stage, entry_point, execution_config=None):
         self.stage = stage
         self.entry_point = entry_point
-        self.execution_config = {}
+        self.execution_config = execution_config or {}
         self.layout_qualifiers = []
         self.local_structs = []
         self.local_functions = []

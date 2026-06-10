@@ -25,9 +25,17 @@ The initial WGSL target surface covers common portable shader output:
 * scalar, vector, matrix, array, struct, function, and local variable syntax
 * stage input/output semantics mapped to ``@location`` and ``@builtin``
   attributes
+* explicit WGSL ``@location``, ``@builtin``, ``@interpolate``, and
+  ``@invariant`` attributes preserved from CrossGL declarations
 * compute workgroup size metadata from CrossGL layout qualifiers
+* direct compute builtin references such as ``gl_GlobalInvocationID`` injected
+  as WGSL entry point parameters
+* compute ``barrier()`` calls lowered to ``workgroupBarrier()``
 * deterministic diagnostics for non-WebGPU stages and pointer types that do not
   have a safe WGSL lowering yet
+* deterministic diagnostics for CrossGL combined texture/sampler resources,
+  and texture sampling calls that need explicit WebGPU binding lowering before
+  they can emit valid WGSL
 
 Implementation Notes
 --------------------
