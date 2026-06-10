@@ -7,7 +7,6 @@ env:
   MLX_OPENGL_BFLOAT16_ISSUE: "https://github.com/CrossGL/crosstl/issues/828"
   MLX_DIRECTX_THREADGROUP_ISSUE: "https://github.com/CrossGL/crosstl/issues/834"
   MLX_VULKAN_THREADGROUP_METADATA_ISSUE: "https://github.com/CrossGL/crosstl/issues/835"
-  MLX_VULKAN_UNARY_LITERAL_ISSUE: "https://github.com/CrossGL/crosstl/issues/836"
 
 on:
   push:

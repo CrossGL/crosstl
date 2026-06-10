@@ -2319,6 +2319,43 @@ class TestVulkanSPIRVCodeGen:
         assert any(f"OpStore {xor_var} {rid}" in spv_code for rid in xor_ids)
         assert "WARNING" not in spv_code
 
+    def test_bitwise_uint_operands_emit_large_literals_as_unsigned(self, tmp_path):
+        source_code = """
+        shader BitwiseLargeUnsignedLiteral {
+            compute {
+                void main() {
+                    uint bits = 4294967295u;
+                    uint highBit = bits & 2147483648;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert uint_type is not None
+        assert int_type is not None
+        high_bit_constant = re.search(
+            rf"(%\d+) = OpConstant {re.escape(uint_type.group(1))} 2147483648\b",
+            spv_code,
+        )
+        assert high_bit_constant is not None
+        assert not re.search(
+            rf"OpConstant {re.escape(int_type.group(1))} 2147483648\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpBitwiseAnd {re.escape(uint_type.group(1))} "
+            rf"%\d+ {re.escape(high_bit_constant.group(1))}\b",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_bitwise_not_emits_op_not(self):
         source_code = """
         shader BitwiseNot {

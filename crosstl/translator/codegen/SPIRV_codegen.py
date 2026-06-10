@@ -1920,11 +1920,17 @@ class VulkanSPIRVCodeGen:
                 if component_type == "uint"
                 else signed_op if component_type == "int" else float_op
             )
-        else:
+        elif op in {"&", "|", "^"}:
+            result_type, left, right = self.align_binary_arithmetic_operands(
+                result_type, left, right
+            )
             spv_op = {
                 "&": "OpBitwiseAnd",
                 "|": "OpBitwiseOr",
                 "^": "OpBitwiseXor",
+            }[op]
+        else:
+            spv_op = {
                 "<<": "OpShiftLeftLogical",
                 ">>": "OpShiftRightLogical",
             }.get(op, f"Op{op}")
@@ -2485,6 +2491,66 @@ class VulkanSPIRVCodeGen:
         if scalar_type is None:
             return left_type
         return self.register_primitive_type(scalar_type)
+
+    def bitwise_expression_operand_type(
+        self, left_type: Optional[SpirvId], right_type: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        """Return a shared integer type for bitwise operands when it is knowable."""
+        if left_type is None and right_type is None:
+            return None
+
+        left_type = self.ensure_registered_type(left_type) if left_type else None
+        right_type = self.ensure_registered_type(right_type) if right_type else None
+        left_vector = (
+            self.vector_component_type_and_count(left_type.type.base_type)
+            if left_type is not None
+            else None
+        )
+        right_vector = (
+            self.vector_component_type_and_count(right_type.type.base_type)
+            if right_type is not None
+            else None
+        )
+
+        if left_vector is not None or right_vector is not None:
+            if (
+                left_vector is not None
+                and right_vector is not None
+                and left_vector[1] != right_vector[1]
+            ):
+                return None
+            component_count = (left_vector or right_vector)[1]
+            component_names = [
+                vector[0]
+                for vector in (left_vector, right_vector)
+                if vector is not None
+            ]
+            for scalar_type in (left_type, right_type):
+                if scalar_type is not None:
+                    scalar_component = self.normalize_primitive_name(
+                        scalar_type.type.base_type
+                    )
+                    if scalar_component in {"int", "uint"}:
+                        component_names.append(scalar_component)
+            if not component_names or any(
+                component not in {"int", "uint"} for component in component_names
+            ):
+                return None
+            component_type = "uint" if "uint" in component_names else "int"
+            return self.register_vector_type(
+                self.register_primitive_type(component_type), component_count
+            )
+
+        type_names = [
+            self.normalize_primitive_name(value.type.base_type)
+            for value in (left_type, right_type)
+            if value is not None
+        ]
+        if not type_names or any(
+            type_name not in {"int", "uint"} for type_name in type_names
+        ):
+            return None
+        return self.register_primitive_type("uint" if "uint" in type_names else "int")
 
     def splat_scalar_to_vector(
         self, scalar_id: SpirvId, vector_type: SpirvId
@@ -20201,8 +20267,24 @@ class VulkanSPIRVCodeGen:
             return self.load_from_variable(access, element_type)
 
         elif isinstance(expr, BinaryOpNode):
-            left = self.process_expression(expr.left)
-            right = self.process_expression(expr.right)
+            if expr.op in {"&", "|", "^"}:
+                expected_type = self.bitwise_expression_operand_type(
+                    self.infer_expression_result_type(expr.left),
+                    self.infer_expression_result_type(expr.right),
+                )
+                if expected_type is not None:
+                    left = self.process_expression_with_expected_type(
+                        expr.left, expected_type
+                    )
+                    right = self.process_expression_with_expected_type(
+                        expr.right, expected_type
+                    )
+                else:
+                    left = self.process_expression(expr.left)
+                    right = self.process_expression(expr.right)
+            else:
+                left = self.process_expression(expr.left)
+                right = self.process_expression(expr.right)
 
             if left is None or right is None:
                 float_type = self.register_primitive_type("float")

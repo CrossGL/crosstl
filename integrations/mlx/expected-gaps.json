@@ -26,12 +26,6 @@
       "scope": "vulkan-threadgroup-metadata",
       "status": "open",
       "summary": "Handle MLX Metal max_total_threads_per_threadgroup metadata for Vulkan."
-    },
-    {
-      "issue": "https://github.com/CrossGL/crosstl/issues/836",
-      "scope": "vulkan-unary-integer-literal",
-      "status": "open",
-      "summary": "Emit valid SPIR-V integer literal typing for MLX unary kernels."
     }
   ]
 }

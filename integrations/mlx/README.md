@@ -14,11 +14,9 @@ The current harness verifies:
 - DirectX and Vulkan artifact generation for the current reduced frontier:
   `arange.metal`, `arg_reduce.metal`, `binary.metal`, `binary_two.metal`,
   `copy.metal`, `fence.metal`, `random.metal`, `rope.metal`, and
-  `ternary.metal`;
+  `ternary.metal`, and `unary.metal`;
 - Vulkan assembly validation when SPIR-V tools are available;
 - tracked OpenGL behavior for the current MLX `bfloat16_t` bitcast gap.
-- tracked Vulkan validation behavior for the current `unary.metal` integer
-  literal typing gap.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -64,8 +62,6 @@ The harness writes reports, generated artifacts, and command logs under
   DirectX output.
 - CrossGL/crosstl#835: handle MLX Metal `max_total_threads_per_threadgroup`
   metadata for Vulkan output.
-- CrossGL/crosstl#836: emit SPIR-V integer literals for `unary.metal` in a
-  form accepted by `spirv-as`.
 
 These gaps are translator work. Host runtime integration gaps should be handled
 in MLX-specific integration code or downstream runtime adapters, not hidden as

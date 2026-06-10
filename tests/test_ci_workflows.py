@@ -1785,10 +1785,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "https://github.com/CrossGL/crosstl/issues/828" in mlx_porting
     assert "https://github.com/CrossGL/crosstl/issues/834" in mlx_porting
     assert "https://github.com/CrossGL/crosstl/issues/835" in mlx_porting
-    assert "https://github.com/CrossGL/crosstl/issues/836" in mlx_porting
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
     assert "mlx/backend/metal/kernels/ternary.metal" in harness
-    assert "unary-vulkan-toolchain-gap" in harness
+    assert "mlx/backend/metal/kernels/unary.metal" in harness
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
