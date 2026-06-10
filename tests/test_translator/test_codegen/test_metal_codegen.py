@@ -15208,6 +15208,7 @@ def test_metal_array_member_semantics():
     struct VertexData {
         float weights[4] @ TEXCOORD0;
         vec3 colors[] @ COLOR;
+        vec4 indexedColor @ COLOR0;
     };
     """
 
@@ -15216,6 +15217,7 @@ def test_metal_array_member_semantics():
 
     assert "float weights[4] [[attribute(5)]];" in generated_code
     assert "float3 colors[1024] [[COLOR]];" in generated_code
+    assert "float4 indexedColor [[user(Color0)]];" in generated_code
 
 
 def test_metal_local_array_declarations_use_c_style_order():
