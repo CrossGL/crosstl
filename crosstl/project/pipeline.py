@@ -4808,7 +4808,11 @@ def translate_project(
         else load_project_config(config_or_root)
     )
     if output_dir is not None:
-        output_dir = str(output_dir)
+        output_dir = os.fspath(output_dir)
+        if not isinstance(output_dir, str):
+            raise TypeError(
+                "output_dir must be a string or path-like object returning str"
+            )
         if not output_dir.strip():
             raise ValueError("output_dir must be a non-empty string")
         config = ProjectConfig(

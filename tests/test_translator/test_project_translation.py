@@ -45,7 +45,7 @@ SIMPLE_CROSSL = textwrap.dedent("""
     """).strip()
 
 
-class ProjectReportPath:
+class ProjectPathLike:
     def __init__(self, path):
         self.path = path
 
@@ -87,7 +87,7 @@ def test_project_report_write_json_accepts_path_like_objects(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
-    report_path = ProjectReportPath(tmp_path / "reports" / "scan-report.json")
+    report_path = ProjectPathLike(tmp_path / "reports" / "scan-report.json")
 
     scan_project(repo).to_report(targets=["cgl"]).write_json(report_path)
 
@@ -118,6 +118,23 @@ def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_p
     assert payload["project"]["root"] == str(repo.resolve())
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "out" / "cgl" / "simple.cgl").exists()
+
+
+def test_translate_project_accepts_path_like_output_dir(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    report = translate_project(
+        repo,
+        targets=["cgl"],
+        output_dir=ProjectPathLike("translated"),
+    )
+    payload = report.to_json()
+
+    assert payload["project"]["outputDir"] == str((repo / "translated").resolve())
+    assert payload["summary"]["translatedCount"] == 1
+    assert (repo / "translated" / "cgl" / "simple.cgl").exists()
 
 
 def _source_hash_status_counts(**overrides):
