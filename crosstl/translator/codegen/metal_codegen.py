@@ -21817,6 +21817,12 @@ class MetalCodeGen:
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to Metal attribute syntax."""
         if semantic is not None:
+            hlsl_attribute = self.metal_hlsl_attribute_semantic(semantic)
+            if hlsl_attribute is not None:
+                return f" [[{hlsl_attribute}]]"
+            hlsl_color = self.metal_hlsl_color_semantic(semantic)
+            if hlsl_color is not None:
+                return f" [[user({hlsl_color})]]"
             mapped_semantic = self.semantic_map.get(str(semantic), str(semantic))
             if (
                 self.is_metal_tessellation_helper_semantic(semantic)
@@ -21829,6 +21835,18 @@ class MetalCodeGen:
                 return f" [[{mapped_semantic}]]"
         else:
             return ""
+
+    def metal_hlsl_attribute_semantic(self, semantic):
+        match = re.fullmatch(r"ATTRIB(\d+)", str(semantic), re.IGNORECASE)
+        if match:
+            return f"attribute({match.group(1)})"
+        return None
+
+    def metal_hlsl_color_semantic(self, semantic):
+        match = re.fullmatch(r"COLOR(\d+)", str(semantic), re.IGNORECASE)
+        if not match:
+            return None
+        return f"Color{match.group(1)}"
 
     def metal_array_semantic_attribute_precedes_extent(self, semantic):
         return self.canonical_metal_semantic(semantic) in {"clip_distance"}
