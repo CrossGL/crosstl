@@ -3318,8 +3318,8 @@ def _config_location(config: ProjectConfig) -> SourceLocation:
 class ProjectConfig:
     """Configuration for scanning and translating a shader repository."""
 
-    root: Path
-    config_path: Path | None = None
+    root: Path | str | os.PathLike[str]
+    config_path: Path | str | os.PathLike[str] | None = None
     source_roots: Sequence[str] = (".",)
     include_patterns: Sequence[str] = ()
     exclude_patterns: Sequence[str] = DEFAULT_EXCLUDE_PATTERNS
@@ -3331,6 +3331,15 @@ class ProjectConfig:
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     selected_variants: Sequence[str] = ()
     external_corpus_manifest: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "root", Path(os.fspath(self.root)).resolve())
+        if self.config_path is not None:
+            object.__setattr__(
+                self,
+                "config_path",
+                Path(os.fspath(self.config_path)).resolve(),
+            )
 
     def normalized_targets(self) -> list[str]:
         return _normalized_targets(self.targets)

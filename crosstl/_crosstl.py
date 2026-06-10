@@ -399,7 +399,11 @@ def _add_project_override_args(parser):
 
 def _add_project_scan_args(parser):
     parser.add_argument("root", help="Repository root to scan")
-    parser.add_argument("--config", help="Path to crosstl.toml")
+    parser.add_argument(
+        "--config",
+        type=_non_empty_project_arg("--config"),
+        help="Path to crosstl.toml",
+    )
     _add_project_override_args(parser)
 
 

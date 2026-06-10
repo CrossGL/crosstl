@@ -74,6 +74,30 @@ def test_project_report_write_json_accepts_path_like_strings(tmp_path):
     assert payload["summary"]["unitCount"] == 1
 
 
+def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config_path = repo / "crosstl.toml"
+    config_path.write_text("[project]\noutput_dir = \"out\"\n", encoding="utf-8")
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    config = project_api.ProjectConfig(
+        root=str(repo),
+        config_path=str(config_path),
+        output_dir="out",
+    )
+    scan = scan_project(config)
+    report = translate_project(config, targets=["cgl"])
+    payload = report.to_json()
+
+    assert config.root == repo.resolve()
+    assert config.config_path == config_path.resolve()
+    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    assert payload["project"]["root"] == str(repo.resolve())
+    assert payload["summary"]["translatedCount"] == 1
+    assert (repo / "out" / "cgl" / "simple.cgl").exists()
+
+
 def _source_hash_status_counts(**overrides):
     counts = {
         "missing": 0,
@@ -19231,6 +19255,32 @@ def test_project_cli_scan_rejects_empty_include_dir_override(tmp_path):
         "argument --include-dir: --include-dir entries must be non-empty"
         in result.stderr
     )
+
+
+@pytest.mark.parametrize("command", ("scan", "report", "translate-project"))
+def test_project_cli_rejects_empty_config_path(command, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            command,
+            str(repo),
+            "--config",
+            " ",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "argument --config: --config entries must be non-empty" in result.stderr
 
 
 def test_project_cli_scan_rejects_empty_target_override(tmp_path):
