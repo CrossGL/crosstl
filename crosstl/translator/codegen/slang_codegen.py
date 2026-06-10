@@ -3630,6 +3630,7 @@ class SlangCodeGen:
             "ray_miss",
             "raygen",
             "raygeneration",
+            "stage_entry",
             "task",
             "tesscontrol",
             "tesseval",

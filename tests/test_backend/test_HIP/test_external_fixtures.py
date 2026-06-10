@@ -1577,7 +1577,7 @@ def test_external_rocwmma_float_aliases_codegen_reparse():
         "float32_t *",
         "float64_t",
     ]
-    assert "@group(0) @binding(1) var<storage, read_write> a: array<f32>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read> a: array<f32>" in crossgl
     assert "@group(0) @binding(2) var<storage, read_write> d: array<f32>" in crossgl
     assert "f32 alpha" in crossgl
     assert "f64 beta" in crossgl
@@ -1917,7 +1917,7 @@ def test_external_rocm_warp_shuffle_reserved_in_parameter_codegen_reparse():
     kernel = ast.statements[0]
 
     assert kernel.params[1]["name"] == "in"
-    assert "@group(0) @binding(1) var<storage, read_write> in_: array<f32>" in crossgl
+    assert "@group(0) @binding(1) var<storage, read> in_: array<f32>" in crossgl
     assert "var val: f32 = in_[((y * width) + x)];" in crossgl
     assert "hip warp intrinsic __shfl(val, ((y * width) + x))" in crossgl
     assert "hip warp intrinsic __shfl_sync" in crossgl
@@ -1946,7 +1946,7 @@ def test_public_cuda_precision_parameter_keyword_hip_parity_codegen_reparse():
     kernel = ast.statements[0]
 
     assert kernel.params[1]["name"] == "precision"
-    assert "var<storage, read_write> precision_: array<T>" in crossgl
+    assert "var<storage, read> precision_: array<T>" in crossgl
     assert "full_precision[i] = f32(precision_[i]);" in crossgl
     assert " precision:" not in crossgl
 

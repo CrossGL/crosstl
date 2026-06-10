@@ -3948,7 +3948,7 @@ class MetalCodeGen:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name, func
             )
-            function_name = entry_name or f"kernel_{func.name}"
+            function_name = entry_name or self.stage_entry_base_name(shader_type, func)
             self.validate_metal_kernel_return_type(func, shader_type, raw_return_type)
             code += f"kernel {return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["mesh", "object", "task", "amplification"]:
@@ -11908,6 +11908,19 @@ class MetalCodeGen:
             str(getattr(attribute, "name", "")).lower()
             for attribute in getattr(node, "attributes", []) or []
         )
+        qualifier_aliases = {
+            "read": "readonly",
+            "write": "writeonly",
+            "read_write": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        qualifiers.update(
+            alias
+            for qualifier, alias in qualifier_aliases.items()
+            if qualifier in qualifiers
+        )
         qualifiers.discard("")
         return qualifiers
 
@@ -12986,6 +12999,22 @@ class MetalCodeGen:
             str(getattr(attr, "name", "")).lower() == "stage_entry"
             for attr in getattr(func, "attributes", []) or []
         )
+
+    def function_stage_qualifier(self, func):
+        qualifiers = getattr(func, "qualifiers", None)
+        if qualifiers:
+            return qualifiers[0]
+
+        qualifier = getattr(func, "qualifier", None)
+        if qualifier:
+            return qualifier
+
+        stage_entry_types = self.stage_entry_types()
+        for attr in getattr(func, "attributes", []) or []:
+            stage_name = normalize_stage_name(getattr(attr, "name", None))
+            if stage_name in stage_entry_types:
+                return stage_name
+        return None
 
     def stage_entry_names(self, ast, target_stage=None):
         stage_entry_types = self.stage_entry_types()

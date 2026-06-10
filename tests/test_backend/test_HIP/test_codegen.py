@@ -46,6 +46,68 @@ class TestHipCodeGen:
         assert "buffer_[gl_LocalInvocationID.x] = 1.0f;" in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
+    def test_hip_kernel_is_preserved_as_metal_compute_entry(self, tmp_path):
+        source_path = tmp_path / "scale.hip"
+        source_path.write_text("""
+            __global__ void scale(const float* input, float* output) {
+                unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+                output[i] = input[i] * 2.0f;
+            }
+            """)
+
+        result = translate(str(source_path), backend="metal", format_output=False)
+
+        assert "kernel void scale(" in result
+        assert "const device float* input [[buffer(0)]]" in result
+        assert "device float* output [[buffer(1)]]" in result
+        assert (
+            "uint3 thread_position_in_threadgroup " "[[thread_position_in_threadgroup]]"
+        ) in result
+        assert (
+            "uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]"
+            in result
+        )
+        assert "uint3 threads_per_threadgroup [[threads_per_threadgroup]]" in result
+        assert (
+            "uint i = threadgroup_position_in_grid.x * "
+            "threads_per_threadgroup.x + thread_position_in_threadgroup.x;"
+        ) in result
+        assert "output[i] = input[i] * 2.0;" in result
+        assert "int main(" not in result
+        assert "[[compute]]" not in result
+        assert "[[group]]" not in result
+        assert "threadIdx" not in result
+        assert "blockIdx" not in result
+        assert "blockDim" not in result
+
+    def test_hip_kernel_is_preserved_as_spirv_compute_entry(self, tmp_path):
+        source_path = tmp_path / "scale.hip"
+        source_path.write_text("""
+            __global__ void scale(const float* input, float* output) {
+                unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+                output[i] = input[i] * 2.0f;
+            }
+            """)
+
+        result = translate(str(source_path), backend="vulkan", format_output=False)
+
+        assert re.search(r'OpEntryPoint GLCompute %\d+ "scale"', result)
+        assert re.search(r"OpExecutionMode %\d+ LocalSize 1 1 1", result)
+        assert "OpDecorate" in result and "BufferBlock" in result
+        assert "OpDecorate" in result and "DescriptorSet 0" in result
+        assert "OpDecorate" in result and "Binding 0" in result
+        assert "OpDecorate" in result and "Binding 1" in result
+        assert "OpMemberDecorate" in result and "NonWritable" in result
+        assert "BuiltIn WorkgroupId" in result
+        assert "BuiltIn LocalInvocationId" in result
+        assert "BuiltIn WorkgroupSize" in result
+        assert "OpAccessChain" in result
+        assert "OpFMul" in result
+        assert "OpStore" in result
+        assert "threadIdx" not in result
+        assert "blockIdx" not in result
+        assert "blockDim" not in result
+
     def test_public_rocm_module_api_unnamed_function_parameter_codegen_reparse(self):
         # Reduced from ROCm/rocm-examples@cf369da68f209c315074204bd0eb61d1a5c015d1,
         # HIP-Basic/module_api/main.hip.
@@ -294,10 +356,7 @@ class TestHipCodeGen:
             "@group(0) @binding(0) var<storage, read_write> d_output: array<u32>"
             in result
         )
-        assert (
-            "@group(0) @binding(1) var<storage, read_write> d_input: array<u32>"
-            in result
-        )
+        assert "@group(0) @binding(1) var<storage, read> d_input: array<u32>" in result
         assert "var d_local: ptr<u32>;" in result
         assert "var d_shadow: ptr<u32>;" in result
         assert "d_output[0] = ((d_input[0] & 0xf00) >> 8);" in result
