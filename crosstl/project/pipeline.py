@@ -685,8 +685,10 @@ def _variant_define_counts(variants: Mapping[str, Any]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _normalized_targets(targets: Sequence[str]) -> list[str]:
+def _normalized_targets(targets: Sequence[str] | str) -> list[str]:
     discover_backend_plugins()
+    if isinstance(targets, str):
+        targets = [targets]
     normalized_targets = []
     for target in targets:
         normalized = normalize_backend_name(target) or target.strip().lower()
@@ -3323,7 +3325,7 @@ class ProjectConfig:
     source_roots: Sequence[str] = (".",)
     include_patterns: Sequence[str] = ()
     exclude_patterns: Sequence[str] = DEFAULT_EXCLUDE_PATTERNS
-    targets: Sequence[str] = ()
+    targets: Sequence[str] | str = ()
     output_dir: str = DEFAULT_OUTPUT_DIR
     source_overrides: Mapping[str, str] = field(default_factory=dict)
     include_dirs: Sequence[str] = ()
@@ -3780,7 +3782,7 @@ class ProjectScan:
     diagnostics: Sequence[ProjectDiagnostic] = ()
 
     def to_report(
-        self, targets: Sequence[str] | None = None
+        self, targets: Sequence[str] | str | None = None
     ) -> ProjectPortabilityReport:
         report_targets = (
             _normalized_targets(targets)
@@ -4794,7 +4796,7 @@ def _has_error_diagnostic(diagnostics: Sequence[ProjectDiagnostic], code: str) -
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
-    targets: Sequence[str] | None = None,
+    targets: Sequence[str] | str | None = None,
     output_dir: str | os.PathLike[str] | None = None,
     variants: Sequence[str] | str | None = None,
     format_output: bool = False,

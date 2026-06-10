@@ -137,6 +137,24 @@ def test_translate_project_accepts_path_like_output_dir(tmp_path):
     assert (repo / "translated" / "cgl" / "simple.cgl").exists()
 
 
+def test_project_apis_accept_single_target_strings(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    scan_payload = scan_project(repo).to_report(targets="OpenGL").to_json()
+    config = project_api.ProjectConfig(root=repo, targets="CGL")
+    report_payload = translate_project(config, output_dir="out").to_json()
+
+    assert scan_payload["project"]["targets"] == ["opengl"]
+    assert scan_payload["summary"]["targetCount"] == 1
+    assert scan_payload["artifactMatrix"]["expectedArtifactCount"] == 1
+    assert report_payload["project"]["targets"] == ["cgl"]
+    assert report_payload["summary"]["targetCount"] == 1
+    assert report_payload["summary"]["translatedCount"] == 1
+    assert (repo / "out" / "cgl" / "simple.cgl").exists()
+
+
 def _source_hash_status_counts(**overrides):
     counts = {
         "missing": 0,
