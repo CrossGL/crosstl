@@ -4,7 +4,7 @@ using namespace metal;
 
 struct gl_PerVertex {
     float4 gl_Position;
-    float gl_PointSize;
+    float gl_PointSize [[mediump]];
     float gl_ClipDistance[8];
     float gl_CullDistance[8];
 };

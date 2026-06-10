@@ -92,6 +92,7 @@ jobs:
             --case raylib-lighting-shader-pair \
             --case sascha-willems-vulkan-conservative-triangle \
             --case slang-hello-world-compute \
+            --case spirv-tools-basic-src \
             --target opengl \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-opengl-vulkan
@@ -106,7 +107,6 @@ jobs:
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
             --case rust-gpu-vulkan-examples-triangle-overlay \
-            --case spirv-tools-basic-src \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-vulkan
         shell: bash
