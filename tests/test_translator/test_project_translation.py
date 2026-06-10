@@ -54,6 +54,14 @@ class ProjectPathLike:
         return os.fspath(self.path)
 
 
+class ProjectBytesPathLike:
+    def __init__(self, path):
+        self.path = path
+
+    def __fspath__(self):
+        return os.fsencode(self.path)
+
+
 def test_project_package_exposes_public_api_surface():
     assert set(project_api.__all__) == {
         "ProjectConfig",
@@ -95,6 +103,29 @@ def test_project_report_write_json_accepts_path_like_objects(tmp_path):
     payload = json.loads(Path(os.fspath(report_path)).read_text(encoding="utf-8"))
     assert payload["kind"] == project_pipeline.REPORT_KIND
     assert payload["summary"]["unitCount"] == 1
+
+
+@pytest.mark.parametrize(
+    "report_path",
+    [
+        b"report.json",
+        ProjectBytesPathLike("report.json"),
+        object(),
+    ],
+)
+def test_project_report_write_json_rejects_invalid_path_values(tmp_path, report_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl"])
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Project report path must be a string or path-like object returning str"
+        ),
+    ):
+        report.write_json(report_path)
 
 
 def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_path):
@@ -9890,6 +9921,28 @@ def test_validate_project_report_returns_structured_invalid_report_diagnostics(
     assert "expected schemaVersion 1" in diagnostic["message"]
     assert "expected kind crosstl-project-portability-report" in diagnostic["message"]
     assert "missing project object" in diagnostic["message"]
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [validate_project_report, inspect_project_report],
+)
+@pytest.mark.parametrize(
+    "report_path",
+    [
+        b"report.json",
+        ProjectBytesPathLike("report.json"),
+        object(),
+    ],
+)
+def test_project_report_readers_reject_invalid_path_values(reader, report_path):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Project report path must be a string or path-like object returning str"
+        ),
+    ):
+        reader(report_path)
 
 
 def test_validate_project_report_rejects_invalid_project_metadata(tmp_path):

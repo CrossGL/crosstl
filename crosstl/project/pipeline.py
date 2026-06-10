@@ -601,6 +601,15 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(handle)
 
 
+def _filesystem_path_arg(value: Any, *, field_name: str) -> Path:
+    try:
+        return Path(value)
+    except TypeError as exc:
+        raise ValueError(
+            f"{field_name} must be a string or path-like object returning str"
+        ) from exc
+
+
 def _mapping_key_path(prefix: str, key: str) -> str:
     if REPORT_PATH_BARE_KEY_RE.match(key):
         return f"{prefix}.{key}"
@@ -4060,7 +4069,7 @@ class ProjectPortabilityReport:
         return payload
 
     def write_json(self, path: str | os.PathLike[str]) -> None:
-        path = Path(path)
+        path = _filesystem_path_arg(path, field_name="Project report path")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(self.to_json(), indent=2, sort_keys=True) + "\n",
@@ -6006,7 +6015,7 @@ def validate_project_report(
     report_path: str | os.PathLike[str], *, run_toolchains: bool = False
 ) -> dict[str, Any]:
     """Validate artifact existence and optional toolchain availability for a report."""
-    path = Path(report_path)
+    path = _filesystem_path_arg(report_path, field_name="Project report path")
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -6191,7 +6200,7 @@ def inspect_project_report(
     max_external_corpus_entries: int = EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     """Build a concise inspection summary for a project portability report."""
-    path = Path(report_path)
+    path = _filesystem_path_arg(report_path, field_name="Project report path")
     validation_report = validate_project_report(path, run_toolchains=run_toolchains)
     diagnostic_limit = max(0, max_diagnostics)
     failed_artifact_limit = max(0, max_failed_artifacts)
