@@ -75,6 +75,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/NVIDIA/cuda-samples/blob/b7c5481c556c3fe98db060207ecaa41a4b9a9abc/LICENSE
 
+## g-truc/ogl-samples
+
+- Repository: https://github.com/g-truc/ogl-samples
+- Commit: `38cada7a9458864265e25415ae61586d500ff5fc`
+- Source paths:
+  - `data/gl-330/flat-color.vert`
+  - `data/gl-330/flat-color.frag`
+- License: MIT
+- License URL:
+  https://github.com/g-truc/ogl-samples/blob/38cada7a9458864265e25415ae61586d500ff5fc/LICENSE.md
+
 ## KhronosGroup/OpenCL-SDK
 
 - Repository: https://github.com/KhronosGroup/OpenCL-SDK

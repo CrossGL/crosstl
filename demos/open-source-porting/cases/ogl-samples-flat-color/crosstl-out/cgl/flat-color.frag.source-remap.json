@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/flat-color.frag.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 314,
+        "file": "crosstl-out/cgl/flat-color.frag.cgl",
+        "length": 314,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 240,
+        "file": "flat-color.frag",
+        "length": 240,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

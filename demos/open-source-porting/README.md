@@ -51,6 +51,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL validation is tracked in issue #805. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX output validation is tracked in issue #807. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
+| `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base vertex shader unchanged. |
@@ -64,8 +65,8 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The DirectX, glslang, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK,
-Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, raylib,
+The DirectX, glslang, Metal performance, NVIDIA CUDA Samples, ogl-samples,
+OpenCL-SDK, Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, raylib,
 SaschaWillems triangle, and Slang cases keep upstream source files unchanged
 apart from repository
 formatting checks. The DirectX Hello Texture shader was retested after issue
@@ -104,6 +105,12 @@ currently expose invalid generated GLSL for HLSL `in`/`out` parameter shaders
 and invalid Metal stage entry points. That translator issue is tracked in issue
 #814, and the case is intentionally not checked in until generated OpenGL and
 Metal artifacts compile directly.
+
+The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
+OpenGL, and Vulkan output. Metal output is intentionally excluded because
+GLSL vertex layout locations are currently emitted as Metal `[[location]]`
+attributes instead of `[[attribute(n)]]` bindings. That translator issue is
+tracked in issue #817.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
 at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate. It
