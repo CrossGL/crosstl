@@ -12,4 +12,3 @@ VertexOutput VSMain(uint gl_VertexIndex : SV_VertexID) {
     output.fragColor = colors[gl_VertexIndex];
     return output;
 }
-

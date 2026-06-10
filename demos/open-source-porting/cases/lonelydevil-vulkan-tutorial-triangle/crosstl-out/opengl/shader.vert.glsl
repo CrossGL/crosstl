@@ -9,4 +9,3 @@ void main() {
     fragColor = colors[gl_VertexID];
     return;
 }
-

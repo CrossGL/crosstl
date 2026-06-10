@@ -8,4 +8,3 @@ float4 PSMain(FragmentInput input): SV_Target0 {
     outColor = float4(input.fragColor, 1.0);
     return outColor;
 }
-

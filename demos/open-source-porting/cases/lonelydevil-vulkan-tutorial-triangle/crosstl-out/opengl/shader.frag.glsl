@@ -9,4 +9,3 @@ void main() {
     out_fragColor = outColor;
     return;
 }
-
