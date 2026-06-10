@@ -4635,6 +4635,91 @@ def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_p
     assert "values[index] = index" not in metal
 
 
+def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add(
+    tmp_path,
+):
+    # Reduced from modular/modular commit
+    # 7aa053560034c8c5b4f9acb0a5b450e79d2f7c18,
+    # mojo/examples/gpu-intro/vector_addition.mojo.
+    repo = tmp_path / "repo"
+    shader_dir = repo / "mojo" / "examples" / "gpu-intro"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "vector_addition.mojo").write_text(
+        textwrap.dedent("""
+            from std.math import ceildiv
+            from std.gpu.host import DeviceContext
+            from std.gpu import block_dim, block_idx, thread_idx
+            from layout import TileTensor, row_major
+
+            comptime float_dtype = DType.float32
+            comptime vector_size = 1000
+            comptime layout = row_major[vector_size]()
+            comptime block_size = 256
+            comptime num_blocks = ceildiv(vector_size, block_size)
+
+
+            def vector_addition(
+                lhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+                rhs_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+                out_tensor: TileTensor[float_dtype, type_of(layout), MutAnyOrigin],
+            ):
+                var tid = block_idx.x * block_dim.x + thread_idx.x
+                if tid < vector_size:
+                    out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid]
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["mojo/examples/gpu-intro"]
+            targets = ["metal", "vulkan"]
+            output_dir = "crosstl-out"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    report_path = repo / "crosstl-out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    payload = report.to_json()
+    artifacts_by_target = {
+        artifact["target"]: artifact for artifact in payload["artifacts"]
+    }
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert validation["success"] is True
+    expected_toolchain_warning_targets = {"metal", "vulkan"}
+    unexpected_validation_diagnostics = [
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if not (
+            diagnostic.get("code") == "project.validate.toolchain-unavailable"
+            and diagnostic.get("severity") == "warning"
+            and diagnostic.get("target") in expected_toolchain_warning_targets
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+        )
+    ]
+    assert unexpected_validation_diagnostics == []
+    assert set(artifacts_by_target) == {"metal", "vulkan"}
+
+    metal_path = repo / artifacts_by_target["metal"]["path"]
+    spirv_path = repo / artifacts_by_target["vulkan"]["path"]
+    metal = metal_path.read_text(encoding="utf-8")
+    spirv = spirv_path.read_text(encoding="utf-8")
+
+    assert artifacts_by_target["metal"]["status"] == "translated"
+    assert artifacts_by_target["vulkan"]["status"] == "translated"
+    assert metal_path.exists()
+    assert spirv_path.exists()
+    assert "TileTensor<float_dtype, type_of(layout), MutAnyOrigin>" in metal
+    assert "; SPIR-V" in spirv
+    assert "IdentifierNode(" not in metal
+    assert "IdentifierNode(" not in spirv
+
+
 def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"

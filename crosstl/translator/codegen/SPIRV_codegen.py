@@ -11917,6 +11917,15 @@ class VulkanSPIRVCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, FunctionCallNode):
+            callee = self.convert_type_node_to_string(type_node.function)
+            args = ", ".join(
+                self.convert_type_node_to_string(arg)
+                for arg in getattr(type_node, "arguments", []) or []
+            )
+            return f"{callee}({args})"
+        if isinstance(type_node, IdentifierNode):
+            return type_node.name
         if isinstance(type_node, LiteralNode):
             return str(type_node.value)
         if type_node.__class__.__name__ == "ArrayType":
