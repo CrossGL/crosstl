@@ -1,162 +1,168 @@
 ; SPIR-V
 ; Version: 1.0
-; Generator: Khronos SPIR-V Tools Assembler; 0
+; Generator: CrossGL Vulkan SPIR-V Generator
 ; Bound: 103
-; Schema: 0
-               OpCapability Shader
-          %1 = OpExtInstImport "GLSL.std.450"
-               OpMemoryModel Logical GLSL450
-               OpEntryPoint GLCompute %2 "mat_mul_simple1" %CrossGL_glcompute_input_A %CrossGL_glcompute_input_B %CrossGL_glcompute_input_X %CrossGL_glcompute_input_params %gl_GlobalInvocationID
-               OpExecutionMode %2 LocalSize 1 1 1
-               OpName %MatMulParams "MatMulParams"
-               OpMemberName %MatMulParams 0 "row_dim_x"
-               OpMemberName %MatMulParams 1 "col_dim_x"
-               OpMemberName %MatMulParams 2 "inner_dim"
-               OpName %CrossGL_glcompute_input_A "CrossGL_glcompute_input_A"
-               OpName %A "A"
-               OpName %CrossGL_glcompute_input_B "CrossGL_glcompute_input_B"
-               OpName %B "B"
-               OpName %CrossGL_glcompute_input_X "CrossGL_glcompute_input_X"
-               OpName %X "X"
-               OpName %CrossGL_glcompute_input_params "CrossGL_glcompute_input_params"
-               OpName %params "params"
-               OpName %gl_GlobalInvocationID "gl_GlobalInvocationID"
-               OpName %id "id"
-               OpName %row_dim_x "row_dim_x"
-               OpName %col_dim_x "col_dim_x"
-               OpName %inner_dim "inner_dim"
-               OpName %index "index"
-               OpName %sum "sum"
-               OpName %k "k"
-               OpName %index_A "index_A"
-               OpName %index_B "index_B"
-               OpDecorate %CrossGL_glcompute_input_A Location 0
-               OpDecorate %CrossGL_glcompute_input_B Location 1
-               OpDecorate %CrossGL_glcompute_input_X Location 2
-               OpDecorate %CrossGL_glcompute_input_params Location 3
-               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
-       %void = OpTypeVoid
-       %bool = OpTypeBool
-        %int = OpTypeInt 32 1
-      %float = OpTypeFloat 32
-    %v2float = OpTypeVector %float 2
-    %v3float = OpTypeVector %float 3
-    %v4float = OpTypeVector %float 4
-       %uint = OpTypeInt 32 0
-%MatMulParams = OpTypeStruct %uint %uint %uint
-     %v2uint = OpTypeVector %uint 2
-         %31 = OpTypeFunction %void
-%_ptr_Input_float = OpTypePointer Input %float
-%_ptr_Function_float = OpTypePointer Function %float
-     %v3uint = OpTypeVector %uint 3
-%_ptr_Input_v3uint = OpTypePointer Input %v3uint
-%_ptr_Function_v2uint = OpTypePointer Function %v2uint
-%_ptr_Function_uint = OpTypePointer Function %uint
-      %int_0 = OpConstant %int 0
-     %uint_1 = OpConstant %uint 1
-%CrossGL_glcompute_input_A = OpVariable %_ptr_Input_float Input
-%CrossGL_glcompute_input_B = OpVariable %_ptr_Input_float Input
-%CrossGL_glcompute_input_X = OpVariable %_ptr_Input_float Input
-%CrossGL_glcompute_input_params = OpVariable %_ptr_Input_float Input
-%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
-          %2 = OpFunction %void None %31
-         %40 = OpLabel
-          %A = OpVariable %_ptr_Function_float Function
-          %B = OpVariable %_ptr_Function_float Function
-          %X = OpVariable %_ptr_Function_float Function
-     %params = OpVariable %_ptr_Function_float Function
-         %id = OpVariable %_ptr_Function_v2uint Function
-  %row_dim_x = OpVariable %_ptr_Function_uint Function
-  %col_dim_x = OpVariable %_ptr_Function_uint Function
-  %inner_dim = OpVariable %_ptr_Function_uint Function
-      %index = OpVariable %_ptr_Function_uint Function
-        %sum = OpVariable %_ptr_Function_float Function
-          %k = OpVariable %_ptr_Function_uint Function
-    %index_A = OpVariable %_ptr_Function_uint Function
-    %index_B = OpVariable %_ptr_Function_uint Function
-         %41 = OpLoad %float %CrossGL_glcompute_input_A
-               OpStore %A %41
-         %42 = OpLoad %float %CrossGL_glcompute_input_B
-               OpStore %B %42
-         %43 = OpLoad %float %CrossGL_glcompute_input_X
-               OpStore %X %43
-         %44 = OpLoad %float %CrossGL_glcompute_input_params
-               OpStore %params %44
-         %45 = OpLoad %v2uint %gl_GlobalInvocationID
-               OpStore %id %45
-         %46 = OpLoad %float %params
-         %47 = OpLoad %float %params
-         %48 = OpLoad %float %params
-         %49 = OpLoad %v2uint %id
-         %50 = OpCompositeExtract %uint %49 0
-         %51 = OpLoad %uint %col_dim_x
-         %52 = OpULessThan %bool %50 %51
-         %53 = OpLoad %v2uint %id
-         %54 = OpCompositeExtract %uint %53 1
-         %55 = OpLoad %uint %row_dim_x
-         %56 = OpULessThan %bool %54 %55
-         %57 = OpLogicalAnd %bool %52 %56
-               OpSelectionMerge %58 None
-               OpBranchConditional %57 %59 %60
-         %59 = OpLabel
-         %61 = OpLoad %v2uint %id
-         %62 = OpCompositeExtract %uint %61 1
-         %63 = OpLoad %uint %col_dim_x
-         %64 = OpIMul %uint %62 %63
-         %65 = OpLoad %v2uint %id
-         %66 = OpCompositeExtract %uint %65 0
-         %67 = OpIAdd %uint %64 %66
-               OpStore %index %67
-         %68 = OpConvertSToF %float %int_0
-               OpStore %sum %68
-         %69 = OpBitcast %uint %int_0
-               OpStore %k %69
-               OpBranch %70
-         %70 = OpLabel
-         %71 = OpLoad %uint %k
-         %72 = OpLoad %uint %inner_dim
-         %73 = OpULessThan %bool %71 %72
-               OpLoopMerge %74 %75 None
-               OpBranchConditional %73 %76 %74
-         %76 = OpLabel
-         %77 = OpLoad %v2uint %id
-         %78 = OpCompositeExtract %uint %77 1
-         %79 = OpLoad %uint %inner_dim
-         %80 = OpIMul %uint %78 %79
-         %81 = OpLoad %uint %k
-         %82 = OpIAdd %uint %80 %81
-               OpStore %index_A %82
-         %83 = OpLoad %uint %k
-         %84 = OpLoad %uint %col_dim_x
-         %85 = OpIMul %uint %83 %84
-         %86 = OpLoad %v2uint %id
-         %87 = OpCompositeExtract %uint %86 0
-         %88 = OpIAdd %uint %85 %87
-               OpStore %index_B %88
-         %89 = OpLoad %float %sum
-         %90 = OpLoad %uint %index_A
-         %91 = OpAccessChain %_ptr_Function_float %A %90
-         %92 = OpLoad %float %91
-         %93 = OpLoad %uint %index_B
-         %94 = OpAccessChain %_ptr_Function_float %B %93
-         %95 = OpLoad %float %94
-         %96 = OpFMul %float %92 %95
-         %97 = OpFAdd %float %89 %96
-               OpStore %sum %97
-               OpBranch %75
-         %75 = OpLabel
-         %98 = OpLoad %uint %k
-         %99 = OpIAdd %uint %98 %uint_1
-               OpStore %k %99
-               OpBranch %70
-         %74 = OpLabel
-        %100 = OpLoad %float %sum
-        %101 = OpLoad %uint %index
-        %102 = OpAccessChain %_ptr_Function_float %X %101
-               OpStore %102 %100
-               OpBranch %58
-         %60 = OpLabel
-               OpBranch %58
-         %58 = OpLabel
-               OpReturn
-               OpFunctionEnd
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %13 "mat_mul_simple1" %16 %20 %23 %26 %31
+OpExecutionMode %13 LocalSize 1 1 1
+OpName %10 "MatMulParams"
+OpMemberName %10 0 "row_dim_x"
+OpMemberName %10 1 "col_dim_x"
+OpMemberName %10 2 "inner_dim"
+OpName %16 "CrossGL_glcompute_input_A"
+OpName %19 "A"
+OpName %20 "CrossGL_glcompute_input_B"
+OpName %22 "B"
+OpName %23 "CrossGL_glcompute_input_X"
+OpName %25 "X"
+OpName %26 "CrossGL_glcompute_input_params"
+OpName %28 "params"
+OpName %31 "gl_GlobalInvocationID"
+OpName %34 "id"
+OpName %36 "row_dim_x"
+OpName %38 "col_dim_x"
+OpName %40 "inner_dim"
+OpName %54 "index"
+OpName %62 "sum"
+OpName %65 "k"
+OpName %74 "index_A"
+OpName %81 "index_B"
+OpDecorate %16 Location 0
+OpDecorate %20 Location 1
+OpDecorate %23 Location 2
+OpDecorate %26 Location 3
+OpDecorate %31 BuiltIn GlobalInvocationId
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeInt 32 0
+%10 = OpTypeStruct %9 %9 %9
+%11 = OpTypeVector %9 2
+%12 = OpTypeFunction %2
+%15 = OpTypePointer Input %5
+%18 = OpTypePointer Function %5
+%29 = OpTypeVector %9 3
+%30 = OpTypePointer Input %29
+%33 = OpTypePointer Function %11
+%35 = OpTypePointer Function %9
+%63 = OpConstant %4 0
+%98 = OpConstant %9 1
+%16 = OpVariable %15 Input
+%20 = OpVariable %15 Input
+%23 = OpVariable %15 Input
+%26 = OpVariable %15 Input
+%31 = OpVariable %30 Input
+; WARNING: Unknown type PointerType(pointee_type=PrimitiveType(name=float,size_bits=None),is_mutable=True), using float as default
+; WARNING: Unknown type PointerType(pointee_type=PrimitiveType(name=float,size_bits=None),is_mutable=True), using float as default
+; WARNING: Unknown type PointerType(pointee_type=PrimitiveType(name=float,size_bits=None),is_mutable=True), using float as default
+; WARNING: Unknown type ReferenceType(referenced_type=NamedType(name=MatMulParams,generic_args=[]),is_mutable=False), using float as default
+%13 = OpFunction %2 None %12
+%14 = OpLabel
+%19 = OpVariable %18 Function
+%22 = OpVariable %18 Function
+%25 = OpVariable %18 Function
+%28 = OpVariable %18 Function
+%34 = OpVariable %33 Function
+%36 = OpVariable %35 Function
+%38 = OpVariable %35 Function
+%40 = OpVariable %35 Function
+%54 = OpVariable %35 Function
+%62 = OpVariable %18 Function
+%65 = OpVariable %35 Function
+%74 = OpVariable %35 Function
+%81 = OpVariable %35 Function
+%17 = OpLoad %5 %16
+OpStore %19 %17
+%21 = OpLoad %5 %20
+OpStore %22 %21
+%24 = OpLoad %5 %23
+OpStore %25 %24
+%27 = OpLoad %5 %26
+OpStore %28 %27
+%32 = OpLoad %11 %31
+OpStore %34 %32
+%37 = OpLoad %5 %28
+; WARNING: Could not find member row_dim_x in float
+%39 = OpLoad %5 %28
+; WARNING: Could not find member col_dim_x in float
+%41 = OpLoad %5 %28
+; WARNING: Could not find member inner_dim in float
+%42 = OpLoad %11 %34
+%43 = OpCompositeExtract %9 %42 0
+%44 = OpLoad %9 %38
+%45 = OpULessThan %3 %43 %44
+%46 = OpLoad %11 %34
+%47 = OpCompositeExtract %9 %46 1
+%48 = OpLoad %9 %36
+%49 = OpULessThan %3 %47 %48
+%50 = OpLogicalAnd %3 %45 %49
+OpSelectionMerge %51 None
+OpBranchConditional %50 %52 %53
+%52 = OpLabel
+%55 = OpLoad %11 %34
+%56 = OpCompositeExtract %9 %55 1
+%57 = OpLoad %9 %38
+%58 = OpIMul %9 %56 %57
+%59 = OpLoad %11 %34
+%60 = OpCompositeExtract %9 %59 0
+%61 = OpIAdd %9 %58 %60
+OpStore %54 %61
+%64 = OpConvertSToF %5 %63
+OpStore %62 %64
+%66 = OpBitcast %9 %63
+OpStore %65 %66
+OpBranch %67
+%67 = OpLabel
+%71 = OpLoad %9 %65
+%72 = OpLoad %9 %40
+%73 = OpULessThan %3 %71 %72
+OpLoopMerge %70 %69 None
+OpBranchConditional %73 %68 %70
+%68 = OpLabel
+%75 = OpLoad %11 %34
+%76 = OpCompositeExtract %9 %75 1
+%77 = OpLoad %9 %40
+%78 = OpIMul %9 %76 %77
+%79 = OpLoad %9 %65
+%80 = OpIAdd %9 %78 %79
+OpStore %74 %80
+%82 = OpLoad %9 %65
+%83 = OpLoad %9 %38
+%84 = OpIMul %9 %82 %83
+%85 = OpLoad %11 %34
+%86 = OpCompositeExtract %9 %85 0
+%87 = OpIAdd %9 %84 %86
+OpStore %81 %87
+%88 = OpLoad %5 %62
+%89 = OpLoad %9 %74
+%90 = OpAccessChain %18 %19 %89
+%91 = OpLoad %5 %90
+%92 = OpLoad %9 %81
+%93 = OpAccessChain %18 %22 %92
+%94 = OpLoad %5 %93
+%95 = OpFMul %5 %91 %94
+%96 = OpFAdd %5 %88 %95
+OpStore %62 %96
+OpBranch %69
+%69 = OpLabel
+%97 = OpLoad %9 %65
+%99 = OpIAdd %9 %97 %98
+OpStore %65 %99
+OpBranch %67
+%70 = OpLabel
+%100 = OpLoad %5 %62
+%101 = OpLoad %9 %54
+%102 = OpAccessChain %18 %25 %101
+OpStore %102 %100
+OpBranch %51
+%53 = OpLabel
+OpBranch %51
+%51 = OpLabel
+OpReturn
+OpFunctionEnd

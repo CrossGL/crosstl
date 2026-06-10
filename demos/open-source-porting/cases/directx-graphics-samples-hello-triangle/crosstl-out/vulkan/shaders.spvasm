@@ -1,78 +1,77 @@
 ; SPIR-V
 ; Version: 1.0
-; Generator: Khronos SPIR-V Tools Assembler; 0
+; Generator: CrossGL Vulkan SPIR-V Generator
 ; Bound: 42
-; Schema: 0
-               OpCapability Shader
-          %1 = OpExtInstImport "GLSL.std.450"
-               OpMemoryModel Logical GLSL450
-               OpEntryPoint Vertex %2 "VSMain" %gl_Position %CrossGL_vertex_output_VSMain_color %CrossGL_vertex_input_position %CrossGL_vertex_input_color
-               OpEntryPoint Fragment %7 "main"
-               OpExecutionMode %7 OriginUpperLeft
-               OpName %PSInput "PSInput"
-               OpMemberName %PSInput 0 "position"
-               OpMemberName %PSInput 1 "color"
-               OpName %input "input"
-               OpName %gl_Position "gl_Position"
-               OpName %CrossGL_vertex_output_VSMain_color "CrossGL_vertex_output_VSMain_color"
-               OpName %CrossGL_vertex_input_position "CrossGL_vertex_input_position"
-               OpName %position "position"
-               OpName %CrossGL_vertex_input_color "CrossGL_vertex_input_color"
-               OpName %color "color"
-               OpName %result "result"
-               OpDecorate %gl_Position BuiltIn Position
-               OpDecorate %CrossGL_vertex_output_VSMain_color Location 0
-               OpDecorate %CrossGL_vertex_input_position Location 0
-               OpDecorate %CrossGL_vertex_input_color Location 1
-       %void = OpTypeVoid
-       %bool = OpTypeBool
-        %int = OpTypeInt 32 1
-      %float = OpTypeFloat 32
-    %v2float = OpTypeVector %float 2
-    %v3float = OpTypeVector %float 3
-    %v4float = OpTypeVector %float 4
-    %PSInput = OpTypeStruct %v4float %v4float
-         %20 = OpTypeFunction %v4float %PSInput
-         %21 = OpTypeFunction %void
-%_ptr_Output_v4float = OpTypePointer Output %v4float
-%_ptr_Input_v4float = OpTypePointer Input %v4float
-%_ptr_Function_v4float = OpTypePointer Function %v4float
-%_ptr_Function_PSInput = OpTypePointer Function %PSInput
-      %int_0 = OpConstant %int 0
-      %int_1 = OpConstant %int 1
-%gl_Position = OpVariable %_ptr_Output_v4float Output
-%CrossGL_vertex_output_VSMain_color = OpVariable %_ptr_Output_v4float Output
-%CrossGL_vertex_input_position = OpVariable %_ptr_Input_v4float Input
-%CrossGL_vertex_input_color = OpVariable %_ptr_Input_v4float Input
-         %28 = OpFunction %v4float None %20
-      %input = OpFunctionParameter %PSInput
-         %29 = OpLabel
-         %30 = OpCompositeExtract %v4float %input 1
-               OpReturnValue %30
-               OpFunctionEnd
-          %2 = OpFunction %void None %21
-         %31 = OpLabel
-   %position = OpVariable %_ptr_Function_v4float Function
-      %color = OpVariable %_ptr_Function_v4float Function
-     %result = OpVariable %_ptr_Function_PSInput Function
-         %32 = OpLoad %v4float %CrossGL_vertex_input_position
-               OpStore %position %32
-         %33 = OpLoad %v4float %CrossGL_vertex_input_color
-               OpStore %color %33
-         %34 = OpLoad %v4float %position
-         %35 = OpAccessChain %_ptr_Function_v4float %result %int_0
-               OpStore %35 %34
-         %36 = OpLoad %v4float %color
-         %37 = OpAccessChain %_ptr_Function_v4float %result %int_1
-               OpStore %37 %36
-         %38 = OpLoad %PSInput %result
-         %39 = OpCompositeExtract %v4float %38 0
-               OpStore %gl_Position %39
-         %40 = OpCompositeExtract %v4float %38 1
-               OpStore %CrossGL_vertex_output_VSMain_color %40
-               OpReturn
-               OpFunctionEnd
-          %7 = OpFunction %void None %21
-         %41 = OpLabel
-               OpReturn
-               OpFunctionEnd
+OpCapability Shader
+%1 = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %16 "VSMain" %19 %20 %22 %26
+OpEntryPoint Fragment %40 "main"
+OpExecutionMode %40 OriginUpperLeft
+OpName %9 "PSInput"
+OpMemberName %9 0 "position"
+OpMemberName %9 1 "color"
+OpName %12 "input"
+OpName %19 "gl_Position"
+OpName %20 "CrossGL_vertex_output_VSMain_color"
+OpName %22 "CrossGL_vertex_input_position"
+OpName %25 "position"
+OpName %26 "CrossGL_vertex_input_color"
+OpName %28 "color"
+OpName %30 "result"
+OpDecorate %19 BuiltIn Position
+OpDecorate %20 Location 0
+OpDecorate %22 Location 0
+OpDecorate %26 Location 1
+%2 = OpTypeVoid
+%3 = OpTypeBool
+%4 = OpTypeInt 32 1
+%5 = OpTypeFloat 32
+%6 = OpTypeVector %5 2
+%7 = OpTypeVector %5 3
+%8 = OpTypeVector %5 4
+%9 = OpTypeStruct %8 %8
+%10 = OpTypeFunction %8 %9
+%15 = OpTypeFunction %2
+%18 = OpTypePointer Output %8
+%21 = OpTypePointer Input %8
+%24 = OpTypePointer Function %8
+%29 = OpTypePointer Function %9
+%32 = OpConstant %4 0
+%35 = OpConstant %4 1
+%19 = OpVariable %18 Output
+%20 = OpVariable %18 Output
+%22 = OpVariable %21 Input
+%26 = OpVariable %21 Input
+%11 = OpFunction %8 None %10
+%12 = OpFunctionParameter %9
+%13 = OpLabel
+%14 = OpCompositeExtract %8 %12 1
+OpReturnValue %14
+OpFunctionEnd
+%16 = OpFunction %2 None %15
+%17 = OpLabel
+%25 = OpVariable %24 Function
+%28 = OpVariable %24 Function
+%30 = OpVariable %29 Function
+%23 = OpLoad %8 %22
+OpStore %25 %23
+%27 = OpLoad %8 %26
+OpStore %28 %27
+%31 = OpLoad %8 %25
+%33 = OpAccessChain %24 %30 %32
+OpStore %33 %31
+%34 = OpLoad %8 %28
+%36 = OpAccessChain %24 %30 %35
+OpStore %36 %34
+%37 = OpLoad %9 %30
+%38 = OpCompositeExtract %8 %37 0
+OpStore %19 %38
+%39 = OpCompositeExtract %8 %37 1
+OpStore %20 %39
+OpReturn
+OpFunctionEnd
+%40 = OpFunction %2 None %15
+%41 = OpLabel
+OpReturn
+OpFunctionEnd

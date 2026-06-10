@@ -66,7 +66,9 @@ mapping preserves distinct stage files.
 Each case stores reference artifacts under `crosstl-out/`. Portability reports
 are not committed because they include machine-local absolute project roots.
 The demo runner and CI workflow generate fresh reports for every run and can
-write them to a separate reports directory for inspection.
+write them to a separate reports directory for inspection. The runner disables
+optional code formatting during generation so artifact comparisons do not
+depend on host `clang-format` availability.
 
 ## Third-party notices
 

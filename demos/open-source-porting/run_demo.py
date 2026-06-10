@@ -94,6 +94,7 @@ def _translate_case(
         "--report",
         str(report_path),
         "--validate",
+        "--no-format",
     ]
     for target in targets:
         command.extend(["--target", target])
@@ -175,6 +176,10 @@ def _artifact_files(output_dir: Path, targets: list[str]) -> dict[Path, Path]:
     return files
 
 
+def _comparison_bytes(path: Path) -> bytes:
+    return path.read_bytes().rstrip(b"\r\n")
+
+
 def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> None:
     expected = _artifact_files(case_dir / OUTPUT_DIR_NAME, targets)
     actual = _artifact_files(work_dir / OUTPUT_DIR_NAME, targets)
@@ -188,7 +193,7 @@ def _compare_artifacts(case_dir: Path, work_dir: Path, targets: list[str]) -> No
     changed = [
         relative
         for relative, expected_path in expected.items()
-        if expected_path.read_bytes() != actual[relative].read_bytes()
+        if _comparison_bytes(expected_path) != _comparison_bytes(actual[relative])
     ]
     if changed:
         raise SystemExit(

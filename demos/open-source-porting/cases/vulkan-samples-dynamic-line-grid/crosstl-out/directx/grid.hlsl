@@ -1,11 +1,9 @@
 
-struct FragmentInput
-{
-    float3 nearPoint : location;
-    float3 farPoint : location;
+struct FragmentInput {
+    float3 nearPoint: location;
+    float3 farPoint: location;
 };
-float4 grid(float3 pos)
-{
+float4 grid(float3 pos) {
     float2 coord = pos.xz;
     float2 derivative = fwidth(coord);
     float2 gridLine = (abs((frac((coord - 0.5)) - 0.5)) / derivative);
@@ -14,8 +12,7 @@ float4 grid(float3 pos)
 }
 
 // Fragment Shader
-float4 PSMain(FragmentInput input) : SV_Target0
-{
+float4 PSMain(FragmentInput input): SV_Target0 {
     float4 outColor;
     float t = (-input.nearPoint.y / (input.farPoint.y - input.nearPoint.y));
     float3 pos = (input.nearPoint + (t * (input.farPoint - input.nearPoint)));

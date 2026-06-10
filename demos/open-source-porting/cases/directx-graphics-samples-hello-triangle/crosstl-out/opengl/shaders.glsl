@@ -12,16 +12,19 @@ in vec4 color;
 #ifdef GL_VERTEX_SHADER
 // Vertex Shader
 void main() {
-  gl_Position = position;
-  out_color = color;
-  return;
+    gl_Position = position;
+    out_color = color;
+    return;
 }
 
 #endif
 #ifdef GL_FRAGMENT_SHADER
 // Fragment Shader
-vec4 PSMain(PSInput input) { return input.color; }
+vec4 PSMain(PSInput input) {
+    return input.color;
+}
 
-void main() {}
+void main() {
+}
 
 #endif
