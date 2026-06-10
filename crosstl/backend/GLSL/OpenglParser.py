@@ -342,6 +342,13 @@ GEOMETRY_OUTPUT_LAYOUT_QUALIFIERS = {
     "triangle_strip",
     "max_vertices",
 }
+HLSL_GEOMETRY_PARAMETER_QUALIFIERS = {
+    "point",
+    "line",
+    "triangle",
+    "lineadj",
+    "triangleadj",
+}
 GEOMETRY_BUILTINS = {
     "EmitVertex",
     "EndPrimitive",
@@ -405,6 +412,8 @@ VERTEX_BUILTINS = {
     "gl_BaseInstance",
     "gl_DrawID",
 }
+TRANSFORM_FEEDBACK_DEFAULT_LAYOUT_KEYS = {"xfb_buffer", "xfb_stride"}
+TRANSFORM_FEEDBACK_LAYOUT_KEYS = TRANSFORM_FEEDBACK_DEFAULT_LAYOUT_KEYS | {"xfb_offset"}
 
 
 class GLSLParser:
@@ -419,6 +428,8 @@ class GLSLParser:
         self.current_token = self.tokens[self.index]
         self.anonymous_struct_count = 0
         self.known_type_names = set()
+        self.current_xfb_output_buffer = None
+        self.xfb_output_stride_by_buffer = {}
 
     def is_auto_shader_type(self, shader_type):
         return shader_type in AUTO_SHADER_TYPES
@@ -516,7 +527,9 @@ class GLSLParser:
 
             if layout is not None and self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
-                layouts.append({"layout": layout, "qualifiers": qualifiers})
+                layout = self.consume_standalone_xfb_output_layout(qualifiers, layout)
+                if layout is not None:
+                    layouts.append({"layout": layout, "qualifiers": qualifiers})
                 continue
 
             if self.is_type_only_layout_declaration_start(qualifiers, layout):
@@ -815,6 +828,76 @@ class GLSLParser:
     def is_io_qualifier_set(self, qualifiers):
         return bool({"in", "out", "inout", "attribute", "varying"} & set(qualifiers))
 
+    def layout_value_key(self, value):
+        if isinstance(value, NumberNode):
+            return value.value
+        if isinstance(value, VariableNode) and not value.vtype:
+            return value.name
+        return str(value)
+
+    def pop_layout_key(self, layout, key_name):
+        for key in list(layout):
+            if str(key).lower() == key_name:
+                return layout.pop(key)
+        return None
+
+    def get_layout_key(self, layout, key_name):
+        for key, value in (layout or {}).items():
+            if str(key).lower() == key_name:
+                return value
+        return None
+
+    def layout_keys_lower(self, layout):
+        return {str(key).lower() for key in layout or {}}
+
+    def has_out_qualifier(self, qualifiers):
+        return "out" in {str(qualifier).lower() for qualifier in qualifiers or []}
+
+    def consume_standalone_xfb_output_layout(self, qualifiers, layout):
+        if not self.has_out_qualifier(qualifiers):
+            return layout
+
+        remaining = dict(layout)
+        xfb_buffer = self.pop_layout_key(remaining, "xfb_buffer")
+        if xfb_buffer is not None:
+            self.current_xfb_output_buffer = xfb_buffer
+
+        xfb_stride = self.pop_layout_key(remaining, "xfb_stride")
+        if xfb_stride is not None:
+            if self.current_xfb_output_buffer is None:
+                self.current_xfb_output_buffer = "0"
+            self.xfb_output_stride_by_buffer[
+                self.layout_value_key(self.current_xfb_output_buffer)
+            ] = xfb_stride
+
+        return remaining or None
+
+    def output_layout_with_xfb_defaults(self, qualifiers, layout):
+        if not layout or not self.has_out_qualifier(qualifiers):
+            return layout
+
+        layout_keys = self.layout_keys_lower(layout)
+        if not layout_keys & TRANSFORM_FEEDBACK_LAYOUT_KEYS:
+            return layout
+
+        merged = dict(layout)
+        xfb_buffer = self.get_layout_key(merged, "xfb_buffer")
+        if xfb_buffer is None and (
+            "xfb_offset" in layout_keys or "xfb_stride" in layout_keys
+        ):
+            xfb_buffer = self.current_xfb_output_buffer
+            if xfb_buffer is not None:
+                merged["xfb_buffer"] = xfb_buffer
+
+        if self.get_layout_key(merged, "xfb_stride") is None and xfb_buffer is not None:
+            stride = self.xfb_output_stride_by_buffer.get(
+                self.layout_value_key(xfb_buffer)
+            )
+            if stride is not None:
+                merged["xfb_stride"] = stride
+
+        return merged
+
     def apply_variable_io_type(self, var, qualifiers):
         if "inout" in qualifiers:
             var.io_type = "INOUT"
@@ -980,6 +1063,10 @@ class GLSLParser:
 
         while True:
             consumed = False
+            while self.skip_attribute_list_if_present():
+                self.skip_newlines()
+                consumed = True
+
             while self.is_macro_declaration_prefix():
                 self.skip_macro_declaration_prefix()
                 self.skip_newlines()
@@ -1025,6 +1112,9 @@ class GLSLParser:
             return False
 
         identifier = self.current_token[1]
+        if identifier in self.known_type_names:
+            return False
+
         if identifier in DECLARATION_ANNOTATION_PREFIXES:
             if self.peek()[0] != "LPAREN":
                 return False
@@ -1275,6 +1365,14 @@ class GLSLParser:
             return type_name
         return f"{type_name}{self.format_type_array_suffixes(array_sizes)}"
 
+    def parse_pointer_declarator_suffix(self):
+        suffix = ""
+        while self.current_token[0] == "MULTIPLY":
+            suffix += "*"
+            self.eat("MULTIPLY")
+            self.skip_newlines()
+        return suffix
+
     def is_name_token(self):
         return self.is_name_token_at(self.index)
 
@@ -1360,6 +1458,7 @@ class GLSLParser:
                 type_array_sizes = self.parse_array_suffixes()
         while True:
             self.skip_newlines()
+            declarator_type = type_name + self.parse_pointer_declarator_suffix()
             if not self.is_name_token():
                 raise SyntaxError(
                     f"Expected identifier in declaration, got {self.current_token}"
@@ -1387,9 +1486,12 @@ class GLSLParser:
                         )
                 else:
                     semantic = self.parse_hlsl_semantic()
+            variable_layout = self.output_layout_with_xfb_defaults(
+                qualifiers, variable_layout
+            )
 
             var = VariableNode(
-                type_name,
+                declarator_type,
                 name,
                 value=value,
                 qualifiers=qualifiers or [],
@@ -1495,7 +1597,7 @@ class GLSLParser:
     def is_hlsl_cbuffer_block_start(self):
         return (
             self.current_token[0] == "IDENTIFIER"
-            and str(self.current_token[1]).lower() == "cbuffer"
+            and str(self.current_token[1]).lower() in {"cbuffer", "tbuffer"}
             and self.peek_non_newline()[0] == "IDENTIFIER"
         )
 
@@ -1514,6 +1616,7 @@ class GLSLParser:
         register_layout = self.parse_hlsl_register_annotation()
         if register_layout:
             layout = self.merge_layout_qualifiers(layout, register_layout)
+        layout = self.output_layout_with_xfb_defaults(qualifiers, layout)
         self.skip_newlines()
         self.eat("LBRACE")
 
@@ -1657,14 +1760,22 @@ class GLSLParser:
         self.eat("COLON")
         self.skip_newlines()
         parts = []
-        while self.current_token[0] not in (
-            "COMMA",
-            "SEMICOLON",
-            "RPAREN",
-            "LBRACE",
-            "NEWLINE",
-            "EOF",
-        ):
+        depth = 0
+        while True:
+            if self.current_token[0] == "EOF":
+                break
+            if depth == 0 and self.current_token[0] in (
+                "COMMA",
+                "SEMICOLON",
+                "RPAREN",
+                "LBRACE",
+                "NEWLINE",
+            ):
+                break
+            if self.current_token[0] == "LPAREN":
+                depth += 1
+            elif self.current_token[0] == "RPAREN" and depth > 0:
+                depth -= 1
             parts.append(str(self.current_token[1]))
             self.advance()
         return " ".join(parts).strip()
@@ -1721,6 +1832,25 @@ class GLSLParser:
         function.semantic = semantic
         return function
 
+    def parse_parameter_prefix(self):
+        qualifiers, layout = self.parse_declaration_prefix()
+        if self.shader_type != "geometry" and not self.should_infer_shader_type:
+            return qualifiers, layout
+
+        while (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in HLSL_GEOMETRY_PARAMETER_QUALIFIERS
+        ):
+            qualifiers.append(self.current_token[1])
+            self.eat("IDENTIFIER")
+            self.skip_newlines()
+            trailing_qualifiers, trailing_layout = self.parse_declaration_prefix()
+            qualifiers.extend(trailing_qualifiers)
+            if trailing_layout:
+                layout = self.merge_layout_qualifiers(layout, trailing_layout)
+
+        return qualifiers, layout
+
     def parse_parameters(self):
         self.eat("LPAREN")
         params = []
@@ -1745,11 +1875,12 @@ class GLSLParser:
                         raise SyntaxError("GLSL variadic parameter must be last")
                     break
 
-                qualifiers = self.parse_qualifiers()
+                qualifiers, layout = self.parse_parameter_prefix()
                 param_type = self.parse_type()
                 type_array_sizes = []
                 if self.current_token[0] == "LBRACKET":
                     type_array_sizes = self.parse_array_suffixes()
+                param_type += self.parse_pointer_declarator_suffix()
 
                 if self.current_token[0] in ("COMMA", "RPAREN"):
                     param_name = f"_param{len(params)}"
@@ -1774,6 +1905,7 @@ class GLSLParser:
                         param_type,
                         param_name,
                         qualifiers=qualifiers,
+                        layout=layout,
                         array_size=array_size,
                         array_sizes=array_sizes,
                         is_array=bool(array_sizes),
@@ -2056,6 +2188,11 @@ class GLSLParser:
             return False
         return self.peek_non_newline()[0] == "LBRACKET"
 
+    def is_hlsl_attribute_list_start(self):
+        return self.current_token[0] == "LBRACKET" and not (
+            self.is_statement_attribute_list_start() or self.is_bracketed_stage_marker()
+        )
+
     def skip_statement_attribute_list(self):
         self.eat("LBRACKET")
         self.skip_newlines()
@@ -2072,9 +2209,29 @@ class GLSLParser:
             self.advance()
 
     def skip_statement_attributes(self):
-        while self.is_statement_attribute_list_start():
-            self.skip_statement_attribute_list()
+        while self.skip_attribute_list_if_present():
             self.skip_newlines()
+
+    def skip_attribute_list_if_present(self):
+        if self.is_statement_attribute_list_start():
+            self.skip_statement_attribute_list()
+            return True
+        if self.is_hlsl_attribute_list_start():
+            self.skip_hlsl_attribute_list()
+            return True
+        return False
+
+    def skip_hlsl_attribute_list(self):
+        self.eat("LBRACKET")
+        depth = 1
+        while depth:
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated HLSL attribute list")
+            if self.current_token[0] == "LBRACKET":
+                depth += 1
+            elif self.current_token[0] == "RBRACKET":
+                depth -= 1
+            self.advance()
 
     def parse_condition(self):
         self.skip_newlines()

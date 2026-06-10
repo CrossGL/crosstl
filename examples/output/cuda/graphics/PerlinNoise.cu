@@ -1,6 +1,6 @@
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-
 __device__ inline float2 cgl_float2_mul_scalar(float2 lhs, float rhs) {
   return make_float2((lhs.x * rhs), (lhs.y * rhs));
 }

@@ -309,6 +309,33 @@ def test_struct_comma_member_declarators_from_ray_tracing_example():
     ]
 
 
+def test_struct_trailing_variable_initializer_from_slang_docs():
+    # Source: Slang declarations docs, Structure Types section, documents a
+    # C-style struct declaration used as a variable declaration.
+    code = """
+    struct Association
+    {
+        int from;
+        int to;
+    } associations[] =
+    {
+        { 1, 1 },
+        { 2, 4 },
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    declaration = ast.global_vars[0]
+
+    assert ast.structs[0].name == "Association"
+    assert isinstance(declaration, AssignmentNode)
+    assert declaration.left.vtype == "Association"
+    assert declaration.left.name == "associations"
+    assert declaration.left.array_sizes == [None]
+    assert isinstance(declaration.right, InitializerListNode)
+    assert len(declaration.right.elements) == 2
+
+
 def test_pervertex_struct_member_qualifier_from_barycentric_tests():
     code = """
     struct Input
@@ -504,6 +531,36 @@ def test_struct_init_method_parsing_from_shader_toy_sample():
         ("float", "e11"),
     ]
     assert isinstance(constructor.body[0], AssignmentNode)
+
+
+def test_class_declaration_parsing_from_slang_cpu_program():
+    # Source: shader-slang/slang@142e00d9342eccf0613ed1b18d81cb003c5d6f09
+    # tests/cpu-program/class.slang
+    code = """
+    class MyClass
+    {
+        int intMember;
+        __init()
+        {
+            intMember = 0;
+        }
+        int method()
+        {
+            return intMember;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    cls = ast.structs[0]
+
+    assert cls.name == "MyClass"
+    assert cls.is_class is True
+    assert [(member.vtype, member.name) for member in cls.members] == [
+        ("int", "intMember")
+    ]
+    assert [method.name for method in cls.methods] == ["__init", "method"]
 
 
 def test_core_meta_generic_extension_constructor_constraints_parse():
@@ -1196,6 +1253,46 @@ def test_dunder_extension_multi_interface_conformance_parse():
     assert len(extension.methods) == 1
     assert extension.methods[0].name == "subf"
     assert isinstance(extension.methods[0].body[0], ReturnNode)
+
+
+def test_generic_prefixed_extension_from_autodiff_force_unroll_sample():
+    # Reduced from shader-slang/slang@0658ed79219d6e4ee526182104ce71d476f787be
+    # tests/autodiff/force-unroll-late-specialization.slang.
+    code = """
+    __generic<T : __BuiltinFloatingPointType, A : IDiffTensorWrapper>
+    extension DiffTensorView<T, A>
+    {
+        [Differentiable]
+        __generic<let M : int, let R : int, let N : int>
+        vector<T, M> loadVecOnce(vector<uint, N> x)
+        {
+            vector<T, M> result;
+            [ForceUnroll]
+            for (int j = 0; j < M; j++)
+            {
+                result[j] = this.loadOnce(x);
+                x[R] += 1;
+            }
+            return result;
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    extension = ast.extensions[0]
+    method = extension.methods[0]
+
+    assert extension.extended_type == "DiffTensorView<T, A>"
+    assert extension.generic_parameters == "<T, A>"
+    assert [
+        (constraint.parameter, constraint.constraint_type)
+        for constraint in extension.generic_constraints
+    ] == [("T", "__BuiltinFloatingPointType"), ("A", "IDiffTensorWrapper")]
+    assert method.name == "loadVecOnce"
+    assert method.is_generic is True
+    assert isinstance(method.body[1], ForNode)
+    assert isinstance(method.body[2], ReturnNode)
 
 
 def test_interface_associated_type_requirement_from_model_viewer_sample():
@@ -2171,6 +2268,31 @@ def test_logical_and_keeps_equality_operands_grouped():
     assert expression.left.op == "=="
     assert isinstance(expression.right, BinaryOpNode)
     assert expression.right.op == "=="
+
+
+def test_if_let_binding_from_slang_gfx_link_time_constants_parse():
+    # Reduced from shader-slang/slang@142e00d9342eccf0613ed1b18d81cb003c5d6f09,
+    # tools/gfx-unit-test/link-time-logical-operators.slang.
+    code = """
+    void main(ValueHolder notValue) {
+        if (let v = notValue.get())
+            result += v;
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    if_stmt = find_function(ast, "main").body[0]
+    binding = if_stmt.if_binding
+
+    assert isinstance(if_stmt, IfNode)
+    assert isinstance(binding, AssignmentNode)
+    assert binding.left.vtype == "let"
+    assert binding.left.name == "v"
+    assert isinstance(binding.right, MethodCallNode)
+    assert binding.right.method == "get"
+    assert if_stmt.condition.name == "v"
+    assert isinstance(if_stmt.if_body[0], AssignmentNode)
 
 
 def test_binary_bitwise_and_shift_precedence_parsing():
@@ -3368,6 +3490,8 @@ def test_numeric_literal_parsing():
         float a = 1e-3f;
         float b = .5f;
         float c = 1.;
+        float scale = 0x1p-24;
+        float hexFloat = 0x1.8p+2f;
         uint mask = 0xffu;
         uint count = 123u;
         return a + b + c;
@@ -3378,10 +3502,12 @@ def test_numeric_literal_parsing():
     ast = parse_code(tokens)
     body = find_function(ast, "f").body
 
-    assert [stmt.right for stmt in body[:5]] == [
+    assert [stmt.right for stmt in body[:7]] == [
         "1e-3f",
         ".5f",
         "1.",
+        "0x1p-24",
+        "0x1.8p+2f",
         "0xffu",
         "123u",
     ]
@@ -3651,6 +3777,30 @@ def test_parenthesized_comma_expression_from_slang_shaders():
     generated = SlangCrossGLCodeGen.SlangToCrossGLConverter().generate(ast)
     assert "max((v.x, v.y), v.z)" in generated
     assert "(0.75, 1.0)" in generated
+
+
+def test_bracket_array_literal_from_slang_generic_lambda_issue_parse():
+    # Source: shader-slang/slang#10866.
+    code = """
+    void upsample()
+    {
+        let positions = [int2(0,0), int2(1, 0), int2(-1, 0),];
+        var first = positions[0];
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    upsample = find_function(ast, "upsample")
+    positions = upsample.body[0]
+
+    assert isinstance(positions.right, InitializerListNode)
+    assert [element.name for element in positions.right.elements] == [
+        "int2",
+        "int2",
+        "int2",
+    ]
+    assert isinstance(positions.right.elements[2].args[0], UnaryOpNode)
 
 
 def test_return_comma_operator_from_slang_compute_test():

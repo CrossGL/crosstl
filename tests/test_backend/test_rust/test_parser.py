@@ -153,6 +153,96 @@ def test_if_expression_continues_through_bitwise_operator_chain():
     assert usage.value.op == "|"
 
 
+def test_if_statement_condition_path_does_not_steal_branch_block():
+    # Reduced from Rust-GPU/rustc_codegen_spirv codegen_cx/constant.rs.
+    code = """
+    fn const_ptr_byte_offset(offset: Size) -> Value {
+        if offset == Size::ZERO {
+            val
+        } else {
+            result
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    if_node = ast.functions[0].body[0]
+
+    assert isinstance(if_node, IfNode)
+    assert isinstance(if_node.condition, BinaryOpNode)
+    assert if_node.condition.right == "Size::ZERO"
+    assert if_node.if_body == ["val"]
+    assert if_node.else_body == ["result"]
+
+
+def test_if_let_condition_does_not_treat_empty_branch_as_struct_literal():
+    # Reduced from Rust-GPU/rustc_codegen_spirv codegen_cx/declare.rs.
+    code = """
+    fn declare(align_override: Option<Align>, attrs: Attrs) {
+        if let Some(_align) = align_override {}
+        if attrs.flags.contains(CodegenFnAttrFlags::THREAD_LOCAL) {}
+    }
+    """
+
+    ast = parse_code(code)
+    first_if, second_if = ast.functions[0].body
+
+    assert isinstance(first_if, IfNode)
+    assert isinstance(first_if.condition, LetPatternConditionNode)
+    assert first_if.condition.expression == "align_override"
+    assert first_if.if_body == []
+    assert isinstance(second_if, IfNode)
+
+
+def test_match_arm_accepts_leading_or_with_struct_rest_patterns():
+    # Reduced from Rust-GPU/rustc_codegen_spirv codegen_cx/type_.rs.
+    code = """
+    fn type_kind(ty: SpirvType) -> TypeKind {
+        match ty {
+            SpirvType::Function { .. } => TypeKind::Function,
+            | SpirvType::Image { .. }
+            | SpirvType::Sampler
+            | SpirvType::SampledImage { .. }
+                => TypeKind::Token,
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    match_node = ast.functions[0].body[0]
+
+    assert isinstance(match_node, MatchNode)
+    assert len(match_node.arms) == 2
+    assert isinstance(match_node.arms[1].pattern, MatchOrPatternNode)
+    assert any(
+        isinstance(pattern, MatchStructPatternNode) and pattern.has_rest
+        for pattern in match_node.arms[1].pattern.patterns
+    )
+
+
+def test_match_tuple_pattern_accepts_half_open_range():
+    # Reduced from Rust-GPU/rustc_codegen_spirv linker/spirt_passes/diagnostics.rs.
+    code = """
+    fn decode(pair: Pair) {
+        match pair {
+            (0, Imm::Short(k, w) | Imm::LongStart(k, w))
+            | (1.., Imm::LongCont(k, w)) => {
+                w
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    match_node = ast.functions[0].body[0]
+    second_pattern = match_node.arms[0].pattern.patterns[1]
+
+    assert isinstance(second_pattern, TupleNode)
+    assert isinstance(second_pattern.elements[0], RangeNode)
+    assert second_pattern.elements[0].start == "1"
+    assert second_pattern.elements[0].end is None
+
+
 def test_raw_borrow_and_nested_reference_closure_patterns_parse():
     code = """
     fn raw(reference: &mut T) -> Self {
@@ -274,6 +364,43 @@ def test_primitive_named_member_access_parse_from_rust_gpu_codegen():
     assert isinstance(insert_call, FunctionCallNode)
     assert insert_call.args[1].member == "usize"
     assert insert_call.args[1].object.member == "types"
+
+
+def test_unsafe_extern_function_pointer_type_parsing_from_rusty_v8_callbacks():
+    # Reduced from denoland/rusty_v8 commit
+    # c2bac76486b5db090587e3f40988a8033ce81773 src/function.rs.
+    code = """
+    pub(crate) type NamedGetterCallbackForAccessor =
+        unsafe extern "C" fn(SealedLocal<Name>, *const PropertyCallbackInfo<Value>);
+
+    struct Handle {
+        callback: unsafe extern "C" fn(handle: &Handle, data: Option<NonNull<c_void>>),
+        fallback: extern "system" fn(u32) -> u32,
+    }
+
+    fn install(callback: unsafe fn(u32) -> u32) -> unsafe fn(u32) -> u32 {
+        callback
+    }
+    """
+
+    ast = parse_code(code)
+
+    alias = ast.type_aliases[0]
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "NamedGetterCallbackForAccessor"
+    assert alias.alias_type == (
+        'unsafe extern "C" fn(SealedLocal<Name>, ' "*const PropertyCallbackInfo<Value>)"
+    )
+
+    struct = ast.structs[0]
+    assert [member.vtype for member in struct.members] == [
+        'unsafe extern "C" fn(&Handle, Option<NonNull<c_void>>)',
+        'extern "system" fn(u32) -> u32',
+    ]
+
+    function = ast.functions[0]
+    assert function.params[0].vtype == "unsafe fn(u32) -> u32"
+    assert function.return_type == "unsafe fn(u32) -> u32"
 
 
 def test_enum_parsing():
@@ -2254,6 +2381,25 @@ def test_nested_qualified_associated_type_generic_from_rust_gpu():
     )
 
 
+def test_nested_generic_qualified_associated_type_from_bevy_pipeline_specializer():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_render/src/render_resource/pipeline_specializer.rs.
+    code = """
+    type VertexLayoutCache<S> = HashMap<
+        VertexBufferLayout,
+        HashMap<<S as SpecializedMeshPipeline>::Key, CachedRenderPipelineId>,
+    >;
+    """
+
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == (
+        "HashMap<VertexBufferLayout, "
+        "HashMap<<S as SpecializedMeshPipeline>::Key, CachedRenderPipelineId>,>"
+    )
+
+
 def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handler():
     # Reduced from https://github.com/bevyengine/bevy commit
     # 67f441da62424f83a1bb6e3f5145034e0583d495,
@@ -2269,6 +2415,21 @@ def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handl
     assert ast.structs[0].members[0].vtype == (
         "for<'a> fn(&RenderError, &mut World, &mut World) -> RenderErrorPolicy"
     )
+
+
+def test_public_tuple_type_tuple_struct_field_from_bevy_skybox():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_core_pipeline/src/skybox/mod.rs.
+    code = """
+    pub struct SkyboxBindGroup(pub (BindGroup, u32));
+    """
+
+    ast = parse_code(code)
+    member = ast.structs[0].members[0]
+
+    assert member.visibility == "pub"
+    assert member.vtype == "(BindGroup, u32)"
 
 
 def test_double_reference_type_and_expression_parsing():
@@ -2359,6 +2520,25 @@ def test_const_expression_array_size_parsing_from_rust_gpu_const_generics():
     assert function.params[0].vtype == "Vec4[LANES+1]"
     assert function.params[1].vtype == "f32[LANES+1][2]"
     assert function.body[0].vtype == "u32[LANES+1]"
+
+
+def test_cast_array_size_spacing_parsing_from_wgpu_backend_list():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu
+    # Commit: 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6
+    # Path: wgpu-types/src/backend.rs
+    code = """
+    impl Backend {
+        pub const ALL: [Backend; Backends::all().bits().count_ones() as usize] = [
+            Self::Noop,
+        ];
+    }
+    """
+
+    ast = parse_code(code)
+    const = ast.impl_blocks[0].associated_consts[0]
+
+    assert const.vtype == "Backend[Backends::all().bits().count_ones() as usize]"
 
 
 def test_reference_array_type_parsing():
@@ -4876,6 +5056,42 @@ def test_try_expression_parsing():
         pytest.fail(f"Try expression parsing failed: {e}")
 
 
+def test_qualified_path_try_postfix_parsing_from_wgpu_deno_webgpu():
+    # Reduced from:
+    # Repo: https://github.com/gfx-rs/wgpu.git
+    # Commit: 26e2525f8dea477ef356b80efb6eb1bc1dec120d
+    # Path: deno_webgpu/compute_pass.rs set_bind_group.
+    code = """
+    fn set_bind_group(
+        scope: Scope,
+        dynamic_offsets: Value,
+        prefix: Prefix,
+        context: Context,
+        options: Options,
+    ) -> Result<(), WebIdlError> {
+        let offsets = <Option<Vec<u32>>>::convert(
+            scope,
+            dynamic_offsets,
+            prefix,
+            context,
+            options,
+        )?.unwrap_or_default();
+        Ok(())
+    }
+    """
+
+    ast = parse_code(code)
+    value = ast.functions[0].body[0].value
+
+    assert isinstance(value, FunctionCallNode)
+    assert isinstance(value.name, MemberAccessNode)
+    assert value.name.member == "unwrap_or_default"
+    assert isinstance(value.name.object, TryNode)
+    subject = value.name.object.expression
+    assert isinstance(subject, FunctionCallNode)
+    assert subject.name == "<Option<Vec<u32>>>::convert"
+
+
 def test_await_expression_parsing():
     code = """
     fn await_values(future: Result<i32, i32>, object: FutureObject) -> Result<i32, i32> {
@@ -5427,6 +5643,7 @@ def test_trait_parsing():
     {
         type Output: Copy + Clone;
         type Scratch: Into<Vec3<f32>> = Vec3<f32>;
+        type WithScalar<S: Scalar>: CubePrimitive;
 
         fn draw(&self) -> Self::Output;
         fn update<V: Copy>(&mut self, value: V) -> U
@@ -5443,17 +5660,23 @@ def test_trait_parsing():
         assert trait.visibility == "pub"
         assert trait.generics == ["T: Into<Vec3<f32>> + Clone", "U"]
         assert trait.where_clauses == [("U", ["Debug"])]
-        assert len(trait.associated_types) == 2
+        assert len(trait.associated_types) == 3
         assert all(
             isinstance(associated_type, AssociatedTypeNode)
             for associated_type in trait.associated_types
         )
         assert trait.associated_types[0].name == "Output"
+        assert trait.associated_types[0].generics == []
         assert trait.associated_types[0].bounds == ["Copy", "Clone"]
         assert trait.associated_types[0].default_type is None
         assert trait.associated_types[1].name == "Scratch"
+        assert trait.associated_types[1].generics == []
         assert trait.associated_types[1].bounds == ["Into<Vec3<f32>>"]
         assert trait.associated_types[1].default_type == "Vec3<f32>"
+        assert trait.associated_types[2].name == "WithScalar"
+        assert trait.associated_types[2].generics == ["S: Scalar"]
+        assert trait.associated_types[2].bounds == ["CubePrimitive"]
+        assert trait.associated_types[2].default_type is None
         assert [method.name for method in trait.methods] == ["draw", "update"]
         assert trait.methods[0].params[0].vtype == "&Self"
         assert trait.methods[0].return_type == "Self::Output"
@@ -6224,6 +6447,118 @@ def test_if_let_dereference_conditions_stop_at_block_from_naga():
     assert isinstance(guarded_if.condition, LetPatternConditionNode)
     assert type(guarded_if.condition.expression).__name__ == "DereferenceNode"
     assert isinstance(guarded_if.if_body[0], IfNode)
+
+
+def test_wgpu_deno_if_expression_with_local_unsafe_extern_function():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # deno_webgpu/buffer.rs GPUBuffer::get_mapped_range.
+    code = """
+    fn get_mapped_range(mode: MapMode) {
+        let bs = if mode == MapMode::Write {
+            unsafe extern "C" fn noop_deleter_callback(
+                _data: *mut std::ffi::c_void,
+                _byte_length: usize,
+            ) {
+            }
+
+            unsafe {
+                ArrayBuffer::new_backing_store_from_ptr(noop_deleter_callback)
+            }
+        } else {
+            ArrayBuffer::new_backing_store_from_vec(slice.to_vec())
+        };
+    }
+    """
+
+    ast = parse_code(code)
+    bs = ast.functions[0].body[0]
+
+    assert isinstance(bs, LetNode)
+    assert isinstance(bs.value, IfNode)
+    assert isinstance(bs.value.if_body.statements[0], FunctionNode)
+    assert bs.value.if_body.statements[0].is_unsafe is True
+    assert bs.value.if_body.statements[0].abi == "C"
+    assert isinstance(bs.value.if_body.expression, UnsafeBlockNode)
+
+
+def test_naga_struct_literal_shorthand_argument_in_if_let_condition():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # naga/src/back/spv/ray/pipeline.rs Writer::write_trace_ray.
+    code = """
+    impl Writer {
+        fn write_trace_ray(&self, payload: Payload) {
+            if let Some(&word) = self
+                .ray_tracing_functions
+                .get(&LookupRaytracingFunction::TraceRay { payload })
+            {
+                return word;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(code)
+    condition = ast.impl_blocks[0].methods[0].body[0].condition
+    get_call = condition.expression
+    lookup = get_call.args[0].expression
+
+    assert isinstance(condition, LetPatternConditionNode)
+    assert isinstance(get_call, FunctionCallNode)
+    assert isinstance(get_call.args[0], ReferenceNode)
+    assert isinstance(lookup, StructInitializationNode)
+    assert lookup.struct_name == "LookupRaytracingFunction::TraceRay"
+    assert lookup.fields == [("payload", "payload")]
+
+
+def test_naga_double_reference_lifetime_type_and_closure_pattern():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # naga/src/proc/keyword_set.rs and wgpu-hal/src/vulkan/instance.rs.
+    code = """
+    fn debug_assert_ascii(s: &&'static str) {
+        debug_assert!(s.is_ascii())
+    }
+
+    fn collect_pointers(layers: Vec<&'static str>) {
+        let str_pointers = layers
+            .iter()
+            .map(|&s: &&'static _| { s.as_ptr() })
+            .collect::<Vec<_>>();
+    }
+    """
+
+    ast = parse_code(code)
+    debug_assert_ascii, collect_pointers = ast.functions
+    closure = collect_pointers.body[0].value.name.object.args[0]
+
+    assert debug_assert_ascii.params[0].vtype == "&&str"
+    assert isinstance(closure, ClosureNode)
+    assert closure.params[0].param_type == "&&_"
+    assert isinstance(closure.params[0].pattern, ReferenceNode)
+
+
+def test_wgpu_gles_block_local_unsafe_impl_items_are_skipped():
+    # Reduced from gfx-rs/wgpu commit
+    # 6fbbb0fbb7e8d546224f84a1efe4337b70654cf6,
+    # wgpu-hal/src/gles/wgl.rs create_temp_window.
+    code = """
+    fn create_temp_window() {
+        struct SendDc(Gdi::HDC);
+        unsafe impl Sync for SendDc {}
+        unsafe impl Send for SendDc {}
+
+        let dc = SendDc(raw_dc);
+    }
+    """
+
+    ast = parse_code(code)
+    body = ast.functions[0].body
+
+    assert len(body) == 1
+    assert isinstance(body[0], LetNode)
+    assert body[0].name == "dc"
 
 
 def test_error_handling():

@@ -69,6 +69,10 @@ class HipParser:
     IDENTIFIER_FUNCTION_SPECIFIER_VALUES = {
         "APIENTRY",
         "CALLBACK",
+        "_CCCL_API",
+        "_CCCL_CONSTEXPR_CXX20",
+        "_CCCL_EXEC_CHECK_DISABLE",
+        "_CCCL_HIDE_FROM_ABI",
         "HIPCUB_DEVICE",
         "HIPCUB_FORCEINLINE",
         "HIPCUB_HOST",
@@ -85,8 +89,21 @@ class HipParser:
         "ROCWMMA_HOST_DEVICE",
         "ROCWMMA_INLINE",
         "ROCWMMA_KERNEL",
+        "THRUST_DEVICE",
+        "THRUST_DEVICE_FUNCTION",
+        "THRUST_FORCEINLINE",
+        "THRUST_FUNCTION",
+        "THRUST_HIP_DEVICE_FUNCTION",
+        "THRUST_HIP_FUNCTION",
+        "THRUST_HIP_RUNTIME_FUNCTION",
+        "THRUST_HOST",
+        "THRUST_HOST_DEVICE",
+        "THRUST_NODISCARD",
+        "THRUST_NODISCARD_FRIEND",
+        "THRUST_RUNTIME_FUNCTION",
         "VX_CALLBACK",
         "WINAPI",
+        "consteval",
     }
     KERNEL_FUNCTION_SPECIFIER_VALUES = {"__global__", "ROCWMMA_KERNEL"}
     DECLARATION_QUALIFIER_TOKENS = {
@@ -95,13 +112,15 @@ class HipParser:
         "__MANAGED__",
         "__DEVICE__",
         "STATIC",
+        "THREAD_LOCAL",
         "EXTERN",
         "CONSTEXPR",
         "INLINE",
+        "REGISTER",
     }
     TYPE_PREFIX_TOKENS = {"TYPENAME"}
     TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "UNSIGNED", "SIGNED", "__RESTRICT__"}
-    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "__RESTRICT__"}
+    POSTFIX_TYPE_QUALIFIER_TOKENS = {"CONST", "VOLATILE", "__RESTRICT__"}
     TYPE_REFERENCE_TOKENS = {"AMPERSAND", "AND"}
     CPP_NAMED_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
     ATOMIC_FUNCTION_TOKENS = {
@@ -168,6 +187,7 @@ class HipParser:
         "XOR_ASSIGN",
         "EQ",
         "NE",
+        "SPACESHIP",
         "LE",
         "GE",
         "AND",
@@ -214,10 +234,44 @@ class HipParser:
         "THEN",
         "WHEN",
     }
-    STANDALONE_STATEMENT_MACRO_NAMES = {
-        "CHECK_IMAGE_SUPPORT",
+    GTEST_TEST_BLOCK_MACRO_NAMES = {
+        "TEST",
+        "TEST_F",
+        "TEST_P",
+        "TYPED_TEST",
+        "TYPED_TEST_P",
     }
-    TYPE_ATTRIBUTE_IDENTIFIERS = {"__attribute__", "__declspec", "alignas", "__align__"}
+    CATCH_TEST_BLOCK_MACRO_NAMES |= GTEST_TEST_BLOCK_MACRO_NAMES
+    BARE_NESTED_BLOCK_MACRO_NAMES = {
+        "HIP_TEST_ATOMIC_BACKWARD_COMPAT_MEMORY",
+    }
+    STANDALONE_STATEMENT_MACRO_NAMES = {
+        "BEGIN_ROCPRIM_NAMESPACE",
+        "CHECK_IMAGE_SUPPORT",
+        "END_ROCPRIM_NAMESPACE",
+        "_CCCL_BEGIN_NAMESPACE_CUDA_STD",
+        "_CCCL_BEGIN_NAMESPACE_STD",
+        "_CCCL_END_NAMESPACE_CUDA_STD",
+        "_CCCL_END_NAMESPACE_STD",
+        "_CCCL_EXEC_CHECK_DISABLE",
+        "THRUST_EXEC_CHECK_DISABLE",
+        "THRUST_NAMESPACE_BEGIN",
+        "THRUST_NAMESPACE_END",
+    }
+    OPTIONAL_SEMICOLON_MACRO_NAMES = {
+        "INSTANTIATE_TESTS",
+        "INSTANTIATE_TEST_CATEGORIES",
+        "INSTANTIATE_TEST_CASE_P",
+        "INSTANTIATE_TEST_SUITE_P",
+    }
+    TYPE_ATTRIBUTE_IDENTIFIERS = {
+        "_CCCL_NODEBUG_ALIAS",
+        "_CCCL_TYPE_VISIBILITY_DEFAULT",
+        "__attribute__",
+        "__declspec",
+        "alignas",
+        "__align__",
+    }
     CLASS_MEMBER_FUNCTION_SPECIFIER_TOKENS = {
         "__DEVICE__",
         "__HOST__",
@@ -365,13 +419,19 @@ class HipParser:
         "hipFloatComplex",
         "hipfftComplex",
         "hipfftDoubleComplex",
+        "coalesced_group",
+        "cluster_group",
         "__half",
         "__half2",
         "half",
         "half2",
+        "grid_group",
+        "multi_grid_group",
+        "thread_block",
         "float16_t",
         "float32_t",
         "float64_t",
+        "thread_group",
         "_Float16",
         "__int64",
         "int8_t",
@@ -449,7 +509,10 @@ class HipParser:
             if self.tokens[index].type == "__LAUNCH_BOUNDS__":
                 index = self.skip_launch_bounds_at_pos(index)
             else:
+                is_linkage_specifier = self.tokens[index].type == "EXTERN"
                 index += 1
+                if is_linkage_specifier:
+                    index = self.skip_linkage_language_string_at_pos(index)
             index = self.skip_newlines_at_pos(index)
             index = self.skip_type_attribute_prefixes_at_pos(index)
 
@@ -466,13 +529,17 @@ class HipParser:
             index = self.skip_launch_bounds_at_pos(index)
             index = self.skip_newlines_at_pos(index)
 
-        while index < len(self.tokens) and self.is_identifier_function_specifier_token(
+        while index < len(self.tokens) and self.is_interleaved_function_specifier_token(
             self.tokens[index]
         ):
             index += 1
             index = self.skip_newlines_at_pos(index)
 
-        if self.skip_function_name_at(index) is not None:
+        parameter_list_start = self.skip_function_name_at(index)
+        if (
+            parameter_list_start is not None
+            and self.is_plausible_function_parameter_list_at_pos(parameter_list_start)
+        ):
             return index
 
         return None
@@ -503,6 +570,20 @@ class HipParser:
             "__LAUNCH_BOUNDS__",
             "CONSTEXPR",
         } or self.is_identifier_function_specifier_token(token)
+
+    def is_interleaved_function_specifier_token(self, token=None):
+        token = token or self.current_token
+        return token is not None and (
+            token.type
+            in {
+                "__DEVICE__",
+                "__HOST__",
+                "__GLOBAL__",
+                "__FORCEINLINE__",
+                "__NOINLINE__",
+            }
+            or self.is_identifier_function_specifier_token(token)
+        )
 
     def error(self, message: str):
         token_info = (
@@ -648,10 +729,28 @@ class HipParser:
             self.consume("RPAREN")
             return "()"
         if self.match(*self.OVERLOADABLE_OPERATOR_TOKENS):
-            operator_value = self.current_token.value
+            operator_value = self.normalized_operator_value()
             self.advance()
             return operator_value
         return ""
+
+    def normalized_operator_value(self):
+        alternative_operators = {
+            "and": "&&",
+            "and_eq": "&=",
+            "bitand": "&",
+            "bitor": "|",
+            "compl": "~",
+            "not": "!",
+            "not_eq": "!=",
+            "or": "||",
+            "or_eq": "|=",
+            "xor": "^",
+            "xor_eq": "^=",
+        }
+        return alternative_operators.get(
+            self.current_token.value, self.current_token.value
+        )
 
     def is_declarator_name_token(self):
         return self.match(*self.DECLARATOR_NAME_TOKENS)
@@ -776,6 +875,23 @@ class HipParser:
         self.skip_newlines()
         return self.parse_block()
 
+    def is_bare_nested_block_macro(self):
+        if self.block_depth == 0:
+            return False
+        if not (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.BARE_NESTED_BLOCK_MACRO_NAMES
+        ):
+            return False
+
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        return index < len(self.tokens) and self.tokens[index].type == "LBRACE"
+
+    def parse_bare_nested_block_macro(self):
+        self.consume("IDENTIFIER")
+        self.skip_newlines()
+        return self.parse_block()
+
     def is_standalone_statement_macro(self):
         if not (
             self.match("IDENTIFIER")
@@ -834,7 +950,9 @@ class HipParser:
         return args
 
     def catch_test_function_name(self, macro_name, args):
-        if args and args[0]:
+        if macro_name in self.GTEST_TEST_BLOCK_MACRO_NAMES and len(args) >= 2:
+            raw_name = "_".join(self.macro_argument_text(arg) for arg in args[:2])
+        elif args and args[0]:
             raw_name = self.macro_argument_text(args[0])
         else:
             raw_name = macro_name.lower()
@@ -977,6 +1095,9 @@ class HipParser:
         if self.match("TEMPLATE"):
             return self.parse_template_prefixed_declaration()
 
+        if self.is_standalone_statement_macro():
+            return self.parse_standalone_statement_macro()
+
         if (
             self.match("STATIC")
             and self.peek()
@@ -1068,8 +1189,8 @@ class HipParser:
             return self.parse_catch_test_block_macro()
         if self.is_catch_nested_block_macro():
             return self.parse_catch_nested_block_macro()
-        if self.is_standalone_statement_macro():
-            return self.parse_standalone_statement_macro()
+        if self.is_bare_nested_block_macro():
+            return self.parse_bare_nested_block_macro()
         if self.match("LBRACE"):
             return self.parse_block()
         if self.is_label_statement_start():
@@ -1368,8 +1489,12 @@ class HipParser:
         if self.match("NAMESPACE"):
             self.skip_until_semicolon()
             return None
+        if self.match("SCOPE"):
+            self.skip_until_semicolon()
+            return None
 
         name = self.consume("IDENTIFIER").value
+        self.parse_type_attribute_prefixes()
         if not self.match("ASSIGN"):
             self.skip_until_semicolon()
             return None
@@ -1669,8 +1794,11 @@ class HipParser:
             if self.match("__LAUNCH_BOUNDS__"):
                 attributes.append(self.parse_launch_bounds_attribute())
             else:
+                is_linkage_specifier = self.current_token.type == "EXTERN"
                 qualifiers.append(self.current_token.value)
                 self.advance()
+                if is_linkage_specifier and self.match("STRING"):
+                    self.advance()
 
         return_type = self.parse_type()
         self.skip_newlines()
@@ -1679,7 +1807,7 @@ class HipParser:
             attributes.append(self.parse_launch_bounds_attribute())
             self.skip_newlines()
 
-        while self.is_identifier_function_specifier_token():
+        while self.is_interleaved_function_specifier_token():
             qualifiers.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
@@ -1745,13 +1873,16 @@ class HipParser:
             self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
             or self.is_identifier_function_specifier_token()
         ):
+            is_linkage_specifier = self.current_token.type == "EXTERN"
             qualifiers.append(self.current_token.value)
             self.advance()
+            if is_linkage_specifier and self.match("STRING"):
+                self.advance()
             self.skip_cpp_attributes()
 
         return_type = self.parse_type()
         self.skip_newlines()
-        while self.is_identifier_function_specifier_token():
+        while self.is_interleaved_function_specifier_token():
             qualifiers.append(self.current_token.value)
             self.advance()
             self.skip_newlines()
@@ -1863,6 +1994,16 @@ class HipParser:
             return
         self.advance()
         self.skip_newlines()
+        if self.match("IDENTIFIER") and self.current_token.value == "requires":
+            self.advance()
+            self.skip_newlines()
+            if self.match("LPAREN"):
+                self.skip_balanced_parentheses()
+                self.skip_newlines()
+            if self.match("LBRACE"):
+                self.skip_balanced_brace_block()
+                self.skip_newlines()
+            return
         if self.match("LPAREN"):
             self.skip_balanced_parentheses()
 
@@ -3177,6 +3318,7 @@ class HipParser:
         vtype = self.parse_type()
         name = self.consume("IDENTIFIER").value
         self.consume("COLON")
+        self.skip_newlines()
         iterable = self.parse_expression()
         self.consume("RPAREN")
 
@@ -3422,18 +3564,26 @@ class HipParser:
         return expr
 
     def is_optional_semicolon_macro_statement(self, expr):
-        if not self.is_expression_statement_boundary():
-            return False
         if not isinstance(expr, FunctionCallNode):
             return False
         name = expr.name
-        return (
+        is_macro_call = (
             isinstance(name, str)
-            and name.isupper()
+            and (name.isupper() or name in self.OPTIONAL_SEMICOLON_MACRO_NAMES)
             and any(char.isalpha() for char in name)
+        )
+        if not is_macro_call:
+            return False
+        if self.is_expression_statement_boundary():
+            return True
+        return name in self.OPTIONAL_SEMICOLON_MACRO_NAMES and (
+            self.match("IDENTIFIER")
+            and self.current_token.value in self.OPTIONAL_SEMICOLON_MACRO_NAMES
         )
 
     def is_expression_statement_boundary(self):
+        if not self.current_token:
+            return True
         if self.match("NEWLINE", "RBRACE"):
             return True
         if self.pos > 0 and self.tokens[self.pos - 1].type == "NEWLINE":
@@ -3475,7 +3625,7 @@ class HipParser:
             "LSHIFT_ASSIGN",
             "RSHIFT_ASSIGN",
         ):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_assignment_expression()
@@ -3504,7 +3654,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("LOGICAL_OR", "OR"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_logical_and_expression()
@@ -3518,7 +3668,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("LOGICAL_AND", "AND"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_bitwise_or_expression()
@@ -3532,7 +3682,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("BITWISE_OR", "PIPE"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_bitwise_xor_expression()
@@ -3546,7 +3696,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("BITWISE_XOR", "XOR"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_bitwise_and_expression()
@@ -3560,7 +3710,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("BITWISE_AND", "AMPERSAND"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_equality_expression()
@@ -3574,7 +3724,7 @@ class HipParser:
         self.skip_newlines()
 
         while self.match("EQ", "NE"):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             self.skip_newlines()
             right = self.parse_relational_expression()
@@ -3651,7 +3801,7 @@ class HipParser:
             "STAR",
             "AMPERSAND",
         ):
-            op = self.current_token.value
+            op = self.normalized_operator_value()
             self.advance()
             operand = self.parse_unary_expression()
             return UnaryOpNode(op, operand)
@@ -3914,6 +4064,7 @@ class HipParser:
             *self.RESOURCE_TYPE_TOKENS,
             *self.ELABORATED_TYPE_TOKENS,
             "TYPENAME",
+            "TEMPLATE",
             "GT",
             "RSHIFT",
             "KERNEL_LAUNCH_END",
@@ -4792,7 +4943,10 @@ class HipParser:
             self.tokens[index].type in self.FUNCTION_DECLARATION_SPECIFIER_TOKENS
             or self.is_identifier_function_specifier_token(self.tokens[index])
         ):
+            is_linkage_specifier = self.tokens[index].type == "EXTERN"
             index += 1
+            if is_linkage_specifier:
+                index = self.skip_linkage_language_string_at_pos(index)
             index = self.skip_cpp_attributes_at_pos(index)
 
         index = self.skip_type_at_pos(
@@ -4802,7 +4956,7 @@ class HipParser:
             index = self.skip_newlines_at_pos(index)
             while index < len(
                 self.tokens
-            ) and self.is_identifier_function_specifier_token(self.tokens[index]):
+            ) and self.is_interleaved_function_specifier_token(self.tokens[index]):
                 index += 1
                 index = self.skip_newlines_at_pos(index)
             parameter_list_start = self.skip_function_name_at(index)
@@ -4964,6 +5118,7 @@ class HipParser:
             "CONSTEXPR",
             "CONST",
             "VOLATILE",
+            "REGISTER",
         }:
             index += 1
 
@@ -5323,6 +5478,11 @@ class HipParser:
         ):
             return index + 2
         return None
+
+    def skip_linkage_language_string_at_pos(self, index):
+        if index < len(self.tokens) and self.tokens[index].type == "STRING":
+            return index + 1
+        return index
 
     def skip_launch_bounds_at_pos(self, index):
         index += 1

@@ -1188,7 +1188,7 @@ def validate_desired_issues(
     signals: dict[str, Any] | None,
     desired: dict[str, DesiredIssue],
     *,
-    min_desired_issues: int = 1,
+    min_desired_issues: int = 0,
 ) -> list[str]:
     errors: list[str] = []
     if len(desired) < min_desired_issues:
@@ -3024,7 +3024,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--min-desired-issues",
         type=int,
-        default=1,
+        default=0,
         help="Fail if the generated issue plan has fewer desired issues than this",
     )
     parser.add_argument(

@@ -36,32 +36,35 @@ class ASTNode:
     def walk(self):
         """Yield this node and all structural descendants once."""
         visited = set()
+        stack = [self]
 
-        def visit(node):
+        while stack:
+            node = stack.pop()
             node_id = id(node)
             if node_id in visited:
-                return
+                continue
             visited.add(node_id)
             yield node
-            for child in node.child_nodes():
-                yield from visit(child)
 
-        yield from visit(self)
+            children = list(node.child_nodes())
+            stack.extend(reversed(children))
 
     def bind_parent_links(self, parent=None):
         """Set parent links for this structural subtree and return ``self``."""
         visited = set()
+        stack = [(self, parent)]
 
-        def bind(node, parent_node):
+        while stack:
+            node, parent_node = stack.pop()
             node_id = id(node)
             if node_id in visited:
-                return
+                continue
             visited.add(node_id)
             node.parent = parent_node
-            for child in node.child_nodes():
-                bind(child, node)
 
-        bind(self, parent)
+            children = list(node.child_nodes())
+            stack.extend((child, node) for child in reversed(children))
+
         return self
 
 

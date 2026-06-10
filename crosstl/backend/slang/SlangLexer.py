@@ -49,9 +49,15 @@ TOKENS = tuple(
         ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
         (
             "NUMBER",
+            r"\d(?:_?\d)*\.(?:\d(?:_?\d)*)?"
+            r"#(?i:inf|ind|qnan|snan)[fFhHlL]?|"
+            r"0[xX](?:(?:_?[0-9a-fA-F])+(?:\.(?:_?[0-9a-fA-F])*)?|"
+            r"\.(?:_?[0-9a-fA-F])+)[pP][+-]?\d(?:_?\d)*[fFhH]?|"
             r"0[xX]_?[0-9a-fA-F](?:_?[0-9a-fA-F])*[uUlL]*|"
             r"0[bB]_?[01](?:_?[01])*[uUlL]*|"
-            r"(?:(?:\d(?:_?\d)*)\.(?:\d(?:_?\d)*)?|"
+            r"(?:(?:\d(?:_?\d)*)\."
+            r"(?!(?:[xyzwrgbaXYZWRGBA]{1,4})(?![a-zA-Z0-9_]))"
+            r"(?:\d(?:_?\d)*)?|"
             r"\.(?:\d(?:_?\d)*)|"
             r"(?:\d(?:_?\d)*))(?:[eE][+-]?\d(?:_?\d)*)?[fFhHuUlL]*",
         ),
@@ -93,6 +99,7 @@ TOKENS = tuple(
         ("BITWISE_OR", r"\|"),
         ("BITWISE_XOR", r"\^"),
         ("DOT", r"\."),
+        ("DOLLAR", r"\$"),
         ("MULTIPLY", r"\*"),
         ("DIVIDE", r"/"),
         ("PLUS", r"\+"),

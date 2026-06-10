@@ -284,7 +284,85 @@ class VulkanParser:
     }
     SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS = {
         "OpRayQueryInitializeKHR": "rayQueryInitializeEXT",
+        "OpRayQueryInitializeNV": "rayQueryInitializeEXT",
         "OpRayQueryTerminateKHR": "rayQueryTerminateEXT",
+        "OpRayQueryTerminateNV": "rayQueryTerminateEXT",
+    }
+    SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS = {
+        "OpRayQueryProceedKHR": "rayQueryProceedEXT",
+        "OpRayQueryProceedNV": "rayQueryProceedEXT",
+        "OpRayQueryGetIntersectionTypeKHR": "rayQueryGetIntersectionTypeEXT",
+        "OpRayQueryGetIntersectionTypeNV": "rayQueryGetIntersectionTypeEXT",
+        "OpRayQueryGetIntersectionTKHR": "rayQueryGetIntersectionTEXT",
+        "OpRayQueryGetIntersectionTNV": "rayQueryGetIntersectionTEXT",
+        "OpRayQueryGetIntersectionInstanceCustomIndexKHR": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceCustomIndexNV": (
+            "rayQueryGetIntersectionInstanceCustomIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceIdKHR": (
+            "rayQueryGetIntersectionInstanceIdEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceIdNV": "rayQueryGetIntersectionInstanceIdEXT",
+        "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetKHR": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT"
+        ),
+        "OpRayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetNV": (
+            "rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT"
+        ),
+        "OpRayQueryGetIntersectionGeometryIndexKHR": (
+            "rayQueryGetIntersectionGeometryIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionGeometryIndexNV": (
+            "rayQueryGetIntersectionGeometryIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionPrimitiveIndexKHR": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionPrimitiveIndexNV": (
+            "rayQueryGetIntersectionPrimitiveIndexEXT"
+        ),
+        "OpRayQueryGetIntersectionBarycentricsKHR": (
+            "rayQueryGetIntersectionBarycentricsEXT"
+        ),
+        "OpRayQueryGetIntersectionBarycentricsNV": (
+            "rayQueryGetIntersectionBarycentricsEXT"
+        ),
+        "OpRayQueryGetIntersectionFrontFaceKHR": "rayQueryGetIntersectionFrontFaceEXT",
+        "OpRayQueryGetIntersectionFrontFaceNV": "rayQueryGetIntersectionFrontFaceEXT",
+        "OpRayQueryGetIntersectionObjectRayDirectionKHR": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectRayDirectionNV": (
+            "rayQueryGetIntersectionObjectRayDirectionEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectRayOriginKHR": (
+            "rayQueryGetIntersectionObjectRayOriginEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectRayOriginNV": (
+            "rayQueryGetIntersectionObjectRayOriginEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectToWorldKHR": (
+            "rayQueryGetIntersectionObjectToWorldEXT"
+        ),
+        "OpRayQueryGetIntersectionObjectToWorldNV": (
+            "rayQueryGetIntersectionObjectToWorldEXT"
+        ),
+        "OpRayQueryGetIntersectionWorldToObjectKHR": (
+            "rayQueryGetIntersectionWorldToObjectEXT"
+        ),
+        "OpRayQueryGetIntersectionWorldToObjectNV": (
+            "rayQueryGetIntersectionWorldToObjectEXT"
+        ),
+        "OpRayQueryGetRayFlagsKHR": "rayQueryGetRayFlagsEXT",
+        "OpRayQueryGetRayFlagsNV": "rayQueryGetRayFlagsEXT",
+        "OpRayQueryGetRayTMinKHR": "rayQueryGetRayTMinEXT",
+        "OpRayQueryGetRayTMinNV": "rayQueryGetRayTMinEXT",
+        "OpRayQueryGetWorldRayDirectionKHR": "rayQueryGetWorldRayDirectionEXT",
+        "OpRayQueryGetWorldRayDirectionNV": "rayQueryGetWorldRayDirectionEXT",
+        "OpRayQueryGetWorldRayOriginKHR": "rayQueryGetWorldRayOriginEXT",
+        "OpRayQueryGetWorldRayOriginNV": "rayQueryGetWorldRayOriginEXT",
     }
     SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS = {
         "OpGroupNonUniformBitwiseAnd": "And",
@@ -440,7 +518,12 @@ class VulkanParser:
         "yield",
     }
     SPIRV_VALUE_FALLBACK_RENAMES = {
+        "buffer": "buffer_",
         "global": "global_",
+        "in": "in_",
+        "out": "out_",
+        "struct": "struct_",
+        "var": "var_",
     }
     SPIRV_GLSL_STD_450_EXT_INST_FUNCTIONS = {
         "Acos": "acos",
@@ -833,6 +916,8 @@ class VulkanParser:
         variables = []
         entry_points = []
         execution_modes = {}
+        group_decorates = []
+        group_member_decorates = []
 
         for result_id, opcode, operands, _line_number in instructions:
             if opcode == "OpCapability" and operands:
@@ -859,6 +944,10 @@ class VulkanParser:
                 member_decorations.setdefault(target, []).append(
                     (member, decoration, operands[3:])
                 )
+            elif opcode == "OpGroupDecorate" and len(operands) >= 2:
+                group_decorates.append((operands[0], operands[1:]))
+            elif opcode == "OpGroupMemberDecorate" and len(operands) >= 3:
+                group_member_decorates.append((operands[0], operands[1:]))
             elif opcode == "OpEntryPoint" and len(operands) >= 3:
                 entry_points.append(
                     {
@@ -1074,6 +1163,9 @@ class VulkanParser:
                     }
                 )
 
+        self.spirv_apply_decoration_groups(
+            decorations, member_decorations, group_decorates, group_member_decorates
+        )
         self.spirv_register_struct_type_names(types, names)
         self.spirv_assign_flattened_resource_block_member_aliases(
             variables,
@@ -1146,6 +1238,7 @@ class VulkanParser:
             and not self.spirv_assembly_has_linkage_metadata_surface(
                 capabilities, types, extended_instruction_imports
             )
+            and not self.spirv_assembly_has_entry_point_metadata_surface(entry_points)
         ):
             raise SyntaxError(SPIRV_ASSEMBLY_ERROR)
 
@@ -1167,6 +1260,31 @@ class VulkanParser:
             spirv_spec_constant_ids=spec_constant_ids,
             spirv_extended_instruction_imports=extended_instruction_imports,
         )
+
+    def spirv_apply_decoration_groups(
+        self, decorations, member_decorations, group_decorates, group_member_decorates
+    ):
+        for group_id, targets in group_decorates:
+            group_decorations = decorations.get(group_id, [])
+            if not group_decorations:
+                continue
+            for target in targets:
+                decorations.setdefault(target, []).extend(
+                    (decoration, list(operands))
+                    for decoration, operands in group_decorations
+                )
+
+        for group_id, target_members in group_member_decorates:
+            group_decorations = decorations.get(group_id, [])
+            if not group_decorations:
+                continue
+            for index in range(0, len(target_members) - 1, 2):
+                target = target_members[index]
+                member = target_members[index + 1]
+                member_decorations.setdefault(target, []).extend(
+                    (member, decoration, list(operands))
+                    for decoration, operands in group_decorations
+                )
 
     def spirv_assembly_has_metadata_only_surface(self, types):
         metadata_type_kinds = {
@@ -1191,6 +1309,9 @@ class VulkanParser:
         if "Linkage" not in capabilities:
             return False
         return bool(types or extended_instruction_imports)
+
+    def spirv_assembly_has_entry_point_metadata_surface(self, entry_points):
+        return bool(entry_points)
 
     def spirv_assembly_functions(
         self,
@@ -2198,6 +2319,25 @@ class VulkanParser:
                     ],
                 )
                 expression_type_ids[result_id] = operands[0]
+                continue
+
+            if (
+                result_id
+                and opcode in self.SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS
+                and len(operands) >= 2
+            ):
+                record_expression(
+                    result_id,
+                    operands[0],
+                    self.spirv_assembly_ray_query_expression(
+                        opcode,
+                        operands,
+                        expressions,
+                        names,
+                        decorations,
+                        constants,
+                    ),
+                )
                 continue
 
             if result_id and opcode == "OpSelect" and len(operands) >= 4:
@@ -4058,7 +4198,7 @@ class VulkanParser:
             if member == member_key
         ]
         qualifiers = self.spirv_layout_qualifiers(member_layout_decorations)
-        block_name = names.get(base_operand) or base_operand.lstrip("%")
+        block_name = self.spirv_assembly_value_name(base_operand, names, decorations={})
         member_name = self.spirv_struct_member_variable_name(
             struct_type_id,
             member_key,
@@ -4678,6 +4818,8 @@ class VulkanParser:
             ("float", "int"): "floatBitsToInt",
             ("float", "uint"): "floatBitsToUint",
             ("int", "float"): "intBitsToFloat",
+            ("int", "uint"): "asuint",
+            ("uint", "int"): "asint",
             ("uint", "float"): "uintBitsToFloat",
         }.get((source_family, result_family))
 
@@ -5057,6 +5199,29 @@ class VulkanParser:
                     constants,
                 )
                 for operand in operands
+            ],
+        )
+
+    def spirv_assembly_ray_query_expression(
+        self,
+        opcode,
+        operands,
+        expressions,
+        names,
+        decorations,
+        constants,
+    ):
+        return FunctionCallNode(
+            self.SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS[opcode],
+            [
+                self.spirv_assembly_operand_expression(
+                    operand,
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                )
+                for operand in operands[1:]
             ],
         )
 
@@ -5874,7 +6039,9 @@ class VulkanParser:
             if data_type is None:
                 continue
 
-            variable_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+            variable_name = self.spirv_assembly_value_name(
+                variable["id"], names, decorations={}
+            )
             variable_name = self.spirv_builtin_variable_name_from_qualifiers(
                 qualifiers, variable_name, storage_class=storage_class
             )
@@ -6287,10 +6454,12 @@ class VulkanParser:
     def spirv_fallback_identifier(self, raw_value, prefix):
         identifier = re.sub(r"\W", "_", str(raw_value or "").lstrip("%"))
         if not identifier:
-            return prefix
+            return self.SPIRV_VALUE_FALLBACK_RENAMES.get(prefix, prefix)
         if identifier[0].isdigit():
-            return f"{prefix}_{identifier}"
-        return identifier
+            identifier = f"{prefix}_{identifier}"
+        if prefix == "part" and identifier.endswith("_"):
+            identifier = identifier.rstrip("_") or prefix
+        return self.SPIRV_VALUE_FALLBACK_RENAMES.get(identifier, identifier)
 
     def spirv_identifier_name(self, raw_name, fallback_value=None, prefix="value"):
         name = str(raw_name or "")
@@ -6530,7 +6699,9 @@ class VulkanParser:
             return []
 
         layouts = []
-        block_name = names.get(variable["id"]) or variable["id"].lstrip("%")
+        block_name = self.spirv_assembly_value_name(
+            variable["id"], names, decorations={}
+        )
         variable_qualifiers = self.spirv_layout_qualifiers(variable_decorations)
         variable_declaration_qualifiers = self.spirv_declaration_qualifiers(
             variable_decorations

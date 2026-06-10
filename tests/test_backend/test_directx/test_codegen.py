@@ -501,6 +501,27 @@ def parse_crossgl(code: str):
     return parser.parse()
 
 
+def test_codegen_pointer_parameter_reparse_from_compiler_fixture():
+    # Reduced from CrossGL-Compiler StorageBufferPointerHelperParamShader.cgl.
+    hlsl = textwrap.dedent("""
+        RWStructuredBuffer<float> values : register(u0);
+
+        void writeScalar(float* dst, float value) {
+            dst[0] = value;
+        }
+
+        [numthreads(1, 1, 1)]
+        void CSMain() {
+            writeScalar(values, 1.0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(hlsl)
+
+    assert "void writeScalar(float* dst, float value)" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_hlsl_psize_roundtrips_to_gl_point_size():
     crossgl = generate_crossgl("float pointSize() : PSIZE { return 1.0; }")
 
@@ -1712,6 +1733,34 @@ def test_codegen_template_method_arguments_closed_by_shift_right_token_from_dxc(
     parse_crossgl(output)
 
 
+def test_codegen_dependent_scoped_template_call_from_dxc_udt_validation():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/template/4771-udt-parameter-validation.hlsl
+    hlsl = textwrap.dedent("""
+        template<typename T>
+        struct Leg {
+            static T zero() {
+                return (T)0;
+            }
+        };
+
+        template<class Animal>
+        typename Animal::LegType getLegs(Animal A) {
+          return A.Legs + Leg<typename Animal::LegType>::zero();
+        }
+
+        struct Pup {
+          using LegType = int;
+          LegType Legs;
+        };
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "Animal_LegType getLegs(Animal A)" in output
+    assert "return A.Legs + Leg<typename Animal::LegType>::zero();" in output
+
+
 def test_codegen_hitobject_array_byval_parameter_modifier_macro_from_dxc():
     # microsoft/DirectXShaderCompiler
     # tools/clang/test/CodeGenDXIL/hlsl/objects/HitObject/hitobject-array-byval.hlsl
@@ -1797,6 +1846,34 @@ def test_codegen_fixed_width_vector_alias_constructors_from_hlsl_docs_reparse():
     parse_crossgl(output)
 
 
+def test_codegen_sm66_packed_8bit_aliases_from_dxc_reparse():
+    # Reduced from microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/CodeGenSPIRV/intrinsics.sm6_6.unpack.hlsl.
+    hlsl = textwrap.dedent("""
+        float4 main(int16_t4 input1 : Inputs1, int16_t4 input2 : Inputs2) : SV_Target {
+          int8_t4_packed signedPacked;
+          uint8_t4_packed unsignedPacked;
+          int16_t4 up1 = unpack_s8s16(unsignedPacked);
+          int32_t4 up3 = unpack_s8s32(unsignedPacked);
+          uint16_t4 up5 = unpack_u8u16(signedPacked);
+          uint32_t4 up7 = unpack_u8u32(signedPacked);
+          return 0.xxxx;
+        }
+    """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "uint signedPacked;" in output
+    assert "uint unsignedPacked;" in output
+    assert "i16vec4 up1 = unpack_s8s16(unsignedPacked);" in output
+    assert "ivec4 up3 = unpack_s8s32(unsignedPacked);" in output
+    assert "u16vec4 up5 = unpack_u8u16(signedPacked);" in output
+    assert "uvec4 up7 = unpack_u8u32(signedPacked);" in output
+    assert "int8_t4_packed" not in output
+    assert "uint8_t4_packed" not in output
+    parse_crossgl(output)
+
+
 def test_codegen_fixed_width_scalar_aliases_from_hlsl_docs_reparse():
     # Source: https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx-graphics-hlsl-scalar
     hlsl = textwrap.dedent("""
@@ -1842,6 +1919,15 @@ def test_codegen_pre_2018_fixed_width_typedef_names_from_dxc_reparse():
     assert "uint16 unsignedValue;" in output
     assert "int16 signedValue;" in output
     assert "double floatValue;" in output
+    parse_crossgl(output)
+
+
+def test_codegen_const_incomplete_array_typedef_from_dxc_reparse():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/hlsl/types/array/incomp_array.hlsl
+    output = generate_crossgl("typedef const int inta[];")
+
+    assert "type inta = [int];" in output
     parse_crossgl(output)
 
 
@@ -2106,6 +2192,39 @@ def test_codegen_mesh_task_stages():
     lowered = output.lower()
     assert "mesh" in lowered
     assert "task" in lowered
+
+
+def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
+    # Source: microsoft/DirectXShaderCompiler@d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652
+    # tools/clang/test/HLSLFileCheck/validation/callgraph/deriv-in-nested-fn-node-lib68-launch.hlsl
+    code = textwrap.dedent("""
+        [noinline] export
+        void intermediate() {
+        }
+
+        [shader("node")]
+        [NodeLaunch("thread")]
+        void main() {
+            intermediate();
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert '@shader("node")' in crossgl
+    assert '@ shader("node")' not in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    main = next(
+        function for function in shader_ast.functions if function.name == "main"
+    )
+
+    assert [
+        (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
+    ] == [
+        ("shader", ["node"]),
+        ("NodeLaunch", ["thread"]),
+    ]
 
 
 def test_codegen_pascal_case_mesh_attributes_infer_stage():
@@ -2679,7 +2798,7 @@ def test_codegen_extra_attributes_emitted():
     output = generate_crossgl(EXTRA_ATTRIBUTES_HLSL)
     lowered = output.lower()
     assert "@ unroll" in lowered
-    assert "@ loop" in lowered
+    assert "@loop" in lowered
     assert "@ branch" in lowered
     assert "@ flatten" in lowered
     assert "@ maxtessfactor" in lowered
@@ -2892,6 +3011,30 @@ def test_codegen_cbuffer_name_matching_struct_is_renamed_for_crossgl():
     assert "@ register(b0)" in output
     assert "cbuffer DispatchWidthConstant_1" in output
     assert "DispatchWidthConstant Constants;" in output
+    parse_crossgl(output)
+
+
+def test_codegen_cbuffer_struct_named_crossgl_keyword_is_renamed():
+    # Reduced from microsoft/DirectXShaderCompiler@main
+    # tools/clang/test/CodeGenSPIRV/vk.layout.cbuffer.fxc.matrix.struct.hlsl
+    hlsl = textwrap.dedent("""
+        cbuffer buffer0 {
+            struct layout {
+                float1x2 foo;
+            } bar;
+        };
+
+        float4 main(float4 color : COLOR) : SV_Target {
+            color.x += bar.foo._12;
+            return color;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "struct layout_ {" in output
+    assert "layout_ bar;" in output
+    assert "layout bar;" not in output
     parse_crossgl(output)
 
 
@@ -6739,6 +6882,29 @@ def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
     assert "type MyHandleT = __builtin_LinAlgMatrix;" in output
     assert "@ numthreads(4, 4, 4)" in output
     assert "MyMatrix MatA = MyMatrix::Splat(1.0);" in output
+    parse_crossgl(output)
+
+
+def test_codegen_cbuffer_member_initializers_from_dxc_issue_reparse():
+    # Source: microsoft/DirectXShaderCompiler#2380 documents default values on
+    # cbuffer members such as array initializers.
+    code = textwrap.dedent("""
+        cbuffer XX
+        {
+            float x = 1.0;
+            float2 param[2] = {float2(0, 1), float2(2, 3)};
+        };
+
+        float4 main() : SV_Target
+        {
+            return float4(param[0], x, 1.0);
+        }
+        """).strip()
+
+    output = generate_crossgl(code)
+
+    assert "float x = 1.0;" in output
+    assert "vec2 param[2] = {vec2(0, 1), vec2(2, 3)};" in output
     parse_crossgl(output)
 
 

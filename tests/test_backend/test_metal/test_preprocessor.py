@@ -71,6 +71,26 @@ def test_preprocessor_include_with_search_path(tmp_path):
     assert '"constants.metal"' not in values
 
 
+def test_preprocessor_include_honors_pragma_once(tmp_path):
+    include_file = tmp_path / "constants.metal"
+    include_file.write_text(
+        "#pragma once\nconstant int guarded = 7;\n", encoding="utf-8"
+    )
+    code = """
+    #include "constants.metal"
+    #include "constants.metal"
+    int value = guarded;
+    """
+
+    output = MetalPreprocessor(include_paths=[str(tmp_path)]).preprocess(
+        code,
+        file_path=str(tmp_path / "main.metal"),
+    )
+
+    assert output.count("guarded") == 2
+    assert "#pragma once" not in output
+
+
 def test_unresolved_system_include_is_preserved():
     code = """
     #include <metal_stdlib>
@@ -83,6 +103,41 @@ def test_unresolved_system_include_is_preserved():
     assert "#include <metal_stdlib>" in output
     assert "#include <metal_stdlib>" in values
     assert "using" in values
+
+
+def test_dawn_tint_warning_prologue_is_stripped_before_msl():
+    # Reduced from:
+    # Repo: https://dawn.googlesource.com/dawn
+    # Commit: 78a171ad2ed7f7265cfc3dd52e4e7a637a099df0
+    # Path: test/tint/bug/tint/2201.wgsl.expected.msl
+    code = """
+    <dawn>/test/tint/bug/tint/2201.wgsl:9:9 warning: code is unreachable
+            let _e16_ = vec2(false, false);
+            ^^^^^^^^^
+
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void v() {}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output.lstrip().startswith("#include <metal_stdlib>")
+    assert "warning: code is unreachable" not in output
+
+
+def test_diagnostic_error_prologue_is_preserved():
+    code = """
+    <dawn>/test/tint/broken.wgsl:1:1 error: invalid shader
+
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void v() {}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "error: invalid shader" in output
 
 
 def test_target_conditionals_simulator_macro_defaults_to_device_import():

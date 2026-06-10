@@ -182,6 +182,49 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_cpp_alternative_operators_parse_as_canonical_operators(self):
+        # Sibling CUDA fixture provenance: NVIDIA/cutlass@1fc71b3,
+        # examples/common/dist_gemm_helpers.h, uses C++ alternative `not`.
+        code = """
+        void host(bool ready, bool done, bool fallback, int mask, int flag) {
+            if (ready and not done or fallback) {
+                mask and_eq flag;
+            }
+            int bits = (mask bitand flag) bitor compl flag;
+            bits xor_eq 3;
+            if (bits not_eq 0) {
+                return;
+            }
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        condition = body[0].condition
+        assignment = body[0].if_body[0]
+        bits = body[1]
+        xor_assignment = body[2]
+        inequality = body[3].condition
+
+        assert isinstance(condition, BinaryOpNode)
+        assert condition.op == "||"
+        assert isinstance(condition.left, BinaryOpNode)
+        assert condition.left.op == "&&"
+        assert isinstance(condition.left.right, UnaryOpNode)
+        assert condition.left.right.op == "!"
+        assert isinstance(assignment, AssignmentNode)
+        assert assignment.operator == "&="
+
+        assert isinstance(bits.value, BinaryOpNode)
+        assert bits.value.op == "|"
+        assert bits.value.left.op == "&"
+        assert isinstance(bits.value.right, UnaryOpNode)
+        assert bits.value.right.op == "~"
+        assert isinstance(xor_assignment, AssignmentNode)
+        assert xor_assignment.operator == "^="
+        assert isinstance(inequality, BinaryOpNode)
+        assert inequality.op == "!="
+
     def test_public_hip_examples_typedef_struct_multi_alias_parsing(self):
         code = """
         typedef struct _GaussParms
@@ -278,6 +321,63 @@ class TestHipParser:
         assert isinstance(comma_expr.right.left, ArrayAccessNode)
         assert comma_expr.right.operator == "="
 
+    def test_public_hip_tests_noinline_before_extern_c_device_function(self):
+        # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381,
+        # catch/unit/deviceLib/DynamicAllocas.cc.
+        code = """
+        __noinline__ extern "C" __device__
+        void process_array_with_aligned_32_byte_buffer(int* a, int* b) {
+            a[0] = b[0];
+        }
+        """
+        ast = self.parse_code(code)
+
+        helper = ast.statements[0]
+
+        assert isinstance(helper, FunctionNode)
+        assert helper.name == "process_array_with_aligned_32_byte_buffer"
+        assert helper.qualifiers == ["__noinline__", "extern", "__device__"]
+
+    def test_public_hip_tests_coalesced_group_const_reference_declaration(self):
+        # Reduced from ROCm/hip-tests@a618b48f0a29cfbd8c990fa72ab772483f61d381,
+        # catch/unit/cooperativeGrps/coalesced_groups_shfl_down_old.cc.
+        code = """
+        __global__ void kernel_shfl_down(int* dResults) {
+            coalesced_group const& g = coalesced_threads();
+            dResults[0] = g.thread_rank();
+        }
+        """
+        ast = self.parse_code(code)
+
+        declaration = ast.statements[0].body[0]
+
+        assert isinstance(declaration, VariableNode)
+        assert declaration.vtype == "coalesced_group const &"
+        assert declaration.name == "g"
+
+    def test_public_rocprim_template_kernel_volatile_const_pointer_parameter(self):
+        # Reduced from ROCm/rocPRIM@14cd5e3c27a4b9ae7d510823a450723a03985ac0,
+        # test/rocprim/test_thread_algos.cpp.
+        code = """
+        template<class Type>
+        __global__
+        void thread_load_kernel(Type* volatile const device_input,
+                                Type* device_output) {
+            size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+            device_output[index] = device_input[index];
+        }
+        """
+        ast = self.parse_code(code)
+
+        kernel = ast.statements[0]
+
+        assert isinstance(kernel, KernelNode)
+        assert kernel.name == "thread_load_kernel"
+        assert kernel.params[0] == {
+            "type": "Type * volatile const",
+            "name": "device_input",
+        }
+
     def test_public_rocm_examples_device_global_variables_parse_as_globals(self):
         code = """
         __device__ auto load_callback_dev = load_callback;
@@ -308,6 +408,29 @@ class TestHipParser:
         assert isinstance(function, FunctionNode)
         assert function.name == "add"
         assert "__device__" in function.qualifiers
+
+    def test_public_hipblaslt_thread_local_extern_declaration_parse(self):
+        # Reduced from ROCm/hipBLASLt@3a609b06926c8227e753b62087555e1f435bf2d4,
+        # clients/include/hipblaslt_random.hpp.
+        code = """
+        using hipblaslt_rng_t = std::mt19937;
+        extern thread_local hipblaslt_rng_t t_hipblaslt_rng;
+        extern thread_local int t_hipblaslt_rand_idx;
+        """
+        ast = self.parse_code(code)
+
+        rng = ast.statements[1]
+        rand_idx = ast.statements[2]
+
+        assert isinstance(rng, VariableNode)
+        assert rng.vtype == "hipblaslt_rng_t"
+        assert rng.name == "t_hipblaslt_rng"
+        assert rng.qualifiers == ["extern", "thread_local"]
+
+        assert isinstance(rand_idx, VariableNode)
+        assert rand_idx.vtype == "int"
+        assert rand_idx.name == "t_hipblaslt_rand_idx"
+        assert rand_idx.qualifiers == ["extern", "thread_local"]
 
     def test_cuda_samples_style_const_dim3_constructor_global_parses(self):
         code = """

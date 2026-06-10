@@ -146,7 +146,15 @@ INTERPOLATION_QUALIFIER_TOKENS = {
     "SAMPLE",
 }
 
-CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"center", "shared", "snorm", "unorm"}
+CONTEXTUAL_QUALIFIER_IDENTIFIERS = {
+    "center",
+    "highp",
+    "lowp",
+    "mediump",
+    "shared",
+    "snorm",
+    "unorm",
+}
 CONTEXTUAL_RESOURCE_IDENTIFIER_TOKENS = {
     "TEXTURE1D",
     "TEXTURE1DARRAY",
@@ -442,6 +450,7 @@ class HLSLParser:
             return_type = self.parse_type()
             qualifiers.extend(self.parse_post_type_qualifiers())
             attributes.extend(self.parse_attribute_list())
+            declarator_type = return_type + self.parse_pointer_declarator_suffix()
             if not self.is_declarator_identifier_token(self.current_token[0]):
                 raise SyntaxError(
                     f"Expected identifier after type, got {self.current_token[0]}"
@@ -451,13 +460,16 @@ class HLSLParser:
 
             if self.current_token[0] == "LPAREN":
                 synthetic_start = len(self.synthetic_structs)
-                func = self.parse_function(return_type, name, qualifiers, attributes)
+                func = self.parse_function(
+                    declarator_type, name, qualifiers, attributes
+                )
                 structs.extend(self.synthetic_structs[synthetic_start:])
                 functions.append(func)
             else:
                 declarations = self.parse_variable_declaration_list_rest(
                     return_type,
                     name,
+                    first_vtype=declarator_type,
                     qualifiers=qualifiers,
                     attributes=attributes,
                     allow_semantic=True,
@@ -491,7 +503,7 @@ class HLSLParser:
             idx += 1
 
         while idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            idx = self.skip_angle_list_at(idx)
+            idx = self.skip_angle_list_at(idx, stop_at_statement_boundary=False)
             if idx is None:
                 return False
 
@@ -985,6 +997,13 @@ class HLSLParser:
 
         return type_name
 
+    def parse_pointer_declarator_suffix(self):
+        suffix = ""
+        while self.current_token[0] == "MULTIPLY":
+            suffix += "*"
+            self.eat("MULTIPLY")
+        return suffix
+
     def parse_type_suffixes(self, type_name):
         while True:
             if self.current_token[0] == "LESS_THAN":
@@ -1281,20 +1300,49 @@ class HLSLParser:
 
         return idx < len(self.tokens) and self.tokens[idx][0] == "SEMICOLON"
 
-    def skip_angle_list_at(self, idx):
+    def skip_angle_list_at(self, idx, stop_at_statement_boundary=True):
         depth = 0
+        paren_depth = 0
+        bracket_depth = 0
         while idx < len(self.tokens):
             token_type = self.tokens[idx][0]
-            if token_type == "LESS_THAN":
+            if token_type == "LPAREN":
+                paren_depth += 1
+            elif token_type == "RPAREN":
+                if paren_depth > 0:
+                    paren_depth -= 1
+                elif stop_at_statement_boundary and depth > 0 and bracket_depth == 0:
+                    return None
+            elif token_type == "LBRACKET":
+                bracket_depth += 1
+            elif token_type == "RBRACKET":
+                if bracket_depth > 0:
+                    bracket_depth -= 1
+            elif token_type == "LESS_THAN" and paren_depth == 0 and bracket_depth == 0:
                 depth += 1
-            elif token_type == "GREATER_THAN":
+            elif (
+                token_type == "GREATER_THAN" and paren_depth == 0 and bracket_depth == 0
+            ):
                 depth -= 1
                 if depth == 0:
                     return idx + 1
-            elif token_type == "SHIFT_RIGHT" and depth > 1:
+            elif (
+                token_type == "SHIFT_RIGHT"
+                and depth > 1
+                and paren_depth == 0
+                and bracket_depth == 0
+            ):
                 depth -= 2
                 if depth == 0:
                     return idx + 1
+            elif (
+                token_type in {"SEMICOLON", "RBRACE"}
+                and stop_at_statement_boundary
+                and depth > 0
+                and paren_depth == 0
+                and bracket_depth == 0
+            ):
+                return None
             elif token_type == "EOF":
                 return None
             idx += 1
@@ -1350,7 +1398,7 @@ class HLSLParser:
             if self.current_token[0] == "ENUM":
                 members.append(self.parse_enum())
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     name,
                     qualifiers=qualifiers,
@@ -1458,7 +1506,7 @@ class HLSLParser:
             if self.current_token[0] == "ENUM":
                 nested_members.append(self.parse_enum())
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     nested_name or parent_name,
                     qualifiers=member_qualifiers,
@@ -1498,6 +1546,9 @@ class HLSLParser:
 
         if not self.is_declarator_identifier_token(self.current_token[0]):
             if nested_name is None:
+                if self.current_token[0] == "SEMICOLON":
+                    self.eat("SEMICOLON")
+                    return nested_members
                 raise SyntaxError("Expected identifier after anonymous struct member")
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -1702,7 +1753,7 @@ class HLSLParser:
             if self.current_token[0] == "ENUM":
                 members.append(self.parse_enum())
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     explicit_name or "AnonymousStruct",
                     qualifiers=member_qualifiers,
@@ -1854,6 +1905,21 @@ class HLSLParser:
         if depth != 0:
             raise SyntaxError(f"Unterminated {open_token} block")
 
+    def looks_like_nested_struct_definition(self):
+        if self.current_token[0] != "STRUCT":
+            return False
+        if self.peek()[0] == "LBRACE":
+            return True
+        if not self.is_identifier_token(self.peek()[0]):
+            return False
+
+        idx = self.current_index + 2
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
+                return False
+        return idx < len(self.tokens) and self.tokens[idx][0] == "LBRACE"
+
     def parse_cbuffer(self, attributes=None):
         buffer_kind = self.current_token[1]
         self.eat(self.current_token[0])
@@ -1886,7 +1952,7 @@ class HLSLParser:
             qualifiers = self.parse_qualifiers()
             if self.skip_unexpanded_member_macro():
                 continue
-            if self.current_token[0] == "STRUCT":
+            if self.looks_like_nested_struct_definition():
                 declarations = self.parse_nested_struct_member(
                     name,
                     qualifiers=qualifiers,
@@ -2170,6 +2236,11 @@ class HLSLParser:
     def parse_parameters(self):
         self.eat("LPAREN")
         params = []
+        if self.current_token[0] == "VOID" and self.peek()[0] == "RPAREN":
+            self.eat("VOID")
+            self.eat("RPAREN")
+            return params
+
         primitive_qualifiers = {
             "point",
             "line",
@@ -2197,6 +2268,7 @@ class HLSLParser:
                 param_type = self.parse_type()
                 qualifiers.extend(self.parse_post_type_qualifiers())
                 attributes.extend(self.parse_attribute_list())
+                param_type += self.parse_pointer_declarator_suffix()
 
                 if self.is_declarator_identifier_token(self.current_token[0]):
                     name = self.parse_declarator_identifier()
@@ -2745,22 +2817,8 @@ class HLSLParser:
             idx += 3
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            depth = 0
-            while idx < len(self.tokens):
-                if self.tokens[idx][0] == "LESS_THAN":
-                    depth += 1
-                elif self.tokens[idx][0] == "GREATER_THAN":
-                    depth -= 1
-                    if depth == 0:
-                        idx += 1
-                        break
-                elif self.tokens[idx][0] == "SHIFT_RIGHT" and depth > 1:
-                    depth -= 2
-                    if depth == 0:
-                        idx += 1
-                        break
-                idx += 1
-            else:
+            idx = self.skip_angle_list_at(idx)
+            if idx is None:
                 return None
 
         return idx
@@ -2777,10 +2835,12 @@ class HLSLParser:
         vtype = self.parse_type()
         qualifiers.extend(self.parse_post_type_qualifiers())
         attributes.extend(self.parse_attribute_list())
+        declarator_type = vtype + self.parse_pointer_declarator_suffix()
         name = self.parse_declarator_identifier()
         declarations = self.parse_variable_declaration_list_rest(
             vtype,
             name,
+            first_vtype=declarator_type,
             qualifiers=qualifiers,
             attributes=attributes,
             allow_semantic=allow_semantic,
@@ -2792,6 +2852,7 @@ class HLSLParser:
         self,
         vtype,
         first_name,
+        first_vtype=None,
         qualifiers=None,
         attributes=None,
         allow_semantic=True,
@@ -2799,13 +2860,14 @@ class HLSLParser:
     ):
         declarations = []
         name = first_name
+        declarator_vtype = first_vtype or vtype
         while True:
             if name is None:
                 self.parse_anonymous_bitfield_declaration_rest()
             else:
                 declarations.append(
                     self.parse_variable_declaration_rest(
-                        vtype,
+                        declarator_vtype,
                         name,
                         qualifiers=qualifiers,
                         attributes=attributes,
@@ -2818,7 +2880,9 @@ class HLSLParser:
             self.eat("COMMA")
             if self.is_anonymous_bitfield_declarator_start():
                 name = None
+                declarator_vtype = vtype
             else:
+                declarator_vtype = vtype + self.parse_pointer_declarator_suffix()
                 name = self.parse_declarator_identifier()
 
         if consume_semicolon:
@@ -3550,10 +3614,20 @@ class HLSLParser:
                         if idx + 1 < len(self.tokens)
                         else ("EOF", "")
                     )
-                    return next_token[0] == "LPAREN" or (
-                        saw_top_level_comma
-                        and next_token[0]
-                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    return (
+                        next_token[0] == "LPAREN"
+                        or self.token_at_is_double_colon(idx + 1)
+                        or (
+                            saw_top_level_comma
+                            and next_token[0]
+                            in {
+                                "SEMICOLON",
+                                "COMMA",
+                                "RPAREN",
+                                "RBRACKET",
+                                "COLON",
+                            }
+                        )
                     )
             elif token_type == "SHIFT_RIGHT" and depth > 1:
                 depth -= 2
@@ -3563,10 +3637,20 @@ class HLSLParser:
                         if idx + 1 < len(self.tokens)
                         else ("EOF", "")
                     )
-                    return next_token[0] == "LPAREN" or (
-                        saw_top_level_comma
-                        and next_token[0]
-                        in {"SEMICOLON", "COMMA", "RPAREN", "RBRACKET", "COLON"}
+                    return (
+                        next_token[0] == "LPAREN"
+                        or self.token_at_is_double_colon(idx + 1)
+                        or (
+                            saw_top_level_comma
+                            and next_token[0]
+                            in {
+                                "SEMICOLON",
+                                "COMMA",
+                                "RPAREN",
+                                "RBRACKET",
+                                "COLON",
+                            }
+                        )
                     )
             elif depth == 1 and token_type == "COMMA":
                 saw_top_level_comma = True

@@ -224,16 +224,24 @@ class ImplNode(ASTNode):
 class AssociatedTypeNode(ASTNode):
     """Node representing a Rust trait associated type declaration."""
 
-    def __init__(self, name, bounds=None, default_type=None, where_clauses=None):
+    def __init__(
+        self,
+        name,
+        bounds=None,
+        default_type=None,
+        where_clauses=None,
+        generics=None,
+    ):
         self.name = name
         self.bounds = bounds or []
         self.default_type = default_type
         self.where_clauses = where_clauses or []
+        self.generics = generics or []
 
     def __repr__(self):
         return (
             f"AssociatedTypeNode(name={self.name}, bounds={self.bounds}, "
-            f"default_type={self.default_type})"
+            f"default_type={self.default_type}, generics={self.generics})"
         )
 
 

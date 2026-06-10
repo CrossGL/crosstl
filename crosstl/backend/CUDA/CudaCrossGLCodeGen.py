@@ -6,6 +6,7 @@ from .CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
     CastNode,
+    DesignatedInitializerNode,
     EnumNode,
     FunctionCallNode,
     InitializerListNode,
@@ -226,7 +227,7 @@ class CudaToCrossGLConverter:
         "cudaStreamGraphFireAndForgetAsSibling": "fire-and-forget sibling",
     }
     CUDA_INTRINSIC_OVERRIDE_NAMES = {"__usad4"}
-    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "var"}
+    CROSSGL_RESERVED_IDENTIFIERS = {"buffer", "in", "kernel", "precision", "var"}
 
     def __init__(self):
         self.indent_level = 0
@@ -246,6 +247,7 @@ class CudaToCrossGLConverter:
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.cuda_record_names = set()
+        self.generated_matrix_helper_types = set()
         self.global_resource_binding_count = 0
         self.anonymous_enum_count = 0
 
@@ -257,6 +259,9 @@ class CudaToCrossGLConverter:
         self.unique_ptr_scopes = [set()]
         self.type_alias_scopes = [{}]
         self.vector1_name_scopes = [{}]
+        self.generated_matrix_helper_types = self.collect_generated_matrix_helper_types(
+            ast_node
+        )
         self.user_function_names = self.collect_user_function_names(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
@@ -284,7 +289,7 @@ class CudaToCrossGLConverter:
     def generic_visit(self, node):
         if isinstance(node, str):
             if self.is_cuda_numeric_literal_text(node):
-                return node.replace("'", "")
+                return self.convert_cuda_numeric_literal_to_crossgl(node)
             if self.is_cuda_char_literal_text(node):
                 return self.convert_cuda_char_literal_to_crossgl(node)
             if self.is_cuda_string_literal_text(node):
@@ -299,9 +304,30 @@ class CudaToCrossGLConverter:
 
     def is_cuda_numeric_literal_text(self, value):
         text = str(value)
+        if "'" in text and bool(text) and (text[0].isdigit() or text.startswith(".")):
+            return True
         return (
-            "'" in text and bool(text) and (text[0].isdigit() or text.startswith("."))
+            re.fullmatch(
+                r"(?i)(?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)(?:u|l|ul|lu|ull|llu)",
+                text,
+            )
+            is not None
         )
+
+    def convert_cuda_numeric_literal_to_crossgl(self, value):
+        text = str(value).replace("'", "")
+        match = re.fullmatch(
+            r"(?i)((?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+))(u|l|ul|lu|ull|llu)",
+            text,
+        )
+        if match is None:
+            return text
+
+        digits, suffix = match.groups()
+        if "u" in suffix.lower():
+            unsigned_suffix = "U" if "U" in suffix else "u"
+            return f"{digits}{unsigned_suffix}"
+        return digits
 
     def is_cuda_char_literal_text(self, value):
         return re.fullmatch(r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'", str(value)) is not None
@@ -334,7 +360,7 @@ class CudaToCrossGLConverter:
         text = str(value)
         if not text or text[0] in "\"'":
             return False
-        return "::" in text and "<" in text and ">" in text
+        return "::" in text and (("<" in text and ">" in text) or "(" in text)
 
     def emit(self, code):
         if code.strip():
@@ -443,7 +469,7 @@ class CudaToCrossGLConverter:
         if normalized_type.startswith("enum "):
             type_name = normalized_type[len("enum ") :].strip()
             return self.convert_cuda_type_to_crossgl(type_name)
-        for prefix in ("struct ", "union "):
+        for prefix in ("class ", "struct ", "union "):
             if normalized_type.startswith(prefix):
                 type_name = normalized_type[len(prefix) :].strip()
                 if "*" in type_name:
@@ -487,6 +513,7 @@ class CudaToCrossGLConverter:
         operator_mapping = {
             "==": "equal",
             "!=": "not_equal",
+            "<=>": "three_way",
             "<": "less",
             ">": "greater",
             "<=": "less_equal",
@@ -529,7 +556,8 @@ class CudaToCrossGLConverter:
             name = getattr(current, "name", None)
             body = getattr(current, "body", None)
             if name is not None and body is not None:
-                names.add(name)
+                if not self.is_generated_matrix_helper_function(current):
+                    names.add(name)
 
             for function in getattr(current, "functions", []):
                 collect(function)
@@ -539,6 +567,79 @@ class CudaToCrossGLConverter:
         collect(node)
         names.discard(None)
         return names
+
+    def collect_generated_matrix_helper_types(self, node):
+        return {
+            struct.name
+            for struct in getattr(node, "structs", []) or []
+            if self.is_generated_matrix_helper_struct(struct)
+        }
+
+    def native_matrix_helper_dimensions(self, type_name):
+        match = re.fullmatch(r"(float|double)([234])x([234])", str(type_name))
+        if match is None:
+            return None
+        scalar_type, columns, rows = match.groups()
+        return scalar_type, int(columns), int(rows)
+
+    def convert_native_matrix_helper_name_to_crossgl(self, type_name):
+        if type_name not in self.generated_matrix_helper_types:
+            return None
+
+        dimensions = self.native_matrix_helper_dimensions(type_name)
+        if dimensions is None:
+            return None
+
+        scalar_type, columns, rows = dimensions
+        prefix = "dmat" if scalar_type == "double" else "mat"
+        suffix = str(columns) if columns == rows else f"{columns}x{rows}"
+        return f"{prefix}{suffix}"
+
+    def is_generated_matrix_helper_struct(self, node):
+        dimensions = self.native_matrix_helper_dimensions(getattr(node, "name", ""))
+        if dimensions is None:
+            return False
+
+        scalar_type, columns, rows = dimensions
+        members = getattr(node, "members", []) or []
+        member_by_name = {
+            getattr(member, "name", None): member
+            for member in members
+            if getattr(member, "name", None)
+        }
+
+        matrix_values = member_by_name.get("m")
+        column_count = member_by_name.get("CGL_COLUMNS")
+        row_count = member_by_name.get("CGL_ROWS")
+        if matrix_values is None or column_count is None or row_count is None:
+            return False
+
+        return (
+            getattr(matrix_values, "vtype", None) == f"{scalar_type}[{columns * rows}]"
+            and getattr(column_count, "vtype", None) == "const int"
+            and str(getattr(column_count, "value", "")).strip() == str(columns)
+            and "static" in (getattr(column_count, "qualifiers", []) or [])
+            and getattr(row_count, "vtype", None) == "const int"
+            and str(getattr(row_count, "value", "")).strip() == str(rows)
+            and "static" in (getattr(row_count, "qualifiers", []) or [])
+        )
+
+    def is_generated_matrix_helper_function(self, node):
+        if getattr(node, "name", None) not in {"operator*", "transpose", "inverse"}:
+            return False
+        if not self.function_references_generated_matrix_helper_type(node):
+            return False
+        qualifiers = set(getattr(node, "qualifiers", []) or [])
+        return {"__host__", "__device__", "inline"}.issubset(qualifiers)
+
+    def function_references_generated_matrix_helper_type(self, node):
+        candidate_types = [getattr(node, "return_type", "")]
+        candidate_types.extend(getattr(param, "vtype", "") for param in node.params)
+        return any(
+            self.strip_type_qualifiers(candidate_type).strip()
+            in self.generated_matrix_helper_types
+            for candidate_type in candidate_types
+        )
 
     def add_resource_object_type_hint(self, hints, name, resource_type):
         if not name or not resource_type:
@@ -3912,6 +4013,8 @@ class CudaToCrossGLConverter:
 
         if hasattr(node, "structs") and node.structs:
             for struct in node.structs:
+                if self.is_generated_matrix_helper_struct(struct):
+                    continue
                 self.visit(struct)
                 self.emit("")
 
@@ -3928,6 +4031,8 @@ class CudaToCrossGLConverter:
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
+                    continue
+                if self.is_generated_matrix_helper_function(func):
                     continue
                 self.emit(f"// Function: {func.name}")
                 self.visit(func)
@@ -3986,13 +4091,18 @@ class CudaToCrossGLConverter:
 
             if member_value is not None:
                 value = self.visit(member_value)
-                member_name = self.sanitize_identifier_name(member_name)
+                member_name = self.sanitize_enum_member_name(member_name)
                 self.emit(f"{member_name} = {value},")
             else:
-                self.emit(f"{self.sanitize_identifier_name(member_name)},")
+                self.emit(f"{self.sanitize_enum_member_name(member_name)},")
 
         self.indent_level -= 1
         self.emit("};")
+
+    def sanitize_enum_member_name(self, name):
+        if name == "object":
+            return "object_"
+        return self.sanitize_identifier_name(name)
 
     def next_anonymous_enum_name(self):
         name = f"anonymous_enum_{self.anonymous_enum_count}"
@@ -4221,7 +4331,7 @@ class CudaToCrossGLConverter:
                 self.emit(f"var {output_name}: {var_type} = {value};")
                 return
 
-            value = self.visit(node.value)
+            value = self.format_variable_initializer_value(node.value)
             self.register_warp_mask_value(node.name, output_name, value)
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
@@ -4286,6 +4396,26 @@ class CudaToCrossGLConverter:
 
         for name in names:
             self.warp_mask_value_scopes[-1].pop(name, None)
+
+    def format_variable_initializer_value(self, value):
+        scalar_value = self.format_single_scalar_initializer(value)
+        if scalar_value is not None:
+            return scalar_value
+        return self.visit(value)
+
+    def format_single_scalar_initializer(self, value):
+        if not isinstance(value, InitializerListNode) or len(value.elements) != 1:
+            return None
+        initializer = value.elements[0]
+        if isinstance(initializer, DesignatedInitializerNode):
+            return None
+        if not isinstance(initializer, FunctionCallNode):
+            return None
+        if not isinstance(initializer.name, str) or not initializer.name.startswith(
+            "::"
+        ):
+            return None
+        return self.visit(initializer)
 
     def resolve_warp_mask_expression(self, mask):
         text = str(mask).strip()
@@ -4590,7 +4720,12 @@ class CudaToCrossGLConverter:
                 return integer_intrinsic
 
         if self.is_user_defined_function(raw_name):
-            return f"{raw_name}({args_str})"
+            func_name = (
+                self.convert_cuda_function_name_to_crossgl(raw_name)
+                if isinstance(raw_name, str) and raw_name.startswith("::")
+                else raw_name
+            )
+            return f"{func_name}({args_str})"
 
         load_cache_intrinsic = self.format_cuda_load_cache_intrinsic_call(
             raw_name, node.args, args
@@ -4639,6 +4774,13 @@ class CudaToCrossGLConverter:
             return resource_call
 
         func_name = self.convert_cuda_builtin_function(raw_name)
+        if (
+            func_name == raw_name
+            and isinstance(raw_name, str)
+            and raw_name.startswith("::")
+            and not self.is_simple_identifier(func_name)
+        ):
+            func_name = self.convert_cuda_function_name_to_crossgl(raw_name)
         return f"{func_name}({args_str})"
 
     def format_cuda_time_function_call(self, function_name, args):
@@ -6343,6 +6485,10 @@ class CudaToCrossGLConverter:
         cuda_type = self.strip_dependent_template_disambiguators(cuda_type)
         cuda_type = self.strip_type_qualifiers(cuda_type)
 
+        matrix_type = self.convert_native_matrix_helper_name_to_crossgl(cuda_type)
+        if matrix_type is not None:
+            return matrix_type
+
         elaborated_type = self.convert_cuda_elaborated_type_to_crossgl(cuda_type)
         if elaborated_type is not None:
             return elaborated_type
@@ -6357,19 +6503,33 @@ class CudaToCrossGLConverter:
             "void": "void",
             "bool": "bool",
             "char": "i8",
+            "signed char": "i8",
             "unsigned char": "u8",
             "short": "i16",
+            "signed short": "i16",
+            "short int": "i16",
+            "signed short int": "i16",
             "unsigned short": "u16",
+            "unsigned short int": "u16",
             "int": "i32",
+            "signed": "i32",
             "signed int": "i32",
+            "unsigned": "u32",
             "uint": "u32",
             "unsigned int": "u32",
             "long": "i64",
             "signed long": "i64",
+            "long int": "i64",
+            "signed long int": "i64",
             "unsigned long": "u64",
+            "unsigned long int": "u64",
+            "long unsigned int": "u64",
             "long long": "i64",
             "signed long long": "i64",
+            "long long int": "i64",
+            "signed long long int": "i64",
             "unsigned long long": "u64",
+            "unsigned long long int": "u64",
             "long long unsigned int": "u64",
             "int8_t": "i8",
             "uint8_t": "u8",
@@ -6410,6 +6570,10 @@ class CudaToCrossGLConverter:
         span_type = self.convert_cuda_span_type(cuda_type)
         if span_type is not None:
             return span_type
+
+        std_array_type = self.convert_cuda_std_array_type(cuda_type)
+        if std_array_type is not None:
+            return std_array_type
 
         nested_scoped_template_type = (
             self.convert_nested_scoped_template_type_to_crossgl(cuda_type)
@@ -6559,6 +6723,19 @@ class CudaToCrossGLConverter:
         if len(template_args) >= 2 and not self.is_dynamic_span_extent(
             template_args[1]
         ):
+            extent = self.format_crossgl_array_extent(template_args[1])
+            return f"array<{element_type}, {extent}>"
+        return f"array<{element_type}>"
+
+    def convert_cuda_std_array_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if base_name.startswith("::"):
+            base_name = base_name[2:]
+        if base_name != "cuda::std::array" or not template_args:
+            return None
+
+        element_type = self.convert_cuda_type_to_crossgl(template_args[0])
+        if len(template_args) >= 2 and template_args[1].strip():
             extent = self.format_crossgl_array_extent(template_args[1])
             return f"array<{element_type}, {extent}>"
         return f"array<{element_type}>"
@@ -6839,6 +7016,11 @@ class CudaToCrossGLConverter:
         }
 
         normalized_func_name = self.normalize_cuda_builtin_function_name(func_name)
+        matrix_constructor = self.convert_native_matrix_helper_name_to_crossgl(
+            normalized_func_name
+        )
+        if matrix_constructor is not None:
+            return matrix_constructor
         return function_mapping.get(normalized_func_name, func_name)
 
     def normalize_cuda_builtin_function_name(self, func_name):

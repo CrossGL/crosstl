@@ -1,6 +1,6 @@
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-
 __device__ inline float cgl_float3_dot(float3 lhs, float3 rhs) {
   return (lhs.x * rhs.x) + (lhs.y * rhs.y) + (lhs.z * rhs.z);
 }

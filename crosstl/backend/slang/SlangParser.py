@@ -38,6 +38,7 @@ class SlangParser:
         "pervertex",
         "row_major",
         "column_major",
+        "dyn",
         "MATRIX_LAYOUT",
         "__prefix",
         "__postfix",
@@ -53,6 +54,7 @@ class SlangParser:
         "TreatAsDifferentiable",
         "__FunctionInterface",
         "__builtin_requirement",
+        "__glsl_extension",
         "__implicit_conversion",
         "__intrinsic_op",
         "__magic_type",
@@ -144,6 +146,12 @@ class SlangParser:
         "ASSIGN_SHIFT_LEFT",
         "ASSIGN_SHIFT_RIGHT",
     )
+    DECLARATION_FOLLOW_TOKENS = set(ASSIGNMENT_TOKENS) | {
+        "SEMICOLON",
+        "COMMA",
+        "COLON",
+        "LBRACKET",
+    }
     EXPRESSION_TYPE_OPERAND_TOKENS = (
         DECLARATION_TYPE_TOKENS | RESOURCE_TYPE_TOKENS | {"GENERIC", "VOID"}
     )
@@ -224,10 +232,18 @@ class SlangParser:
                 interfaces.append(self.parse_interface())
             elif (
                 declaration_token == "STRUCT"
+                or self.is_class_declaration_start()
                 or self.is_generic_prefixed_struct_declaration_start()
             ):
-                structs.append(self.parse_struct())
-            elif declaration_token == "EXTENSION":
+                struct = self.parse_struct()
+                structs.append(struct)
+                global_variables.extend(
+                    getattr(struct, "variable_declarations", []) or []
+                )
+            elif (
+                declaration_token == "EXTENSION"
+                or self.is_generic_prefixed_extension_declaration_start()
+            ):
                 extensions.append(self.parse_extension())
             elif declaration_token in {"CBUFFER", "TBUFFER"}:
                 cbuffers.append(self.parse_cbuffer(attributes=pending_attributes))
@@ -730,8 +746,32 @@ class SlangParser:
         current_pos = self.skip_declaration_prefix_tokens(
             self.pos, include_generic=True
         )
+        return current_pos < len(
+            self.tokens
+        ) and self.is_struct_like_declaration_token_at(current_pos)
+
+    def is_generic_prefixed_extension_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
         return (
-            current_pos < len(self.tokens) and self.tokens[current_pos][0] == "STRUCT"
+            current_pos < len(self.tokens)
+            and self.tokens[current_pos][0] == "EXTENSION"
+        )
+
+    def is_class_declaration_start(self):
+        current_pos = self.skip_declaration_prefix_tokens(
+            self.pos, include_generic=True
+        )
+        return current_pos < len(self.tokens) and self.tokens[current_pos] == (
+            "IDENTIFIER",
+            "class",
+        )
+
+    def is_struct_like_declaration_token_at(self, index):
+        return index < len(self.tokens) and (
+            self.tokens[index][0] == "STRUCT"
+            or self.tokens[index] == ("IDENTIFIER", "class")
         )
 
     def parse_qualifiers(self):
@@ -1464,7 +1504,10 @@ class SlangParser:
             or self.is_generic_prefixed_struct_declaration_start()
         ):
             exported_item = self.parse_struct()
-        elif declaration_token == "EXTENSION":
+        elif (
+            declaration_token == "EXTENSION"
+            or self.is_generic_prefixed_extension_declaration_start()
+        ):
             exported_item = self.parse_extension()
         elif self.is_func_keyword_declaration_start():
             exported_item = self.parse_func_keyword_function(attributes=attributes)
@@ -1571,7 +1614,11 @@ class SlangParser:
         qualifiers, prefix_generic_parameters, prefix_generic_constraints = (
             self.parse_typedef_prefixes()
         )
-        self.eat("STRUCT")
+        is_class = self.current_token == ("IDENTIFIER", "class")
+        if is_class:
+            self.eat("IDENTIFIER")
+        else:
+            self.eat("STRUCT")
         name = self.current_token[1]
         self.eat("IDENTIFIER")
         generic_parameters = prefix_generic_parameters
@@ -1593,6 +1640,7 @@ class SlangParser:
             node.generic_constraints = generic_constraints
             node.conformances = conformances
             node.qualifiers = qualifiers
+            node.is_class = is_class
             node.is_forward_declaration = True
             return node
 
@@ -1632,6 +1680,7 @@ class SlangParser:
                 continue
             if (
                 declaration_token == "STRUCT"
+                or self.is_class_declaration_start()
                 or self.is_generic_prefixed_struct_declaration_start()
             ):
                 structs.append(self.parse_struct())
@@ -1687,8 +1736,72 @@ class SlangParser:
         node.generic_constraints = generic_constraints
         node.conformances = conformances
         node.qualifiers = qualifiers
+        node.is_class = is_class
         node.is_forward_declaration = False
+        node.variable_declarations = []
+
+        if self.is_struct_trailing_variable_declaration_start():
+            node.variable_declarations = (
+                self.parse_struct_trailing_variable_declarations(
+                    name,
+                    qualifiers=qualifiers,
+                )
+            )
+        elif self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+
         return node
+
+    def is_struct_trailing_variable_declaration_start(self):
+        if self.current_token[0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS:
+            return False
+        if self.pos + 1 >= len(self.tokens):
+            return False
+        return self.tokens[self.pos + 1][0] in self.DECLARATION_FOLLOW_TOKENS
+
+    def parse_struct_trailing_variable_declarations(
+        self,
+        struct_type,
+        qualifiers=None,
+        attributes=None,
+    ):
+        declarations = []
+        qualifiers = qualifiers or []
+        attributes = attributes or []
+
+        while True:
+            name = self.parse_contextual_identifier()
+            variable = VariableNode(
+                struct_type,
+                name,
+                qualifiers=qualifiers,
+                attributes=attributes,
+                array_sizes=self.parse_array_suffixes(),
+            )
+
+            register_names = self.parse_register_annotations()
+            if register_names:
+                variable.register = register_names[0]
+                variable.registers = register_names
+
+            if self.current_token[0] == "COLON":
+                variable.semantic = self.parse_semantic_annotations()
+
+            if self.current_token[0] in self.ASSIGNMENT_TOKENS:
+                op = self.current_token[1]
+                self.eat(self.current_token[0])
+                declarations.append(
+                    AssignmentNode(variable, self.parse_expression(), op)
+                )
+            else:
+                declarations.append(variable)
+
+            if self.current_token[0] != "COMMA":
+                break
+            self.eat("COMMA")
+
+        self.eat("SEMICOLON")
+        return declarations
 
     def parse_struct_field_members(self, attributes=None):
         attributes = attributes or []
@@ -2085,14 +2198,17 @@ class SlangParser:
         )
 
     def parse_extension(self):
-        qualifiers = self.parse_qualifiers()
+        qualifiers, prefix_generic_parameters, prefix_generic_constraints = (
+            self.parse_typedef_prefixes()
+        )
         self.eat("EXTENSION")
-        generic_parameters = None
+        generic_parameters = prefix_generic_parameters
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
         extended_type = self.parse_type_name()
         conformances = self.parse_conformance_clause()
-        generic_constraints = self.parse_generic_constraint_clauses()
+        generic_constraints = prefix_generic_constraints
+        generic_constraints.extend(self.parse_generic_constraint_clauses())
         self.eat("LBRACE")
         methods = []
         typedefs = []
@@ -2627,6 +2743,8 @@ class SlangParser:
             if self.current_token[0] == "EQUALS":
                 self.eat("EQUALS")
                 default_value = self.parse_expression()
+            register_names = self.parse_register_annotations()
+            register_name = register_names[0] if register_names else None
             if self.current_token[0] == "COLON":
                 semantic = self.parse_semantic_annotations()
             if self.current_token[0] == "EQUALS":
@@ -2641,6 +2759,8 @@ class SlangParser:
                     semantic=semantic,
                     array_sizes=array_sizes,
                     value=default_value,
+                    register=register_name,
+                    registers=register_names,
                 )
             )
             if self.current_token[0] == "COMMA":
@@ -2854,9 +2974,16 @@ class SlangParser:
         next_pos = self.skip_qualified_type_suffix_tokens(next_pos)
         next_pos = self.skip_type_array_suffix_tokens(next_pos)
         next_pos = self.skip_pointer_declarator_tokens(next_pos)
+        if (
+            next_pos >= len(self.tokens)
+            or self.tokens[next_pos][0] not in self.CONTEXTUAL_IDENTIFIER_TOKENS
+        ):
+            return False
+
+        follow_pos = self.skip_type_array_suffix_tokens(next_pos + 1)
         return (
-            next_pos < len(self.tokens)
-            and self.tokens[next_pos][0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+            follow_pos < len(self.tokens)
+            and self.tokens[follow_pos][0] in self.DECLARATION_FOLLOW_TOKENS
         )
 
     def is_anonymous_struct_variable_declaration_start(self):
@@ -3023,7 +3150,11 @@ class SlangParser:
     def parse_if_statement(self):
         self.eat("IF")
         self.eat("LPAREN")
-        condition = self.parse_expression()
+        if_binding = self.parse_optional_if_binding()
+        if if_binding is not None:
+            condition = VariableNode("", if_binding.left.name)
+        else:
+            condition = self.parse_expression()
         self.eat("RPAREN")
         if_body = self.parse_statement_or_block()
         else_body = None
@@ -3032,7 +3163,29 @@ class SlangParser:
             else_body = self.parse_statement_or_block()
         elif self.current_token[0] == "ELSE_IF":
             else_body = self.parse_else_if_statement()
-        return IfNode(condition, if_body, else_body)
+        node = IfNode(condition, if_body, else_body)
+        if if_binding is not None:
+            node.if_binding = if_binding
+        return node
+
+    def parse_optional_if_binding(self):
+        if not (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in self.MODERN_VARIABLE_KEYWORDS
+            and self.pos + 2 < len(self.tokens)
+            and self.tokens[self.pos + 1][0] in self.CONTEXTUAL_IDENTIFIER_TOKENS
+            and self.tokens[self.pos + 2][0] in self.ASSIGNMENT_TOKENS
+        ):
+            return None
+
+        binding_type = self.current_token[1]
+        self.eat("IDENTIFIER")
+        name = self.parse_contextual_identifier()
+        op = self.current_token[1]
+        self.eat(self.current_token[0])
+        return AssignmentNode(
+            VariableNode(binding_type, name), self.parse_expression(), op
+        )
 
     def parse_else_if_statement(self):
         self.eat("ELSE_IF")
@@ -3493,6 +3646,9 @@ class SlangParser:
             self.eat("RBRAKET")
             return expr
 
+        if self.current_token[0] == "LBRACKET":
+            return self.parse_initializer_list("LBRACKET", "RBRACKET")
+
         if self.current_token[0] == "LBRACE":
             return self.parse_initializer_list()
 
@@ -3523,20 +3679,20 @@ class SlangParser:
                 f"Unexpected token in expression: {self.current_token[0]}"
             )
 
-    def parse_initializer_list(self):
+    def parse_initializer_list(self, open_token="LBRACE", close_token="RBRACE"):
         elements = []
-        self.eat("LBRACE")
-        while self.current_token[0] != "RBRACE":
+        self.eat(open_token)
+        while self.current_token[0] != close_token:
             if self.current_token[0] == "EOF":
                 raise SyntaxError("Unterminated initializer list")
             elements.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
-            elif self.current_token[0] != "RBRACE":
+            elif self.current_token[0] != close_token:
                 raise SyntaxError(
-                    f"Expected COMMA or RBRACE in initializer list, got {self.current_token[0]}"
+                    f"Expected COMMA or {close_token} in initializer list, got {self.current_token[0]}"
                 )
-        self.eat("RBRACE")
+        self.eat(close_token)
         return InitializerListNode(elements)
 
     def parse_vector_constructor(

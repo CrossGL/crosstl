@@ -2665,29 +2665,29 @@ def _shader_functions(shader):
 def _walk_ast(root):
     visited = set()
 
-    def walk(value):
+    def push_children(stack, children):
+        stack.extend(reversed(list(children)))
+
+    stack = [root]
+    while stack:
+        value = stack.pop()
         if value is None or isinstance(value, (str, int, float, bool)):
-            return
+            continue
         if isinstance(value, dict):
-            for item in value.values():
-                yield from walk(item)
-            return
+            push_children(stack, value.values())
+            continue
         if isinstance(value, (list, tuple, set)):
-            for item in value:
-                yield from walk(item)
-            return
+            push_children(stack, value)
+            continue
 
         value_id = id(value)
         if value_id in visited:
-            return
+            continue
         visited.add(value_id)
         yield value
 
         if hasattr(value, "__dict__"):
-            for child in vars(value).values():
-                yield from walk(child)
-
-    yield from walk(root)
+            push_children(stack, vars(value).values())
 
 
 def _is_variable_node(node):

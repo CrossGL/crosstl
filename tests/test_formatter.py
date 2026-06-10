@@ -14,6 +14,7 @@ class TestShaderLanguage:
         assert ShaderLanguage.GLSL.value == "glsl"
         assert ShaderLanguage.METAL.value == "metal"
         assert ShaderLanguage.SPIRV.value == "spirv"
+        assert ShaderLanguage.MOJO.value == "mojo"
         assert ShaderLanguage.UNKNOWN.value == "unknown"
 
 
@@ -65,6 +66,7 @@ class TestCodeFormatter:
         assert formatter.detect_language("shader.spvasm") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.vulkan") == ShaderLanguage.SPIRV
         assert formatter.detect_language("shader.slangh") == ShaderLanguage.SLANG
+        assert formatter.detect_language("shader.mojo") == ShaderLanguage.MOJO
         assert formatter.detect_language("shader.cuh") == ShaderLanguage.CUDA
         assert formatter.detect_language("shader.cuda") == ShaderLanguage.CUDA
         assert formatter.detect_language("shader.rust") == ShaderLanguage.RUST
@@ -101,6 +103,15 @@ class TestCodeFormatter:
 
         assert formatter.format_code("code", language="hlsl") == "clang_formatted"
         assert formatter.format_code("code", language="spirv") == "spirv_formatted"
+
+    def test_mojo_formatting_is_quiet_passthrough(self):
+        formatter = CodeFormatter()
+
+        with mock.patch("crosstl.formatter.logger.warning") as mock_warning:
+            assert formatter.format_code("code", language=ShaderLanguage.MOJO) == "code"
+            assert formatter.format_code("code", file_path="shader.mojo") == "code"
+
+        mock_warning.assert_not_called()
 
     def test_format_with_clang(self):
         formatter = CodeFormatter()

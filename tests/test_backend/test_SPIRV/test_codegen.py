@@ -434,6 +434,60 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_CROSSGL_CLIP_POSITION_SHIFTED_VARYINGS_ASSEMBLY = """
+; Reduced from local generated artifact:
+; examples/output/vulkan/cross_platform/UniversalPBRShader.spvasm.
+; CrossGL's SPIR-V generator emitted clip_position as Location 0, then numbered
+; remaining vertex varyings one slot higher than the fragment inputs.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "main" %clip %v_world %v_uv
+OpEntryPoint Fragment %fs "main" %f_color %f_world %f_uv
+OpExecutionMode %fs OriginUpperLeft
+OpName %clip "CrossGL_vertex_output_main_clip_position"
+OpName %v_world "CrossGL_vertex_output_main_world_position"
+OpName %v_uv "CrossGL_vertex_output_main_uv"
+OpName %f_world "CrossGL_fragment_input_input_world_position"
+OpName %f_uv "CrossGL_fragment_input_input_uv"
+OpName %f_color "CrossGL_fragment_output_main"
+OpDecorate %clip Location 0
+OpDecorate %v_world Location 1
+OpDecorate %v_uv Location 2
+OpDecorate %f_world Location 0
+OpDecorate %f_uv Location 1
+OpDecorate %f_color Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v3float = OpTypeVector %float 3
+%v4float = OpTypeVector %float 4
+%ptr_out_v4 = OpTypePointer Output %v4float
+%ptr_out_v3 = OpTypePointer Output %v3float
+%ptr_out_v2 = OpTypePointer Output %v2float
+%ptr_in_v3 = OpTypePointer Input %v3float
+%ptr_in_v2 = OpTypePointer Input %v2float
+%zero = OpConstant %float 0.0
+%one = OpConstant %float 1.0
+%clip_value = OpConstantComposite %v4float %zero %zero %zero %one
+%clip = OpVariable %ptr_out_v4 Output
+%v_world = OpVariable %ptr_out_v3 Output
+%v_uv = OpVariable %ptr_out_v2 Output
+%f_world = OpVariable %ptr_in_v3 Input
+%f_uv = OpVariable %ptr_in_v2 Input
+%f_color = OpVariable %ptr_out_v4 Output
+%vs = OpFunction %void None %fn
+%vs_label = OpLabel
+OpStore %clip %clip_value
+OpReturn
+OpFunctionEnd
+%fs = OpFunction %void None %fn
+%fs_label = OpLabel
+OpStore %f_color %clip_value
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_MATRIX_INTERFACE_ASSEMBLY = """
 OpCapability Shader
 OpMemoryModel Logical GLSL450
@@ -2154,6 +2208,47 @@ OpReturn
 OpFunctionEnd
 """
 
+SPIRV_TOOLS_RESERVED_FALLBACK_RESOURCE_NAMES_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Tools
+; Source commit: 199cb207b911501ddd76dcddf100a6e21c15ef23
+; Source paths: test/val/val_decoration_test.cpp,
+; test/val/val_non_uniform_test.cpp, and test/opt/simplification_test.cpp
+; Reduced from valid validation/optimization fixtures with unnamed resource ids
+; such as %var, %in, and %out. CrossGL must not emit reserved identifiers.
+OpCapability Shader
+OpCapability GroupNonUniformBallot
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %out_value
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %uniform_struct Block
+OpMemberDecorate %uniform_struct 0 Offset 0
+OpDecorate %var DescriptorSet 0
+OpDecorate %var Binding 0
+OpDecorate %struct Block
+OpMemberDecorate %struct 0 Offset 0
+OpDecorate %in DescriptorSet 0
+OpDecorate %in Binding 1
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 2
+OpDecorate %out_value Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uniform_struct = OpTypeStruct %uint
+%struct = OpTypeStruct %uint
+%ptr_uniform = OpTypePointer Uniform %uniform_struct
+%ptr_storage = OpTypePointer StorageBuffer %struct
+%ptr_output_uint = OpTypePointer Output %uint
+%var = OpVariable %ptr_uniform Uniform
+%in = OpVariable %ptr_storage StorageBuffer
+%out = OpVariable %ptr_storage StorageBuffer
+%out_value = OpVariable %ptr_output_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+OpReturn
+OpFunctionEnd
+"""
+
 SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY = """
 ; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
 ; Source version: SPIR-V 1.6 Revision 7, unified spec.
@@ -2756,6 +2851,86 @@ OpMemberDecorate %Params 0 Offset 0
 %encoded = OpLoad %uvec2 %ptr
 %tlas = OpConvertUToAccelerationStructureKHR %accel %encoded
 OpRayQueryInitializeKHR %ray_query %tlas %zero %zero %origin %zero_f %direction %one_f
+OpRayQueryTerminateKHR %ray_query
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_NAGA_RAY_QUERY_PROCEED_GETTERS_ASSEMBLY = """
+; Source repo: https://github.com/gfx-rs/naga
+; Source path: tests/out/spv/ray-query.spvasm
+; Reduced from OpRayQueryProceedKHR and OpRayQueryGetIntersection*KHR result use.
+OpCapability Shader
+OpCapability RayQueryKHR
+OpExtension "SPV_KHR_ray_query"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %top_level_as %results
+OpExecutionMode %main LocalSize 1 1 1
+OpName %top_level_as "topLevelAS"
+OpName %Results "Results"
+OpMemberName %Results 0 "proceeded"
+OpMemberName %Results 1 "intersectionType"
+OpMemberName %Results 2 "distance"
+OpMemberName %Results 3 "barycentrics"
+OpName %results "results"
+OpName %ray_query "rayQuery"
+OpDecorate %top_level_as DescriptorSet 0
+OpDecorate %top_level_as Binding 0
+OpDecorate %Results Block
+OpMemberDecorate %Results 0 Offset 0
+OpMemberDecorate %Results 1 Offset 4
+OpMemberDecorate %Results 2 Offset 8
+OpMemberDecorate %Results 3 Offset 16
+OpDecorate %results DescriptorSet 0
+OpDecorate %results Binding 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%float = OpTypeFloat 32
+%v2float = OpTypeVector %float 2
+%v3float = OpTypeVector %float 3
+%accel = OpTypeAccelerationStructureKHR
+%rayquery = OpTypeRayQueryKHR
+%Results = OpTypeStruct %uint %uint %float %v2float
+%ptr_accel = OpTypePointer UniformConstant %accel
+%ptr_results = OpTypePointer StorageBuffer %Results
+%ptr_function_rayquery = OpTypePointer Function %rayquery
+%ptr_storage_uint = OpTypePointer StorageBuffer %uint
+%ptr_storage_float = OpTypePointer StorageBuffer %float
+%ptr_storage_v2float = OpTypePointer StorageBuffer %v2float
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%mask = OpConstant %uint 255
+%zero_i = OpConstant %int 0
+%one_i = OpConstant %int 1
+%two_i = OpConstant %int 2
+%three_i = OpConstant %int 3
+%zero_f = OpConstant %float 0.0
+%one_f = OpConstant %float 1.0
+%origin = OpConstantComposite %v3float %zero_f %zero_f %zero_f
+%direction = OpConstantComposite %v3float %zero_f %one_f %zero_f
+%top_level_as = OpVariable %ptr_accel UniformConstant
+%results = OpVariable %ptr_results StorageBuffer
+%main = OpFunction %void None %fn
+%label = OpLabel
+%ray_query = OpVariable %ptr_function_rayquery Function
+%accel_value = OpLoad %accel %top_level_as
+OpRayQueryInitializeKHR %ray_query %accel_value %zero %mask %origin %zero_f %direction %one_f
+%proceeded = OpRayQueryProceedKHR %bool %ray_query
+%proceeded_uint = OpSelect %uint %proceeded %one %zero
+%proceeded_ptr = OpAccessChain %ptr_storage_uint %results %zero_i
+OpStore %proceeded_ptr %proceeded_uint
+%intersection_type = OpRayQueryGetIntersectionTypeKHR %uint %ray_query %one
+%intersection_type_ptr = OpAccessChain %ptr_storage_uint %results %one_i
+OpStore %intersection_type_ptr %intersection_type
+%distance = OpRayQueryGetIntersectionTKHR %float %ray_query %one
+%distance_ptr = OpAccessChain %ptr_storage_float %results %two_i
+OpStore %distance_ptr %distance
+%barycentrics = OpRayQueryGetIntersectionBarycentricsKHR %v2float %ray_query %one
+%barycentrics_ptr = OpAccessChain %ptr_storage_v2float %results %three_i
+OpStore %barycentrics_ptr %barycentrics
 OpRayQueryTerminateKHR %ray_query
 OpReturn
 OpFunctionEnd
@@ -4119,6 +4294,57 @@ OpDecorate %vec_out Location 1
 OpStore %float_out %float_value
 %vec_value = OpBitcast %v2float %u32vec2_12
 OpStore %vec_out %vec_value
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_CROSS_INTEGER_BITCAST_ASSEMBLY = """
+; Source repo: https://github.com/KhronosGroup/SPIRV-Cross
+; Source commit: 146679ff8255a6068518685599d7fb8761d1b570
+; Source path: shaders/asm/comp/atomic-decrement.asm.comp
+; Reduced from signed GlobalInvocationId component bitcast to unsigned output.
+OpCapability Shader
+OpCapability ImageBuffer
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %thread_id
+OpExecutionMode %main LocalSize 4 1 1
+OpName %thread_id "vThreadID"
+OpName %Output "Output"
+OpMemberName %Output 0 "unsignedValue"
+OpMemberName %Output 1 "signedValue"
+OpName %output "output"
+OpDecorate %thread_id BuiltIn GlobalInvocationId
+OpDecorate %Output BufferBlock
+OpMemberDecorate %Output 0 Offset 0
+OpMemberDecorate %Output 1 Offset 4
+OpDecorate %output DescriptorSet 0
+OpDecorate %output Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%int = OpTypeInt 32 1
+%v3int = OpTypeVector %int 3
+%Output = OpTypeStruct %uint %int
+%ptr_input_v3int = OpTypePointer Input %v3int
+%ptr_input_int = OpTypePointer Input %int
+%ptr_output_block = OpTypePointer Uniform %Output
+%ptr_output_uint = OpTypePointer Uniform %uint
+%ptr_output_int = OpTypePointer Uniform %int
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%all_bits = OpConstant %uint 4294967295
+%thread_id = OpVariable %ptr_input_v3int Input
+%output = OpVariable %ptr_output_block Uniform
+%main = OpFunction %void None %fn
+%label = OpLabel
+%thread_x_ptr = OpAccessChain %ptr_input_int %thread_id %zero
+%thread_x = OpLoad %int %thread_x_ptr
+%unsigned_bits = OpBitcast %uint %thread_x
+%unsigned_ptr = OpAccessChain %ptr_output_uint %output %zero
+OpStore %unsigned_ptr %unsigned_bits
+%signed_bits = OpBitcast %int %all_bits
+%signed_ptr = OpAccessChain %ptr_output_int %output %one
+OpStore %signed_ptr %signed_bits
 OpReturn
 OpFunctionEnd
 """
@@ -5714,6 +5940,75 @@ def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():
     assert downstream_code.count("OpFunction ") == 2
 
 
+def test_spirv_cross_extra_entrypoint_interfaces_are_pruned_for_reparse():
+    assembly = """
+    ; Reduced from:
+    ; Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    ; Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    ; Path: shaders-msl/asm/vert/fake-builtin-input.asm.vert
+    OpCapability Shader
+    OpCapability Float16
+    OpCapability StorageInputOutput16
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint Vertex %vertexShader "main" %in_var_POSITION %gl_Position %out_var_SV_Target
+    OpEntryPoint Fragment %fragmentShader "fragmentShader" %in_var_POSITION %gl_Position %out_var_SV_Target
+    OpExecutionMode %fragmentShader OriginUpperLeft
+    OpName %in_var_POSITION "in.var.POSITION"
+    OpName %out_var_SV_Target "out.var.SV_Target"
+    OpName %vertexShader "vertexShader"
+    OpName %fragmentShader "fragmentShader"
+    OpDecorate %gl_Position BuiltIn Position
+    OpDecorate %in_var_POSITION Location 0
+    OpDecorate %out_var_SV_Target Location 0
+    %float = OpTypeFloat 32
+    %float_0 = OpConstant %float 0
+    %float_1 = OpConstant %float 1
+    %half = OpTypeFloat 16
+    %half_0x1p_0 = OpConstant %half 0x1p+0
+    %half_0x0p_0 = OpConstant %half 0x0p+0
+    %v4half = OpTypeVector %half 4
+    %out_color = OpConstantComposite %v4half %half_0x1p_0 %half_0x0p_0 %half_0x1p_0 %half_0x1p_0
+    %v2float = OpTypeVector %float 2
+    %_ptr_Input_v2float = OpTypePointer Input %v2float
+    %v4float = OpTypeVector %float 4
+    %_ptr_Output_v4float = OpTypePointer Output %v4float
+    %_ptr_Output_v4half = OpTypePointer Output %v4half
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %in_var_POSITION = OpVariable %_ptr_Input_v2float Input
+    %gl_Position = OpVariable %_ptr_Output_v4float Output
+    %out_var_SV_Target = OpVariable %_ptr_Output_v4half Output
+    %vertexShader = OpFunction %void None %fn
+    %vs_label = OpLabel
+    %loaded_position = OpLoad %v2float %in_var_POSITION
+    %x = OpCompositeExtract %float %loaded_position 0
+    %y = OpCompositeExtract %float %loaded_position 1
+    %position = OpCompositeConstruct %v4float %x %y %float_0 %float_1
+    OpStore %gl_Position %position
+    OpReturn
+    OpFunctionEnd
+    %fragmentShader = OpFunction %void None %fn
+    %fs_label = OpLabel
+    OpStore %out_var_SV_Target %out_color
+    OpReturn
+    OpFunctionEnd
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(assembly)))
+
+    parse_crossgl(generated_code)
+    vertex_section = generated_code.split("// Vertex Shader", 1)[1].split(
+        "// Fragment Shader", 1
+    )[0]
+    fragment_section = generated_code.split("// Fragment Shader", 1)[1]
+
+    assert "float2 in_var_POSITION @input @location(0);" in vertex_section
+    assert "float4 gl_Position @output @gl_Position;" in vertex_section
+    assert "out_var_SV_Target @output @location(0);" not in vertex_section
+    assert "half4 out_var_SV_Target @output @location(0);" in fragment_section
+    assert "in_var_POSITION @input @location(0);" not in fragment_section
+
+
 def test_glslang_location_decorated_interface_block_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_LOCATION_BLOCK_TO_FLAT_INTERFACE_ASSEMBLY)
     ast = parse_code(tokens)
@@ -5802,6 +6097,29 @@ def test_spirv_linked_vertex_fragment_main_roundtrip_keeps_stage_scoped_uv(tmp_p
         )
 
 
+def test_spirv_crossgl_clip_position_output_shifts_varying_locations():
+    tokens = tokenize_code(SPIRV_CROSSGL_CLIP_POSITION_SHIFTED_VARYINGS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 gl_Position @output @gl_Position;" in generated_code
+    assert "gl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+    assert (
+        "float3 CrossGL_vertex_output_main_world_position " "@output @location(0);"
+    ) in generated_code
+    assert (
+        "float2 CrossGL_vertex_output_main_uv @output @location(1);"
+    ) in generated_code
+    assert (
+        "float3 CrossGL_fragment_input_input_world_position " "@input @location(0);"
+    ) in generated_code
+    assert (
+        "float2 CrossGL_fragment_input_input_uv @input @location(1);"
+    ) in generated_code
+    assert "CrossGL_vertex_output_main_clip_position @output" not in generated_code
+    parse_crossgl(generated_code)
+
+
 def test_spirv_assembly_matrix_interface_codegen():
     tokens = tokenize_code(SPIRV_MATRIX_INTERFACE_ASSEMBLY)
     ast = parse_code(tokens)
@@ -5844,6 +6162,57 @@ def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
         "@set(0) @binding(4);" in generated_code
     )
     assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_decoration_group_resource_layout_codegen_reparse():
+    assembly = """
+    ; Reduced from:
+    ; Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    ; Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    ; Path: shaders/asm/comp/decoration-group.asm.comp
+    OpCapability Shader
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint GLCompute %main "main" %gid
+    OpExecutionMode %main LocalSize 1 1 1
+    OpName %gid "gl_GlobalInvocationID"
+    OpName %values "values"
+    OpDecorate %gid BuiltIn GlobalInvocationId
+    OpDecorate %stride_group ArrayStride 4
+    OpDecorate %block_group BufferBlock
+    OpDecorate %offset_group Offset 0
+    %stride_group = OpDecorationGroup
+    %block_group = OpDecorationGroup
+    %offset_group = OpDecorationGroup
+    OpGroupDecorate %stride_group %runtime_float
+    OpGroupDecorate %block_group %Values
+    OpGroupMemberDecorate %offset_group %Values 0
+    OpDecorate %values DescriptorSet 0
+    OpDecorate %values Binding 2
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %uint = OpTypeInt 32 0
+    %float = OpTypeFloat 32
+    %v3uint = OpTypeVector %uint 3
+    %ptr_input_v3uint = OpTypePointer Input %v3uint
+    %runtime_float = OpTypeRuntimeArray %float
+    %Values = OpTypeStruct %runtime_float
+    %ptr_uniform_values = OpTypePointer Uniform %Values
+    %gid = OpVariable %ptr_input_v3uint Input
+    %values = OpVariable %ptr_uniform_values Uniform
+    %main = OpFunction %void None %fn
+    %label = OpLabel
+    OpReturn
+    OpFunctionEnd
+    """
+
+    ast = parse_code(tokenize_code(assembly))
+    generated_code = generate_code(ast)
+
+    assert ("BufferBlock", []) in ast.spirv_decorations["%Values"]
+    assert ("0", "Offset", ["0"]) in ast.spirv_member_decorations["%Values"]
+    assert "RWStructuredBuffer<values> values @set(0) @binding(2);" in generated_code
+    assert "float member0[];" in generated_code
+    parse_crossgl(generated_code)
 
 
 def test_spirv_cross_block_name_alias_global_codegen_reparse():
@@ -6611,6 +6980,20 @@ def test_spirv_tools_anonymous_resource_block_codegen_reparse():
     assert "Unhandled statement type" not in generated_code
 
 
+def test_spirv_tools_reserved_fallback_resource_names_codegen_reparse():
+    tokens = tokenize_code(SPIRV_TOOLS_RESERVED_FALLBACK_RESOURCE_NAMES_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "cbuffer var_ @set(0) @binding(0) {" in generated_code
+    assert "RWStructuredBuffer<in_> in_ @set(0) @binding(1);" in generated_code
+    assert "RWStructuredBuffer<out_> out_ @set(0) @binding(2);" in generated_code
+    assert "cbuffer var @set" not in generated_code
+    assert "RWStructuredBuffer<in> in @set" not in generated_code
+    assert "RWStructuredBuffer<out> out @set" not in generated_code
+
+
 def test_spirv_tools_array_length_codegen_reparse():
     tokens = tokenize_code(SPIRV_TOOLS_ARRAY_LENGTH_ASSEMBLY)
     ast = parse_code(tokens)
@@ -6881,6 +7264,37 @@ def test_spirv_glslang_ray_query_convert_codegen_reparse():
     assert "rayQueryTerminateEXT(rayQuery);" in generated_code
     assert "OpRayQuery" not in generated_code
     assert "%ray_query" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_naga_ray_query_proceed_and_getters_codegen_reparse():
+    tokens = tokenize_code(SPIRV_NAGA_RAY_QUERY_PROCEED_GETTERS_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "accelerationStructureEXT topLevelAS @set(0) @binding(0);" in generated_code
+    assert "RWStructuredBuffer<Results> results @set(0) @binding(1);" in generated_code
+    assert "rayQueryEXT rayQuery;" in generated_code
+    assert (
+        "results[0].proceeded = (rayQueryProceedEXT(rayQuery) ? 1 : 0);"
+        in generated_code
+    )
+    assert (
+        "results[0].intersectionType = "
+        "rayQueryGetIntersectionTypeEXT(rayQuery, 1);" in generated_code
+    )
+    assert (
+        "results[0].distance = rayQueryGetIntersectionTEXT(rayQuery, 1);"
+        in generated_code
+    )
+    assert (
+        "results[0].barycentrics = "
+        "rayQueryGetIntersectionBarycentricsEXT(rayQuery, 1);" in generated_code
+    )
+    assert "rayQueryTerminateEXT(rayQuery);" in generated_code
+    assert "OpRayQuery" not in generated_code
+    assert "intersection_type" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -7498,6 +7912,21 @@ def test_spirv_tools_bitcast_success_codegen_reparse():
     assert "vecOut = uintBitsToFloat(uint2(1, 2));" in generated_code
     assert "float_value" not in generated_code
     assert "vec_value" not in generated_code
+    assert "Unhandled statement type" not in generated_code
+
+
+def test_spirv_cross_integer_bitcast_codegen_reparse():
+    tokens = tokenize_code(SPIRV_CROSS_INTEGER_BITCAST_ASSEMBLY)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert "int3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;" in generated_code
+    assert (
+        "output[0].unsignedValue = asuint(gl_GlobalInvocationID[0]);" in generated_code
+    )
+    assert "output[0].signedValue = asint(4294967295);" in generated_code
+    assert "spirvBitcast_" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 
@@ -8132,6 +8561,29 @@ def test_naga_linkage_metadata_only_assembly_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert ast.spirv_capabilities == ["Shader", "Linkage"]
+    assert generated_code == "shader main {\n}\n"
+
+
+def test_entry_point_metadata_only_assembly_codegen_reparse():
+    # Reduced from CrossGL-Compiler build/test-vulkan-package-inspect-
+    # disassembly-emitted.cglb/backend/vulkan/
+    # StorageBufferComputeShader.disassembly.spvasm.
+    code = """
+    OpEntryPoint GLCompute %compute_main "main" %resource_values
+    OpExecutionMode %compute_main LocalSize 1 1 1
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    parse_crossgl(generated_code)
+    assert ast.spirv_entry_points[0]["id"] == "%compute_main"
+    assert ast.spirv_execution_modes["%compute_main"][0]["operands"] == [
+        "1",
+        "1",
+        "1",
+    ]
     assert generated_code == "shader main {\n}\n"
 
 

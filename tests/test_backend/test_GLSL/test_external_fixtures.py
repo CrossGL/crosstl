@@ -26,6 +26,8 @@ from crosstl.translator.parser import Parser as CrossGLParser
 
 VULKAN_SAMPLES_REPO = "https://github.com/KhronosGroup/Vulkan-Samples"
 VULKAN_SAMPLES_COMMIT = "ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a"
+OGL_SAMPLES_REPO = "https://github.com/g-truc/ogl-samples"
+OGL_SAMPLES_COMMIT = "38cada7a9458864265e25415ae61586d500ff5fc"
 
 
 @dataclass(frozen=True)
@@ -256,6 +258,65 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/spv.rw.autoassign.frag.
+    # Reduced from HLSL-style UAV auto-assignment coverage that mixes
+    # RWTexture and RWBuffer generic resource spellings.
+    ExternalFixture(
+        name="glslang-spv-rw-autoassign-generic-uav-resources",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.rw.autoassign.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            RWTexture1D <float> g_tTex1df1;
+            RWBuffer <uint>     g_tBuf1du1;
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            PS_OUTPUT main()
+            {
+                float r00 = g_tTex1df1[0];
+                uint  r01 = g_tBuf1du1[0];
+
+                PS_OUTPUT psout;
+                psout.Color = 0;
+                return psout;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.rw.scalar.bracket.frag.
+    # Reduced from scalar typed RWTexture bracket access coverage. The element
+    # type controls whether CrossGL receives image, iimage, or uimage.
+    ExternalFixture(
+        name="glslang-hlsl-rwtexture-scalar-generic-elements",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.rw.scalar.bracket.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            RWTexture1D <float> g_tTex1df1;
+            RWTexture1D <int>   g_tTex1di1;
+            RWTexture1D <uint>  g_tTex1du1;
+
+            struct PS_OUTPUT
+            {
+                float4 Color : SV_Target0;
+            };
+
+            PS_OUTPUT main()
+            {
+               PS_OUTPUT psout;
+               float r00 = g_tTex1df1[0];
+               int   r01 = g_tTex1di1[0];
+               uint  r02 = g_tTex1du1[0];
+               psout.Color = float4(r00, float(r01), float(r02), 1.0);
+               return psout;
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.int16.amd.frag.
     # Reduced from AMD int16 literal and specialization-constant coverage.
     ExternalFixture(
@@ -330,6 +391,49 @@ EXTERNAL_FIXTURES = [
                 }
                 [[branch]] if (cond) cond = false;
                 [ [ dont_flatten , branch ] ] switch(3) { case 3: break; }
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.attribute.expression.comp.
+    # Reduced from HLSL-style single-bracket attributes accepted by glslang
+    # before entry-point declarations and loop statements.
+    ExternalFixture(
+        name="glslang-hlsl-single-bracket-entry-and-loop-attributes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.attribute.expression.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            uniform int bound;
+
+            #define FOO 3
+            #define BAR 2
+
+            [numthreads(2+2, 2*3, (1+FOO)*BAR)]
+            void main()
+            {
+                [unroll(5*2 + 1)]
+                for (int x = 0; x < bound; ++x)
+                    ;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.loopattr.frag.
+    # Reduced from HLSL-style single-bracket loop attributes in a fragment
+    # shader body.
+    ExternalFixture(
+        name="glslang-hlsl-single-bracket-loop-attributes",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.loopattr.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            float4 main() : SV_Target0
+            {
+                [unroll(5)] for (int x = 0; x < 5; ++x);
+                [loop] for (int y = 0; y < 5; ++y);
+
+                return 0;
             }
         """).strip(),
     ),
@@ -456,6 +560,75 @@ EXTERNAL_FIXTURES = [
             void main()
             {
                 argless = 1.0;
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/GL_EXT_shader_integer_mix.vert.
+    # Reduced from extension-macro guards after a declared GLSL extension.
+    ExternalFixture(
+        name="glslang-extension-directive-defines-feature-macro",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/GL_EXT_shader_integer_mix.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 330
+            #extension GL_EXT_shader_integer_mix: require
+
+            #if !defined GL_EXT_shader_integer_mix
+            #  error GL_EXT_shader_integer_mix is not defined
+            #elif GL_EXT_shader_integer_mix != 1
+            #  error GL_EXT_shader_integer_mix is not equal to 1
+            #endif
+
+            void main(void)
+            {
+                gl_Position = vec4(0);
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.tensorARM.declare.comp.
+    # Reduced from companion extension-macro guards exposed with GL_ARM_tensors.
+    ExternalFixture(
+        name="glslang-arm-tensors-extension-companion-macros",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.tensorARM.declare.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 460 core
+
+            #extension GL_ARM_tensors : enable
+            #extension GL_EXT_shader_explicit_arithmetic_types : enable
+
+            #if !defined GL_ARM_tensors
+            #  error GL_ARM_tensors is not defined
+            #elif GL_ARM_tensors != 1
+            #  error GL_ARM_tensors is not equal to 1
+            #endif
+
+            #if !defined GL_ARM_tensors_bfloat16
+            #  error GL_ARM_tensors_bfloat16 is not defined
+            #elif GL_ARM_tensors_bfloat16 != 1
+            #  error GL_ARM_tensors_bfloat16 is not equal to 1
+            #endif
+
+            #if !defined GL_ARM_tensors_float_e5m2
+            #  error GL_ARM_tensors_float_e5m2 is not defined
+            #elif GL_ARM_tensors_float_e5m2 != 1
+            #  error GL_ARM_tensors_float_e5m2 is not equal to 1
+            #endif
+
+            #if !defined GL_ARM_tensors_float_e4m3
+            #  error GL_ARM_tensors_float_e4m3 is not defined
+            #elif GL_ARM_tensors_float_e4m3 != 1
+            #  error GL_ARM_tensors_float_e4m3 is not equal to 1
+            #endif
+
+            layout(local_size_x = 1) in;
+
+            void main()
+            {
             }
         """).strip(),
     ),
@@ -1484,6 +1657,145 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: g-truc/ogl-samples data/gl-400/tess-struct.geom.
+    # Reduced from geometry shader I/O using a user struct named `vertex`,
+    # which collides with CrossGL's vertex stage keyword during reverse codegen.
+    ExternalFixture(
+        name="ogl-samples-gl-400-geometry-struct-named-vertex",
+        repo=OGL_SAMPLES_REPO,
+        commit=OGL_SAMPLES_COMMIT,
+        path="data/gl-400/tess-struct.geom",
+        shader_type="geometry",
+        code=textwrap.dedent("""
+            #version 400 core
+
+            layout(triangles, invocations = 1) in;
+            layout(triangle_strip, max_vertices = 4) out;
+
+            struct vertex
+            {
+                vec4 Color;
+            };
+
+            in vertex Eval[];
+            out vertex Geom;
+
+            void main()
+            {
+                for(int i = 0; i < gl_in.length(); ++i)
+                {
+                    Geom.Color = Eval[i].Color;
+                    EmitVertex();
+                }
+                EndPrimitive();
+            }
+        """).strip(),
+    ),
+    # Upstream source: g-truc/ogl-samples data/gl-430/image-sampling.frag.
+    # Reduced from image function parameters whose image format is declared with
+    # a parameter-level layout qualifier.
+    ExternalFixture(
+        name="ogl-samples-gl-430-image-parameter-layout-format",
+        repo=OGL_SAMPLES_REPO,
+        commit=OGL_SAMPLES_COMMIT,
+        path="data/gl-430/image-sampling.frag",
+        shader_type="fragment",
+        code=textwrap.dedent("""
+            #version 420 core
+            #extension GL_ARB_shader_image_size : require
+
+            layout(binding = 0, rgba8) uniform image2D Diffuse[3];
+
+            in block
+            {
+                vec2 Texcoord;
+                flat int Instance;
+            } In;
+
+            layout(location = 0, index = 0) out vec4 Color;
+
+            vec4 fetchBilinear(layout(rgba8) in image2D Image, in vec2 Texcoord)
+            {
+                return imageLoad(Image, ivec2(Texcoord));
+            }
+
+            void main()
+            {
+                Color = fetchBilinear(Diffuse[In.Instance], In.Texcoord);
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.basic.geom.
+    # Reduced from HLSL-style geometry entry parameters that put primitive
+    # topology qualifiers before optional in/out parameter qualifiers.
+    ExternalFixture(
+        name="glslang-hlsl-geometry-primitive-parameter-qualifiers",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.basic.geom",
+        shader_type="geometry",
+        code=textwrap.dedent("""
+            struct PSInput
+            {
+                float myfloat : SOME_SEMANTIC;
+            };
+
+            [maxvertexcount(4)]
+            void main(triangle in uint vertexID[3] : VertexID,
+                      triangle uint weights[3] : FOO,
+                      inout LineStream<PSInput> outputStream)
+            {
+                PSInput vert;
+                vert.myfloat = weights[0] + weights[1] + weights[2];
+
+                outputStream.Append(vert);
+                outputStream.RestartStrip();
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/hlsl.hull.1.tesc.
+    # Reduced from HLSL tessellation shaders with all-caps user struct return
+    # types, which should not be treated as declaration-prefix macros.
+    ExternalFixture(
+        name="glslang-hlsl-hull-uppercase-struct-return-type",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/hlsl.hull.1.tesc",
+        shader_type="tessellation_control",
+        code=textwrap.dedent("""
+            struct VS_OUT
+            {
+                float3 cpoint : CPOINT;
+            };
+
+            struct HS_CONSTANT_OUT
+            {
+                float edges[2] : SV_TessFactor;
+            };
+
+            struct HS_OUT
+            {
+                float3 cpoint : CPOINT;
+            };
+
+            [outputcontrolpoints(4)]
+            HS_OUT main(InputPatch<VS_OUT, 4> ip,
+                        uint cpid : SV_OutputControlPointID)
+            {
+                HS_OUT output;
+                output.cpoint = ip[0].cpoint;
+                return output;
+            }
+
+            HS_CONSTANT_OUT PCF(uint pid : SV_PrimitiveId)
+            {
+                HS_CONSTANT_OUT output;
+                output.edges[0] = 2.0f;
+                output.edges[1] = 8.0f;
+                return output;
+            }
+        """).strip(),
+    ),
 ]
 
 
@@ -1563,6 +1875,41 @@ def test_parse_glslang_perprimitive_nv_interface_block_fixture():
     assert output.layout == {"location": "8"}
 
 
+def test_parse_glslang_hlsl_geometry_parameter_primitive_qualifiers():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-geometry-primitive-parameter-qualifiers"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    vertex_id, weights, output_stream = ast.functions[0].params
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert vertex_id.qualifiers == ["triangle", "in"]
+    assert vertex_id.semantic == "VertexID"
+    assert weights.qualifiers == ["triangle"]
+    assert weights.semantic == "FOO"
+    assert output_stream.qualifiers == ["inout"]
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_parse_glslang_hlsl_hull_uppercase_struct_return_type():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-hull-uppercase-struct-return-type"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert [function.name for function in ast.functions] == ["main", "PCF"]
+    assert ast.functions[1].return_type == "HS_CONSTANT_OUT"
+    assert ast.functions[1].params[0].semantic == "SV_PrimitiveId"
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_parse_glslang_anonymous_struct_declarator_fixture():
     fixture = next(
         item
@@ -1632,6 +1979,35 @@ def test_parse_glslang_control_flow_statement_attributes_fixture():
         IfNode,
         SwitchNode,
     ]
+
+
+def test_parse_glslang_hlsl_single_bracket_attributes_fixture():
+    entry_fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-single-bracket-entry-and-loop-attributes"
+    )
+    loop_fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-single-bracket-loop-attributes"
+    )
+
+    entry_ast = parse_glsl(entry_fixture.code, entry_fixture.shader_type)
+    entry_main = next(
+        function for function in entry_ast.functions if function.name == "main"
+    )
+    loop_ast = parse_glsl(loop_fixture.code, loop_fixture.shader_type)
+    loop_main = next(
+        function for function in loop_ast.functions if function.name == "main"
+    )
+
+    assert [type(statement) for statement in entry_main.body] == [ForNode]
+    assert [type(statement) for statement in loop_main.body[:-1]] == [
+        ForNode,
+        ForNode,
+    ]
+    assert loop_main.semantic == "SV_Target0"
 
 
 def test_parse_glslang_function_attributes_fixture():
@@ -1722,6 +2098,62 @@ def test_parse_glslang_token_paste_object_like_macro_fixture():
 
     assert argless.vtype == "float"
     assert "float argless;" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_glslang_uninitialized_const_declaration_reparses():
+    # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/decls.frag. The source is semantically invalid GLSL, but the importer
+    # accepts it syntactically; reverse-codegen should still emit parseable CrossGL.
+    code = textwrap.dedent("""
+        #version 120
+
+        const int missing;
+        const int present = 1;
+
+        void main()
+        {
+            gl_FragColor = vec4(float(present));
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "int missing;" in crossgl
+    assert "const int missing;" not in crossgl
+    assert "const int present = 1;" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_glslang_extension_directive_feature_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-extension-directive-defines-feature-macro"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "#extension GL_EXT_shader_integer_mix : require" in ast.preprocessor
+    assert "#error" not in crossgl
+    assert "output.gl_Position = vec4(0);" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_glslang_arm_tensors_companion_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-arm-tensors-extension-companion-macros"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "#extension GL_ARM_tensors : enable" in ast.preprocessor
+    assert "#error" not in crossgl
+    assert "compute" in crossgl
     parse_crossgl(crossgl)
 
 
@@ -2363,6 +2795,38 @@ def test_codegen_glslang_cbuffer_register_fixture_snippets():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_glslang_hlsl_tbuffer_packoffset_fixture_snippets():
+    # Source: KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
+    # Test/hlsl.buffer.frag
+    code = textwrap.dedent("""
+        tbuffer buf2 : register(t8) {
+            float4 v4 : packoffset(c1);
+            int i4 : packoffset(c3);
+        };
+
+        float4 main() : SV_Target {
+            return v4 + float4(i4);
+        }
+    """).strip()
+
+    ast = parse_glsl(code, "fragment")
+    block = next(struct for struct in ast.structs if struct.name == "buf2")
+
+    assert getattr(block, "hlsl_cbuffer", False) is True
+    assert block.interface_layout == {"binding": "8"}
+    assert [member.semantic for member in block.members] == [
+        "packoffset ( c1 )",
+        "packoffset ( c3 )",
+    ]
+
+    crossgl = generate_crossgl(code, "fragment")
+
+    assert "cbuffer buf2 @binding(8) {" in crossgl
+    assert "vec4 v4;" in crossgl
+    assert "int i4;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_glslang_register_autoassign_resource_fixture_snippets():
     fixture = next(
         item
@@ -2468,6 +2932,47 @@ def test_codegen_glslang_register_append_structured_buffer_fixture_snippets():
     assert "RWStructuredBuffer<uint> Buf2 @binding(2);" in crossgl
     assert "AppendStructuredBuffer<uint> Buf1" not in crossgl
     assert "vec4 main() @ gl_FragColor" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_rw_autoassign_resource_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-spv-rw-autoassign-generic-uav-resources"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    texture = next(var for var in ast.global_variables if var.name == "g_tTex1df1")
+    buffer = next(var for var in ast.global_variables if var.name == "g_tBuf1du1")
+
+    assert texture.vtype == "RWTexture1D<float>"
+    assert buffer.vtype == "RWBuffer<uint>"
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image1D g_tTex1df1;" in crossgl
+    assert "RWStructuredBuffer<uint> g_tBuf1du1;" in crossgl
+    assert "image1D<float>" not in crossgl
+    assert "RWBuffer<uint>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_glslang_rwtexture_scalar_generic_elements_fixture_snippets():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-hlsl-rwtexture-scalar-generic-elements"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image1D g_tTex1df1;" in crossgl
+    assert "iimage1D g_tTex1di1;" in crossgl
+    assert "uimage1D g_tTex1du1;" in crossgl
+    assert "image1D<float>" not in crossgl
+    assert "image1D<int>" not in crossgl
+    assert "image1D<uint>" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -2638,6 +3143,51 @@ def test_codegen_ekmett_vr_scan_multi_declarator_for_fixture_snippet():
         "for (uint i = 1, i_max = min((N >> 1), 5u); (i < i_max); i <<= 1)" in crossgl
     )
     assert "for (uint i = 1; (i < i_max);" not in crossgl
+
+
+def test_codegen_ogl_samples_geometry_struct_named_vertex_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ogl-samples-gl-400-geometry-struct-named-vertex"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "struct vertex_ {" in crossgl
+    assert "in vertex_ Eval[];" in crossgl
+    assert "out vertex_ Geom;" in crossgl
+    assert "in vertex Eval[];" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_parse_ogl_samples_image_parameter_layout_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ogl-samples-gl-430-image-parameter-layout-format"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    function = next(item for item in ast.functions if item.name == "fetchBilinear")
+
+    assert function.params[0].vtype == "image2D"
+    assert function.params[0].qualifiers == ["in"]
+    assert function.params[0].layout == {"rgba8": None}
+
+
+def test_codegen_ogl_samples_image_parameter_layout_fixture_snippet():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "ogl-samples-gl-430-image-parameter-layout-format"
+    )
+
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "image2D Diffuse[3] @binding(0) @rgba8;" in crossgl
+    assert "vec4 fetchBilinear(in image2D Image @rgba8, in vec2 Texcoord)" in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_glslang_legacy_projected_texture_fixture_snippet():

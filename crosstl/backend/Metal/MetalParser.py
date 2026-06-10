@@ -126,13 +126,15 @@ IDENTIFIER_TYPE_QUALIFIERS = MACRO_QUALIFIERS | {
     "__restrict__",
     "object_data",
 }
+IDENTIFIER_PREFIX_TYPE_QUALIFIERS = {"out", "inout"}
 RAYTRACING_TYPE_QUALIFIERS = {"ray_data"}
 TYPE_QUALIFIER_FUNCTIONS = {"coherent"}
 SIGNED_TYPE_PREFIXES = {"signed", "unsigned"}
 SIGNED_PREFIX_TYPE_TOKENS = {"CHAR", "SHORT", "INT", "LONG"}
-KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL"}
+KEYWORD_IDENTIFIER_TOKENS = {"BUFFER", "SAMPLER", "METAL", "RESTRICT"}
 TYPE_IDENTIFIER_TOKENS = {"PACKED_VECTOR"}
 GNU_EXTENSION_PREFIXES = {"__extension__"}
+STRUCT_METHOD_PREFIXES = {"virtual"}
 OPERATOR_OVERLOAD_TOKENS = {
     "PLUS",
     "MINUS",
@@ -383,6 +385,7 @@ class MetalParser:
                 union = self.parse_union()
                 if union is not None:
                     structs.append(union)
+                    global_variables.extend(getattr(union, "trailing_declarations", []))
             elif self.is_bare_macro_invocation():
                 self.skip_bare_macro_invocation()
             elif self.is_top_level_expression_statement_start():
@@ -402,10 +405,16 @@ class MetalParser:
                     struct = self.parse_struct()
                     if struct is not None:
                         structs.append(struct)
+                        global_variables.extend(
+                            getattr(struct, "trailing_declarations", [])
+                        )
             elif self.current_token[0] == "CLASS":
                 class_node = self.parse_class()
                 if class_node is not None:
                     structs.append(class_node)
+                    global_variables.extend(
+                        getattr(class_node, "trailing_declarations", [])
+                    )
             elif self.current_token[0] == "ALIGNAS":
                 alignas_specs = self.parse_alignas_specifiers()
                 if self.current_token[0] in {"STRUCT", "CLASS"}:
@@ -416,13 +425,21 @@ class MetalParser:
                     )
                     if struct is not None:
                         structs.append(struct)
+                        global_variables.extend(
+                            getattr(struct, "trailing_declarations", [])
+                        )
                 else:
                     self.add_global_declaration(
                         global_variables,
                         self.parse_global_variable(pre_alignas=alignas_specs),
                     )
             elif self.current_token[0] == "ENUM":
-                enums.append(self.parse_enum())
+                if self.is_function_definition():
+                    function = self.parse_function()
+                    if function is not None:
+                        functions.append(function)
+                else:
+                    enums.append(self.parse_enum())
             elif self.current_token[0] == "TYPEDEF":
                 typedef = self.parse_typedef()
                 if isinstance(typedef, StructNode):
@@ -439,6 +456,13 @@ class MetalParser:
                 self.skip_decltype_template_instantiation_declaration()
             elif self.is_top_level_parameter_fragment_start():
                 self.parse_top_level_parameter_fragment()
+            elif self.is_qualified_aggregate_declaration_start():
+                aggregate = self.parse_qualified_aggregate_declaration()
+                if aggregate is not None:
+                    structs.append(aggregate)
+                    global_variables.extend(
+                        getattr(aggregate, "trailing_declarations", [])
+                    )
             elif self.current_token[0] == "CONSTANT":
                 if self.is_constant_buffer():
                     constants.append(self.parse_constant_buffer())
@@ -602,6 +626,63 @@ class MetalParser:
             and self.tokens[idx + 1][0] in {"IDENTIFIER", "LBRACE"}
         )
 
+    def is_qualified_aggregate_declaration_start(self):
+        idx = self.pos
+        saw_qualifier = False
+        while idx < len(self.tokens) and self.is_qualifier_token_at(idx):
+            saw_qualifier = True
+            idx += 1
+        if not saw_qualifier or idx >= len(self.tokens):
+            return False
+        if self.tokens[idx][0] in {"STRUCT", "CLASS"}:
+            idx += 1
+            idx = self.skip_alignas_specifier_tokens_at(idx)
+            if idx >= len(self.tokens) or not self.is_name_token_at(idx):
+                return False
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_template_argument_list_at(idx)
+            idx = self.skip_alignas_specifier_tokens_at(idx)
+            return idx < len(self.tokens) and self.tokens[idx][0] in {
+                "LBRACE",
+                "COLON",
+            }
+        return (
+            self.tokens[idx] == ("IDENTIFIER", "union")
+            and idx + 2 < len(self.tokens)
+            and self.is_name_token_at(idx + 1)
+            and self.tokens[idx + 2][0] == "LBRACE"
+        )
+
+    def parse_qualified_aggregate_declaration(self):
+        qualifiers = []
+        while self.is_type_qualifier_start():
+            qualifiers.extend(self.parse_type_qualifier())
+
+        if self.current_token[0] == "STRUCT":
+            aggregate = self.parse_struct()
+        elif self.current_token[0] == "CLASS":
+            aggregate = self.parse_class()
+        elif self.is_union_declaration_start():
+            aggregate = self.parse_union()
+        else:
+            raise SyntaxError(
+                f"Expected aggregate declaration, got {self.current_token[0]}"
+            )
+
+        for declaration in getattr(aggregate, "trailing_declarations", []) or []:
+            var_node = (
+                declaration.left
+                if isinstance(declaration, AssignmentNode)
+                and isinstance(declaration.left, VariableNode)
+                else declaration
+            )
+            if isinstance(var_node, VariableNode):
+                var_node.qualifiers = list(qualifiers) + list(
+                    getattr(var_node, "qualifiers", []) or []
+                )
+        return aggregate
+
     def parse_template_declaration(self):
         template_parameters = self.parse_template_prefix()
         template_type_names = {
@@ -654,22 +735,31 @@ class MetalParser:
         parameters = []
         parameter_tokens = []
         depth = 1
+        grouped_depth = 0
         self.eat("LESS_THAN")
 
         while depth > 0 and self.current_token[0] != "EOF":
             token = self.current_token
-            if token[0] == "LESS_THAN":
+            if token[0] in {"LPAREN", "LBRACKET", "LBRACE"}:
+                grouped_depth += 1
+                parameter_tokens.append(token)
+                self.eat(token[0])
+            elif token[0] in {"RPAREN", "RBRACKET", "RBRACE"} and grouped_depth > 0:
+                grouped_depth -= 1
+                parameter_tokens.append(token)
+                self.eat(token[0])
+            elif grouped_depth == 0 and token[0] == "LESS_THAN":
                 depth += 1
                 parameter_tokens.append(token)
                 self.eat("LESS_THAN")
-            elif token[0] == "GREATER_THAN":
+            elif grouped_depth == 0 and token[0] == "GREATER_THAN":
                 depth -= 1
                 if depth == 0:
                     self.eat("GREATER_THAN")
                     break
                 parameter_tokens.append(token)
                 self.eat("GREATER_THAN")
-            elif token[0] == "SHIFT_RIGHT" and depth >= 2:
+            elif grouped_depth == 0 and token[0] == "SHIFT_RIGHT" and depth >= 2:
                 closers_to_keep = min(2, depth - 1)
                 parameter_tokens.extend(
                     ("GREATER_THAN", ">") for _ in range(closers_to_keep)
@@ -678,7 +768,7 @@ class MetalParser:
                 self.eat("SHIFT_RIGHT")
                 if depth == 0:
                     break
-            elif token[0] == "COMMA" and depth == 1:
+            elif grouped_depth == 0 and token[0] == "COMMA" and depth == 1:
                 parsed = self.parse_template_parameter_tokens(parameter_tokens)
                 if parsed is not None:
                     parameters.append(parsed)
@@ -916,6 +1006,22 @@ class MetalParser:
         ):
             type_name = f"{self.tokens[idx][1]} {self.tokens[idx + 1][1]}"
             idx += 2
+        elif (
+            tok_type == "IDENTIFIER"
+            and self.tokens[idx][1] == "typename"
+            and idx + 1 < len(self.tokens)
+            and (
+                self.tokens[idx + 1][0] in {"METAL", "SCOPE"}
+                or (
+                    self.tokens[idx + 1][0] == "IDENTIFIER"
+                    and idx + 2 < len(self.tokens)
+                    and self.tokens[idx + 2][0] == "SCOPE"
+                )
+            )
+        ):
+            idx += 1
+            type_name = self.tokens[idx][1]
+            idx = self.skip_scoped_type_name_at(idx)
         elif tok_type not in TYPE_TOKENS:
             return False
         else:
@@ -925,6 +1031,7 @@ class MetalParser:
 
         if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
             idx = self.skip_template_argument_list_at(idx)
+            idx = self.skip_scoped_type_suffix_at(idx)
 
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
@@ -1007,6 +1114,27 @@ class MetalParser:
             idx += 1
         return idx
 
+    def skip_type_reference_suffix_at(self, idx):
+        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+        while idx < len(self.tokens) and self.tokens[idx][0] == "SCOPE":
+            idx += 1
+            if (
+                idx < len(self.tokens)
+                and self.tokens[idx] == ("IDENTIFIER", "template")
+                and idx + 1 < len(self.tokens)
+                and self.tokens[idx + 1][0] in SCOPED_IDENTIFIER_PART_TOKENS
+            ):
+                idx += 1
+            if idx >= len(self.tokens):
+                return idx
+            if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
+                return idx
+            idx += 1
+            if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
+                idx = self.skip_template_argument_list_at(idx)
+        return idx
+
     def parenthesized_list_ends_with_semicolon(self, idx):
         depth = 0
         while idx < len(self.tokens):
@@ -1032,6 +1160,8 @@ class MetalParser:
             and value in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
         ):
             return True
+        if tok_type == "IDENTIFIER" and value in IDENTIFIER_PREFIX_TYPE_QUALIFIERS:
+            return self.prefix_type_qualifier_followed_by_type_at(idx)
         return tok_type == "IDENTIFIER" and value in TYPE_QUALIFIER_FUNCTIONS
 
     def parse_preprocessor_directive(self):
@@ -1589,11 +1719,11 @@ class MetalParser:
             self.eat(self.current_token[0])
 
         pointer_suffix = ""
-        while self.is_type_qualifier_start() or self.current_token[0] in [
+        while self.is_post_type_qualifier_start() or self.current_token[0] in [
             "MULTIPLY",
             "BITWISE_AND",
         ]:
-            if self.is_type_qualifier_start():
+            if self.is_post_type_qualifier_start():
                 qualifiers.extend(self.parse_type_qualifier())
                 continue
             pointer_suffix += "*" if self.current_token[0] == "MULTIPLY" else "&"
@@ -1604,6 +1734,20 @@ class MetalParser:
             self.eat("ELLIPSIS")
 
         return base_type + pointer_suffix, qualifiers
+
+    def is_post_type_qualifier_start(self):
+        if not self.is_type_qualifier_start():
+            return False
+        if self.current_token[0] == "RESTRICT" and self.peek(1)[0] in {
+            "SEMICOLON",
+            "COMMA",
+            "EQUALS",
+            "LPAREN",
+            "LBRACE",
+            "LBRACKET",
+        }:
+            return False
+        return True
 
     def skip_signed_type_prefix_at(self, idx):
         if (
@@ -1626,6 +1770,11 @@ class MetalParser:
             in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
         ):
             return True
+        if (
+            self.current_token[0] == "IDENTIFIER"
+            and self.current_token[1] in IDENTIFIER_PREFIX_TYPE_QUALIFIERS
+        ):
+            return self.prefix_type_qualifier_followed_by_type_at(self.pos)
         return (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] in TYPE_QUALIFIER_FUNCTIONS
@@ -1635,7 +1784,11 @@ class MetalParser:
         if self.current_token[0] in QUALIFIER_TOKENS or (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1]
-            in IDENTIFIER_TYPE_QUALIFIERS | RAYTRACING_TYPE_QUALIFIERS
+            in (
+                IDENTIFIER_TYPE_QUALIFIERS
+                | RAYTRACING_TYPE_QUALIFIERS
+                | IDENTIFIER_PREFIX_TYPE_QUALIFIERS
+            )
         ):
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
@@ -1673,6 +1826,23 @@ class MetalParser:
         if depth != 0:
             raise SyntaxError(error_message)
         return self.format_generic_type_tokens(tokens)
+
+    def prefix_type_qualifier_followed_by_type_at(self, idx):
+        next_idx = idx + 1
+        if next_idx >= len(self.tokens):
+            return False
+        token_type, token_value = self.tokens[next_idx]
+        if token_type != "IDENTIFIER":
+            return token_type in TYPE_TOKENS
+        return token_value in self.known_types or self.identifier_type_name_at(next_idx)
+
+    def identifier_type_name_at(self, idx):
+        return (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx][0] == "IDENTIFIER"
+            and self.tokens[idx + 1][0]
+            in {"IDENTIFIER", "MULTIPLY", "BITWISE_AND", "LESS_THAN", "SCOPE"}
+        )
 
     def format_generic_type_tokens(self, tokens):
         text = ""
@@ -1825,6 +1995,22 @@ class MetalParser:
             or self.current_token[0] == "COMPUTE"
         )
 
+    def is_current_member_name_token(self):
+        return self.is_current_name_token() or self.current_token[0] in {
+            "READ",
+            "WRITE",
+            "READ_WRITE",
+        }
+
+    def parse_member_name(self, context):
+        if not self.is_current_member_name_token():
+            raise SyntaxError(
+                f"Expected identifier after {context}, got {self.current_token[0]}"
+            )
+        member = self.current_token[1]
+        self.eat(self.current_token[0])
+        return member
+
     def parse_declarator_array_sizes(self):
         array_sizes = []
         while self.current_token[0] == "LBRACKET":
@@ -1865,13 +2051,14 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
-
         struct_node = StructNode(name, members)
         struct_node.attributes = struct_attributes
         struct_node.alignas = alignas_specs
         struct_node.base_types = base_types
+        self.eat("RBRACE")
+        struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
+            name
+        )
         return struct_node
 
     def parse_class(self, pre_alignas=None):
@@ -1902,14 +2089,15 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
-
         class_node = StructNode(name, members)
         class_node.attributes = class_attributes
         class_node.alignas = alignas_specs
         class_node.base_types = base_types
         class_node.aggregate_kind = "class"
+        self.eat("RBRACE")
+        class_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
+            name
+        )
         return class_node
 
     def parse_struct_base_clause(self):
@@ -1964,12 +2152,49 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        self.eat("RBRACE")
-        self.eat("SEMICOLON")
-
         union_node = StructNode(name, members)
         union_node.aggregate_kind = "union"
+        self.eat("RBRACE")
+        union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
+            name
+        )
         return union_node
+
+    def parse_trailing_aggregate_declarations(self, aggregate_type):
+        declarations = []
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
+            return declarations
+
+        while True:
+            name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            decl_type = self.apply_declarator_type_suffix(aggregate_type, type_suffix)
+            attributes = self.parse_attributes()
+            var_node = VariableNode(decl_type, name, attributes=attributes)
+            var_node.array_sizes = array_sizes
+            self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
+            self.register_local_variable_name(name)
+
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                declarations.append(AssignmentNode(var_node, self.parse_expression()))
+            elif self.current_token[0] == "LPAREN":
+                args = self.parse_parenthesized_arguments()
+                declarations.append(
+                    AssignmentNode(var_node, VectorConstructorNode(decl_type, args))
+                )
+            elif self.current_token[0] == "LBRACE":
+                declarations.append(
+                    AssignmentNode(var_node, self.parse_initializer_list())
+                )
+            else:
+                declarations.append(var_node)
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                continue
+            self.eat("SEMICOLON")
+            return declarations
 
     def parse_struct_members(self):
         members = []
@@ -1981,6 +2206,12 @@ class MetalParser:
                 self.skip_nested_aggregate_declaration()
                 continue
             if self.current_token == ("IDENTIFIER", "friend"):
+                self.skip_struct_method()
+                continue
+            if (
+                self.current_token[0] == "IDENTIFIER"
+                and self.current_token[1] in STRUCT_METHOD_PREFIXES
+            ):
                 self.skip_struct_method()
                 continue
             if self.current_token[0] == "STATIC_ASSERT":
@@ -2000,6 +2231,9 @@ class MetalParser:
                 self.skip_nested_aggregate_declaration()
                 continue
             if self.is_struct_conversion_operator_start():
+                self.skip_struct_method()
+                continue
+            if self.is_struct_destructor_start():
                 self.skip_struct_method()
                 continue
             vtype, qualifiers = self.parse_type_specifier()
@@ -2167,6 +2401,14 @@ class MetalParser:
         while idx < len(self.tokens) and self.tokens[idx] == ("IDENTIFIER", "explicit"):
             idx += 1
         return idx < len(self.tokens) and self.tokens[idx] == ("IDENTIFIER", "operator")
+
+    def is_struct_destructor_start(self):
+        return (
+            self.current_token[0] == "BITWISE_NOT"
+            and self.pos + 2 < len(self.tokens)
+            and self.is_name_token_at(self.pos + 1)
+            and self.tokens[self.pos + 2][0] == "LPAREN"
+        )
 
     def is_access_specifier_label(self):
         return (
@@ -2387,6 +2629,8 @@ class MetalParser:
             attributes = self.parse_attributes()
             vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
             name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
+            if grouped_suffix and self.current_token[0] == "LPAREN":
+                self.parse_function_pointer_parameter_suffix()
             param_type = self.apply_declarator_type_suffix(vtype, type_suffix)
             default_value = None
             if self.current_token[0] == "EQUALS":
@@ -2412,6 +2656,13 @@ class MetalParser:
                     f"Expected comma or closing parenthesis, got {self.current_token[0]}"
                 )
         return params
+
+    def parse_function_pointer_parameter_suffix(self):
+        self.parse_balanced_token_text(
+            "LPAREN",
+            "RPAREN",
+            error_message="Unterminated function pointer parameter",
+        )
 
     def is_gnu_attribute_start(self):
         return (
@@ -3231,6 +3482,12 @@ class MetalParser:
         if idx >= len(self.tokens):
             return False
         tok_type = self.tokens[idx][0]
+        typename_prefix = tok_type == "IDENTIFIER" and self.tokens[idx][1] == "typename"
+        if typename_prefix:
+            idx += 1
+            if idx >= len(self.tokens):
+                return False
+            tok_type = self.tokens[idx][0]
         if tok_type not in TYPE_TOKENS:
             return False
         if tok_type == "IDENTIFIER":
@@ -3240,7 +3497,8 @@ class MetalParser:
                 idx += 2
             else:
                 if (
-                    name not in self.known_types
+                    not typename_prefix
+                    and name not in self.known_types
                     and next_type not in {"SCOPE", "LESS_THAN"}
                     and not (
                         saw_qualifier
@@ -3254,17 +3512,7 @@ class MetalParser:
                 idx += 1
         else:
             idx += 1
-        if idx < len(self.tokens) and self.tokens[idx][0] == "LESS_THAN":
-            depth = 0
-            while idx < len(self.tokens):
-                if self.tokens[idx][0] == "LESS_THAN":
-                    depth += 1
-                elif self.tokens[idx][0] == "GREATER_THAN":
-                    depth -= 1
-                    if depth == 0:
-                        idx += 1
-                        break
-                idx += 1
+        idx = self.skip_type_reference_suffix_at(idx)
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
             "BITWISE_AND",
@@ -3342,17 +3590,7 @@ class MetalParser:
                 if self.is_conversion_operator_call_start():
                     node = self.parse_conversion_operator_call(node)
                     continue
-                if self.current_token[0] not in [
-                    "IDENTIFIER",
-                    "READ",
-                    "WRITE",
-                    "READ_WRITE",
-                ]:
-                    raise SyntaxError(
-                        f"Expected identifier after dot, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_member_name("dot")
                 node = MemberAccessNode(node, member)
                 continue
             if self.current_token[0] == "ARROW":
@@ -3361,32 +3599,12 @@ class MetalParser:
                 if self.is_conversion_operator_call_start():
                     node = self.parse_conversion_operator_call(node)
                     continue
-                if self.current_token[0] not in [
-                    "IDENTIFIER",
-                    "READ",
-                    "WRITE",
-                    "READ_WRITE",
-                ]:
-                    raise SyntaxError(
-                        f"Expected identifier after arrow, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_member_name("arrow")
                 node = MemberAccessNode(node, member, True)
                 continue
             if self.current_token[0] == "SCOPE":
                 self.eat("SCOPE")
-                if self.current_token[0] not in [
-                    "IDENTIFIER",
-                    "READ",
-                    "WRITE",
-                    "READ_WRITE",
-                ]:
-                    raise SyntaxError(
-                        f"Expected identifier after scope, got {self.current_token[0]}"
-                    )
-                member = self.current_token[1]
-                self.eat(self.current_token[0])
+                member = self.parse_member_name("scope")
                 if isinstance(node, VariableNode):
                     node.name += f"::{member}"
                 elif isinstance(node, MemberAccessNode):

@@ -1,8 +1,10 @@
 from crosstl.translator.ast import (
     AttributeNode,
+    BinaryOpNode,
     BlockNode,
     ExecutionModel,
     FunctionNode,
+    IdentifierNode,
     LayoutQualifierNode,
     LiteralNode,
     ParameterNode,
@@ -89,6 +91,29 @@ def test_ast_walk_tolerates_existing_parent_links_and_cycles():
 
     assert output_struct in walked
     assert member in walked
+    assert len({id(node) for node in walked}) == len(walked)
+
+
+def test_ast_walk_and_parent_binding_tolerate_deep_generated_expression_chains():
+    expression = IdentifierNode("v0")
+    for index in range(1, 1400):
+        expression = BinaryOpNode(expression, "+", IdentifierNode(f"v{index}"))
+
+    body = BlockNode([ReturnNode(expression)])
+    function = FunctionNode("main", PrimitiveType("float"), [], body=body)
+    shader = ShaderNode(
+        "LongExpressionShader",
+        ExecutionModel.GRAPHICS_PIPELINE,
+        functions=[function],
+    )
+
+    assert shader.bind_parent_links() is shader
+
+    walked = list(shader.walk())
+    assert walked[0] is shader
+    assert function in walked
+    assert body in walked
+    assert expression in walked
     assert len({id(node) for node in walked}) == len(walked)
 
 

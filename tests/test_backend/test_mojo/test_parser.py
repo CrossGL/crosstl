@@ -4422,6 +4422,29 @@ def test_nested_prefixed_tstring_parse_from_modular_format_tests():
     assert isinstance(greeting.initial_value, VectorConstructorNode)
 
 
+def test_multiline_parenthesized_prefixed_adjacent_string_parse_from_modular_tstring():
+    # Reduced from https://github.com/modular/modular.git commit
+    # a86508a4e0084e1a53fc262b7f8257b38f0c558c,
+    # mojo/stdlib/test/format/test_tstring.mojo test_tstring_multiline_concatenation.
+    code = """
+    fn main():
+        var tstring = (
+            t"This is a multiline {x}"
+            t" tstring expression that will "
+            t"concatenate, {y}!"
+        )
+    """
+    ast = parse_code(tokenize_code(code))
+    function = find_function(ast, "main")
+    declaration = function.body[0]
+
+    assert isinstance(declaration, VariableDeclarationNode)
+    assert (
+        declaration.initial_value
+        == 't"This is a multiline {x} tstring expression that will concatenate, {y}!"'
+    )
+
+
 def test_numeric_literals_parsing():
     code = """
     fn main():

@@ -136,6 +136,33 @@ def test_preprocessor_defaults_to_rocm_amd_linux_platform_branches():
     assert "selected_windows" not in values
 
 
+def test_preprocessor_defaults_to_cplusplus_17_for_rocm_headers():
+    values = token_values("""
+        #if __cplusplus < 201402L
+        #error "rocPRIM requires at least C++14"
+        #else
+        __device__ int selected_cpp_standard() { return __cplusplus; }
+        #endif
+    """)
+
+    assert "selected_cpp_standard" in values
+    assert "201703L" in values
+
+
+def test_preprocessor_cplusplus_define_override_disables_default():
+    with pytest.raises(SyntaxError, match="rocPRIM requires at least C\\+\\+14"):
+        HipLexer(
+            """
+            #if __cplusplus < 201402L
+            #error "rocPRIM requires at least C++14"
+            #else
+            __device__ int selected_cpp_standard() { return __cplusplus; }
+            #endif
+            """,
+            defines={"__cplusplus": "199711L"},
+        ).tokenize()
+
+
 def test_preprocessor_platform_define_override_disables_matching_defaults():
     values = token_values(
         """

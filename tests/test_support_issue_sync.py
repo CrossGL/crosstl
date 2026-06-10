@@ -203,6 +203,64 @@ def sample_signals():
     }
 
 
+def clean_matrix():
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py",
+        "summary": {
+            "status_counts": {
+                "directx": {
+                    "supported": 2,
+                    "partial": 0,
+                    "diagnostic": 0,
+                    "validated_rejection": 0,
+                    "unsupported": 0,
+                    "unknown": 0,
+                }
+            }
+        },
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "docs": [],
+            }
+        ],
+        "features": [],
+        "backlog": [],
+    }
+
+
+def clean_signals():
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_signals.py",
+        "summary": {
+            "backend_count": 1,
+            "feature_count": 0,
+            "state_counts": {},
+            "issue_count": 0,
+            "docs_probe": {
+                "provided": False,
+                "total": 0,
+                "ok": 0,
+                "failed": 0,
+                "linked_documents": 0,
+            },
+            "pytest_failures": {
+                "provided": False,
+                "report_count": 0,
+                "load_error_count": 0,
+                "failed_testcase_count": 0,
+                "categories": {},
+                "backends": {},
+            },
+        },
+        "features": [],
+        "issues": [],
+    }
+
+
 def sample_matrix_check_report(ok=True):
     return {
         "schema_version": 1,
@@ -560,6 +618,17 @@ def test_validate_desired_issues_accepts_complete_plan():
         )
         == []
     )
+
+
+def test_validate_desired_issues_accepts_empty_clean_plan_by_default():
+    module = load_sync_module()
+    matrix = clean_matrix()
+    signals = clean_signals()
+
+    desired = module.build_desired_issues(matrix, signals)
+
+    assert desired == {}
+    assert module.validate_desired_issues(matrix, signals, desired) == []
 
 
 def test_validate_desired_issues_catches_empty_or_incomplete_plan():
@@ -2605,6 +2674,9 @@ def test_github_client_uses_retry_after_header_for_retry_delay():
 def test_parse_args_exposes_rate_limit_controls():
     module = load_sync_module()
 
+    default_args = module.parse_args(["--repo", "owner/repo"])
+    assert default_args.min_desired_issues == 0
+
     args = module.parse_args(
         [
             "--repo",
@@ -2674,3 +2746,38 @@ def test_parse_args_exposes_rate_limit_controls():
         "support/generated/support-issue-sync-summary.json"
     )
     assert args.preserve_pytest_failure_issues is True
+
+
+def test_main_dry_run_accepts_zero_desired_issue_plan(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(clean_matrix()), encoding="utf-8")
+    signals_path.write_text(json.dumps(clean_signals()), encoding="utf-8")
+
+    result = module.main(
+        [
+            "--dry-run",
+            "--repo",
+            "owner/repo",
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert result == 0
+    assert "Desired support issues: total=0" in captured.out
+    assert "Dry run: would manage 0 desired issues" in captured.out
+    assert plan["desired"] == {
+        "total": 0,
+        "parents": 0,
+        "backlog": 0,
+        "extracted": 0,
+    }

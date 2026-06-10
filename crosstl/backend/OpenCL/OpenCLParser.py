@@ -1,16 +1,21 @@
 """OpenCL parser for converting OpenCL C tokens to AST."""
 
 import re
+import sys
 
 from crosstl.backend.HIP.HipAst import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
     KernelNode,
+    StructNode,
+    TypeAliasNode,
+    VariableNode,
 )
 from crosstl.backend.HIP.HipParser import HipParser
 
 from .OpenCLAst import (
+    OpenCLBlockLiteralNode,
     OpenCLMacroBlockNode,
     OpenCLProgramNode,
     OpenCLStatementExpressionNode,
@@ -21,6 +26,26 @@ from .OpenCLLexer import OpenCLLexer
 class OpenCLParser(HipParser):
     """Parse OpenCL C tokens into the OpenCL backend AST."""
 
+    MEMBER_NAME_TOKENS = {*HipParser.MEMBER_NAME_TOKENS, "TYPENAME"}
+    DECLARATOR_NAME_TOKENS = {
+        *HipParser.DECLARATOR_NAME_TOKENS,
+        *HipParser.ATOMIC_FUNCTION_TOKENS,
+        *HipParser.VECTOR_TYPE_TOKENS,
+        "SIZE_T",
+        "SYNCTHREADS",
+        "SYNCWARP",
+        "TYPENAME",
+    }
+    FUNCTION_NAME_TOKENS = {
+        *HipParser.FUNCTION_NAME_TOKENS,
+        "SYNCTHREADS",
+        "SYNCWARP",
+        "TYPENAME",
+    }
+    CONTEXTUAL_IDENTIFIER_TOKENS = {
+        *HipParser.CONTEXTUAL_IDENTIFIER_TOKENS,
+        "TYPENAME",
+    }
     FUNCTION_DECLARATION_SPECIFIER_TOKENS = {
         *HipParser.FUNCTION_DECLARATION_SPECIFIER_TOKENS,
         "__GLOBAL__",
@@ -30,17 +55,35 @@ class OpenCLParser(HipParser):
         *HipParser.IDENTIFIER_FUNCTION_SPECIFIER_VALUES,
         "__inline",
         "__inline__",
+        "_CL_ALWAYSINLINE",
         "_CL_NOINLINE",
+        "_CLC_CONST",
+        "_CLC_DECL",
+        "_CLC_DEF",
+        "_CLC_INLINE",
+        "_CLC_OVERLOAD",
+        "_CL_OPTNONE",
+        "_CL_OVERLOADABLE",
+        "_CL_READNONE",
+        "DECLSPEC",
         "INLINE_FUNC",
+        "KERNEL_FA",
+        "KERNEL_FQ",
         "OPENCL_KERNEL",
     }
-    KERNEL_FUNCTION_SPECIFIER_VALUES = {"kernel", "__kernel", "OPENCL_KERNEL"}
+    KERNEL_FUNCTION_SPECIFIER_VALUES = {
+        "kernel",
+        "__kernel",
+        "KERNEL_FQ",
+        "OPENCL_KERNEL",
+    }
     DECLARATION_QUALIFIER_TOKENS = {
         *HipParser.DECLARATION_QUALIFIER_TOKENS,
         "__DEVICE__",
         "__SHARED__",
         "__CONSTANT__",
         "__MANAGED__",
+        "__GENERIC__",
     }
     TYPE_QUALIFIER_TOKENS = {
         *HipParser.TYPE_QUALIFIER_TOKENS,
@@ -48,16 +91,19 @@ class OpenCLParser(HipParser):
         "__SHARED__",
         "__CONSTANT__",
         "__MANAGED__",
+        "__GENERIC__",
         "READ_ONLY",
         "WRITE_ONLY",
         "READ_WRITE",
     }
     POSTFIX_TYPE_QUALIFIER_TOKENS = {
         *HipParser.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        "VOLATILE",
         "__DEVICE__",
         "__SHARED__",
         "__CONSTANT__",
         "__MANAGED__",
+        "__GENERIC__",
         "READ_ONLY",
         "WRITE_ONLY",
         "READ_WRITE",
@@ -167,6 +213,8 @@ class OpenCLParser(HipParser):
         "OR",
         "LOGICAL_AND",
         "LOGICAL_OR",
+        "LSHIFT",
+        "RSHIFT",
         "PIPE",
         "XOR",
         "QUESTION",
@@ -179,21 +227,128 @@ class OpenCLParser(HipParser):
     }
 
     def parse(self):
+        previous_recursion_limit = sys.getrecursionlimit()
+        if len(self.tokens) > previous_recursion_limit:
+            sys.setrecursionlimit(
+                min(50000, max(previous_recursion_limit, len(self.tokens) * 10))
+            )
+
         statements = []
 
-        while self.current_token:
-            if self.match("NEWLINE", "SEMICOLON"):
-                self.advance()
-                continue
+        try:
+            while self.current_token:
+                if self.match("NEWLINE", "SEMICOLON"):
+                    self.advance()
+                    continue
 
-            stmt = self.parse_statement()
-            if stmt:
-                if isinstance(stmt, list):
-                    statements.extend(stmt)
-                else:
-                    statements.append(stmt)
+                stmt = self.parse_statement()
+                if stmt:
+                    if isinstance(stmt, list):
+                        statements.extend(stmt)
+                    else:
+                        statements.append(stmt)
+        finally:
+            if sys.getrecursionlimit() != previous_recursion_limit:
+                sys.setrecursionlimit(previous_recursion_limit)
 
         return OpenCLProgramNode(statements)
+
+    def skip_cpp_attributes_at_pos(self, index):
+        while index < len(self.tokens):
+            old_index = index
+            index = super().skip_cpp_attributes_at_pos(index)
+            index = self.skip_type_attribute_prefixes_at_pos(index)
+            if index == old_index:
+                break
+        return index
+
+    def skip_parameter_attributes(self):
+        old_pos = None
+        while self.current_token and self.pos != old_pos:
+            old_pos = self.pos
+            self.skip_cpp_attributes()
+            self.parse_type_attribute_prefixes()
+
+    def is_opaque_parameter_pack_macro(self):
+        return bool(
+            self.current_token
+            and self.current_token.type == "IDENTIFIER"
+            and self.current_token.value.startswith("KERN_ATTR_")
+            and self.peek()
+            and self.peek().type == "LPAREN"
+        )
+
+    def skip_opaque_parameter_pack_macro(self):
+        self.advance()
+        self.skip_newlines()
+        if self.match("LPAREN"):
+            self.skip_balanced_parentheses()
+
+    def parse_parameter_list(self):
+        params = []
+        previous_base_type = None
+
+        self.skip_newlines()
+        if self.match("RPAREN"):
+            return params
+        if self.match("VOID") and self.peek() and self.peek().type == "RPAREN":
+            self.advance()
+            return params
+
+        while True:
+            self.skip_newlines()
+            if self.match("RPAREN"):
+                break
+
+            if self.is_opaque_parameter_pack_macro():
+                self.skip_opaque_parameter_pack_macro()
+                self.skip_newlines()
+                if self.match("COMMA"):
+                    self.advance()
+                    self.skip_newlines()
+                    continue
+                break
+
+            self.skip_parameter_attributes()
+            if previous_base_type and self.is_parameter_declarator_continuation():
+                param_type = self.parse_declarator_prefix(previous_base_type)
+            else:
+                param_type = self.parse_type()
+                previous_base_type = self.strip_declarator_markers(param_type)
+            self.skip_newlines()
+
+            param_name = ""
+            function_pointer_name = self.parse_function_pointer_parameter_declarator()
+            if function_pointer_name is not None:
+                param_type += " (*)"
+                param_name = function_pointer_name
+            elif self.is_declarator_name_token():
+                param_name = self.current_token.value
+                self.advance()
+                self.skip_parameter_attributes()
+
+            if self.match("ELLIPSIS"):
+                param_type += " ..."
+                self.advance()
+                self.skip_newlines()
+
+            if not param_name and self.is_declarator_name_token():
+                param_name = self.current_token.value
+                self.advance()
+                self.skip_parameter_attributes()
+
+            param_type += self.parse_array_suffix()
+            self.skip_default_parameter_value()
+            params.append({"type": param_type, "name": param_name})
+
+            self.skip_newlines()
+            if self.match("COMMA"):
+                self.advance()
+                self.skip_newlines()
+            else:
+                break
+
+        return params
 
     def parse_expression_statement(self):
         expressions = [self.parse_expression()]
@@ -291,18 +446,162 @@ class OpenCLParser(HipParser):
         return index
 
     def skip_post_return_function_specifiers_at_pos(self, index):
-        while index < len(self.tokens) and (
-            self.tokens[index].type in self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS
-            or self.is_identifier_function_specifier_token(self.tokens[index])
-        ):
-            index += 1
+        while index < len(self.tokens):
             index = self.skip_newlines_at_pos(index)
+            index = self.skip_cpp_attributes_at_pos(index)
+            index = self.skip_type_attribute_prefixes_at_pos(index)
+            if index >= len(self.tokens) or not (
+                self.tokens[index].type
+                in self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS
+                or self.is_identifier_function_specifier_token(self.tokens[index])
+            ):
+                return index
+            index += 1
         return index
 
     def consume_function_name(self):
         name = super().consume_function_name()
         self.skip_newlines()
         return name
+
+    def skip_post_function_qualifiers(self, attributes=None):
+        while True:
+            previous_pos = self.pos
+            super().skip_post_function_qualifiers(attributes)
+            self.skip_newlines()
+            if self.match("ASM"):
+                self.advance()
+                self.skip_newlines()
+                if self.match("LPAREN"):
+                    self.skip_balanced_parentheses()
+                continue
+            if self.pos == previous_pos:
+                return
+
+    def parse_function_with_qualifier(self):
+        qualifiers = []
+        attributes = []
+
+        while True:
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            parsed_attributes = self.parse_type_attribute_prefixes()
+            if parsed_attributes:
+                attributes.extend(parsed_attributes)
+                continue
+            if self.match("__LAUNCH_BOUNDS__"):
+                attributes.append(self.parse_launch_bounds_attribute())
+                continue
+            if not (
+                self.match(*self.FUNCTION_DECLARATION_SPECIFIER_TOKENS)
+                or self.is_identifier_function_specifier_token()
+            ):
+                break
+            qualifiers.append(self.current_token.value)
+            self.advance()
+
+        return_type = self.parse_type()
+        self.skip_newlines()
+        self.skip_cpp_attributes()
+        attributes.extend(self.parse_type_attribute_prefixes())
+        self.skip_newlines()
+
+        while True:
+            if self.match("__LAUNCH_BOUNDS__"):
+                attributes.append(self.parse_launch_bounds_attribute())
+                self.skip_newlines()
+                continue
+            if not (
+                self.match(*self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS)
+                or self.is_identifier_function_specifier_token()
+            ):
+                break
+            qualifiers.append(self.current_token.value)
+            self.advance()
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            attributes.extend(self.parse_type_attribute_prefixes())
+            self.skip_newlines()
+
+        name = self.consume_function_name()
+        self.user_function_names.add(name)
+
+        self.consume("LPAREN")
+        params = self.parse_parameter_list()
+        self.consume("RPAREN")
+        self.skip_newlines()
+        return_type = self.parse_trailing_return_type(return_type)
+        self.skip_post_function_qualifiers(attributes)
+        return_type = self.parse_trailing_return_type(return_type)
+
+        body = None
+        if self.match("LBRACE"):
+            body = self.parse_block()
+        elif self.match("SEMICOLON"):
+            self.advance()
+
+        if any(item in self.KERNEL_FUNCTION_SPECIFIER_VALUES for item in qualifiers):
+            return KernelNode(return_type, name, params, body, attributes)
+
+        return FunctionNode(return_type, name, params, body, qualifiers, attributes)
+
+    def parse_type(self):
+        self.parse_type_attribute_prefixes()
+        type_name = super().parse_type()
+
+        if "pipe" in str(type_name).split() and self.is_current_token_type_start():
+            element_type = super().parse_type()
+            type_name = f"{type_name} {element_type}".strip()
+
+        return type_name
+
+    def skip_type_at_pos(self, index, allow_unknown_identifier_pointers=False):
+        original_index = index
+        index = super().skip_type_at_pos(
+            index,
+            allow_unknown_identifier_pointers=allow_unknown_identifier_pointers,
+        )
+        if index is None:
+            return None
+
+        consumed_values = {
+            token.value
+            for token in self.tokens[original_index:index]
+            if token.type != "NEWLINE"
+        }
+        if (
+            "pipe" in consumed_values
+            and index < len(self.tokens)
+            and self.is_type_start_token_at_pos(index)
+        ):
+            element_end = super().skip_type_at_pos(
+                index,
+                allow_unknown_identifier_pointers=allow_unknown_identifier_pointers,
+            )
+            if element_end is not None:
+                return element_end
+
+        return index
+
+    def is_current_token_type_start(self):
+        if self.current_token is None:
+            return False
+        return (
+            self.is_builtin_type_token()
+            or self.match(*self.VECTOR_TYPE_TOKENS)
+            or self.match(*self.RESOURCE_TYPE_TOKENS)
+            or self.match(*self.ELABORATED_TYPE_TOKENS)
+            or self.match("IDENTIFIER")
+        )
+
+    def is_type_start_token_at_pos(self, index):
+        return index < len(self.tokens) and (
+            self.is_builtin_type_token(self.tokens[index])
+            or self.tokens[index].type in self.VECTOR_TYPE_TOKENS
+            or self.tokens[index].type in self.RESOURCE_TYPE_TOKENS
+            or self.tokens[index].type in self.ELABORATED_TYPE_TOKENS
+            or self.tokens[index].type == "IDENTIFIER"
+        )
 
     def skip_function_name_at(self, index):
         if index >= len(self.tokens) or not self.is_function_name_token(
@@ -382,11 +681,338 @@ class OpenCLParser(HipParser):
             base_type = self.parse_declarator_prefix(base_type)
         self.skip_newlines()
         self.parse_type_attribute_prefixes()
+        block_declarator = self.parse_opencl_block_pointer_declarator()
+        if block_declarator is not None:
+            name, parameter_suffix = block_declarator
+            self.skip_declarator_attribute_suffixes()
+            self.skip_newlines()
+            value = self.parse_variable_initializer(base_type)
+            return VariableNode(
+                self.opencl_block_type_name(base_type, parameter_suffix),
+                name,
+                value,
+                list(qualifiers),
+                is_extern_shared_memory=self.is_extern_shared_memory(qualifiers),
+                is_dynamic_shared_memory=False,
+            )
         return super().parse_variable_declarator(
             base_type, qualifiers, allow_prefix=False
         )
 
+    def is_variable_declaration(self) -> bool:
+        if super().is_variable_declaration():
+            return True
+
+        index = self.pos
+        saw_opencl_qualifier = False
+        while index < len(self.tokens) and self.tokens[index].type in {
+            *self.DECLARATION_QUALIFIER_TOKENS,
+            *self.TYPE_QUALIFIER_TOKENS,
+        }:
+            if self.tokens[index].type in {
+                "__CONSTANT__",
+                "__DEVICE__",
+                "__GENERIC__",
+                "__MANAGED__",
+                "__SHARED__",
+                "READ_ONLY",
+                "WRITE_ONLY",
+                "READ_WRITE",
+            }:
+                saw_opencl_qualifier = True
+            index += 1
+            index = self.skip_newlines_at_pos(index)
+
+        index = self.skip_cpp_attributes_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
+        type_end = self.skip_type_at_pos(
+            index,
+            allow_unknown_identifier_pointers=saw_opencl_qualifier,
+        )
+        if type_end is None:
+            return False
+
+        index = self.skip_newlines_at_pos(type_end)
+        block_declarator_end = self.skip_opencl_block_pointer_declarator_at_pos(index)
+        if block_declarator_end is not None:
+            block_declarator_end = self.skip_newlines_at_pos(block_declarator_end)
+            block_declarator_end = self.skip_type_attribute_prefixes_at_pos(
+                block_declarator_end
+            )
+            block_declarator_end = self.skip_newlines_at_pos(block_declarator_end)
+            return block_declarator_end < len(self.tokens) and self.tokens[
+                block_declarator_end
+            ].type in {
+                "SEMICOLON",
+                "ASSIGN",
+                "COMMA",
+            }
+
+        index = self.skip_newlines_at_pos(type_end)
+        while index < len(self.tokens) and self.tokens[index].type in {
+            "ASTERISK",
+            "STAR",
+            *self.TYPE_REFERENCE_TOKENS,
+            *self.POSTFIX_TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+            index = self.skip_postfix_type_qualifiers_at_pos(index)
+            index = self.skip_newlines_at_pos(index)
+
+        declarator_name_end = self.skip_variable_declarator_name_at_pos(index)
+        if declarator_name_end is None:
+            return False
+
+        index = self.skip_newlines_at_pos(declarator_name_end)
+        index = self.skip_array_suffix_at_pos(index)
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_type_attribute_prefixes_at_pos(index)
+        index = self.skip_newlines_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type in {
+            "SEMICOLON",
+            "ASSIGN",
+            "LBRACKET",
+            "LPAREN",
+            "LBRACE",
+            "COMMA",
+        }
+
+    def skip_opencl_qualifiers_at_pos(self, index):
+        while index < len(self.tokens) and self.tokens[index].type in {
+            *self.DECLARATION_QUALIFIER_TOKENS,
+            *self.TYPE_QUALIFIER_TOKENS,
+        }:
+            index += 1
+            index = self.skip_newlines_at_pos(index)
+        return index
+
+    def parse_type_alias_declarator(self, base_type, allow_prefix):
+        alias_type = base_type
+        if allow_prefix:
+            alias_type = self.parse_declarator_prefix(alias_type)
+        self.parse_type_attribute_prefixes()
+
+        block_declarator = self.parse_opencl_block_pointer_declarator()
+        if block_declarator is not None:
+            name, parameter_suffix = block_declarator
+            self.type_aliases.add(name)
+            return TypeAliasNode(
+                self.opencl_block_type_name(alias_type, parameter_suffix), name
+            )
+
+        function_pointer_name = self.parse_function_pointer_parameter_declarator()
+        if function_pointer_name is not None:
+            alias_type += " (*)"
+            self.type_aliases.add(function_pointer_name)
+            return TypeAliasNode(alias_type, function_pointer_name)
+
+        name = self.consume_declarator_name_token().value
+        self.skip_newlines()
+        self.skip_declarator_attribute_suffixes()
+        if self.match("LPAREN"):
+            self.consume_function_type_parameter_list()
+            self.skip_declarator_attribute_suffixes()
+            self.type_aliases.add(name)
+            return TypeAliasNode(alias_type, name)
+
+        alias_type += self.parse_array_suffix()
+        self.skip_declarator_attribute_suffixes()
+        self.type_aliases.add(name)
+        return TypeAliasNode(alias_type, name)
+
+    def parse_typedef_alias(self):
+        if not self.match("TYPEDEF"):
+            return super().parse_typedef_alias()
+
+        typedef_pos = self.pos
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        if index < len(self.tokens) and self.tokens[index].type == "UNION":
+            self.consume("TYPEDEF")
+            return self.parse_typedef_union_alias()
+
+        self.pos = typedef_pos
+        self.current_token = self.tokens[self.pos]
+        return super().parse_typedef_alias()
+
+    def parse_typedef_union_alias(self):
+        self.consume("UNION")
+        self.skip_newlines()
+
+        tag_name = None
+        if self.match("IDENTIFIER"):
+            tag_name = self.current_token.value
+            self.advance()
+
+        self.skip_newlines()
+        if not self.match("LBRACE"):
+            alias = self.parse_type_alias_declarator(
+                f"union {tag_name}", allow_prefix=True
+            )
+            if self.match("SEMICOLON"):
+                self.advance()
+            return alias
+
+        self.consume("LBRACE")
+        members = self.parse_struct_members(tag_name)
+        self.consume("RBRACE")
+
+        alias_base_type = f"union {tag_name}" if tag_name else "union <anonymous>"
+        aliases = []
+        self.skip_newlines()
+        while self.current_token and not self.match("SEMICOLON"):
+            aliases.append(
+                self.parse_type_alias_declarator(alias_base_type, allow_prefix=True)
+            )
+            self.skip_newlines()
+            if not self.match("COMMA"):
+                break
+            self.advance()
+            self.skip_newlines()
+
+        alias_name = aliases[0].name if aliases else tag_name
+        if not alias_name:
+            self.error("Expected typedef union alias name")
+
+        if self.match("SEMICOLON"):
+            self.advance()
+        self.type_aliases.add(alias_name)
+
+        extra_aliases = []
+        for alias in aliases[1:]:
+            alias.alias_type = self.replace_typedef_record_base_type(
+                alias.alias_type, alias_base_type, alias_name
+            )
+            extra_aliases.append(alias)
+
+        union_node = StructNode(alias_name, members)
+        union_node.is_union = True
+        return [union_node, *extra_aliases] if extra_aliases else union_node
+
+    def consume_declarator_name_token(self):
+        if self.is_declarator_name_token():
+            token = self.current_token
+            self.advance()
+            return token
+        return self.consume("IDENTIFIER")
+
+    def is_function_pointer_parameter_start_at_pos(self, index):
+        if super().is_function_pointer_parameter_start_at_pos(index):
+            return True
+
+        type_end = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
+        return (
+            type_end is not None
+            and self.skip_opencl_block_pointer_declarator_at_pos(type_end) is not None
+        )
+
+    def is_plausible_function_parameter_at_pos(self, index):
+        if super().is_plausible_function_parameter_at_pos(index):
+            return True
+
+        type_end = self.skip_type_at_pos(index, allow_unknown_identifier_pointers=True)
+        if type_end is None:
+            return False
+
+        index = self.skip_opencl_block_pointer_declarator_at_pos(type_end)
+        if index is None:
+            return False
+
+        index = self.skip_newlines_at_pos(index)
+        index = self.skip_cpp_attributes_at_pos(index)
+        return index < len(self.tokens) and self.tokens[index].type in {
+            "COMMA",
+            "RPAREN",
+            "ASSIGN",
+        }
+
+    def parse_opencl_block_pointer_declarator(self):
+        if not self.is_opencl_block_pointer_declarator():
+            return None
+
+        self.consume("LPAREN")
+        self.skip_newlines()
+        self.consume("XOR")
+        self.skip_newlines()
+
+        while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
+            self.advance()
+            self.skip_newlines()
+
+        name = ""
+        if self.is_declarator_name_token():
+            name = self.current_token.value
+            self.advance()
+            self.skip_newlines()
+
+        while self.match(*self.POSTFIX_TYPE_QUALIFIER_TOKENS):
+            self.advance()
+            self.skip_newlines()
+
+        self.consume("RPAREN")
+        self.skip_newlines()
+
+        parameter_suffix = ""
+        if self.match("LPAREN"):
+            parameter_suffix = self.format_opencl_block_parameter_suffix(
+                self.consume_balanced_token_values("LPAREN", "RPAREN")
+            )
+
+        return name, parameter_suffix
+
+    def is_opencl_block_pointer_declarator(self):
+        if not self.match("LPAREN"):
+            return False
+        index = self.skip_newlines_at_pos(self.pos + 1)
+        return index < len(self.tokens) and self.tokens[index].type == "XOR"
+
+    def skip_opencl_block_pointer_declarator_at_pos(self, index):
+        index = self.skip_newlines_at_pos(index)
+        if index >= len(self.tokens) or self.tokens[index].type != "LPAREN":
+            return None
+
+        index = self.skip_newlines_at_pos(index + 1)
+        if index >= len(self.tokens) or self.tokens[index].type != "XOR":
+            return None
+
+        index = self.skip_newlines_at_pos(index + 1)
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
+        ):
+            index = self.skip_newlines_at_pos(index + 1)
+
+        if self.is_declarator_name_token_at(index):
+            index = self.skip_newlines_at_pos(index + 1)
+
+        while (
+            index < len(self.tokens)
+            and self.tokens[index].type in self.POSTFIX_TYPE_QUALIFIER_TOKENS
+        ):
+            index = self.skip_newlines_at_pos(index + 1)
+
+        if index >= len(self.tokens) or self.tokens[index].type != "RPAREN":
+            return None
+
+        index = self.skip_newlines_at_pos(index + 1)
+        if index < len(self.tokens) and self.tokens[index].type == "LPAREN":
+            index = self.skip_balanced_tokens_at_pos(index, "LPAREN", "RPAREN")
+
+        return index
+
+    def format_opencl_block_parameter_suffix(self, values):
+        text = " ".join(value for value in values if value != "\n")
+        return re.sub(r"\s+", " ", text).strip()
+
+    def opencl_block_type_name(self, base_type, parameter_suffix=""):
+        suffix = f" {parameter_suffix}" if parameter_suffix else ""
+        return f"__opencl_block {base_type}{suffix}".strip()
+
     def parse_function_pointer_parameter_declarator(self):
+        block_declarator = self.parse_opencl_block_pointer_declarator()
+        if block_declarator is not None:
+            name, _parameter_suffix = block_declarator
+            return name
+
         if not (
             self.match("LPAREN")
             and self.peek()
@@ -428,12 +1054,18 @@ class OpenCLParser(HipParser):
 
         return_type = self.parse_type()
         self.skip_newlines()
+        self.skip_cpp_attributes()
+        attributes.extend(self.parse_type_attribute_prefixes())
+        self.skip_newlines()
         while (
             self.match(*self.OPENCL_POST_RETURN_FUNCTION_SPECIFIER_TOKENS)
             or self.is_identifier_function_specifier_token()
         ):
             qualifiers.append(self.current_token.value)
             self.advance()
+            self.skip_newlines()
+            self.skip_cpp_attributes()
+            attributes.extend(self.parse_type_attribute_prefixes())
             self.skip_newlines()
 
         name = self.consume_function_name()
@@ -462,7 +1094,32 @@ class OpenCLParser(HipParser):
             return self.parse_opencl_statement_expression()
         if self.is_opencl_vector_constructor_cast():
             return self.parse_opencl_vector_constructor_cast()
+        if self.match("XOR"):
+            return self.parse_opencl_block_literal()
         return super().parse_primary_expression()
+
+    def parse_opencl_block_literal(self):
+        self.consume("XOR")
+        self.skip_newlines()
+
+        params = []
+        if self.match("LPAREN"):
+            self.consume("LPAREN")
+            params = self.parse_parameter_list()
+            self.consume("RPAREN")
+            self.skip_newlines()
+
+        if not self.match("LBRACE"):
+            self.error("Expected block literal body")
+
+        body = self.format_opencl_block_body(
+            self.consume_balanced_token_values("LBRACE", "RBRACE")
+        )
+        return OpenCLBlockLiteralNode(params, body)
+
+    def format_opencl_block_body(self, values):
+        text = " ".join(value for value in values if value != "\n")
+        return re.sub(r"\s+", " ", text).strip()
 
     def is_opencl_statement_expression_start(self):
         if not self.match("LPAREN"):
@@ -488,6 +1145,12 @@ class OpenCLParser(HipParser):
     def parse_statement(self):
         if self.is_opencl_macro_block_statement():
             return self.parse_opencl_macro_block_statement()
+        if self.match(*self.ELABORATED_TYPE_TOKENS):
+            if self.is_function_declaration():
+                return self.parse_simple_function()
+            if self.is_variable_declaration():
+                declarations = self.parse_variable_declaration_list()
+                return declarations if len(declarations) > 1 else declarations[0]
         return super().parse_statement()
 
     def is_opencl_macro_block_statement(self):
@@ -512,7 +1175,7 @@ class OpenCLParser(HipParser):
                 depth -= 1
                 if depth == 0:
                     return saw_block_argument
-            elif token_type == "LBRACE" and depth == 1:
+            elif token_type == "LBRACE" and depth in {1, 2}:
                 saw_block_argument = True
                 index = self.skip_balanced_group_at_pos(index, "LBRACE", "RBRACE")
                 if index is None:
@@ -524,6 +1187,7 @@ class OpenCLParser(HipParser):
 
     def parse_opencl_macro_block_statement(self):
         name = self.consume("IDENTIFIER").value
+        self.skip_newlines()
         args = self.consume_raw_opencl_macro_arguments()
         if self.match("SEMICOLON"):
             self.advance()
