@@ -3889,8 +3889,8 @@ class MetalCodeGen:
         if shader_type == "vertex":
             function_name = entry_name or f"vertex_{func.name}"
             if vertex_stage_input_parameters:
-                stage_input_struct_name = (
-                    self.unique_vertex_stage_input_struct_name(function_name)
+                stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
+                    function_name
                 )
                 stage_input_parameter_name = self.unique_metal_generated_name(
                     "_crossglInput",
