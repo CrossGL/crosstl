@@ -3227,10 +3227,10 @@ class HLSLToCrossGLConverter:
         for func in getattr(ast, "functions", []) or []:
             stage_name = str(getattr(func, "qualifier", "") or "").lower()
             params = getattr(func, "params", []) or []
-            flattens_entry_structs = (
-                stage_name in {"vertex", "fragment"}
-                and self.has_stage_struct_output_parameter(params)
-            )
+            flattens_entry_structs = stage_name in {
+                "vertex",
+                "fragment",
+            } and self.has_stage_struct_output_parameter(params)
             for param in params:
                 type_name = self.raw_type_base(getattr(param, "vtype", None))
                 if type_name not in self.struct_type_names:
@@ -3672,7 +3672,9 @@ class HLSLToCrossGLConverter:
                 return True
         return False
 
-    def unique_flattened_stage_parameter_name(self, param_name, member_name, used_names):
+    def unique_flattened_stage_parameter_name(
+        self, param_name, member_name, used_names
+    ):
         base = f"{param_name}_{member_name}"
         candidate = base
         suffix = 2
