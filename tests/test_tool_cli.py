@@ -181,3 +181,11 @@ def test_public_docs_reference_project_porting_workflow():
         assert "inspect-report" in text
         assert "--format text" in text
         assert "project-porting" in text
+
+
+def test_public_api_docs_include_project_api():
+    public_api = (ROOT / "docs" / "source" / "api" / "public.rst").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".. automodule:: crosstl.project" in public_api
