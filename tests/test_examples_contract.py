@@ -25,11 +25,63 @@ WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS = (
     ("gpu_computing/MatrixMultiplication.cgl", "webgl"),
 )
 WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES = set(WEBGL_COMPUTE_EXAMPLE_DIAGNOSTICS)
+
+MOJO_PLACEHOLDER_MARKERS = (
+    "# CrossGL builtin placeholders",
+    "# CrossGL GPU builtin placeholders",
+    "# CrossGL resource placeholders",
+    "# CrossGL geometry stream placeholders",
+    "# CrossGL tessellation patch placeholders",
+    "# CrossGL mesh/task placeholders",
+    "# CrossGL synchronization placeholders",
+    "# CrossGL wave/subgroup placeholders",
+    "# CrossGL ray tracing placeholders",
+)
+MOJO_PLACEHOLDER_EXAMPLE_CASES = (
+    (
+        "compute/ParticleSimulation.cgl",
+        "mojo",
+        (
+            "# CrossGL GPU builtin placeholders",
+            "# CrossGL synchronization placeholders",
+        ),
+    ),
+    (
+        "gpu_computing/MatrixMultiplication.cgl",
+        "mojo",
+        (
+            "# CrossGL GPU builtin placeholders",
+            "# CrossGL synchronization placeholders",
+            "# CrossGL wave/subgroup placeholders",
+        ),
+    ),
+    (
+        "cross_platform/UniversalPBRShader.cgl",
+        "mojo",
+        (
+            "# CrossGL GPU builtin placeholders",
+            "# CrossGL resource placeholders",
+        ),
+    ),
+    (
+        "graphics/ComplexShader.cgl",
+        "mojo",
+        (
+            "# CrossGL GPU builtin placeholders",
+            "# CrossGL resource placeholders",
+        ),
+    ),
+)
+MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS = {
+    (relative_path, backend)
+    for relative_path, backend, _markers in MOJO_PLACEHOLDER_EXAMPLE_CASES
+}
 FULL_BACKEND_EXAMPLE_CASES = tuple(
     (relative_path, backend)
     for relative_path in FULL_BACKEND_EXAMPLES
     for backend in codegen.backend_names()
     if (relative_path, backend) not in WEBGL_COMPUTE_EXAMPLE_DIAGNOSTIC_CASES
+    and (relative_path, backend) not in MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS
 )
 
 KNOWN_PRIMARY_GRAPHICS_GAPS = ()
@@ -49,10 +101,7 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "webgl"),
 )
 
-ADDITIONAL_FIXED_CASES = (
-    ("cross_platform/UniversalPBRShader.cgl", "mojo"),
-    ("cross_platform/UniversalPBRShader.cgl", "slang"),
-)
+ADDITIONAL_FIXED_CASES = (("cross_platform/UniversalPBRShader.cgl", "slang"),)
 
 GENERIC_FUNCTION_UNSUPPORTED_BACKEND_CASES = (
     ("advanced/GenericPatternMatching.cgl", "vulkan", "SPIR-V"),
@@ -90,7 +139,7 @@ def _example_path(relative_path):
     return EXAMPLES_ROOT / relative_path
 
 
-def _assert_generated_output_is_usable(generated):
+def _assert_generated_output_has_no_internal_failures(generated):
     assert isinstance(generated, str)
     assert generated.strip()
     assert "Traceback" not in generated
@@ -106,6 +155,12 @@ def _assert_generated_output_is_usable(generated):
     assert "unsupported CUDA match" not in generated
     assert "unsupported HIP match" not in generated
     assert "unsupported Slang match" not in generated
+
+
+def _assert_generated_output_is_usable(generated):
+    _assert_generated_output_has_no_internal_failures(generated)
+    for marker in MOJO_PLACEHOLDER_MARKERS:
+        assert marker not in generated
 
 
 @pytest.mark.parametrize("example_path", sorted(EXAMPLES_ROOT.rglob("*.cgl")))
@@ -159,6 +214,21 @@ def test_webgl_compute_examples_report_actionable_diagnostics(relative_path, bac
         crosstl.translate(
             str(_example_path(relative_path)), backend=backend, format_output=False
         )
+
+
+@pytest.mark.parametrize(
+    "relative_path,backend,expected_markers", MOJO_PLACEHOLDER_EXAMPLE_CASES
+)
+def test_mojo_placeholder_examples_are_tracked(
+    relative_path, backend, expected_markers
+):
+    generated = crosstl.translate(
+        str(_example_path(relative_path)), backend=backend, format_output=False
+    )
+
+    _assert_generated_output_has_no_internal_failures(generated)
+    for marker in expected_markers:
+        assert marker in generated
 
 
 @pytest.mark.parametrize("relative_path,backend", KNOWN_PRIMARY_GRAPHICS_GAPS)
