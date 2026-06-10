@@ -1178,12 +1178,21 @@ class VulkanParser:
         resource_block_type_ids = self.spirv_resource_block_struct_type_ids(
             variables, types, decorations
         )
+        builtin_interface_struct_storage_classes = (
+            self.spirv_builtin_interface_struct_storage_classes(
+                variables, types, member_decorations
+            )
+        )
         structs = self.spirv_assembly_structs(
             names,
             member_names,
+            member_decorations,
             types,
             constants,
             skip_type_ids=resource_block_type_ids,
+            builtin_interface_struct_storage_classes=(
+                builtin_interface_struct_storage_classes
+            ),
         )
         entry_interface_ids = {
             interface_id
@@ -6235,9 +6244,19 @@ class VulkanParser:
                 ) or self.spirv_fallback_identifier(type_id, "struct")
 
     def spirv_assembly_structs(
-        self, names, member_names, types, constants, skip_type_ids=None
+        self,
+        names,
+        member_names,
+        member_decorations,
+        types,
+        constants,
+        skip_type_ids=None,
+        builtin_interface_struct_storage_classes=None,
     ):
         skip_type_ids = set(skip_type_ids or [])
+        builtin_interface_struct_storage_classes = (
+            builtin_interface_struct_storage_classes or {}
+        )
         structs = []
         seen_struct_signatures = set()
         for type_id, type_info in types.items():
@@ -6257,10 +6276,27 @@ class VulkanParser:
                     continue
 
                 member_key = str(member_index)
-                member_name = member_names.get(type_id, {}).get(
-                    member_key, f"member{member_key}"
+                member_layout_decorations = self.spirv_member_decorations_for_member(
+                    member_decorations, type_id, member_key
                 )
-                members.append(VariableNode(data_type, f"{member_name}{array_suffix}"))
+                member_name = None
+                if type_id in builtin_interface_struct_storage_classes:
+                    member_name = self.spirv_builtin_variable_name_from_qualifiers(
+                        self.spirv_layout_qualifiers(member_layout_decorations),
+                        storage_class=(
+                            builtin_interface_struct_storage_classes.get(type_id)
+                        ),
+                    )
+                if member_name is None:
+                    member_name = member_names.get(type_id, {}).get(
+                        member_key, f"member{member_key}"
+                    )
+                member_node = VariableNode(data_type, f"{member_name}{array_suffix}")
+                if type_id in builtin_interface_struct_storage_classes:
+                    member_node.declaration_qualifiers = (
+                        self.spirv_declaration_qualifiers(member_layout_decorations)
+                    )
+                members.append(member_node)
 
             if members:
                 signature = (
@@ -6270,9 +6306,86 @@ class VulkanParser:
                 if signature in seen_struct_signatures:
                     continue
                 seen_struct_signatures.add(signature)
-                structs.append(StructNode(type_info["name"], members))
+                struct = StructNode(type_info["name"], members)
+                storage_class = builtin_interface_struct_storage_classes.get(type_id)
+                if storage_class is not None:
+                    struct.spirv_builtin_interface_storage_class = storage_class
+                    struct.spirv_builtin_interface_block_name = (
+                        self.spirv_builtin_interface_block_name(
+                            type_info["name"], type_id, member_decorations
+                        )
+                    )
+                structs.append(struct)
 
         return structs
+
+    def spirv_builtin_interface_struct_storage_classes(
+        self, variables, types, member_decorations
+    ):
+        storage_classes = {}
+        for variable in variables:
+            pointer_type = types.get(variable["pointer_type_id"], {})
+            if pointer_type.get("kind") != "pointer":
+                continue
+
+            storage_class = variable["storage_class"] or pointer_type.get(
+                "storage_class"
+            )
+            if storage_class not in self.SPIRV_INTERFACE_STORAGE_CLASSES:
+                continue
+
+            struct_type_id = pointer_type.get("type_id")
+            struct_type = types.get(struct_type_id, {})
+            if struct_type.get("kind") != "struct":
+                continue
+            if not self.spirv_struct_has_builtin_member_decorations(
+                struct_type_id, member_decorations
+            ):
+                continue
+
+            storage_classes.setdefault(struct_type_id, storage_class)
+        return storage_classes
+
+    def spirv_struct_has_builtin_member_decorations(
+        self, struct_type_id, member_decorations
+    ):
+        return any(
+            decoration == "BuiltIn"
+            for _member, decoration, _operands in member_decorations.get(
+                struct_type_id, []
+            )
+        )
+
+    def spirv_member_decorations_for_member(
+        self, member_decorations, struct_type_id, member_key
+    ):
+        return [
+            (decoration, operands)
+            for member, decoration, operands in member_decorations.get(
+                struct_type_id, []
+            )
+            if member == member_key
+        ]
+
+    def spirv_builtin_interface_block_name(
+        self, fallback_name, struct_type_id, member_decorations
+    ):
+        builtin_names = {
+            operands[0]
+            for _member, decoration, operands in member_decorations.get(
+                struct_type_id, []
+            )
+            if decoration == "BuiltIn" and operands
+        }
+        per_vertex_builtins = {
+            "Position",
+            "PointSize",
+            "ClipDistance",
+            "CullDistance",
+        }
+        if builtin_names and builtin_names.issubset(per_vertex_builtins):
+            return "gl_PerVertex"
+        return fallback_name
 
     def spirv_resource_block_struct_type_ids(self, variables, types, decorations):
         resource_block_type_ids = set()

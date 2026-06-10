@@ -1387,17 +1387,44 @@ class VulkanToCrossGLConverter:
 
     def generate_struct(self, node):
         self.reserve_global_declaration_name(node.name)
-        code = f"    struct {node.name} {{\n"
+        code = self.spirv_builtin_interface_struct_attribute_prefix(node)
+        code += f"    struct {node.name} {{\n"
         for member in node.members:
             if isinstance(member, VariableNode):
-                code += f"        {self.map_type(self.variable_type(member))} {member.name};\n"
+                attributes = self.declaration_qualifier_attribute_suffix(member)
+                code += (
+                    f"        {self.map_type(self.variable_type(member))} "
+                    f"{member.name}{attributes};\n"
+                )
             elif isinstance(member, AssignmentNode):
                 lhs = self.assignment_left(member)
+                attributes = self.declaration_qualifier_attribute_suffix(lhs)
                 code += (
-                    f"        {self.map_type(self.variable_type(lhs))} {lhs.name};\n"
+                    f"        {self.map_type(self.variable_type(lhs))} "
+                    f"{lhs.name}{attributes};\n"
                 )
         code += "    }\n\n"
         return code
+
+    def spirv_builtin_interface_struct_attribute_prefix(self, node):
+        storage_class = getattr(node, "spirv_builtin_interface_storage_class", None)
+        layout_type = {"Input": "IN", "Output": "OUT"}.get(storage_class)
+        if layout_type is None:
+            return ""
+        direction = "in" if layout_type == "IN" else "out"
+        block_name = getattr(node, "spirv_builtin_interface_block_name", node.name)
+        return (
+            f"    @glsl_interface_block({direction})\n"
+            f"    @glsl_interface_block_name({block_name})\n"
+        )
+
+    def declaration_qualifier_attribute_suffix(self, node):
+        attributes = []
+        for qualifier in getattr(node, "declaration_qualifiers", []) or []:
+            qualifier_name = str(qualifier).strip()
+            if qualifier_name:
+                attributes.append(f"@{qualifier_name}")
+        return f" {' '.join(attributes)}" if attributes else ""
 
     def generate_function(self, node, indent=1):
         """Render one Vulkan backend function node as a CrossGL function."""

@@ -23101,10 +23101,12 @@ def test_project_cli_package_runtime_json_writes_output(tmp_path):
     assert (package_dir / "runtime-package.json").is_file()
 
 
-def _build_runtime_package_fixture(tmp_path):
+def _build_runtime_package_fixture(
+    tmp_path, source=SIMPLE_CROSSL, source_name="simple.cgl"
+):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / source_name).write_text(source, encoding="utf-8")
     (repo / "host.cpp").write_text(
         "void run() { cudaLaunchKernel(nullptr); }\n",
         encoding="utf-8",
@@ -23177,7 +23179,80 @@ def test_inspect_runtime_package_reports_ready_bindings(tmp_path):
         "source-remaps/out/cgl/simple.source-remap.json"
     )
     assert binding["sourceRemap"]["status"] == "ready"
+    host_interface = binding["hostInterface"]
+    assert set(host_interface) == project_pipeline.RUNTIME_HOST_INTERFACE_FIELDS
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "cgl"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["resourceCount"] == 0
+    assert len(host_interface["entryPoints"]) == 1
+    entry_point = host_interface["entryPoints"][0]
+    assert (
+        set(entry_point) == project_pipeline.RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS
+    )
+    assert entry_point == {
+        "name": "main",
+        "stage": "vertex",
+        "executionConfig": {},
+    }
+    assert host_interface["resources"] == []
+    assert host_interface["diagnostics"] == []
     assert binding["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reports_host_interface_resources(tmp_path):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path, source=source, source_name="resource.cgl"
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"][0] == {
+        "name": "main",
+        "stage": "fragment",
+        "executionConfig": {},
+    }
+    assert host_interface["resourceCount"] == 2
+    for resource in host_interface["resources"]:
+        assert set(resource) == project_pipeline.RUNTIME_HOST_INTERFACE_RESOURCE_FIELDS
+    assert host_interface["resources"] == [
+        {
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": None,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "sampler2D",
+            "set": 1,
+            "binding": 2,
+            "access": None,
+        },
+    ]
+    assert host_interface["diagnostics"] == []
 
 
 def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
@@ -23193,6 +23268,10 @@ def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
     assert payload["summary"]["failedBindingCount"] == 1
     assert payload["bindings"][0]["status"] == "failed"
     assert payload["bindings"][0]["artifactStatus"] == "failed"
+    assert payload["bindings"][0]["hostInterface"]["status"] == "not-inspected"
+    assert payload["bindings"][0]["hostInterface"]["diagnostics"] == [
+        "project.runtime-package-inspection.host-interface-artifact-not-ready"
+    ]
     assert payload["bindings"][0]["diagnostics"] == [
         "project.runtime-package-inspection.artifact-missing"
     ]
@@ -23681,6 +23760,14 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
     assert adapter["adapterKind"] == "crossgl-source-adapter"
     assert adapter["artifactFormat"] == "CrossGL source"
     assert adapter["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert adapter["hostInterface"]["status"] == "ready"
+    assert adapter["hostInterface"]["entryPointCount"] == 1
+    assert adapter["hostInterface"]["resourceCount"] == 0
+    assert adapter["hostInterface"]["entryPoints"][0] == {
+        "name": "main",
+        "stage": "vertex",
+        "executionConfig": {},
+    }
     assert adapter["validation"] == {
         "packageInspection": "ready",
         "artifact": "ready",
@@ -23772,6 +23859,7 @@ def test_project_cli_plan_runtime_adapters_text_outputs_adapters(tmp_path):
         "- cgl: artifacts/out/cgl/simple.cgl via crossgl-source-adapter "
         "[format: CrossGL source;"
     ) in result.stdout
+    assert "interface: 1 entry points, 0 resources" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
     assert "wire-runtime-adapter" in result.stdout
     assert "review-runtime-references" in result.stdout
