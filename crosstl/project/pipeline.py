@@ -1272,9 +1272,11 @@ RUNTIME_REFERENCE_FILE_SIZE_LIMIT = 1_000_000
 RUNTIME_REFERENCE_EXTENSIONS = frozenset(
     (
         ".c",
+        ".cjs",
         ".cc",
         ".cmake",
         ".cpp",
+        ".cts",
         ".cuh",
         ".cu",
         ".cxx",
@@ -1283,13 +1285,17 @@ RUNTIME_REFERENCE_EXTENSIONS = frozenset(
         ".hip",
         ".hpp",
         ".hxx",
+        ".jsx",
         ".js",
         ".m",
         ".mm",
+        ".mjs",
+        ".mts",
         ".py",
         ".rs",
         ".swift",
         ".ts",
+        ".tsx",
     )
 )
 RUNTIME_REFERENCE_FILENAMES = frozenset(
@@ -1429,6 +1435,24 @@ RUNTIME_REFERENCE_RULES = (
     ),
     (
         "directx",
+        "runtime-api",
+        re.compile(
+            r"\b(?:m_)?(?:d3d12Device|device|graphicsDevice|commandList|"
+            r"command_list|cmdList|cmd_list|graphicsCommandList|"
+            r"computeCommandList)\s*(?:->|\.)"
+            r"(Create(?:RootSignature|GraphicsPipelineState|ComputePipelineState)|"
+            r"Set(?:PipelineState|GraphicsRootSignature|ComputeRootSignature|"
+            r"GraphicsRoot(?:DescriptorTable|ConstantBufferView|ShaderResourceView|"
+            r"UnorderedAccessView|32BitConstants?)|"
+            r"ComputeRoot(?:DescriptorTable|ConstantBufferView|ShaderResourceView|"
+            r"UnorderedAccessView|32BitConstants?))|"
+            r"IASet(?:VertexBuffers|IndexBuffer|PrimitiveTopology)|"
+            r"Draw(?:Indexed)?Instanced|Dispatch)(?=\s*\()"
+        ),
+        None,
+    ),
+    (
+        "directx",
         "build-system",
         re.compile(
             r"\b(?:d3d11|d3d12|d3dcompiler|dxgi|dxcompiler)\.lib\b",
@@ -1468,6 +1492,17 @@ RUNTIME_REFERENCE_RULES = (
             r"Gen(?:Buffers|Textures|VertexArrays)|GetUniformLocation|LinkProgram|"
             r"ShaderSource|Tex(?:Image2D|Parameteri)|Uniform(?:Matrix[2-4]fv|"
             r"[1-4][fi](?:v)?)|UseProgram|VertexAttribPointer)[A-Za-z0-9_]*)\b"
+        ),
+        None,
+    ),
+    (
+        "opengl",
+        "runtime-api",
+        re.compile(
+            r"(?<![\w.'\"])((?:gladLoadGL(?:Loader)?|glewInit|"
+            r"glfw(?:GetProcAddress|MakeContextCurrent|SwapBuffers)|"
+            r"SDL_GL_(?:CreateContext|MakeCurrent|SwapWindow|GetProcAddress)|"
+            r"egl(?:CreateContext|GetProcAddress|MakeCurrent|SwapBuffers)))(?!\w)"
         ),
         None,
     ),

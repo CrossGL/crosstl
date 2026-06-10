@@ -2024,6 +2024,122 @@ def test_scan_report_records_opengl_host_runtime_reference_evidence(tmp_path):
     ]
 
 
+def test_scan_report_records_opengl_context_loader_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void create_context() {
+              glfwMakeContextCurrent(window);
+              gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
+              glewInit();
+              SDL_GL_CreateContext(window);
+              SDL_GL_MakeCurrent(window, context);
+              SDL_GL_SwapWindow(window);
+              eglCreateContext(display, config, EGL_NO_CONTEXT, attrs);
+              eglMakeCurrent(display, surface, surface, context);
+              eglSwapBuffers(display, surface);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              glfwCreateWindow(800, 600, "app", nullptr, nullptr);
+              glfwInit();
+              glfwPollEvents();
+              glfwMakeContextCurrentLater(window);
+              renderer.SDL_GL_SwapWindow();
+              eglCreateContextual();
+              gladLoadGLLoaderEx();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 10
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"opengl": 10}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 10}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 10}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "opengl", "runtime-api", "glfwMakeContextCurrent"),
+        ("host.cpp", "opengl", "runtime-api", "gladLoadGLLoader"),
+        ("host.cpp", "opengl", "runtime-api", "glfwGetProcAddress"),
+        ("host.cpp", "opengl", "runtime-api", "glewInit"),
+        ("host.cpp", "opengl", "runtime-api", "SDL_GL_CreateContext"),
+        ("host.cpp", "opengl", "runtime-api", "SDL_GL_MakeCurrent"),
+        ("host.cpp", "opengl", "runtime-api", "SDL_GL_SwapWindow"),
+        ("host.cpp", "opengl", "runtime-api", "eglCreateContext"),
+        ("host.cpp", "opengl", "runtime-api", "eglMakeCurrent"),
+        ("host.cpp", "opengl", "runtime-api", "eglSwapBuffers"),
+    ]
+
+
+def test_scan_report_records_web_runtime_references_in_module_extensions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "app.tsx").write_text(
+        "const device: GPUDevice = getDevice();\n",
+        encoding="utf-8",
+    )
+    (repo / "component.jsx").write_text(
+        'const gl = canvas.getContext("webgl2");\n',
+        encoding="utf-8",
+    )
+    (repo / "config.cts").write_text(
+        "const stage = GPUShaderStage.COMPUTE;\n",
+        encoding="utf-8",
+    )
+    (repo / "legacy.cjs").write_text(
+        "webgl2.drawArrays(webgl2.TRIANGLES, 0, 3);\n",
+        encoding="utf-8",
+    )
+    (repo / "module.mjs").write_text(
+        "ctx.createShader(ctx.VERTEX_SHADER);\n",
+        encoding="utf-8",
+    )
+    (repo / "worker.mts").write_text(
+        "await navigator.gpu.requestAdapter();\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 6
+    assert payload["migration"]["runtimeReferencesByBackend"] == {
+        "webgl": 3,
+        "wgsl": 3,
+    }
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 6}
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "app.tsx": 1,
+        "component.jsx": 1,
+        "config.cts": 1,
+        "legacy.cjs": 1,
+        "module.mjs": 1,
+        "worker.mts": 1,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("app.tsx", "wgsl", "runtime-api", "GPUDevice"),
+        ("component.jsx", "webgl", "runtime-api", "getContext"),
+        ("config.cts", "wgsl", "runtime-api", "GPUShaderStage"),
+        ("legacy.cjs", "webgl", "runtime-api", "drawArrays"),
+        ("module.mjs", "webgl", "runtime-api", "createShader"),
+        ("worker.mts", "wgsl", "runtime-api", "navigator.gpu"),
+    ]
+
+
 def test_scan_report_records_directx_11_runtime_references(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2097,6 +2213,60 @@ def test_scan_report_records_directx_dxgi_runtime_references(tmp_path):
         ("host.cpp", "directx", "runtime-api", "IDXGISwapChain1"),
         ("host.cpp", "directx", "runtime-api", "DXGI_SWAP_CHAIN_DESC1"),
         ("host.cpp", "directx", "runtime-api", "CreateDXGIFactory2"),
+    ]
+
+
+def test_scan_report_records_directx_d3d12_pipeline_command_list_runtime_references(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void build_pipeline() {
+              ThrowIfFailed(m_device->CreateRootSignature(
+                  0, blob->GetBufferPointer(), blob->GetBufferSize(),
+                  IID_PPV_ARGS(&rootSignature)));
+              ThrowIfFailed(m_device->CreateGraphicsPipelineState(
+                  &psoDesc, IID_PPV_ARGS(&pipelineState)));
+              m_commandList->SetPipelineState(pipelineState.Get());
+              m_commandList->SetGraphicsRootSignature(rootSignature.Get());
+              m_commandList->SetGraphicsRootDescriptorTable(0, heapStart);
+              m_commandList->IASetVertexBuffers(0, 1, &vbv);
+              m_commandList->DrawInstanced(3, 1, 0, 0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "near_miss.cpp").write_text(
+        textwrap.dedent("""
+            void helper() {
+              builder.CreateGraphicsPipelineState(desc);
+              commandListFactory.SetPipelineStateCache(cache);
+              m_commandList->SetPipelineStateCache(cache);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 7
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 7}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 7}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 7}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.cpp", "directx", "runtime-api", "CreateRootSignature"),
+        ("host.cpp", "directx", "runtime-api", "CreateGraphicsPipelineState"),
+        ("host.cpp", "directx", "runtime-api", "SetPipelineState"),
+        ("host.cpp", "directx", "runtime-api", "SetGraphicsRootSignature"),
+        ("host.cpp", "directx", "runtime-api", "SetGraphicsRootDescriptorTable"),
+        ("host.cpp", "directx", "runtime-api", "IASetVertexBuffers"),
+        ("host.cpp", "directx", "runtime-api", "DrawInstanced"),
     ]
 
 
