@@ -198,6 +198,17 @@ def test_project_config_accepts_single_string_sequence_fields(tmp_path):
     ("project_config_kwargs", "message"),
     [
         (
+            {"source_overrides": ["gpu/*.shader=cgl"]},
+            "ProjectConfig.source_overrides must be a mapping",
+        ),
+        (
+            {"source_overrides": {"gpu/*.shader": 1}},
+            (
+                "ProjectConfig.source_overrides entries must map non-empty "
+                "strings to strings"
+            ),
+        ),
+        (
             {"defines": ["USE_FAST_PATH=1"]},
             "ProjectConfig.defines must be a mapping",
         ),
@@ -222,7 +233,7 @@ def test_project_config_accepts_single_string_sequence_fields(tmp_path):
         ),
     ],
 )
-def test_project_config_rejects_malformed_direct_define_and_variant_maps(
+def test_project_config_rejects_malformed_direct_mapping_fields(
     tmp_path,
     project_config_kwargs,
     message,

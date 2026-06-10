@@ -3375,6 +3375,8 @@ class ProjectConfig:
         object.__setattr__(
             self, "output_dir", _normalize_project_relative_path(output_dir)
         )
+        if not isinstance(self.source_overrides, Mapping):
+            raise ValueError("ProjectConfig.source_overrides must be a mapping")
         object.__setattr__(
             self,
             "source_overrides",
