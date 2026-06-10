@@ -721,6 +721,27 @@ def _as_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
     return result
 
 
+def _as_non_empty_str_mapping(value: Any, *, field_name: str) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if (
+            not isinstance(key, str)
+            or not key.strip()
+            or not isinstance(item, str)
+            or not item.strip()
+        ):
+            raise ValueError(
+                f"{field_name} entries must map non-empty strings to non-empty strings"
+            )
+        result[key] = item
+    return result
+
+
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for name, value in variants.items():
@@ -3458,7 +3479,7 @@ class ProjectConfig:
             self,
             "source_overrides",
             _normalize_project_relative_path_mapping(
-                _as_str_mapping(
+                _as_non_empty_str_mapping(
                     self.source_overrides,
                     field_name="ProjectConfig.source_overrides",
                 )
@@ -4161,7 +4182,7 @@ def load_project_config(
     if not isinstance(project, Mapping):
         raise ValueError("crosstl.toml [project] must be a table")
 
-    sources = _as_str_mapping(
+    sources = _as_non_empty_str_mapping(
         project.get("sources"), field_name="crosstl.toml [project.sources]"
     )
     defines = _as_str_mapping(
@@ -8937,9 +8958,9 @@ def _project_config_for_scan_validation(
 
     source_overrides = project.get("sourceOverrides")
     defines = project.get("defines")
-    if not _valid_string_mapping(source_overrides) or not _valid_string_mapping(
-        defines
-    ):
+    if not _valid_non_empty_string_mapping(
+        source_overrides
+    ) or not _valid_string_mapping(defines):
         return None
 
     raw_variants = project.get("variants")
@@ -10016,7 +10037,7 @@ def _unit_source_override_contract_reasons(
         not _is_non_empty_string(source_path)
         or not _is_report_identity_path(source_path)
         or not _is_non_empty_string(source_backend)
-        or not _valid_string_mapping(source_overrides)
+        or not _valid_non_empty_string_mapping(source_overrides)
     ):
         return []
 
@@ -10702,7 +10723,7 @@ def _skipped_source_override_contract_reasons(
     if (
         not _is_non_empty_string(skipped_path)
         or not _is_report_identity_path(skipped_path)
-        or not _valid_string_mapping(source_overrides)
+        or not _valid_non_empty_string_mapping(source_overrides)
     ):
         return []
 
@@ -10773,6 +10794,15 @@ def _string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     return []
 
 
+def _non_empty_string_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
+    reasons = _string_mapping_contract_reasons(prefix, value)
+    if reasons:
+        return reasons
+    if any(not item.strip() for item in value.values()):
+        return [f"{prefix} values must be non-empty strings"]
+    return []
+
+
 def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -10793,6 +10823,10 @@ def _valid_string_mapping(value: Any) -> bool:
         _is_non_empty_string(key) and isinstance(item, str)
         for key, item in value.items()
     )
+
+
+def _valid_non_empty_string_mapping(value: Any) -> bool:
+    return _valid_string_mapping(value) and all(item.strip() for item in value.values())
 
 
 def _expected_artifact_defines(
@@ -11392,7 +11426,7 @@ def _project_metadata_contract_reasons(
         project, "sourceOverrides", required=require_full_metadata
     ):
         reasons.extend(
-            _string_mapping_contract_reasons(
+            _non_empty_string_mapping_contract_reasons(
                 "project.sourceOverrides", source_overrides
             )
         )

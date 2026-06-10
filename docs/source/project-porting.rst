@@ -510,10 +510,10 @@ directories through those paths. Other native preprocessor behavior remains
 backend-dependent.
 
 Configuration scalar values and define/source-override maps are type checked
-when ``crosstl.toml`` is loaded. Define names, source override patterns, named
-variants, and variant define names must be non-empty strings. Malformed values
-are rejected before scan or translation so reports do not silently stringify
-invalid project metadata.
+when ``crosstl.toml`` is loaded. Define names, source override patterns, source
+override backend names, named variants, and variant define names must be
+non-empty strings. Malformed values are rejected before scan or translation so
+reports do not silently stringify invalid project metadata.
 
 ``external_corpus_manifest`` points at an optional repository-relative JSON
 manifest of pinned upstream shader or GPU-source reductions. When configured,

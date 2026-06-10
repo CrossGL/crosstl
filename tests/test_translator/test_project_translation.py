@@ -416,7 +416,14 @@ def test_project_config_accepts_single_string_sequence_fields(tmp_path):
             {"source_overrides": {"gpu/*.shader": 1}},
             (
                 "ProjectConfig.source_overrides entries must map non-empty "
-                "strings to strings"
+                "strings to non-empty strings"
+            ),
+        ),
+        (
+            {"source_overrides": {"gpu/*.shader": " "}},
+            (
+                "ProjectConfig.source_overrides entries must map non-empty "
+                "strings to non-empty strings"
             ),
         ),
         (
@@ -3980,7 +3987,7 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
             """,
             (
                 "crosstl.toml [project.sources] entries must map non-empty "
-                "strings to strings"
+                "strings to non-empty strings"
             ),
         ),
         (
@@ -3990,7 +3997,17 @@ def test_project_config_rejects_malformed_variant_entries(tmp_path):
             """,
             (
                 "crosstl.toml [project.sources] entries must map non-empty "
-                "strings to strings"
+                "strings to non-empty strings"
+            ),
+        ),
+        (
+            """
+            [project.sources]
+            "gpu/*.shader" = " "
+            """,
+            (
+                "crosstl.toml [project.sources] entries must map non-empty "
+                "strings to non-empty strings"
             ),
         ),
         (
@@ -10644,6 +10661,39 @@ def test_validate_project_report_rejects_empty_project_mapping_keys(tmp_path):
         diagnostic["message"]
     )
     assert "project.variants.debug keys must be non-empty strings" in (
+        diagnostic["message"]
+    )
+
+
+def test_validate_project_report_rejects_empty_source_override_values(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    report_path = repo / "empty-source-override-value-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-project-portability-report",
+                "project": {
+                    "root": str(repo),
+                    "targets": ["opengl"],
+                    "outputDir": "out",
+                    "sourceOverrides": {"gpu/*.shader": " "},
+                    "sourceOverrideCount": 1,
+                },
+                "artifacts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = validate_project_report(report_path)
+
+    assert payload["success"] is False
+    assert payload["validation"] == {"toolchains": [], "artifacts": []}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert "project.sourceOverrides values must be non-empty strings" in (
         diagnostic["message"]
     )
 
