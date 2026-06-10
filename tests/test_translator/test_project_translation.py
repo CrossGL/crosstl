@@ -1321,6 +1321,60 @@ def test_scan_report_records_documented_migration_actions(tmp_path):
                 "and backend framework integration separately."
             ),
             "targets": ["opengl"],
+            "runtimeReferences": [],
+        }
+    ]
+
+
+def test_scan_report_records_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void configure() {
+            cudaMalloc(&buffer, 4);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["actions"][0]["runtimeReferences"] == [
+        {
+            "path": "host.cpp",
+            "line": 2,
+            "column": 1,
+            "backend": "cuda",
+            "kind": "runtime-api",
+            "symbol": "cudaMalloc",
+        }
+    ]
+
+
+def test_scan_report_records_build_system_runtime_reference(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            cmake_minimum_required(VERSION 3.27)
+            find_package(Vulkan REQUIRED)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+
+    assert payload["migration"]["actions"][0]["runtimeReferences"] == [
+        {
+            "path": "CMakeLists.txt",
+            "line": 2,
+            "column": 1,
+            "backend": "vulkan",
+            "kind": "build-system",
+            "symbol": "vulkan-build-system",
         }
     ]
 
@@ -17045,6 +17099,60 @@ def test_validate_project_report_rejects_malformed_migration_actions(tmp_path):
     assert "migration.actions[2] must be an object" in diagnostic["message"]
 
 
+def test_validate_project_report_rejects_malformed_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
+    payload["migration"]["actions"][0]["runtimeReferences"] = [
+        {
+            "path": "../host.cpp",
+            "line": 0,
+            "column": True,
+            "backend": "CUDA",
+            "kind": "runtime",
+            "symbol": "",
+            "extra": "metadata",
+        }
+    ]
+    report_path = repo / "invalid-runtime-reference-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "migration.actions[0].runtimeReferences[0].extra is not allowed"
+        in diagnostic["message"]
+    )
+    assert (
+        "migration.actions[0].runtimeReferences[0].path must be repository-relative"
+        in diagnostic["message"]
+    )
+    assert (
+        "migration.actions[0].runtimeReferences[0].line must be a positive integer"
+        in diagnostic["message"]
+    )
+    assert (
+        "migration.actions[0].runtimeReferences[0].column must be a positive integer"
+        in diagnostic["message"]
+    )
+    assert (
+        "migration.actions[0].runtimeReferences[0].backend must be a normalized "
+        "backend name"
+    ) in diagnostic["message"]
+    assert (
+        "migration.actions[0].runtimeReferences[0].kind must be one of "
+        "runtime-api, kernel-launch, build-system"
+    ) in diagnostic["message"]
+    assert (
+        "migration.actions[0].runtimeReferences[0].symbol must be a string"
+        in diagnostic["message"]
+    )
+
+
 def test_validate_project_report_rejects_migration_actions_with_undeclared_targets(
     tmp_path,
 ):
@@ -21174,6 +21282,8 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "and backend framework integration separately."
             ),
             "targets": ["cgl"],
+            "runtimeReferences": [],
+            "runtimeReferenceCount": 0,
         }
     ]
 

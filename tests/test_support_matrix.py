@@ -559,9 +559,22 @@ def test_project_migration_actions_are_first_class_support_feature():
         assert "shader/kernel source translation from host runtime APIs" in (
             backend_support["notes"]
         )
+        assert "malformed runtime-reference records" in backend_support["notes"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
             "test_scan_report_records_documented_migration_actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_report_records_runtime_reference_evidence"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_scan_report_records_build_system_runtime_reference"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_validate_project_report_rejects_malformed_runtime_references"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "

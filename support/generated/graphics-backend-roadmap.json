@@ -2877,6 +2877,9 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_runtime_reference_evidence",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_build_system_runtime_reference",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_runtime_references",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_altered_migration_non_goals",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_migration_action_targets",
@@ -2885,7 +2888,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_migration_rollups"
           ],
-          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, and action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, include runtime-reference counts in inspection output, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, action targets that are not declared by the report, and malformed runtime-reference records. Runtime-reference records identify detected host or build-file symbols by repository-relative path, line, column, backend, kind, and symbol while keeping host runtime integration as a manual follow-up. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "status": "supported"
         },
         "metal": {
@@ -2895,6 +2898,9 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_runtime_reference_evidence",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_build_system_runtime_reference",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_runtime_references",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_altered_migration_non_goals",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_migration_action_targets",
@@ -2903,7 +2909,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_migration_rollups"
           ],
-          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, and action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, include runtime-reference counts in inspection output, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, action targets that are not declared by the report, and malformed runtime-reference records. Runtime-reference records identify detected host or build-file symbols by repository-relative path, line, column, backend, kind, and symbol while keeping host runtime integration as a manual follow-up. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "status": "supported"
         },
         "opengl": {
@@ -2913,6 +2919,9 @@
             "tests/test_translator/test_project_translation.py::def test_scan_report_records_unsupported_targets",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_structured_diagnostics_for_failures",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_migration_actions",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_runtime_reference_evidence",
+            "tests/test_translator/test_project_translation.py::def test_scan_report_records_build_system_runtime_reference",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_malformed_runtime_references",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_altered_migration_non_goals",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_migration_actions_with_undeclared_targets",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_noncanonical_migration_action_targets",
@@ -2921,7 +2930,7 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_truncated_migration_actions",
             "tests/test_translator/test_project_translation.py::def test_validate_project_report_rejects_missing_migration_rollups"
           ],
-          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, and action targets that are not declared by the report. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
+          "notes": "Project reports emit documented manual-runtime-integration actions when supported translation units and target backends are present, emit documented manual-include-resolution actions for unresolved system include dependencies, omit unsupported scan targets, scope translation-report actions to targets with translated artifacts, emit action count and kind, severity, and target rollups, expose bounded inspection samples with target lists and truncation metadata, include runtime-reference counts in inspection output, and validation rejects altered migration non-goals, missing or altered action rollups, noncanonical or duplicate action targets, empty action targets, action targets without translated artifacts, action targets that are not declared by the report, and malformed runtime-reference records. Runtime-reference records identify detected host or build-file symbols by repository-relative path, line, column, backend, kind, and symbol while keeping host runtime integration as a manual follow-up. The action message separates shader/kernel source translation from host runtime APIs, resource binding setup, build scripts, and backend framework integration.",
           "status": "supported"
         }
       }
