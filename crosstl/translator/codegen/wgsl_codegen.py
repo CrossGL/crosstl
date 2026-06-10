@@ -754,11 +754,15 @@ class WGSLCodeGen:
             )
         elif "uniform" in qualifier_names:
             address_space = "uniform"
-            attributes = self.next_binding_attributes()
+            attributes = (
+                self.explicit_binding_attributes(node) or self.next_binding_attributes()
+            )
         elif "buffer" in qualifier_names or "storage" in qualifier_names:
             address_space = "storage"
             access = ", read_write"
-            attributes = self.next_binding_attributes()
+            attributes = (
+                self.explicit_binding_attributes(node) or self.next_binding_attributes()
+            )
         elif "workgroup" in qualifier_names or "shared" in qualifier_names:
             address_space = "workgroup"
 
@@ -787,7 +791,9 @@ class WGSLCodeGen:
         texture_attributes = (
             self.explicit_binding_attributes(node) or self.next_binding_attributes()
         )
-        sampler_attributes = self.next_binding_attributes()
+        sampler_attributes = self.sampler_binding_attributes_for_texture(
+            texture_attributes
+        )
         sampler_name = self.texture_sampler_name(node.name)
         return (
             f"{texture_attributes}\nvar {node.name}: {texture_type};\n"
@@ -823,7 +829,9 @@ class WGSLCodeGen:
                 self.explicit_binding_attributes(member)
                 or self.next_binding_attributes()
             )
-            sampler_attributes = self.next_binding_attributes()
+            sampler_attributes = self.sampler_binding_attributes_for_texture(
+                texture_attributes
+            )
             sampler_name = self.texture_sampler_name(binding_name)
             return (
                 f"{texture_attributes}\nvar {binding_name}: {sampled_texture_type};\n"
@@ -1715,10 +1723,26 @@ class WGSLCodeGen:
             return int(numeric_suffix.group(1))
         return None
 
-    def next_binding_attributes(self):
+    def next_binding_attributes(self, group="0"):
         binding = self._global_binding_index
         self._global_binding_index += 1
-        return f"@group(0) @binding({binding})"
+        return f"@group({group}) @binding({binding})"
+
+    def binding_group_from_attributes(self, attributes):
+        match = re.search(r"@group\(([^)]+)\)", attributes)
+        return match.group(1) if match else "0"
+
+    def sampler_binding_attributes_for_texture(self, texture_attributes):
+        group = self.binding_group_from_attributes(texture_attributes)
+        match = re.search(r"@binding\(([^)]+)\)", texture_attributes)
+        if not match:
+            return self.next_binding_attributes(group=group)
+        try:
+            binding = int(str(match.group(1)), 0) + 1
+        except ValueError:
+            return self.next_binding_attributes(group=group)
+        self._global_binding_index = max(self._global_binding_index, binding + 1)
+        return f"@group({group}) @binding({binding})"
 
     def explicit_binding_attributes(self, node):
         group = "0"
@@ -1726,7 +1750,7 @@ class WGSLCodeGen:
         for attr in getattr(node, "attributes", []) or []:
             key = self.semantic_key(str(getattr(attr, "name", attr)))
             arguments = getattr(attr, "arguments", []) or []
-            if key == "group" and arguments:
+            if key in {"group", "set", "space"} and arguments:
                 group = self.generate_attribute_argument(arguments[0])
             elif key == "binding" and arguments:
                 binding = self.generate_attribute_argument(arguments[0])

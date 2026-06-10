@@ -1557,6 +1557,93 @@ def test_scan_report_records_build_system_runtime_reference(tmp_path):
     ]
 
 
+def test_scan_report_records_metal_framework_linker_runtime_reference(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Makefile").write_text(
+        "LDFLAGS += -framework MetalKit\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["metal"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 1
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"metal": 1}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 1}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"Makefile": 1}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [("Makefile", "metal", "build-system", "metal-build-system")]
+
+
+def test_scan_report_records_vulkan_loader_linker_runtime_reference(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "Makefile").write_text(
+        "LDLIBS += -lvulkan\n",
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["vulkan"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 1
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"vulkan": 1}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 1}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"Makefile": 1}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [("Makefile", "vulkan", "build-system", "vulkan-build-system")]
+
+
+def test_scan_report_records_directx_11_runtime_references(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        textwrap.dedent("""
+            void configure(ID3D11Device* device) {
+              D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+                                nullptr, 0, D3D11_SDK_VERSION, &device,
+                                nullptr, nullptr);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "CMakeLists.txt").write_text(
+        textwrap.dedent("""
+            target_link_libraries(game PRIVATE d3d11.lib d3dcompiler.lib)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["directx"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 5
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"directx": 5}
+    assert payload["migration"]["runtimeReferencesByKind"] == {
+        "build-system": 2,
+        "runtime-api": 3,
+    }
+    assert payload["migration"]["runtimeReferencesByPath"] == {
+        "CMakeLists.txt": 2,
+        "host.cpp": 3,
+    }
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("CMakeLists.txt", "directx", "build-system", "directx-build-system"),
+        ("CMakeLists.txt", "directx", "build-system", "directx-build-system"),
+        ("host.cpp", "directx", "runtime-api", "ID3D11Device"),
+        ("host.cpp", "directx", "runtime-api", "D3D11CreateDevice"),
+        ("host.cpp", "directx", "runtime-api", "D3D11_SDK_VERSION"),
+    ]
+
+
 def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -1595,6 +1682,41 @@ def test_scan_report_records_webgpu_runtime_reference_evidence(tmp_path):
         ("host.ts", "wgsl", "runtime-api", "createShaderModule"),
         ("host.ts", "wgsl", "runtime-api", "navigator.gpu"),
         ("package.json", "wgsl", "build-system", "wgsl-build-system"),
+    ]
+
+
+def test_scan_report_records_webgpu_bind_group_runtime_reference_evidence(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.ts").write_text(
+        textwrap.dedent("""
+            export function bind(device, pass) {
+              const layout = device.createBindGroupLayout({ entries: [] });
+              const bindGroup = device.createBindGroup({ layout, entries: [] });
+              const pipelineLayout = device.createPipelineLayout({
+                bindGroupLayouts: [layout],
+              });
+              pass.setBindGroup(0, bindGroup);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = scan_project(repo).to_report(targets=["wgsl"]).to_json()
+
+    assert payload["migration"]["runtimeReferenceCount"] == 4
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"wgsl": 4}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 4}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.ts": 4}
+    assert [
+        (ref["path"], ref["backend"], ref["kind"], ref["symbol"])
+        for ref in payload["migration"]["actions"][0]["runtimeReferences"]
+    ] == [
+        ("host.ts", "wgsl", "runtime-api", "createBindGroupLayout"),
+        ("host.ts", "wgsl", "runtime-api", "createBindGroup"),
+        ("host.ts", "wgsl", "runtime-api", "createPipelineLayout"),
+        ("host.ts", "wgsl", "runtime-api", "setBindGroup"),
     ]
 
 

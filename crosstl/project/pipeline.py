@@ -1217,19 +1217,22 @@ RUNTIME_REFERENCE_RULES = (
     (
         "metal",
         "build-system",
-        re.compile(r"\b(?:Metal(?:Kit)?\.framework|-framework\s+Metal(?:Kit)?)\b"),
+        re.compile(r"(?<!\w)(?:Metal(?:Kit)?\.framework|-framework\s+Metal(?:Kit)?)\b"),
         "metal-build-system",
     ),
     (
         "directx",
         "runtime-api",
-        re.compile(r"\b((?:D3D12|ID3D12|D3DCompile)[A-Za-z0-9_]*)\b"),
+        re.compile(r"\b((?:D3D11|D3D12|ID3D11|ID3D12|D3DCompile)[A-Za-z0-9_]*)\b"),
         None,
     ),
     (
         "directx",
         "build-system",
-        re.compile(r"\b(?:d3d12|dxgi|dxcompiler)\.lib\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:d3d11|d3d12|d3dcompiler|dxgi|dxcompiler)\.lib\b",
+            re.IGNORECASE,
+        ),
         "directx-build-system",
     ),
     (
@@ -1241,7 +1244,7 @@ RUNTIME_REFERENCE_RULES = (
     (
         "vulkan",
         "build-system",
-        re.compile(r"\b(?:find_package\s*\(\s*Vulkan|Vulkan::Vulkan)\b"),
+        re.compile(r"(?<!\w)(?:find_package\s*\(\s*Vulkan|Vulkan::Vulkan|-lvulkan)\b"),
         "vulkan-build-system",
     ),
     (
@@ -1275,9 +1278,10 @@ RUNTIME_REFERENCE_RULES = (
         "wgsl",
         "runtime-api",
         re.compile(
-            r"\b(navigator\.gpu|GPU(?:Adapter|BindGroup|CanvasContext|"
-            r"CommandEncoder|ComputePipeline|Device|Queue|RenderPipeline|"
-            r"ShaderModule)|createShaderModule)\b"
+            r"\b(navigator\.gpu|GPU(?:Adapter|BindGroup(?:Layout)?|CanvasContext|"
+            r"CommandEncoder|ComputePipeline|Device|PipelineLayout|Queue|"
+            r"RenderPipeline|ShaderModule)|create(?:BindGroup(?:Layout)?|"
+            r"PipelineLayout|ShaderModule)|setBindGroup)\b"
         ),
         None,
     ),

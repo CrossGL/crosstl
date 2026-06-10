@@ -219,6 +219,36 @@ def test_wgsl_codegen_emits_resource_address_spaces_and_bindings():
     assert "var<workgroup> scratch: array<f32, 4>;" in generated
 
 
+def test_wgsl_codegen_preserves_explicit_set_and_binding_resources():
+    shader = """
+    shader WGSLExplicitResourceBindings {
+        layout(set = 2, binding = 4) uniform sampler2D colorTex;
+        sampler explicitSampler @set(3) @binding(5);
+        layout(set = 4, binding = 6) uniform vec4 tint;
+        layout(set = 5, binding = 7) buffer float values[4];
+        cbuffer Registered : register(b8, space6) {
+            float value;
+        };
+        compute {
+            void main() {
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "@group(2) @binding(4)\nvar colorTex: texture_2d<f32>;" in generated
+    assert "@group(2) @binding(5)\nvar colorTex_sampler: sampler;" in generated
+    assert "@group(3) @binding(5)\nvar explicitSampler: sampler;" in generated
+    assert "@group(4) @binding(6)\nvar<uniform> tint: vec4<f32>;" in generated
+    assert (
+        "@group(5) @binding(7)\n" "var<storage, read_write> values: array<f32, 4>;"
+    ) in generated
+    assert "@group(6) @binding(8)\nvar<uniform> _Registered: Registered;" in generated
+
+
 def test_wgsl_codegen_lowers_cbuffers_to_uniform_struct_bindings():
     shader = """
     shader WGSLCBuffer {
