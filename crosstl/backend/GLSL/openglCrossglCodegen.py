@@ -2333,12 +2333,9 @@ class GLSLToCrossGLConverter:
             output_names = {
                 var.name for var in self.outputs if isinstance(var, VariableNode)
             }
-            if (
-                "gl_Position" not in output_names
-                and (
-                    "gl_Position" in builtin_redeclaration_qualifiers
-                    or vertex_builtin_output_writes.get("gl_Position", False)
-                )
+            if "gl_Position" not in output_names and (
+                "gl_Position" in builtin_redeclaration_qualifiers
+                or vertex_builtin_output_writes.get("gl_Position", False)
             ):
                 builtin = VariableNode(
                     "vec4",
@@ -2639,8 +2636,19 @@ class GLSLToCrossGLConverter:
         if main_function is None and self.shader_type == "fragment":
             shadertoy_main_image = self.find_shadertoy_main_image(other_functions)
 
+        defined_function_signatures = {
+            self.function_signature(function)
+            for function in other_functions
+            if not self.is_function_prototype(function)
+        }
+
         # Generate auxiliary functions first
         for function in other_functions:
+            if (
+                self.is_function_prototype(function)
+                and self.function_signature(function) in defined_function_signatures
+            ):
+                continue
             self.increase_indent()
             result += self.indent() + self.generate_function(function) + "\n\n"
             self.decrease_indent()
@@ -2932,6 +2940,9 @@ class GLSLToCrossGLConverter:
 
             params_str = ", ".join(params)
 
+            if self.is_function_prototype(node):
+                return f"{attribute_prefix}{return_type} {name}({params_str});"
+
             result = f"{attribute_prefix}{return_type} {name}({params_str}) {{\n"
 
             self.increase_indent()
@@ -2943,6 +2954,23 @@ class GLSLToCrossGLConverter:
             return result
         finally:
             self.pop_variable_type_scope()
+
+    def is_function_prototype(self, node):
+        return bool(getattr(node, "is_prototype", False))
+
+    def function_signature(self, node):
+        params = []
+        for param in getattr(node, "params", []) or []:
+            if isinstance(param, tuple):
+                param_type = param[0]
+            else:
+                param_type = getattr(param, "vtype", None)
+            params.append((self.convert_type(param_type), self.array_suffix(param)))
+        return (
+            getattr(node, "name", None),
+            self.convert_type(node.return_type),
+            tuple(params),
+        )
 
     def generate_statement_sequence(self, statements):
         generated = []

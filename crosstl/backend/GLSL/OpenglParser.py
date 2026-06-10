@@ -1861,6 +1861,7 @@ class GLSLParser:
                 body=[],
                 qualifiers=list(qualifiers or []),
                 layout=layout,
+                is_prototype=True,
             )
             function.semantic = semantic
             return function
