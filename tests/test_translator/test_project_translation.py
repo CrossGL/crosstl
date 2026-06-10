@@ -190,6 +190,68 @@ def test_project_config_accepts_single_string_sequence_fields(tmp_path):
     assert payload["summary"]["unitCount"] == 1
 
 
+def test_project_config_normalizes_direct_relative_path_separators(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu" / "shaders"
+    include_dir = repo / "gpu" / "include"
+    corpus_dir = repo / "corpus"
+    shader_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    corpus_dir.mkdir(parents=True)
+    (shader_dir / "kernel.shader").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (corpus_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {
+                        "id": "repo/kernel",
+                        "path": "gpu/shaders/kernel.shader",
+                        "sourceBackend": "cgl",
+                        "targets": ["cgl"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = project_api.ProjectConfig(
+        root=repo,
+        source_roots=r"gpu\shaders",
+        include_patterns=r"gpu\shaders\*.shader",
+        exclude_patterns=r"ignored\*",
+        targets="cgl",
+        output_dir=ProjectPathLike(r"generated\out"),
+        source_overrides={r"gpu\shaders\*.shader": "cgl"},
+        include_dirs=r"gpu\include",
+        external_corpus_manifest=ProjectPathLike(r"corpus\manifest.json"),
+    )
+    report = translate_project(config)
+    payload = report.to_json()
+
+    assert config.source_roots == ["gpu/shaders"]
+    assert config.include_patterns == ["gpu/shaders/*.shader"]
+    assert config.exclude_patterns == ["ignored/*"]
+    assert config.output_dir == "generated/out"
+    assert config.source_overrides == {"gpu/shaders/*.shader": "cgl"}
+    assert config.include_dirs == ["gpu/include"]
+    assert config.external_corpus_manifest == "corpus/manifest.json"
+    assert payload["project"]["sourceRoots"] == ["gpu/shaders"]
+    assert payload["project"]["includePatterns"] == ["gpu/shaders/*.shader"]
+    assert payload["project"]["excludePatterns"] == ["ignored/*"]
+    assert payload["project"]["outputDir"] == str(repo / "generated" / "out")
+    assert payload["project"]["sourceOverrides"] == {"gpu/shaders/*.shader": "cgl"}
+    assert payload["project"]["includeDirs"] == ["gpu/include"]
+    assert payload["project"]["externalCorpusManifest"] == "corpus/manifest.json"
+    assert payload["units"][0]["path"] == "gpu/shaders/kernel.shader"
+    assert payload["artifacts"][0]["path"] == (
+        "generated/out/cgl/gpu/shaders/kernel.cgl"
+    )
+    assert payload["externalCorpus"]["status"] == "ok"
+    assert payload["summary"]["translatedCount"] == 1
+
+
 def _source_hash_status_counts(**overrides):
     counts = {
         "missing": 0,

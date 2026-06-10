@@ -3326,13 +3326,13 @@ class ProjectConfig:
     include_patterns: Sequence[str] | str = ()
     exclude_patterns: Sequence[str] | str = DEFAULT_EXCLUDE_PATTERNS
     targets: Sequence[str] | str = ()
-    output_dir: str = DEFAULT_OUTPUT_DIR
+    output_dir: str | os.PathLike[str] = DEFAULT_OUTPUT_DIR
     source_overrides: Mapping[str, str] = field(default_factory=dict)
     include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
-    external_corpus_manifest: str | None = None
+    external_corpus_manifest: str | os.PathLike[str] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root", Path(os.fspath(self.root)).resolve())
@@ -3346,10 +3346,19 @@ class ProjectConfig:
             "source_roots",
             "include_patterns",
             "exclude_patterns",
-            "targets",
             "include_dirs",
-            "selected_variants",
         ):
+            object.__setattr__(
+                self,
+                field_name,
+                _normalize_project_relative_paths(
+                    _as_str_list(
+                        getattr(self, field_name),
+                        field_name=f"ProjectConfig.{field_name}",
+                    )
+                ),
+            )
+        for field_name in ("targets", "selected_variants"):
             object.__setattr__(
                 self,
                 field_name,
@@ -3357,6 +3366,39 @@ class ProjectConfig:
                     getattr(self, field_name),
                     field_name=f"ProjectConfig.{field_name}",
                 ),
+            )
+        output_dir = os.fspath(self.output_dir)
+        if not isinstance(output_dir, str):
+            raise ValueError("ProjectConfig.output_dir must be a string")
+        if not output_dir.strip():
+            raise ValueError("ProjectConfig.output_dir must be a non-empty string")
+        object.__setattr__(
+            self, "output_dir", _normalize_project_relative_path(output_dir)
+        )
+        object.__setattr__(
+            self,
+            "source_overrides",
+            _normalize_project_relative_path_mapping(
+                _as_str_mapping(
+                    self.source_overrides,
+                    field_name="ProjectConfig.source_overrides",
+                )
+            ),
+        )
+        if self.external_corpus_manifest is not None:
+            external_corpus_manifest = os.fspath(self.external_corpus_manifest)
+            if not isinstance(external_corpus_manifest, str):
+                raise ValueError(
+                    "ProjectConfig.external_corpus_manifest must be a string"
+                )
+            if not external_corpus_manifest.strip():
+                raise ValueError(
+                    "ProjectConfig.external_corpus_manifest must be a non-empty string"
+                )
+            object.__setattr__(
+                self,
+                "external_corpus_manifest",
+                _normalize_project_relative_path(external_corpus_manifest),
             )
 
     def normalized_targets(self) -> list[str]:
