@@ -752,8 +752,12 @@ def test_support_external_corpus_manifest_documents_pinned_reductions():
     assert manifest["schemaVersion"] == 1
     assert manifest["entries"]
     source_backends = {entry["sourceBackend"] for entry in manifest["entries"]}
-    backend_ids = {backend["id"] for backend in backend_catalog["backends"]}
-    assert backend_ids == source_backends
+    source_capable_backend_ids = {
+        backend["id"]
+        for backend in backend_catalog["backends"]
+        if backend["source_kind"] != "target-only"
+    }
+    assert source_capable_backend_ids == source_backends
     for entry in manifest["entries"]:
         assert entry["id"]
         assert entry["path"]
