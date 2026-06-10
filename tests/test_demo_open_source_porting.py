@@ -71,6 +71,48 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
+def _workflow_step_block(workflow: str, step_name: str) -> str:
+    marker = f"      - name: {step_name}"
+    start = workflow.index(marker)
+    next_step = workflow.find("\n      - name:", start + len(marker))
+    return workflow[start:] if next_step == -1 else workflow[start:next_step]
+
+
+def _workflow_step_cases(workflow: str, step_name: str) -> set[str]:
+    return set(
+        re.findall(r"--case ([a-z0-9-]+)", _workflow_step_block(workflow, step_name))
+    )
+
+
+def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
+    workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
+
+    assert _workflow_step_cases(workflow, "Linux OpenGL and Vulkan smoke checks") == {
+        "apple-modern-rendering-mesh-viewdir",
+        "directx-graphics-samples-hello-triangle",
+        "metal-performance-testing-matmul",
+        "raylib-base-fragment",
+        "sascha-willems-vulkan-conservative-triangle",
+        "slang-hello-world-compute",
+        "vulkan-samples-dynamic-line-grid",
+    }
+    assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
+        "apple-modern-rendering-mesh-viewdir",
+        "directx-graphics-samples-hello-triangle",
+        "metal-performance-testing-matmul",
+        "raylib-base-fragment",
+        "sascha-willems-vulkan-conservative-triangle",
+        "slang-hello-world-compute",
+        "vulkan-samples-dynamic-line-grid",
+    }
+    assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {
+        "apple-modern-rendering-mesh-viewdir",
+        "directx-graphics-samples-hello-triangle",
+        "slang-hello-world-compute",
+        "vulkan-samples-dynamic-line-grid",
+    }
+
+
 def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):
     runner = _load_demo_runner()
     lf_text = tmp_path / "shader.glsl"

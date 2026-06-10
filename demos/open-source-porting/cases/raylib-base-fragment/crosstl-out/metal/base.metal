@@ -17,4 +17,3 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
     finalColor = texelColor * uniforms.colDiffuse * input.fragColor;
     return finalColor;
 }
-
