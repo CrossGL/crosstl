@@ -26,6 +26,7 @@ BACKEND_TEST_MATRIX_NAMES = {
 TRANSLATOR_TEST_MATRIX_NAMES = {
     **BACKEND_TEST_MATRIX_NAMES,
     "hip": "hip",
+    "webgl": "webgl",
 }
 
 
@@ -53,6 +54,15 @@ def _load_ci_coverage_module():
 def _catalog_backend_ids():
     catalog = json.loads((ROOT / "support" / "backends.json").read_text())
     return {backend["id"] for backend in catalog["backends"]}
+
+
+def _native_catalog_backend_ids():
+    catalog = json.loads((ROOT / "support" / "backends.json").read_text())
+    return {
+        backend["id"]
+        for backend in catalog["backends"]
+        if backend.get("source_kind", "native") == "native"
+    }
 
 
 def _parse_matrix_values(raw):
@@ -1654,7 +1664,7 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     backend_tests = workflows.get("backend-tests.yml", "")
     assert backend_tests, "backend-tests.yml must exist"
 
-    assert set(BACKEND_TEST_MATRIX_NAMES) == _catalog_backend_ids()
+    assert set(BACKEND_TEST_MATRIX_NAMES) == _native_catalog_backend_ids()
     assert _matrix_values(backend_tests, "backend") == set(
         BACKEND_TEST_MATRIX_NAMES.values()
     )
@@ -1814,7 +1824,7 @@ def test_examples_workflow_enforces_backend_outputs_and_platform_matrix():
     assert _matrix_values(examples, "python-version") == PYTHON_VERSIONS
     assert _matrix_values(examples, "os") == RUNNER_OSES
     _assert_windows_legacy_python_is_excluded(examples, os_key="os")
-    for backend in BACKEND_TEST_MATRIX_NAMES:
+    for backend in TRANSLATOR_TEST_MATRIX_NAMES:
         assert f'backend: "{backend}"' in examples
     assert "python test.py" in examples
     assert "backend-specific:" in examples

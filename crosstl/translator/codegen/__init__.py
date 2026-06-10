@@ -18,6 +18,7 @@ from .registry import (
 )
 from .rust_codegen import RustCodeGen
 from .SPIRV_codegen import VulkanSPIRVCodeGen
+from .webgl_codegen import WebGLCodeGen
 
 register_backend(
     BackendSpec(
@@ -91,6 +92,16 @@ register_backend(
         format_backend="vulkan",
     )
 )
+register_backend(
+    BackendSpec(
+        name="webgl",
+        codegen_class=WebGLCodeGen,
+        aliases=("webgl2", "essl", "glsl-es"),
+        file_extensions=(".webgl.glsl",),
+        format_backend="opengl",
+        has_source_frontend=False,
+    )
+)
 
 # Import slang_codegen only if available
 try:
@@ -120,6 +131,7 @@ __all__ = [
     "MojoCodeGen",
     "RustCodeGen",
     "VulkanSPIRVCodeGen",
+    "WebGLCodeGen",
     "get_backend",
     "get_codegen",
     "get_backend_extension",

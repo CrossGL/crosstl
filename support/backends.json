@@ -48,6 +48,25 @@
       ]
     },
     {
+      "id": "webgl",
+      "name": "WebGL / GLSL ES",
+      "source_kind": "target-only",
+      "aliases": ["webgl2", "essl", "glsl-es"],
+      "target_extension": ".webgl.glsl",
+      "translator_codegen": "crosstl/translator/codegen/webgl_codegen.py",
+      "tests": ["tests/test_translator/test_codegen/test_webgl_codegen.py"],
+      "docs": [
+        {
+          "name": "WebGL 2.0 specification",
+          "url": "https://registry.khronos.org/webgl/specs/latest/2.0/"
+        },
+        {
+          "name": "OpenGL ES Shading Language 3.00 specification",
+          "url": "https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf"
+        }
+      ]
+    },
+    {
       "id": "metal",
       "name": "Metal",
       "source_kind": "native",

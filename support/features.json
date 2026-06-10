@@ -68,6 +68,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -130,6 +137,13 @@
           "evidence": [
             "tests/test_backend/test_slang/test_parser.py::def test_"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -191,6 +205,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_backend/test_slang/test_lexer.py::def test_"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -297,6 +318,13 @@
             "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_error_directive_raises",
             "tests/test_backend/test_slang/test_preprocessor.py::def test_parser_uses_preprocessed_conditionals"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -383,6 +411,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_only_shader_emits_slang_entry_point"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -467,6 +502,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_output_assignments_rewrite_to_slang_return_semantics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -530,6 +572,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_emits_default_numthreads",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_compute_stage_uses_execution_layout_numthreads"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -614,6 +663,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stream_signature_and_method_validation",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -702,6 +758,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_mismatch_raises_diagnostic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_stage_attributes_raise",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -849,6 +912,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_signature_validates_roles_counts_and_topology",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dispatch_mesh_payload_argument_matches_mesh_payload_parameter",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1018,6 +1088,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_tracing_pipeline_if_available"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1107,6 +1184,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_entry_parameters_reject_non_mesh_stages"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1194,6 +1278,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1284,6 +1375,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1364,6 +1462,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_metadata_raises",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1454,6 +1559,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_metadata_raises"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -1615,6 +1727,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_glsl_buffer_array_declarations_lower_to_slang_resources",
             "tests/test_translator/test_codegen/test_generic_resource_codegen.py::def test_structured_buffer_parameters_preserve_element_type_for_core_backends"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1756,6 +1875,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffers_emit_slang_load_store_dimensions_and_bindings",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -1857,6 +1983,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_auto_resource_bindings_assign_ranges_and_skip_reserved_slots",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_conflicting_slang_resource_binding_ranges_raise"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2029,6 +2162,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_glsl_buffer_block_offsets_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2139,6 +2279,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2225,6 +2372,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_malformed_sampled_texture_ops_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2330,6 +2484,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs",
             "tests/test_backend/test_slang/test_external_fixtures.py::slang_hlsl_intrinsic_sample_cmp_bias"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2432,6 +2593,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_projected_texture_builtins_validate_target_result_types"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2524,6 +2692,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2615,6 +2790,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices",
             "tests/test_backend/test_slang/test_external_fixtures.py::slang_hlsl_intrinsic_sample_cmp_bias"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2717,6 +2899,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_unsupported_resource_query_combinations_emit_slang_diagnostics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_query_helpers_avoid_user_symbol_collisions"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -2822,6 +3011,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_control_flow_emit_slang_operations",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_calls_in_loops_emit_slang_operations"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -2913,6 +3109,13 @@
           "notes": "Covers multisample texture fetches, sample-count and size queries, valid sample index handling, and deterministic diagnostics for unsupported multisample sampling, LOD/query-LOD, gather, and compare forms.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_texture_multisample_backlog_fetch_queries_and_diagnostics"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3025,6 +3228,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_shadow_compare_builtins_emit_slang_compare_methods",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_texture_query_lod_emits_slang_lod_methods"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3125,6 +3335,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_arrays_preserve_expression_sizes",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_formatted_image_queries_emit_typed_slang_helpers"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3217,6 +3434,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_float_image_atomics_emit_slang_diagnostic_stubs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3306,6 +3530,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_multisample_storage_backlog_load_store_queries_and_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3372,6 +3603,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_struct"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3437,6 +3675,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_array_access_and_ternary_expressions_emit_slang_syntax"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3515,6 +3760,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_local_functions_and_initialized_variables_emit",
             "tests/test_examples_contract.py::def test_generic_function_examples_report_backend_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3580,6 +3832,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_if_else_control_flow_emits_slang_blocks"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3683,6 +3942,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_workgroup_barrier_lowers_to_slang_group_sync",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_synchronization_intrinsics_lower_to_slang_barriers"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -3796,6 +4062,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsics_compile_with_slangc_if_available",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics"
           ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3897,6 +4170,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_match_payload_enum_patterns_lower_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_generic_enum_match_expression_lowers_for_slang"
           ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -3981,6 +4261,13 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_matrix_and_non_float_vector_types_emit_slang_names"
           ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ]
         }
       }
     },
@@ -4049,6 +4336,13 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_bitwise_operators_emit_slang_syntax"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }
@@ -4197,6 +4491,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_validate_target_result_types",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
           ]
         }
       }

@@ -130,6 +130,12 @@ jobs:
           - {
               category: "graphics",
               example: "SimpleShader",
+              backend: "webgl",
+              extension: ".webgl.glsl",
+            }
+          - {
+              category: "graphics",
+              example: "SimpleShader",
               backend: "vulkan",
               extension: ".spvasm",
             }
@@ -182,6 +188,12 @@ jobs:
               example: "PerlinNoise",
               backend: "opengl",
               extension: ".glsl",
+            }
+          - {
+              category: "graphics",
+              example: "PerlinNoise",
+              backend: "webgl",
+              extension: ".webgl.glsl",
             }
           - {
               category: "graphics",
