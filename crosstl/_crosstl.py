@@ -1286,6 +1286,159 @@ def _run_plan_runtime_adapters(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_loader_manifest(payload):
+    lines = [f"Runtime loader manifest: {payload.get('sourcePackage')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Loader schema version"),
+        _format_payload_kind(payload, "Loader kind"),
+        _format_payload_generated_at(payload, "Loader generated at"),
+        _format_payload_hash(payload, "sourcePackageHash", "Source package hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    package_root = payload.get("packageRoot")
+    if isinstance(package_root, str) and package_root:
+        lines.append(f"Package root: {package_root}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Loader scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Loader non-goals: {', '.join(non_goal_labels)}")
+
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+    ):
+        if project_line:
+            lines.append(project_line)
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('loadUnitCount', 0)} load units, "
+            f"{summary.get('readyLoadUnitCount', 0)} ready, "
+            f"{summary.get('blockedLoadUnitCount', 0)} blocked, "
+            f"{summary.get('runtimeReferenceCount', 0)} runtime references"
+        )
+
+    adapter_plan = payload.get("adapterPlan")
+    if isinstance(adapter_plan, Mapping):
+        status = "ok" if adapter_plan.get("success") else "failed"
+        lines.append(
+            "Adapter plan: "
+            f"{status}, "
+            f"{adapter_plan.get('adapterCount', 0)} adapters, "
+            f"{adapter_plan.get('actionCount', 0)} actions"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime loader targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            required_tools = target.get("requiredTools")
+            tool_suffix = ""
+            if isinstance(required_tools, list):
+                tools = [tool for tool in required_tools if isinstance(tool, str)]
+                if tools:
+                    tool_suffix = f"; tools: {', '.join(tools)}"
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('adapterKind', 'target-source-adapter')}, "
+                f"{target.get('readyLoadUnitCount', 0)} ready, "
+                f"{target.get('blockedLoadUnitCount', 0)} blocked"
+                f"{tool_suffix}"
+            )
+
+    load_units = payload.get("loadUnits", [])
+    if load_units:
+        lines.append("Runtime loader units:")
+        for load_unit in load_units:
+            if not isinstance(load_unit, Mapping):
+                continue
+            details = []
+            host_interface = load_unit.get("hostInterface")
+            if isinstance(host_interface, Mapping):
+                details.append(
+                    f"interface: {host_interface.get('status', 'not-inspected')}"
+                )
+            blockers = load_unit.get("blockers")
+            if isinstance(blockers, list) and blockers:
+                details.append(f"blockers: {len(blockers)}")
+            load_steps = load_unit.get("loadSteps")
+            if isinstance(load_steps, list):
+                details.append(f"steps: {len(load_steps)}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{load_unit.get('target', 'unknown')}: "
+                f"{load_unit.get('packagePath') or '<missing package path>'} "
+                f"via {load_unit.get('adapterKind', 'target-source-adapter')}"
+                f"{suffix}"
+            )
+
+    actions = payload.get("actions", [])
+    if actions:
+        lines.append("Runtime loader actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            details = []
+            severity = action.get("severity")
+            if isinstance(severity, str) and severity:
+                details.append(f"severity: {severity}")
+            target = action.get("target")
+            if isinstance(target, str) and target:
+                details.append(f"target: {target}")
+            package_path = action.get("packagePath")
+            if isinstance(package_path, str) and package_path:
+                details.append(f"package path: {package_path}")
+            suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{action.get('kind', 'unknown')}{suffix}: "
+                f"{action.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_runtime_loader_manifest(args):
+    from .project import build_runtime_loader_manifest
+
+    payload = build_runtime_loader_manifest(args.package_manifest)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime loader manifest"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_loader_manifest(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -4913,6 +5066,24 @@ def _build_parser():
     )
     runtime_adapter_parser.set_defaults(func=_run_plan_runtime_adapters)
 
+    runtime_loader_parser = subparsers.add_parser(
+        "runtime-loader-manifest",
+        help="Build a runtime loader manifest from a runtime package manifest",
+    )
+    runtime_loader_parser.add_argument(
+        "package_manifest", help="Runtime package manifest JSON"
+    )
+    runtime_loader_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Runtime loader manifest output format",
+    )
+    runtime_loader_parser.add_argument(
+        "--output", "-o", help="Write runtime loader manifest; use '-' for stdout"
+    )
+    runtime_loader_parser.set_defaults(func=_run_runtime_loader_manifest)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -4945,6 +5116,7 @@ def _use_legacy_cli(argv):
         "inspect-runtime-package",
         "plan-host-bindings",
         "plan-runtime-adapters",
+        "runtime-loader-manifest",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:

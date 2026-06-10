@@ -20,6 +20,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
+    build_runtime_loader_manifest,
     build_runtime_package,
     inspect_project_report,
     inspect_runtime_package,
@@ -161,6 +162,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectScan",
         "ProjectTranslationUnit",
         "build_runtime_artifact_manifest",
+        "build_runtime_loader_manifest",
         "build_runtime_package",
         "inspect_runtime_package",
         "inspect_project_report",
@@ -10029,7 +10031,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
 
     def run_toolchain(command, **kwargs):
         commands.append((command, kwargs))
-        assert command == ["glslangValidator", "--stdin", "-S", "comp"]
+        assert command == ["glslangValidator", "--stdin", "-S", "vert"]
         assert kwargs["cwd"] == str(repo)
         assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
         assert kwargs["input"]
@@ -10078,7 +10080,7 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
             "sourceBackend": "cgl",
             "target": "opengl",
             "path": "out/opengl/simple.glsl",
-            "command": ["glslangValidator", "--stdin", "-S", "comp"],
+            "command": ["glslangValidator", "--stdin", "-S", "vert"],
             "checkKind": "artifact",
             "returncode": 0,
             "status": "ok",
@@ -10165,6 +10167,90 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], vertex_shader
     ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], fragment_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_uses_generated_stage_comment(tmp_path):
+    vertex_shader = tmp_path / "generated.glsl"
+    vertex_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "layout(location = 0) in vec3 position;",
+                "out vec3 out_position;",
+                "// Vertex Shader",
+                "void main() {",
+                "  out_position = position;",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        vertex_shader,
+        artifact={"source": "AAPLMeshRenderer.metal", "sourceBackend": "metal"},
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+
+    guarded_shader = tmp_path / "guarded.glsl"
+    guarded_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() {",
+                "  fragColor = vec4(1.0);",
+                "}",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], guarded_shader
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_uses_global_stage_io_direction(tmp_path):
+    vertex_shader = tmp_path / "stage_io.glsl"
+    vertex_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "layout(location = 0) in vec3 position;",
+                "out vec3 out_position;",
+                "void main() {",
+                "  out_position = position;",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl", ["glslangValidator"], vertex_shader
+    ) == (["glslangValidator", "--stdin", "-S", "vert"], "artifact")
+
+    fragment_shader = tmp_path / "fragment_output_only.glsl"
+    fragment_shader.write_text(
+        "\n".join(
+            [
+                "#version 450 core",
+                "out vec4 fragColor;",
+                "void main() {",
+                "  fragColor = vec4(1.0);",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], fragment_shader
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
@@ -24395,6 +24481,171 @@ def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_ADAPTER_PLAN_KIND
     assert payload["summary"]["adapterCount"] == 1
     assert payload["adapters"][0]["adapterKind"] == "crossgl-source-adapter"
+
+
+def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+
+    assert set(payload) == project_pipeline.RUNTIME_LOADER_MANIFEST_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_LOADER_MANIFEST_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_LOADER_MANIFEST_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_LOADER_MANIFEST_NON_GOALS
+    )
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "loadUnitCount": 1,
+        "readyLoadUnitCount": 1,
+        "blockedLoadUnitCount": 0,
+        "actionCount": 2,
+        "runtimeReferenceCount": 1,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_LOADER_MANIFEST_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["adapterKind"] == "crossgl-source-adapter"
+    assert payload["targets"][0]["readyLoadUnitCount"] == 1
+    assert payload["targets"][0]["blockedLoadUnitCount"] == 0
+    assert payload["targets"][0]["packagePaths"] == ["artifacts/out/cgl/simple.cgl"]
+    assert len(payload["loadUnits"]) == 1
+    load_unit = payload["loadUnits"][0]
+    assert set(load_unit) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS
+    assert load_unit["target"] == "cgl"
+    assert load_unit["adapterKind"] == "crossgl-source-adapter"
+    assert load_unit["artifactFormat"] == "CrossGL source"
+    assert load_unit["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert load_unit["hostInterface"]["status"] == "ready"
+    assert load_unit["blockers"] == []
+    assert load_unit["validation"]["loadReady"] is True
+    assert load_unit["validation"]["hostInterface"] == "ready"
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "load-source-remap",
+        "bind-host-interface",
+    ]
+    for load_step in load_unit["loadSteps"]:
+        assert (
+            set(load_step) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS
+        )
+    assert payload["adapterPlan"] == {
+        "kind": project_pipeline.RUNTIME_ADAPTER_PLAN_KIND,
+        "success": True,
+        "adapterCount": 1,
+        "actionCount": 2,
+    }
+    assert payload["packageInspection"] == {
+        "kind": project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": True,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+    }
+
+
+def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "loadUnitCount": 1,
+        "readyLoadUnitCount": 0,
+        "blockedLoadUnitCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["target"] == "vulkan"
+    assert payload["targets"][0]["adapterKind"] == "vulkan-shader-adapter"
+    assert payload["targets"][0]["readyLoadUnitCount"] == 0
+    assert payload["targets"][0]["blockedLoadUnitCount"] == 1
+    load_unit = payload["loadUnits"][0]
+    assert load_unit["target"] == "vulkan"
+    assert load_unit["hostInterface"]["status"] == "unavailable"
+    assert load_unit["validation"]["loadReady"] is False
+    assert load_unit["validation"]["hostInterface"] == "unavailable"
+    assert [step["kind"] for step in load_unit["loadSteps"]] == [
+        "load-package-artifact",
+        "validate-target-toolchain",
+    ]
+    assert len(load_unit["blockers"]) == 1
+    assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
+    assert load_unit["blockers"][0]["severity"] == "warning"
+    assert "host-interface-empty" in load_unit["blockers"][0]["message"]
+
+
+def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("vulkan",))
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-loader-manifest",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime loader manifest: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Loader scope: runtime-loader-metadata-contract" in result.stdout
+    assert (
+        "Loader non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 load units, 0 ready, 1 blocked" in result.stdout
+    assert "Adapter plan: ok, 1 adapters, 3 actions" in result.stdout
+    assert "- vulkan: vulkan-shader-adapter, 0 ready, 1 blocked" in result.stdout
+    assert "Runtime loader units:" in result.stdout
+    assert "via vulkan-shader-adapter [interface: unavailable; blockers: 1" in (
+        result.stdout
+    )
+    assert "Runtime loader actions:" in result.stdout
+    assert "resolve-host-interface-metadata" in result.stdout
+
+
+def test_project_cli_runtime_loader_manifest_json_writes_output(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    output_path = package_dir / "runtime-loader-manifest.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "runtime-loader-manifest",
+            str(package_dir / "runtime-package.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_LOADER_MANIFEST_KIND
+    assert payload["summary"]["loadUnitCount"] == 1
+    assert payload["loadUnits"][0]["validation"]["loadReady"] is True
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
