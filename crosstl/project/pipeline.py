@@ -179,6 +179,10 @@ REPORT_MIGRATION_FIELDS = frozenset(
         "actionsByKind",
         "actionsBySeverity",
         "actionsByTarget",
+        "runtimeReferenceCount",
+        "runtimeReferencesByBackend",
+        "runtimeReferencesByKind",
+        "runtimeReferencesByPath",
         "actions",
     )
 )
@@ -633,6 +637,7 @@ EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_DEPENDENCY_INSPECTION_SAMPLE_LIMIT = 20
 INCLUDE_PATH_PROCESSING_INSPECTION_SAMPLE_LIMIT = 20
 MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT = 20
+RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT = 20
 SKIPPED_SOURCE_INSPECTION_SAMPLE_LIMIT = 20
 SOURCE_MAP_INSPECTION_SAMPLE_LIMIT = 20
 VALIDATION_INSPECTION_SAMPLE_LIMIT = 20
@@ -2180,12 +2185,59 @@ def _migration_action_counts_by_target(actions: Sequence[Any]) -> dict[str, int]
     return dict(sorted(counts.items()))
 
 
+def _migration_runtime_references(actions: Sequence[Any]) -> list[Mapping[str, Any]]:
+    references: list[Mapping[str, Any]] = []
+    for action in actions:
+        if not isinstance(action, Mapping):
+            continue
+        action_references = action.get("runtimeReferences")
+        if not isinstance(action_references, list):
+            continue
+        references.extend(
+            reference
+            for reference in action_references
+            if isinstance(reference, Mapping)
+        )
+    return references
+
+
+def _migration_runtime_reference_counts_by_field(
+    references: Sequence[Mapping[str, Any]], field_name: str
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for reference in references:
+        value = reference.get(field_name)
+        if not _is_non_empty_string(value):
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _migration_runtime_reference_rollups(
+    actions: Sequence[Any],
+) -> dict[str, Any]:
+    references = _migration_runtime_references(actions)
+    return {
+        "runtimeReferenceCount": len(references),
+        "runtimeReferencesByBackend": _migration_runtime_reference_counts_by_field(
+            references, "backend"
+        ),
+        "runtimeReferencesByKind": _migration_runtime_reference_counts_by_field(
+            references, "kind"
+        ),
+        "runtimeReferencesByPath": _migration_runtime_reference_counts_by_field(
+            references, "path"
+        ),
+    }
+
+
 def _migration_action_rollups(actions: Sequence[Any]) -> dict[str, Any]:
     return {
         "actionCount": len(actions),
         "actionsByKind": _migration_action_counts_by_kind(actions),
         "actionsBySeverity": _migration_action_counts_by_severity(actions),
         "actionsByTarget": _migration_action_counts_by_target(actions),
+        **_migration_runtime_reference_rollups(actions),
     }
 
 
@@ -6499,11 +6551,6 @@ def _inspection_migration_action(action: Any) -> dict[str, Any] | None:
     runtime_references = action.get("runtimeReferences")
     if isinstance(runtime_references, list):
         payload["runtimeReferenceCount"] = len(runtime_references)
-        payload["runtimeReferences"] = [
-            dict(reference)
-            for reference in runtime_references
-            if isinstance(reference, Mapping)
-        ]
     return payload
 
 
@@ -6515,6 +6562,12 @@ def _empty_inspection_migration_summary() -> dict[str, Any]:
         "actionsByKind": {},
         "actionsBySeverity": {},
         "actionsByTarget": {},
+        "runtimeReferenceCount": 0,
+        "runtimeReferencesByBackend": {},
+        "runtimeReferencesByKind": {},
+        "runtimeReferencesByPath": {},
+        "truncatedRuntimeReferenceCount": 0,
+        "runtimeReferences": [],
         "truncatedActionCount": 0,
         "actions": [],
     }
@@ -6540,6 +6593,7 @@ def inspect_project_report(
     max_validation_artifacts: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_toolchain_runs: int = VALIDATION_INSPECTION_SAMPLE_LIMIT,
     max_migration_actions: int = MIGRATION_ACTION_INSPECTION_SAMPLE_LIMIT,
+    max_runtime_references: int = RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT,
     max_external_corpus_entries: int = EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     """Build a concise inspection summary for a project portability report."""
@@ -6584,6 +6638,9 @@ def inspect_project_report(
     )
     migration_action_limit = _inspection_limit_arg(
         max_migration_actions, field_name="max_migration_actions"
+    )
+    runtime_reference_limit = _inspection_limit_arg(
+        max_runtime_references, field_name="max_runtime_references"
     )
     external_corpus_entry_limit = _inspection_limit_arg(
         max_external_corpus_entries, field_name="max_external_corpus_entries"
@@ -6919,6 +6976,10 @@ def inspect_project_report(
             for action in actions
             if (sample := _inspection_migration_action(action)) is not None
         ]
+        runtime_reference_rollups = _migration_runtime_reference_rollups(actions)
+        runtime_references = [
+            dict(reference) for reference in _migration_runtime_references(actions)
+        ]
         payload["migration"] = {
             "scope": migration.get("scope"),
             "nonGoals": (
@@ -6946,6 +7007,31 @@ def inspect_project_report(
                 if isinstance(migration.get("actionsByTarget"), Mapping)
                 else _migration_action_counts_by_target(actions)
             ),
+            "runtimeReferenceCount": (
+                migration.get("runtimeReferenceCount")
+                if _is_non_negative_int(migration.get("runtimeReferenceCount"))
+                else runtime_reference_rollups["runtimeReferenceCount"]
+            ),
+            "runtimeReferencesByBackend": (
+                dict(migration.get("runtimeReferencesByBackend", {}))
+                if isinstance(migration.get("runtimeReferencesByBackend"), Mapping)
+                else runtime_reference_rollups["runtimeReferencesByBackend"]
+            ),
+            "runtimeReferencesByKind": (
+                dict(migration.get("runtimeReferencesByKind", {}))
+                if isinstance(migration.get("runtimeReferencesByKind"), Mapping)
+                else runtime_reference_rollups["runtimeReferencesByKind"]
+            ),
+            "runtimeReferencesByPath": (
+                dict(migration.get("runtimeReferencesByPath", {}))
+                if isinstance(migration.get("runtimeReferencesByPath"), Mapping)
+                else runtime_reference_rollups["runtimeReferencesByPath"]
+            ),
+            "truncatedRuntimeReferenceCount": max(
+                0,
+                len(runtime_references) - runtime_reference_limit,
+            ),
+            "runtimeReferences": runtime_references[:runtime_reference_limit],
             "truncatedActionCount": max(
                 0,
                 len(action_samples) - migration_action_limit,
@@ -13169,7 +13255,22 @@ def _migration_contract_reasons(
                 "migration.actions",
             )
         )
-        for field_name in ("actionsByKind", "actionsBySeverity", "actionsByTarget"):
+        reasons.extend(
+            _count_field_contract_reasons(
+                "migration.runtimeReferenceCount",
+                migration.get("runtimeReferenceCount"),
+                rollups["runtimeReferenceCount"],
+                "migration.actions.runtimeReferences",
+            )
+        )
+        for field_name in (
+            "actionsByKind",
+            "actionsBySeverity",
+            "actionsByTarget",
+            "runtimeReferencesByBackend",
+            "runtimeReferencesByKind",
+            "runtimeReferencesByPath",
+        ):
             reasons.extend(
                 _mapping_field_contract_reasons(
                     f"migration.{field_name}",

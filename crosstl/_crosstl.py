@@ -3619,9 +3619,62 @@ def _format_project_report_inspection(payload):
                 ),
                 include_zero=False,
             ),
+            _format_count_rollup(
+                "Runtime references by backend",
+                (
+                    migration.get("runtimeReferencesByBackend")
+                    if isinstance(migration, Mapping)
+                    else {}
+                ),
+                include_zero=False,
+            ),
+            _format_count_rollup(
+                "Runtime references by kind",
+                (
+                    migration.get("runtimeReferencesByKind")
+                    if isinstance(migration, Mapping)
+                    else {}
+                ),
+                include_zero=False,
+            ),
+            _format_count_rollup(
+                "Runtime references by path",
+                (
+                    migration.get("runtimeReferencesByPath")
+                    if isinstance(migration, Mapping)
+                    else {}
+                ),
+                include_zero=False,
+            ),
         ):
             if line:
                 lines.append(line)
+        runtime_references = (
+            migration.get("runtimeReferences", [])
+            if isinstance(migration, Mapping)
+            else []
+        )
+        if runtime_references:
+            lines.append("Runtime references:")
+            for reference in runtime_references:
+                if not isinstance(reference, Mapping):
+                    continue
+                path = reference.get("path", "unknown")
+                line = reference.get("line", "?")
+                column = reference.get("column", "?")
+                backend = reference.get("backend", "unknown")
+                kind = reference.get("kind", "unknown")
+                symbol = reference.get("symbol", "")
+                lines.append(f"- {path}:{line}:{column} [{backend}/{kind}]: {symbol}")
+            truncated_runtime_references = migration.get(
+                "truncatedRuntimeReferenceCount", 0
+            )
+            if (
+                isinstance(truncated_runtime_references, int)
+                and not isinstance(truncated_runtime_references, bool)
+                and truncated_runtime_references > 0
+            ):
+                lines.append(f"- +{truncated_runtime_references} more")
         lines.append("Migration actions:")
         for action in actions:
             if not isinstance(action, Mapping):
@@ -3635,6 +3688,13 @@ def _format_project_report_inspection(payload):
                 target_names = [target for target in targets if isinstance(target, str)]
                 if target_names:
                     details.append(f"targets: {', '.join(target_names)}")
+            runtime_reference_count = action.get("runtimeReferenceCount")
+            if (
+                isinstance(runtime_reference_count, int)
+                and not isinstance(runtime_reference_count, bool)
+                and runtime_reference_count > 0
+            ):
+                details.append(f"runtime references: {runtime_reference_count}")
             detail_suffix = f" [{'; '.join(details)}]" if details else ""
             lines.append(
                 "- "
@@ -3671,6 +3731,7 @@ def _run_inspect_report(args):
         max_validation_artifacts=args.max_validation_artifacts,
         max_toolchain_runs=args.max_toolchain_runs,
         max_migration_actions=args.max_migration_actions,
+        max_runtime_references=args.max_runtime_references,
         max_external_corpus_entries=args.max_external_corpus_entries,
     )
     if args.format == "sarif":
@@ -3894,6 +3955,12 @@ def _build_parser():
         type=_non_negative_int,
         default=20,
         help="Maximum migration action samples to include in the inspection summary",
+    )
+    inspect_parser.add_argument(
+        "--max-runtime-references",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum runtime reference samples to include in the inspection summary",
     )
     inspect_parser.add_argument(
         "--max-external-corpus-entries",

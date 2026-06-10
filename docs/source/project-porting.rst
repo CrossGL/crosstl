@@ -285,6 +285,7 @@ Inspect an existing report as a concise JSON, text, or SARIF summary:
      --max-validation-artifacts 20 \
      --max-toolchain-runs 20 \
      --max-migration-actions 20 \
+     --max-runtime-references 20 \
      --max-external-corpus-entries 20
 
 Report inspection includes inspection identity, SARIF invocation metadata, and
@@ -293,7 +294,8 @@ source report generation metadata,
 validation status,
 invalid/unavailable report status, project counts, project configuration path,
 project root, output directory, configuration counts, normalized source-root,
-include-pattern, exclude-pattern, and include-directory lists, failed artifacts
+include-pattern, exclude-pattern, and include-directory lists, runtime-reference
+rollups and bounded runtime-reference samples, failed artifacts
 with variant labels when present, diagnostic code and missing-capability rollups,
 validation diagnostic-code, missing-capability, artifact target,
 artifact source-backend, artifact variant, hash-status, source-map status,
@@ -784,7 +786,10 @@ Project reports are JSON documents with:
   build script, and backend integration review. Runtime actions can include
   ``runtimeReferences`` entries for detected host or build files, with
   repository-relative path, line, column, backend, kind, and symbol metadata.
-  These references are evidence for follow-up integration work; they are not
-  host-code rewrites. Reports with unresolved system include dependencies also
-  emit ``manual-include-resolution`` actions so target SDK or toolchain header
-  assumptions remain visible without claiming automatic header rewriting.
+  Reports also include runtime-reference count, backend, kind, and path rollups
+  so inspection tools can summarize host integration evidence without parsing
+  each action. These references are evidence for follow-up integration work;
+  they are not host-code rewrites. Reports with unresolved system include
+  dependencies also emit ``manual-include-resolution`` actions so target SDK or
+  toolchain header assumptions remain visible without claiming automatic header
+  rewriting.

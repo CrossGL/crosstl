@@ -517,12 +517,14 @@ def test_project_report_inspection_documents_rollups():
         assert (
             "source-map, source-remap, provenance, define-processing, "
             "include-path-processing, include-dependency, validation artifact, "
-            "validation toolchain-run, and skipped-source samples with custom limits"
+            "validation toolchain-run, runtime-reference, and skipped-source "
+            "samples with custom limits"
         ) in backend_support["notes"]
         assert (
             "migration scope and non-goal text output, action count and kind, "
-            "severity, and target rollups, bounded migration action samples with "
-            "custom limits, target lists, and truncation metadata"
+            "severity, target, and runtime-reference rollups, bounded migration "
+            "action and runtime-reference samples with custom limits, target "
+            "lists, and truncation metadata"
         ) in backend_support["notes"]
         assert "does not derive artifact-matrix gaps for scan-only reports" in (
             backend_support["notes"]
@@ -548,12 +550,20 @@ def test_project_migration_actions_are_first_class_support_feature():
         assert "action targets without translated artifacts" in (
             backend_support["notes"]
         )
-        assert "action count and kind, severity, and target rollups" in (
-            backend_support["notes"]
+        assert (
+            "action count and kind, severity, target, and runtime-reference rollups"
+            in (backend_support["notes"])
         )
         assert (
             "bounded inspection samples with target lists and truncation metadata"
             in (backend_support["notes"])
+        )
+        assert "runtime-reference count, backend, kind, and path rollups" in (
+            backend_support["notes"]
+        )
+        assert "bounded runtime-reference samples" in backend_support["notes"]
+        assert "runtime-reference rollups and samples in CLI inspection text" in (
+            backend_support["notes"]
         )
         assert "missing or altered action rollups" in backend_support["notes"]
         assert "shader/kernel source translation from host runtime APIs" in (
@@ -580,6 +590,10 @@ def test_project_migration_actions_are_first_class_support_feature():
             "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_inspect_report_text_reports_truncated_migration_"
             "actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_inspect_project_report_applies_custom_sample_limits"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
@@ -1708,9 +1722,9 @@ def test_project_validation_hooks_document_migration_contract_checks():
     for backend_support in feature["support"].values():
         assert (
             "migration scope, non-goals, required action count and kind, "
-            "severity, and target rollups, non-empty action targets, "
-            "translated artifact target references, and canonical target "
-            "declarations"
+            "severity, target, and runtime-reference rollups, non-empty action "
+            "targets, translated artifact target references, and canonical "
+            "target declarations"
         ) in backend_support["notes"]
         assert "unit source hash checks" in backend_support["notes"]
         assert "canonical source backend declarations" in backend_support["notes"]

@@ -1341,6 +1341,10 @@ def test_scan_report_records_runtime_reference_evidence(tmp_path):
 
     payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
 
+    assert payload["migration"]["runtimeReferenceCount"] == 1
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"cuda": 1}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 1}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"host.cpp": 1}
     assert payload["migration"]["actions"][0]["runtimeReferences"] == [
         {
             "path": "host.cpp",
@@ -1367,6 +1371,10 @@ def test_scan_report_records_build_system_runtime_reference(tmp_path):
 
     payload = scan_project(repo).to_report(targets=["opengl"]).to_json()
 
+    assert payload["migration"]["runtimeReferenceCount"] == 1
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"vulkan": 1}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"build-system": 1}
+    assert payload["migration"]["runtimeReferencesByPath"] == {"CMakeLists.txt": 1}
     assert payload["migration"]["actions"][0]["runtimeReferences"] == [
         {
             "path": "CMakeLists.txt",
@@ -1424,6 +1432,10 @@ def test_validate_project_report_rejects_missing_migration_rollups(tmp_path):
     payload["migration"].pop("actionsByKind")
     payload["migration"].pop("actionsBySeverity")
     payload["migration"].pop("actionsByTarget")
+    payload["migration"].pop("runtimeReferenceCount")
+    payload["migration"].pop("runtimeReferencesByBackend")
+    payload["migration"].pop("runtimeReferencesByKind")
+    payload["migration"].pop("runtimeReferencesByPath")
     report_path = repo / "missing-migration-rollups-report.json"
     report_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -1438,6 +1450,18 @@ def test_validate_project_report_rejects_missing_migration_rollups(tmp_path):
     assert "migration.actionsByKind must be an object" in diagnostic["message"]
     assert "migration.actionsBySeverity must be an object" in diagnostic["message"]
     assert "migration.actionsByTarget must be an object" in diagnostic["message"]
+    assert "migration.runtimeReferenceCount must be a non-negative integer" in (
+        diagnostic["message"]
+    )
+    assert "migration.runtimeReferencesByBackend must be an object" in (
+        diagnostic["message"]
+    )
+    assert (
+        "migration.runtimeReferencesByKind must be an object" in diagnostic["message"]
+    )
+    assert (
+        "migration.runtimeReferencesByPath must be an object" in diagnostic["message"]
+    )
 
 
 def test_scan_report_records_unsupported_targets(tmp_path):
@@ -20823,6 +20847,12 @@ def test_project_cli_inspect_report_text_marks_invalid_reports(tmp_path):
         "actionsByKind": {},
         "actionsBySeverity": {},
         "actionsByTarget": {},
+        "runtimeReferenceCount": 0,
+        "runtimeReferencesByBackend": {},
+        "runtimeReferencesByKind": {},
+        "runtimeReferencesByPath": {},
+        "truncatedRuntimeReferenceCount": 0,
+        "runtimeReferences": [],
         "truncatedActionCount": 0,
         "actions": [],
     }
@@ -21271,6 +21301,12 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
     assert payload["migration"]["actionsByKind"] == {"manual-runtime-integration": 1}
     assert payload["migration"]["actionsBySeverity"] == {"note": 1}
     assert payload["migration"]["actionsByTarget"] == {"cgl": 1}
+    assert payload["migration"]["runtimeReferenceCount"] == 0
+    assert payload["migration"]["runtimeReferencesByBackend"] == {}
+    assert payload["migration"]["runtimeReferencesByKind"] == {}
+    assert payload["migration"]["runtimeReferencesByPath"] == {}
+    assert payload["migration"]["truncatedRuntimeReferenceCount"] == 0
+    assert payload["migration"]["runtimeReferences"] == []
     assert payload["migration"]["truncatedActionCount"] == 0
     assert payload["migration"]["actions"] == [
         {
@@ -21282,7 +21318,6 @@ def test_inspect_project_report_summarizes_generated_report(tmp_path):
                 "and backend framework integration separately."
             ),
             "targets": ["cgl"],
-            "runtimeReferences": [],
             "runtimeReferenceCount": 0,
         }
     ]
@@ -21527,6 +21562,16 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
             "severity": "note",
             "message": f"Review host integration task {index}.",
             "targets": ["cgl"],
+            "runtimeReferences": [
+                {
+                    "path": f"host-{index}.cpp",
+                    "line": index + 1,
+                    "column": 1,
+                    "backend": "cuda",
+                    "kind": "runtime-api",
+                    "symbol": "cudaMalloc",
+                }
+            ],
         }
         for index in range(5)
     ]
@@ -21565,6 +21610,7 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
         max_validation_artifacts=2,
         max_toolchain_runs=3,
         max_migration_actions=4,
+        max_runtime_references=3,
     )
 
     assert payload["sourceMaps"]["sourceMapArtifactCount"] == 4
@@ -21597,6 +21643,13 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
     assert payload["migration"]["actionCount"] == 5
     assert payload["migration"]["truncatedActionCount"] == 1
     assert len(payload["migration"]["actions"]) == 4
+    assert payload["migration"]["actions"][0]["runtimeReferenceCount"] == 1
+    assert "runtimeReferences" not in payload["migration"]["actions"][0]
+    assert payload["migration"]["runtimeReferenceCount"] == 5
+    assert payload["migration"]["runtimeReferencesByBackend"] == {"cuda": 5}
+    assert payload["migration"]["runtimeReferencesByKind"] == {"runtime-api": 5}
+    assert payload["migration"]["truncatedRuntimeReferenceCount"] == 2
+    assert len(payload["migration"]["runtimeReferences"]) == 3
 
 
 @pytest.mark.parametrize(
@@ -21614,6 +21667,7 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
         "max_validation_artifacts",
         "max_toolchain_runs",
         "max_migration_actions",
+        "max_runtime_references",
         "max_external_corpus_entries",
     ),
 )
@@ -21998,6 +22052,10 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
     report = translate_project(repo, targets=["cgl"], output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
@@ -22027,10 +22085,16 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
     assert "Migration actions by kind: manual-runtime-integration=1" in result.stdout
     assert "Migration actions by severity: note=1" in result.stdout
     assert "Migration actions by target: cgl=1" in result.stdout
+    assert "Runtime references by backend: cuda=1" in result.stdout
+    assert "Runtime references by kind: runtime-api=1" in result.stdout
+    assert "Runtime references by path: host.cpp=1" in result.stdout
+    assert "Runtime references:" in result.stdout
+    assert "- host.cpp:1:14 [cuda/runtime-api]: cudaLaunchKernel" in result.stdout
     assert "Migration actions:" in result.stdout
-    assert "- manual-runtime-integration [severity: note; targets: cgl]:" in (
-        result.stdout
-    )
+    assert (
+        "- manual-runtime-integration "
+        "[severity: note; targets: cgl; runtime references: 1]:"
+    ) in result.stdout
     assert "CrossTL translated shader/kernel source artifacts only" in result.stdout
     assert (
         "review host runtime API calls, resource binding setup, build scripts, "
@@ -23856,6 +23920,7 @@ def test_project_cli_inspect_report_text_reports_truncated_sections(tmp_path):
         "--max-validation-artifacts",
         "--max-toolchain-runs",
         "--max-migration-actions",
+        "--max-runtime-references",
         "--max-external-corpus-entries",
     ),
 )
