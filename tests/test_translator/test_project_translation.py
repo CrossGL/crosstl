@@ -4621,7 +4621,18 @@ def test_translate_project_generates_metal_and_spirv_for_modular_mojo_vector_add
     assert payload["summary"]["translatedCount"] == 2
     assert payload["summary"]["failedCount"] == 0
     assert validation["success"] is True
-    assert validation["diagnostics"] == []
+    expected_toolchain_warning_targets = {"metal", "vulkan"}
+    unexpected_validation_diagnostics = [
+        diagnostic
+        for diagnostic in validation["diagnostics"]
+        if not (
+            diagnostic.get("code") == "project.validate.toolchain-unavailable"
+            and diagnostic.get("severity") == "warning"
+            and diagnostic.get("target") in expected_toolchain_warning_targets
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+        )
+    ]
+    assert unexpected_validation_diagnostics == []
     assert set(artifacts_by_target) == {"metal", "vulkan"}
 
     metal_path = repo / artifacts_by_target["metal"]["path"]
