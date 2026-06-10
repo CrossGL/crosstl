@@ -96,6 +96,16 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/raysan5/raylib/blob/94897c4eca842673bad16ab03ad776a0a2255b14/LICENSE
 
+## Rust-GPU/VulkanShaderExamples
+
+- Repository: https://github.com/Rust-GPU/VulkanShaderExamples
+- Commit: `b29a37eb46802b5ea6882af4808d6887fc184581`
+- Source path:
+  `shaders/rust/conservativeraster/triangleoverlay/src/lib.rs`
+- License: MIT
+- License URL:
+  https://github.com/Rust-GPU/VulkanShaderExamples/blob/b29a37eb46802b5ea6882af4808d6887fc184581/LICENSE.md
+
 ## SaschaWillems/Vulkan
 
 - Repository: https://github.com/SaschaWillems/Vulkan

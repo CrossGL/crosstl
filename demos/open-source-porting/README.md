@@ -52,19 +52,20 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. OpenGL binding qualifier/version alignment is tracked in issue #765. |
 | `raylib-base-vertex` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base vertex shader unchanged. |
 | `raylib-lighting-shader-pair` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream lighting vertex and fragment shaders unchanged. |
+| `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, Metal, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. DirectX semantic lowering remains outside this checked target subset. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. OpenGL builtin interface lowering is tracked in issue #779. |
 
 ## Source adjustments
 
-The DirectX, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK, SPIRV-Tools,
-raylib, SaschaWillems triangle, and Slang cases keep upstream source files
-unchanged apart from repository formatting checks. The Vulkan Samples and Apple
-cases are reduced source slices copied from fixture-backed upstream examples so
-the demo remains small and deterministic. The reductions remove unrelated code
-around the shader construct being demonstrated; they do not patch translator
-output.
+The DirectX, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK, Rust-GPU,
+SPIRV-Tools, raylib, SaschaWillems triangle, and Slang cases keep upstream
+source files unchanged apart from repository formatting checks. The Vulkan
+Samples and Apple cases are reduced source slices copied from fixture-backed
+upstream examples so the demo remains small and deterministic. The reductions
+remove unrelated code around the shader construct being demonstrated; they do
+not patch translator output.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses
@@ -109,14 +110,13 @@ launcher is intentionally not included; rewriting launch configuration, memory
 allocation, and data-transfer code is a runtime porting task outside this demo
 scope.
 
-Rust-GPU graphics and compute examples were tested from `Rust-GPU/rust-gpu`
-and `Rust-GPU/VulkanShaderExamples`. The graphics example needs target-native
-entry-point IO lowering for vertex index, position, and fragment color outputs;
-that translator issue is tracked in issue #776. The compute examples need Rust
-`Option<T>`, fixed-size array, and unsigned-constant lowering for Metal and
-SPIR-V targets; that translator issue is tracked in issue #775. These cases are
-intentionally not checked in until generated target artifacts preserve the
-shader semantics and validate directly.
+The `Rust-GPU/VulkanShaderExamples` conservative raster triangle-overlay shader
+was retested after issue #776 closed and is now checked for Metal and Vulkan
+output. Richer `Rust-GPU/rust-gpu` graphics examples with plain vertex stage
+parameters still need Metal vertex input attribute lowering; that follow-up is
+tracked in issue #794. Rust-GPU compute examples still need Rust `Option<T>`,
+fixed-size array, and unsigned-constant lowering for Metal and SPIR-V targets;
+that translator issue is tracked in issue #775.
 
 The `ROCm/rocm-examples` bit-extract HIP kernel and the `ROCm/hip-tests` Set
 kernel were tested as candidates. Metal and SPIR-V output still needs HIP
