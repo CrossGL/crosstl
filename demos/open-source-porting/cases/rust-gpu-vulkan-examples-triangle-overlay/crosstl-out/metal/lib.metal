@@ -14,4 +14,3 @@ fragment fragment_main_fs_Return fragment_main_fs() {
     _crossglOutput.out_frag_color = out_frag_color;
     return _crossglOutput;
 }
-
