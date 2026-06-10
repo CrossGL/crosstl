@@ -313,6 +313,7 @@ RUNTIME_HOST_BINDING_PLAN_FIELDS = frozenset(
         "targets",
         "actions",
         "runtimePlan",
+        "packageInspection",
         "diagnosticCounts",
         "diagnostics",
     )
@@ -8640,89 +8641,6 @@ def build_runtime_package(
     return payload
 
 
-def _runtime_host_binding_load_package(
-    path: Path,
-) -> tuple[Mapping[str, Any], list[ProjectDiagnostic]]:
-    try:
-        package = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        return {}, [
-            ProjectDiagnostic(
-                severity="error",
-                code="project.runtime-host-bindings.package-read-failed",
-                message=f"Runtime package manifest could not be read: {exc}",
-                location=SourceLocation(file=str(path)),
-                check_kind="runtime-host-bindings",
-            )
-        ]
-    except json.JSONDecodeError as exc:
-        return {}, [
-            ProjectDiagnostic(
-                severity="error",
-                code="project.runtime-host-bindings.package-json-invalid",
-                message=f"Runtime package manifest is not valid JSON: {exc}",
-                location=SourceLocation(
-                    file=str(path), line=exc.lineno, column=exc.colno
-                ),
-                check_kind="runtime-host-bindings",
-            )
-        ]
-    if not isinstance(package, Mapping):
-        return {}, [
-            ProjectDiagnostic(
-                severity="error",
-                code="project.runtime-host-bindings.package-invalid",
-                message="Runtime package manifest must be a JSON object.",
-                location=SourceLocation(file=str(path)),
-                check_kind="runtime-host-bindings",
-            )
-        ]
-    return package, []
-
-
-def _runtime_host_binding_package_diagnostics(
-    path: Path, package: Mapping[str, Any]
-) -> list[ProjectDiagnostic]:
-    diagnostics: list[ProjectDiagnostic] = []
-    if package.get("schemaVersion") != REPORT_SCHEMA_VERSION:
-        diagnostics.append(
-            ProjectDiagnostic(
-                severity="error",
-                code="project.runtime-host-bindings.package-schema-invalid",
-                message=f"Runtime package schemaVersion must be {REPORT_SCHEMA_VERSION}.",
-                location=SourceLocation(file=str(path)),
-                check_kind="runtime-host-bindings",
-            )
-        )
-    if package.get("kind") != RUNTIME_PACKAGE_KIND:
-        diagnostics.append(
-            ProjectDiagnostic(
-                severity="error",
-                code="project.runtime-host-bindings.package-kind-invalid",
-                message=(
-                    "Host binding planning input must be a "
-                    f"{RUNTIME_PACKAGE_KIND} document."
-                ),
-                location=SourceLocation(file=str(path)),
-                check_kind="runtime-host-bindings",
-            )
-        )
-    if package.get("success") is not True:
-        diagnostics.append(
-            ProjectDiagnostic(
-                severity="error",
-                code="project.runtime-host-bindings.package-failed",
-                message=(
-                    "Runtime package must be successful before host bindings can "
-                    "be planned."
-                ),
-                location=SourceLocation(file=str(path)),
-                check_kind="runtime-host-bindings",
-            )
-        )
-    return diagnostics
-
-
 def _runtime_host_binding_packaged_artifacts(
     package: Mapping[str, Any],
 ) -> list[Mapping[str, Any]]:
@@ -8733,22 +8651,23 @@ def _runtime_host_binding_packaged_artifacts(
     ]
 
 
-def _runtime_host_binding_action(artifact: Mapping[str, Any]) -> dict[str, Any]:
-    source_remap = artifact.get("sourceRemap")
+def _runtime_host_binding_action(record: Mapping[str, Any]) -> dict[str, Any]:
+    source_remap = record.get("sourceRemap")
+    artifact = record.get("artifact", record.get("id"))
     return {
         "kind": "bind-runtime-artifact",
         "severity": "note",
         "message": (
             "Load packaged artifact "
-            f"{artifact.get('packagePath')} for target {artifact.get('target')}."
+            f"{record.get('packagePath')} for target {record.get('target')}."
         ),
-        "target": artifact.get("target"),
-        "artifact": artifact.get("id"),
-        "packagePath": artifact.get("packagePath"),
+        "target": record.get("target"),
+        "artifact": artifact,
+        "packagePath": record.get("packagePath"),
         "sourceRemap": (
             source_remap.get("packagePath")
             if isinstance(source_remap, Mapping)
-            else None
+            else source_remap if _is_non_empty_string(source_remap) else None
         ),
     }
 
@@ -8775,18 +8694,73 @@ def _runtime_host_binding_review_action(
 
 def _runtime_host_binding_target(
     target: str,
-    artifacts: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]],
     runtime_reference_count: int,
 ) -> dict[str, Any]:
-    target_artifacts = [
-        artifact for artifact in artifacts if artifact.get("target") == target
-    ]
+    target_records = [record for record in records if record.get("target") == target]
     return {
         "target": target,
-        "artifactCount": len(target_artifacts),
+        "artifactCount": len(target_records),
         "runtimeReferenceCount": runtime_reference_count,
-        "artifacts": [artifact.get("id") for artifact in target_artifacts],
-        "packagePaths": [artifact.get("packagePath") for artifact in target_artifacts],
+        "artifacts": [
+            record.get("artifact", record.get("id")) for record in target_records
+        ],
+        "packagePaths": [record.get("packagePath") for record in target_records],
+    }
+
+
+def _runtime_host_binding_ready_bindings(
+    bindings: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    return [binding for binding in bindings if binding.get("status") == "ready"]
+
+
+def _runtime_host_binding_actions(
+    bindings: Sequence[Mapping[str, Any]],
+    targets: Sequence[str],
+    runtime_reference_count: int,
+) -> list[dict[str, Any]]:
+    ready_bindings = _runtime_host_binding_ready_bindings(bindings)
+    actions = [_runtime_host_binding_action(binding) for binding in ready_bindings]
+    review_action = _runtime_host_binding_review_action(
+        targets, runtime_reference_count
+    )
+    if review_action is not None and ready_bindings:
+        actions.append(review_action)
+    return actions
+
+
+def _runtime_host_binding_package_inspection_summary(
+    inspection: Mapping[str, Any],
+) -> dict[str, Any]:
+    summary = (
+        inspection.get("summary")
+        if isinstance(inspection.get("summary"), Mapping)
+        else {}
+    )
+    return {
+        "kind": inspection.get("kind"),
+        "success": inspection.get("success"),
+        "readyBindingCount": (
+            summary.get("readyBindingCount")
+            if _is_non_negative_int(summary.get("readyBindingCount"))
+            else 0
+        ),
+        "failedBindingCount": (
+            summary.get("failedBindingCount")
+            if _is_non_negative_int(summary.get("failedBindingCount"))
+            else 0
+        ),
+        "verifiedArtifactCount": (
+            summary.get("verifiedArtifactCount")
+            if _is_non_negative_int(summary.get("verifiedArtifactCount"))
+            else 0
+        ),
+        "failedArtifactCount": (
+            summary.get("failedArtifactCount")
+            if _is_non_negative_int(summary.get("failedArtifactCount"))
+            else 0
+        ),
     }
 
 
@@ -8798,15 +8772,10 @@ def plan_runtime_host_bindings(
     package_path = _filesystem_path_arg(
         package_manifest_path, field_name="Runtime package manifest path"
     )
-    package, diagnostics = _runtime_host_binding_load_package(package_path)
-    if package:
-        diagnostics.extend(
-            _runtime_host_binding_package_diagnostics(package_path, package)
-        )
-
+    inspection = inspect_runtime_package(package_path)
     project_payload = (
-        dict(package.get("project"))
-        if isinstance(package.get("project"), Mapping)
+        dict(inspection.get("project"))
+        if isinstance(inspection.get("project"), Mapping)
         else {"targets": []}
     )
     targets = [
@@ -8815,24 +8784,27 @@ def plan_runtime_host_bindings(
         if _is_non_empty_string(target)
     ]
     runtime_plan = (
-        dict(package.get("runtimePlan"))
-        if isinstance(package.get("runtimePlan"), Mapping)
+        dict(inspection.get("runtimePlan"))
+        if isinstance(inspection.get("runtimePlan"), Mapping)
+        else {}
+    )
+    inspection_summary = (
+        inspection.get("summary")
+        if isinstance(inspection.get("summary"), Mapping)
         else {}
     )
     runtime_reference_count = (
-        runtime_plan.get("runtimeReferenceCount")
-        if _is_non_negative_int(runtime_plan.get("runtimeReferenceCount"))
+        inspection_summary.get("runtimeReferenceCount")
+        if _is_non_negative_int(inspection_summary.get("runtimeReferenceCount"))
         else 0
     )
-    artifacts = (
-        _runtime_host_binding_packaged_artifacts(package) if not diagnostics else []
-    )
-    actions = [_runtime_host_binding_action(artifact) for artifact in artifacts]
-    review_action = _runtime_host_binding_review_action(
-        targets, runtime_reference_count
-    )
-    if review_action is not None and artifacts:
-        actions.append(review_action)
+    bindings = [
+        binding
+        for binding in _record_sequence(inspection.get("bindings"))
+        if isinstance(binding, Mapping)
+    ]
+    ready_bindings = _runtime_host_binding_ready_bindings(bindings)
+    actions = _runtime_host_binding_actions(bindings, targets, runtime_reference_count)
 
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
@@ -8840,29 +8812,38 @@ def plan_runtime_host_bindings(
         "sourcePackage": str(package_path),
         "sourcePackageHash": _optional_source_hash(package_path),
         "generatedAt": int(time.time()),
-        "success": not any(
-            diagnostic.severity == "error" for diagnostic in diagnostics
-        ),
+        "success": bool(inspection.get("success")),
         "scope": RUNTIME_HOST_BINDING_PLAN_SCOPE,
         "nonGoals": list(RUNTIME_HOST_BINDING_PLAN_NON_GOALS),
-        "packageRoot": (
-            package.get("packageRoot") if isinstance(package, Mapping) else None
-        ),
+        "packageRoot": inspection.get("packageRoot"),
         "project": project_payload,
         "summary": {
             "targetCount": len(targets),
-            "artifactCount": len(artifacts),
+            "artifactCount": len(ready_bindings),
             "actionCount": len(actions),
             "runtimeReferenceCount": runtime_reference_count,
         },
         "targets": [
-            _runtime_host_binding_target(target, artifacts, runtime_reference_count)
+            _runtime_host_binding_target(
+                target, ready_bindings, runtime_reference_count
+            )
             for target in targets
         ],
         "actions": actions,
         "runtimePlan": runtime_plan,
-        "diagnosticCounts": _diagnostic_counts(diagnostics),
-        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+        "packageInspection": _runtime_host_binding_package_inspection_summary(
+            inspection
+        ),
+        "diagnosticCounts": (
+            dict(inspection.get("diagnosticCounts"))
+            if isinstance(inspection.get("diagnosticCounts"), Mapping)
+            else {}
+        ),
+        "diagnostics": (
+            [dict(diagnostic) for diagnostic in inspection.get("diagnostics", [])]
+            if isinstance(inspection.get("diagnostics"), list)
+            else []
+        ),
     }
 
 
@@ -9275,8 +9256,8 @@ def inspect_runtime_package(
         if isinstance(binding.get("sourceRemap"), Mapping)
         and binding["sourceRemap"].get("status") == "ready"
     )
-    host_binding_plan = (
-        plan_runtime_host_bindings(package_path) if package_input_valid else {}
+    host_binding_actions = _runtime_host_binding_actions(
+        bindings, targets, runtime_reference_count
     )
 
     return {
@@ -9305,21 +9286,13 @@ def inspect_runtime_package(
             "failedBindingCount": failed_binding_count,
             "bindingCount": len(bindings),
             "runtimeReferenceCount": runtime_reference_count,
-            "actionCount": (
-                host_binding_plan.get("summary", {}).get("actionCount")
-                if isinstance(host_binding_plan.get("summary"), Mapping)
-                else 0
-            ),
+            "actionCount": len(host_binding_actions),
         },
         "hostBindingPlan": {
-            "kind": host_binding_plan.get("kind"),
-            "actionCount": (
-                host_binding_plan.get("summary", {}).get("actionCount")
-                if isinstance(host_binding_plan.get("summary"), Mapping)
-                else 0
-            ),
+            "kind": RUNTIME_HOST_BINDING_PLAN_KIND,
+            "actionCount": len(host_binding_actions),
             "runtimeReferenceCount": runtime_reference_count,
-            "reviewRequired": runtime_reference_count > 0,
+            "reviewRequired": runtime_reference_count > 0 and ready_binding_count > 0,
         },
         "targets": [
             _runtime_package_inspection_target(

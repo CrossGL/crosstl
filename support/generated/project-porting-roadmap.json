@@ -4736,100 +4736,130 @@
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "directx": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "hip": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "metal": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "mojo": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "rust": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "vulkan": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         },
         "webgl": {
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_from_runtime_package",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_bindings_rejects_missing_source_remap",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_outputs_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_text_rejects_stale_package",
             "tests/test_translator/test_project_translation.py::def test_project_cli_plan_host_bindings_json_writes_output"
           ],
-          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, records packaged artifact binding actions as bind-runtime-artifact entries, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, and rejects failed runtime packages with structured diagnostics. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-bindings builds crosstl-runtime-host-binding-plan JSON, text, and SARIF output from a runtime package manifest, reuses runtime package inspection readiness before emitting bind-runtime-artifact entries, records packageInspection ready and failed binding counts, records review-runtime-references actions when runtime references were detected, preserves runtime-loader-plan-v1 summary linkage, rejects failed runtime packages and missing or stale packaged artifacts with structured package-inspection diagnostics, and does not emit host bind actions for failed package records. The plan does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "status": "supported"
         }
       }

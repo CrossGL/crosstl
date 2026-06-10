@@ -407,12 +407,15 @@ Build a host binding plan from a runtime package manifest:
      --format text
 
 Host binding plans emit a ``crosstl-runtime-host-binding-plan`` JSON document
-with per-target packaged artifact paths, ``bind-runtime-artifact`` actions for
-host loader or build-system tooling, and ``review-runtime-references`` actions
-when the source repository contained runtime API references. The plan preserves
-the ``runtime-loader-plan-v1`` summary linkage from earlier reports. It is an
-action plan only; it does not rewrite host application code, execute device
-code, generate runtime framework code, or install target SDKs.
+with per-target packaged artifact paths, package-inspection readiness metadata,
+``bind-runtime-artifact`` actions for host loader or build-system tooling, and
+``review-runtime-references`` actions when the source repository contained
+runtime API references. The planner reuses runtime package inspection and only
+emits bind actions for ready package records; missing or stale package artifacts
+remain diagnostics instead of host-integration work items. The plan preserves the
+``runtime-loader-plan-v1`` summary linkage from earlier reports. It is an action
+plan only; it does not rewrite host application code, execute device code,
+generate runtime framework code, or install target SDKs.
 
 Build a target-scoped runtime adapter plan from a runtime package manifest:
 

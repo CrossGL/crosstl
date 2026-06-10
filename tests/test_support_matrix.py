@@ -816,7 +816,12 @@ def test_project_runtime_host_binding_plan_is_first_class_support_feature():
         assert backend_support["status"] == "supported"
         assert "crosstl-runtime-host-binding-plan" in backend_support["notes"]
         assert "runtime package manifest" in backend_support["notes"]
+        assert "runtime package inspection readiness" in backend_support["notes"]
+        assert "packageInspection" in backend_support["notes"]
         assert "bind-runtime-artifact" in backend_support["notes"]
+        assert "does not emit host bind actions for failed package records" in (
+            backend_support["notes"]
+        )
         assert "review-runtime-references" in backend_support["notes"]
         assert "runtime-loader-plan-v1" in backend_support["notes"]
         assert "does not rewrite host application code" in backend_support["notes"]
@@ -832,7 +837,19 @@ def test_project_runtime_host_binding_plan_is_first_class_support_feature():
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_bindings_rejects_missing_packaged_artifact"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_plan_runtime_host_bindings_rejects_missing_source_remap"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
             "test_project_cli_plan_host_bindings_text_outputs_actions"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_plan_host_bindings_text_rejects_stale_package"
         ) in backend_support["evidence"]
         assert (
             "tests/test_translator/test_project_translation.py::def "
