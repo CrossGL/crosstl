@@ -25934,6 +25934,95 @@ def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
     assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
 
 
+def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "lib.rs").write_text(
+        textwrap.dedent("""
+            use spirv_std::glam::{vec4, Vec4};
+
+            #[spirv(fragment)]
+            pub fn main_fs(output: &mut Vec4) {
+                *output = vec4(1.0, 0.0, 0.0, 1.0);
+            }
+
+            #[spirv(vertex)]
+            pub fn main_vs(
+                #[spirv(vertex_index)] vert_id: i32,
+                #[spirv(position, invariant)] out_pos: &mut Vec4,
+            ) {
+                *out_pos = vec4(
+                    (vert_id - 1) as f32,
+                    ((vert_id & 1) * 2 - 1) as f32,
+                    0.0,
+                    1.0,
+                );
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "opengl", "metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cgl", "translated"),
+        ("opengl", "translated"),
+        ("metal", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    assert "int vert_id @ gl_VertexID" in outputs["cgl"]
+    assert "out vec4 out_pos @ gl_Position @ invariant" in outputs["cgl"]
+    assert "void main(out vec4 output @ gl_FragColor)" in outputs["cgl"]
+
+    glsl = outputs["opengl"]
+    assert "layout(location = 0) out vec4 fragColor;" in glsl
+    assert "fragColor = vec4(1.0, 0.0, 0.0, 1.0);" in glsl
+    assert "gl_Position = vec4(float((gl_VertexID - 1))" in glsl
+    assert "in vec4 output;" not in glsl
+    assert re.search(r"\boutput\s*=", glsl) is None
+    GLSLParser(GLSLLexer(glsl).tokenize(), "fragment").parse()
+    GLSLParser(GLSLLexer(glsl).tokenize(), "vertex").parse()
+
+    metal = outputs["metal"]
+    assert "float4 output [[color(0)]];" in metal
+    assert "float4 out_pos [[position]];" in metal
+    assert "uint _crossglVertexID [[vertex_id]]" in metal
+    assert "int vert_id = int(_crossglVertexID);" in metal
+    assert "float4 out_pos [[position]]" not in metal.split("vertex_main_vs(", 1)[1]
+
+    spirv = outputs["vulkan"]
+    assert re.search(r'OpEntryPoint Fragment %\d+ "main_fs" %\d+', spirv)
+    fragment_output = re.search(
+        r'OpName (%\d+) "CrossGL_fragment_output_output"', spirv
+    )
+    vertex_index = re.search(r'OpName (%\d+) "gl_VertexID"', spirv)
+    assert fragment_output is not None
+    assert vertex_index is not None
+    fragment_output_id = fragment_output.group(1)
+    vertex_index_id = vertex_index.group(1)
+    assert f"OpDecorate {fragment_output_id} Location 0" in spirv
+    assert re.search(rf"{fragment_output_id} = OpVariable %\d+ Output", spirv)
+    assert f"OpDecorate {vertex_index_id} BuiltIn VertexIndex" in spirv
+    assert re.search(rf"%\d+ = OpLoad %\d+ {vertex_index_id}", spirv)
+    assert re.search(rf"OpStore {fragment_output_id} %\d+", spirv)
+    assert re.search(r'OpName %\d+ "output"', spirv) is None
+
+
 def test_legacy_single_file_cli_still_works(tmp_path):
     shader = tmp_path / "simple.cgl"
     output = tmp_path / "simple.glsl"

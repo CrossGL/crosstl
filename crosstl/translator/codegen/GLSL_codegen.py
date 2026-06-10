@@ -897,6 +897,7 @@ class GLSLCodeGen:
         self.current_stage_outputs = {}
         self.current_stage_output_member_map = {}
         self.current_stage_parameter_aliases = {}
+        self.stage_parameter_output_aliases = {}
         self.stage_entry_functions_by_stage = {}
         self.current_identifier_aliases = {}
         self.current_mesh_output_parameters = {}
@@ -2682,6 +2683,7 @@ class GLSLCodeGen:
         )
 
         code += self.generate_stage_parameter_input_declarations(ast, target_stage)
+        code += self.generate_stage_parameter_output_declarations(ast, target_stage)
 
         resource_binding_cursors = {}
         used_resource_bindings = {}
@@ -6394,6 +6396,8 @@ class GLSLCodeGen:
         def add_parameter(param, stage_name):
             if stage_name == "mesh" and self.is_mesh_output_parameter(param):
                 return
+            if self.is_graphics_stage_output_parameter(param, stage_name):
+                return
             if not self.is_stage_entry_value_parameter(param):
                 return
             semantic = self.semantic_from_node(param)
@@ -6455,6 +6459,86 @@ class GLSLCodeGen:
                 or []
             ):
                 add_parameter(param, stage_name)
+
+        if target_stage is None:
+            return "".join(declarations)
+        return "\n".join(declarations) + ("\n" if declarations else "")
+
+    def generate_stage_parameter_output_declarations(self, ast, target_stage=None):
+        declarations = []
+        graphics_stages = {"vertex", "fragment"}
+
+        def add_parameter(func, param, stage_name):
+            if not self.is_graphics_stage_output_parameter(param, stage_name):
+                return
+            if not self.is_stage_entry_value_parameter(param):
+                return
+
+            param_type = self.map_type(self.resource_node_type(param))
+            output_name = self.stage_output_parameter_name(func, param, stage_name)
+            self.stage_parameter_output_aliases.setdefault(id(func), {})[
+                param.name
+            ] = output_name
+
+            if self.is_fragment_builtin_output_target(output_name):
+                return
+            if self.is_vertex_builtin_output(output_name):
+                return
+
+            layout = self.stage_output_parameter_layout(param, stage_name)
+            if layout:
+                self.reserve_stage_io_layout(
+                    self.stage_io_used_locations,
+                    stage_name,
+                    "output",
+                    layout,
+                    param_type,
+                    output_name,
+                )
+            prefix = self.stage_io_declaration_prefix(param, "out", layout)
+            prefix = self.stage_io_prefix_with_required_flat(prefix, param_type)
+            parameter_declaration = format_c_style_array_declaration(
+                param_type, output_name
+            )
+            declaration = f"{prefix} {parameter_declaration};"
+            if self.reserve_stage_io_declaration(
+                stage_name, "output", output_name, declaration
+            ):
+                if target_stage is None:
+                    declarations.append(
+                        self.wrap_stage_guard(f"{declaration}\n", stage_name)
+                    )
+                else:
+                    declarations.append(declaration)
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifier = (
+                func.qualifiers[0]
+                if hasattr(func, "qualifiers") and func.qualifiers
+                else getattr(func, "qualifier", None)
+            )
+            qualifier_name = normalize_stage_name(qualifier)
+            if qualifier_name not in graphics_stages:
+                continue
+            if not should_emit_qualified_function(target_stage, qualifier_name):
+                continue
+            for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+                add_parameter(func, param, qualifier_name)
+
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name not in graphics_stages:
+                continue
+            if not stage_matches(target_stage, stage_name):
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+            for param in (
+                getattr(entry_point, "parameters", getattr(entry_point, "params", []))
+                or []
+            ):
+                add_parameter(entry_point, param, stage_name)
 
         if target_stage is None:
             return "".join(declarations)
@@ -6755,10 +6839,62 @@ class GLSLCodeGen:
             for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
                 if not self.is_stage_entry_value_parameter(param):
                     continue
+                if self.is_graphics_stage_output_parameter(param, stage_name):
+                    continue
                 if self.is_stage_builtin_semantic(self.semantic_from_node(param)):
                     continue
                 names.add(param.name)
         return names
+
+    def parameter_qualifier_names(self, node=None):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        qualifiers.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        )
+        qualifiers.discard("")
+        return qualifiers
+
+    def is_graphics_stage_output_parameter(self, param, stage_name):
+        if normalize_stage_name(stage_name) not in {"vertex", "fragment"}:
+            return False
+        return bool(self.parameter_qualifier_names(param) & {"out", "inout"})
+
+    def stage_output_parameter_name(self, func, param, stage_name):
+        semantic = self.semantic_from_node(param)
+        mapped_semantic = self.map_semantic(semantic)
+        if normalize_stage_name(stage_name) == "vertex":
+            if self.is_vertex_builtin_output(mapped_semantic):
+                return mapped_semantic
+            reserved = set(self.vertex_input_member_names)
+            reserved.update(self.stage_io_declared_names("vertex", "output"))
+            return self.stage_io_name_avoiding_reserved(param.name, reserved)
+
+        if self.is_fragment_builtin_output_target(mapped_semantic):
+            return mapped_semantic
+        if str(semantic or "").startswith("gl_FragColor"):
+            return self.fragment_output_name(
+                semantic, self.function_local_variable_names(func)
+            )
+        reserved = set(self.fragment_input_member_names)
+        reserved.update(self.stage_io_declared_names("fragment", "output"))
+        reserved.update(self.function_local_variable_names(func))
+        return self.stage_io_name_avoiding_reserved(param.name, reserved)
+
+    def stage_output_parameter_layout(self, param, stage_name):
+        if normalize_stage_name(stage_name) != "fragment":
+            return self.stage_io_layout_for_node(param)
+
+        mapped_semantic = self.map_semantic(self.semantic_from_node(param))
+        if mapped_semantic.startswith("layout("):
+            return mapped_semantic
+        layout = self.stage_io_layout_for_node(param)
+        if layout.startswith("layout("):
+            return layout
+        return "layout(location = 0)"
 
     def stage_io_name_avoiding_reserved(self, preferred_name, reserved_names):
         if preferred_name not in reserved_names:
@@ -7200,6 +7336,12 @@ class GLSLCodeGen:
 
         aliases = {}
         for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            output_alias = self.stage_parameter_output_aliases.get(id(func), {}).get(
+                param.name
+            )
+            if output_alias is not None:
+                aliases[param.name] = output_alias
+                continue
             semantic = self.semantic_from_node(param)
             if self.is_stage_builtin_semantic(semantic):
                 if self.stage_builtin_parameter_local_alias_declaration(

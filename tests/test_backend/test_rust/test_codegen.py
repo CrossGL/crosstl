@@ -1100,8 +1100,8 @@ def test_rust_gpu_spirv_attributes_drive_stage_and_parameter_semantics():
     result = parse_and_generate(code)
 
     assert "vertex main_vs {" in result
-    assert "int vert_id @ VertexID" in result
-    assert "vec4 out_pos @ gl_Position @ invariant" in result
+    assert "int vert_id @ gl_VertexID" in result
+    assert "out vec4 out_pos @ gl_Position @ invariant" in result
     assert "compute main_cs {" in result
     assert "uvec3 id @ gl_GlobalInvocationID" in result
     assert "uint values[] @ set(0) @ binding(0)" in result
@@ -2071,7 +2071,7 @@ def test_vulkan_shader_examples_multiview_view_index_semantic_codegen():
 
     assert "vertex main_vs {" in result
     assert "uint view_index @ gl_ViewIndex" in result
-    assert "vec4 out_position @ gl_Position" in result
+    assert "out vec4 out_position @ gl_Position" in result
     crosstl.translator.parse(result)
 
 
@@ -11115,7 +11115,7 @@ def test_rust_gpu_sky_shader_cfg_test_module_is_not_emitted_to_crossgl():
     result = parse_and_generate(code)
 
     assert "fragment main_fs {" in result
-    assert "void main(vec4 output)" in result
+    assert "void main(out vec4 output @ gl_FragColor)" in result
     assert "output = vec4(1.0, 0.0, 0.0, 1.0);" in result
     assert "test_tonemap" not in result
     assert "assert_eq!" not in result

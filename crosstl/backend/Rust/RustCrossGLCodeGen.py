@@ -400,8 +400,8 @@ class RustToCrossGLConverter:
             "draw_index": "gl_DrawID",
             "instance_id": "InstanceID",
             "instance_index": "InstanceID",
-            "vertex_id": "VertexID",
-            "vertex_index": "VertexID",
+            "vertex_id": "gl_VertexID",
+            "vertex_index": "gl_VertexID",
             "clip_distance": "gl_ClipDistance",
             "cull_distance": "gl_CullDistance",
             "frag_depth": "gl_FragDepth",
@@ -1069,7 +1069,7 @@ class RustToCrossGLConverter:
         )
 
     def prepare_function_parameters(
-        self, params, struct_name=None, extra_forbidden=None
+        self, params, struct_name=None, extra_forbidden=None, shader_type=None
     ):
         original_names = {
             param.name for param in params if getattr(param, "name", None)
@@ -1092,6 +1092,12 @@ class RustToCrossGLConverter:
                 getattr(param, "attributes", [])
             )
             param_type = self.normalize_parameter_type(param.vtype, struct_name)
+            if self.is_graphics_mutable_output_parameter(
+                param, shader_type, qualifier, semantic
+            ):
+                qualifier = "out"
+                if not semantic and str(shader_type).lower() == "fragment":
+                    semantic = " @ gl_FragColor"
             declaration = self.format_typed_declarator(param_type, name)
             if qualifier:
                 declaration = f"{qualifier} {declaration}"
@@ -1111,6 +1117,28 @@ class RustToCrossGLConverter:
                 return "uniform"
 
         return ""
+
+    def is_graphics_mutable_output_parameter(
+        self, param, shader_type, qualifier="", semantic=""
+    ):
+        shader_type = str(shader_type).lower() if shader_type is not None else None
+        if shader_type not in {"vertex", "fragment"}:
+            return False
+        if qualifier in {"uniform"}:
+            return False
+
+        raw_type = str(getattr(param, "vtype", "")).strip()
+        if not raw_type.startswith("&mut "):
+            return False
+
+        semantic_text = str(semantic or "")
+        if shader_type == "fragment" and "gl_FragColor" in semantic_text:
+            return True
+        if shader_type == "fragment" and not semantic_text:
+            return True
+        if shader_type == "vertex" and "gl_Position" in semantic_text:
+            return True
+        return False
 
     def local_aliasing_enabled(self):
         return bool(self.local_binding_name_scopes)
@@ -2471,6 +2499,7 @@ class RustToCrossGLConverter:
         params_str, param_types, name_aliases = self.prepare_function_parameters(
             func.params,
             extra_forbidden=local_binding_names,
+            shader_type=shader_type,
         )
         return_type = self.map_function_return_type(func.return_type)
         entry_point_name = self.get_entry_point_name_from_attributes(func.attributes)
