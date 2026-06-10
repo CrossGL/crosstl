@@ -3019,6 +3019,44 @@
     },
     {
       "category": "project",
+      "description": "Build deterministic runtime handoff packages from runtime artifact manifests without rewriting host code, executing device code, or installing target SDKs.",
+      "id": "project.runtime_package_handoff",
+      "name": "Runtime package handoff",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -3870,12 +3908,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 56,
+    "feature_count": 57,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 51,
+        "supported": 52,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -3883,7 +3921,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 50,
+        "supported": 51,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -3891,7 +3929,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 51,
+        "supported": 52,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

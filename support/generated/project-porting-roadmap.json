@@ -4482,6 +4482,114 @@
     },
     {
       "category": "project",
+      "description": "Build deterministic runtime handoff packages from runtime artifact manifests without rewriting host code, executing device code, or installing target SDKs.",
+      "id": "project.runtime_package_handoff",
+      "name": "Runtime package handoff",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ],
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -7180,12 +7288,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 13,
+    "feature_count": 14,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7193,7 +7301,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7201,7 +7309,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7209,7 +7317,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7217,7 +7325,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7225,7 +7333,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7233,7 +7341,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7241,7 +7349,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7249,7 +7357,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7257,7 +7365,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 9,
+        "supported": 10,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

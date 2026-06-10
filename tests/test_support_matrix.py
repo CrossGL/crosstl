@@ -704,6 +704,49 @@ def test_project_runtime_artifact_manifest_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_package_handoff_is_first_class_support_feature():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.runtime_package_handoff"]
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime package handoff"
+    assert set(feature["support"]) == {backend["id"] for backend in matrix["backends"]}
+    for backend_support in feature["support"].values():
+        assert backend_support["status"] == "supported"
+        assert "crosstl-runtime-package" in backend_support["notes"]
+        assert "runtime artifact manifest" in backend_support["notes"]
+        assert "validates artifact hash and byte-size metadata" in (
+            backend_support["notes"]
+        )
+        assert "source-remap sidecars" in backend_support["notes"]
+        assert "integration guide" in backend_support["notes"]
+        assert "runtime-loader-plan-v1" in backend_support["notes"]
+        assert "does not rewrite host application code" in backend_support["notes"]
+        assert "execute device code" in backend_support["notes"]
+        assert "install target SDKs" in backend_support["notes"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_build_runtime_package_from_runtime_artifact_manifest"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_runtime_package_rejects_stale_artifact_hash"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_package_runtime_text_outputs_package_summary"
+        ) in backend_support["evidence"]
+        assert (
+            "tests/test_translator/test_project_translation.py::def "
+            "test_project_cli_package_runtime_json_writes_output"
+        ) in backend_support["evidence"]
+
+
 def test_project_include_resolution_documents_status_reporting():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

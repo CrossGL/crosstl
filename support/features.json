@@ -8571,6 +8571,114 @@
       }
     },
     {
+      "id": "project.runtime_package_handoff",
+      "category": "project",
+      "name": "Runtime package handoff",
+      "description": "Build deterministic runtime handoff packages from runtime artifact manifests without rewriting host code, executing device code, or installing target SDKs.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "package-runtime builds crosstl-runtime-package JSON, text, and SARIF output from a runtime artifact manifest, validates artifact hash and byte-size metadata before copying translated artifacts, copies source-remap sidecars, writes a package manifest and integration guide, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale or missing package inputs. The package does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_package_from_runtime_artifact_manifest",
+            "tests/test_translator/test_project_translation.py::def test_runtime_package_rejects_stale_artifact_hash",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_text_outputs_package_summary",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_package_runtime_json_writes_output"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.report_inspection",
       "category": "project",
       "name": "Project report inspection",

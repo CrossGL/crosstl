@@ -28,6 +28,7 @@ from ..ast import (
     RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReferenceType,
     ReturnNode,
     StructNode,
     SwitchNode,
@@ -4002,6 +4003,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def type_name_string(self, vtype):
         if vtype is None:
             return None
+        if isinstance(vtype, ReferenceType):
+            return self.convert_type_node_to_string(vtype)
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             return self.convert_type_node_to_string(vtype)
         return str(vtype)
@@ -17736,6 +17739,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             return self.map_type(vtype)
 
+        constant_reference_type = self.hlsl_constant_reference_parameter_type(
+            vtype, node
+        )
+        if constant_reference_type is not None:
+            return constant_reference_type
+
         function_hints = self.function_resource_array_size_hints.get(function_name, {})
         param_name = getattr(node, "name", None)
         lowered_block = self.current_glsl_buffer_block_parameters.get(param_name)
@@ -17786,6 +17795,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"{mapped_type}{array_suffix}"
 
         return self.map_resource_type_with_format(vtype, node)
+
+    def hlsl_constant_reference_parameter_type(self, vtype, node=None):
+        if not isinstance(vtype, ReferenceType):
+            return None
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "constant" not in qualifiers:
+            return None
+
+        referenced_type = self.map_type(vtype.referenced_type)
+        if referenced_type in {"float", "double", "int", "uint", "bool"}:
+            return referenced_type
+        return f"ConstantBuffer<{referenced_type}>"
 
     def glsl_buffer_block_parameter_type(
         self, mapped_type, vtype, node=None, function_hints=None
@@ -19579,6 +19604,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(type_node, PointerType):
             pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
             return f"{pointee_type}*"
+        if isinstance(type_node, ReferenceType):
+            return self.convert_type_node_to_string(type_node.referenced_type)
         if hasattr(type_node, "value"):
             value = type_node.value
             return str(value).lower() if isinstance(value, bool) else str(value)
@@ -19650,6 +19677,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if isinstance(vtype, PointerType):
             return f"{self.map_type(vtype.pointee_type)}*"
+
+        if isinstance(vtype, ReferenceType):
+            return self.map_type(vtype.referenced_type)
 
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             vtype_str = self.convert_type_node_to_string(vtype)

@@ -15,6 +15,7 @@ import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
     build_runtime_artifact_manifest,
+    build_runtime_package,
     inspect_project_report,
     load_project_config,
     plan_runtime_integration,
@@ -72,6 +73,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectScan",
         "ProjectTranslationUnit",
         "build_runtime_artifact_manifest",
+        "build_runtime_package",
         "inspect_project_report",
         "load_project_config",
         "plan_runtime_integration",
@@ -9592,6 +9594,71 @@ def test_translate_project_can_embed_toolchain_smoke_runs(tmp_path, monkeypatch)
     ]
 
 
+def test_translate_project_opengl_smoke_uses_source_stage_metadata(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "grid.frag").write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    expected_command = ["glslangValidator", "--stdin", "-S", "frag"]
+    commands = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def write_generic_glsl(
+        file_path,
+        backend="cgl",
+        save_shader=None,
+        format_output=True,
+        source_backend=None,
+        *,
+        include_paths=None,
+        defines=None,
+    ):
+        del backend, format_output, include_paths, defines
+        assert Path(file_path).name == "grid.frag"
+        assert source_backend == "opengl"
+        Path(save_shader).write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+        return "#version 450\nvoid main() {}\n"
+
+    monkeypatch.setattr(project_pipeline, "translate", write_generic_glsl)
+
+    def run_toolchain(command, **kwargs):
+        commands.append(command)
+        assert command == expected_command
+        assert kwargs["cwd"] == str(repo)
+        assert kwargs["timeout"] == project_pipeline.TOOLCHAIN_SMOKE_TIMEOUT_SECONDS
+        assert kwargs["input"] == "#version 450\nvoid main() {}\n"
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        run_toolchains=True,
+    )
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path, run_toolchains=True)
+
+    assert commands == [expected_command, expected_command]
+    assert payload["artifacts"][0]["source"] == "grid.frag"
+    assert payload["artifacts"][0]["sourceBackend"] == "opengl"
+    assert payload["artifacts"][0]["path"] == "out/opengl/grid.glsl"
+    assert payload["validation"]["toolchainRuns"][0]["command"] == expected_command
+    assert validation["success"] is True
+    assert validation["validation"]["toolchainRuns"][0]["command"] == expected_command
+
+
 def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     vertex_shader = tmp_path / "shader.glsl"
     vertex_shader.write_text(
@@ -9607,6 +9674,24 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     assert project_pipeline._toolchain_smoke_command(
         "opengl", ["glslangValidator"], fragment_shader
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+
+
+def test_opengl_toolchain_smoke_command_prefers_opengl_source_stage(tmp_path):
+    generic_shader = tmp_path / "grid.glsl"
+    generic_shader.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        generic_shader,
+        artifact={"source": "shaders/grid.frag", "sourceBackend": "opengl"},
+    ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
+    assert project_pipeline._toolchain_smoke_command(
+        "opengl",
+        ["glslangValidator"],
+        generic_shader,
+        artifact={"source": "shaders/grid.frag", "sourceBackend": "cgl"},
+    ) == (["glslangValidator", "--stdin", "-S", "comp"], "artifact")
 
 
 def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
@@ -22572,6 +22657,207 @@ def test_project_cli_runtime_manifest_json_writes_output(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["kind"] == project_pipeline.RUNTIME_ARTIFACT_MANIFEST_KIND
     assert payload["artifacts"][0]["path"] == "out/cgl/simple.cgl"
+
+
+def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+
+    payload = build_runtime_package(manifest_path, package_dir)
+
+    assert set(payload) == project_pipeline.RUNTIME_PACKAGE_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_PACKAGE_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_PACKAGE_SCOPE
+    assert payload["nonGoals"] == list(project_pipeline.RUNTIME_PACKAGE_NON_GOALS)
+    assert payload["packageRoot"] == str(package_dir)
+    assert payload["packageManifest"] == "runtime-package.json"
+    assert payload["integrationGuide"] == "INTEGRATION.md"
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "artifactCount": 1,
+        "packagedArtifactCount": 1,
+        "failedArtifactCount": 0,
+        "sourceRemapCount": 1,
+        "runtimeReferenceCount": 1,
+        "compilerRequestCount": 1,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == project_pipeline.RUNTIME_PACKAGE_TARGET_FIELDS
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["packagedArtifactCount"] == 1
+    assert len(payload["artifacts"]) == 1
+    artifact = payload["artifacts"][0]
+    assert set(artifact) == project_pipeline.RUNTIME_PACKAGE_ARTIFACT_FIELDS
+    assert artifact["status"] == "packaged"
+    assert artifact["sourcePath"] == "out/cgl/simple.cgl"
+    assert artifact["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert artifact["hash"]["algorithm"] == "sha256"
+    assert (
+        set(artifact["sourceRemap"])
+        == project_pipeline.RUNTIME_PACKAGE_SOURCE_REMAP_FIELDS
+    )
+    assert artifact["sourceRemap"]["packagePath"] == (
+        "source-remaps/out/cgl/simple.source-remap.json"
+    )
+    assert (package_dir / "runtime-package.json").is_file()
+    assert (package_dir / "INTEGRATION.md").is_file()
+    assert (package_dir / "artifacts" / "out" / "cgl" / "simple.cgl").read_text(
+        encoding="utf-8"
+    ) == (repo / "out" / "cgl" / "simple.cgl").read_text(encoding="utf-8")
+    assert (
+        package_dir / "source-remaps" / "out" / "cgl" / "simple.source-remap.json"
+    ).is_file()
+    package_manifest = json.loads(
+        (package_dir / "runtime-package.json").read_text(encoding="utf-8")
+    )
+    assert package_manifest["kind"] == project_pipeline.RUNTIME_PACKAGE_KIND
+    assert "does not rewrite host application code" in (
+        package_dir / "INTEGRATION.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_runtime_package_rejects_stale_artifact_hash(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    (repo / "out" / "cgl" / "simple.cgl").write_text(
+        "// stale artifact\n",
+        encoding="utf-8",
+    )
+
+    payload = build_runtime_package(manifest_path, repo / "runtime-package")
+
+    assert payload["success"] is False
+    assert payload["summary"]["packagedArtifactCount"] == 0
+    assert payload["summary"]["failedArtifactCount"] == 1
+    assert payload["artifacts"][0]["status"] == "failed"
+    assert payload["artifacts"][0]["packagePath"] is None
+    assert payload["diagnosticCounts"]["error"] == 2
+    assert {diagnostic["code"] for diagnostic in payload["diagnostics"]} == {
+        "project.runtime-package.artifact-hash-mismatch",
+        "project.runtime-package.artifact-size-mismatch",
+    }
+    assert not (repo / "runtime-package" / "artifacts" / "out").exists()
+    assert not (repo / "runtime-package" / "source-remaps" / "out").exists()
+
+
+def test_project_cli_package_runtime_text_outputs_package_summary(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "package-runtime",
+            str(manifest_path),
+            "--package-dir",
+            str(package_dir),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime package: {package_dir}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Package scope: runtime-artifact-handoff-package" in result.stdout
+    assert (
+        "Package non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 packaged artifacts, 0 failed artifacts" in (
+        result.stdout
+    )
+    assert "Runtime plan contract: runtime-loader-plan-v1 (requested)" in result.stdout
+    assert "- cgl: 1 packaged, 0 failed, 1 runtime references" in result.stdout
+    assert "- cgl: out/cgl/simple.cgl -> artifacts/out/cgl/simple.cgl" in (
+        result.stdout
+    )
+    assert (package_dir / "runtime-package.json").is_file()
+
+
+def test_project_cli_package_runtime_json_writes_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+    output_path = repo / "out" / "runtime-package-report.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "package-runtime",
+            str(manifest_path),
+            "--package-dir",
+            str(package_dir),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_PACKAGE_KIND
+    assert payload["artifacts"][0]["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert (package_dir / "runtime-package.json").is_file()
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):
