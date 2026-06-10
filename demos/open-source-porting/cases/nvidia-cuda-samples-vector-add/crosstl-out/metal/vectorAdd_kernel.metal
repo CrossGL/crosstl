@@ -13,4 +13,3 @@ kernel void kernel_vectorAdd(uint3 thread_position_in_threadgroup [[thread_posit
         C[i] = A[i] + B[i];
     }
 }
-
