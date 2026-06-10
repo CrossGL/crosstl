@@ -3626,7 +3626,9 @@ class MetalCodeGen:
                     "gl_VertexIndex"
                 ] = explicit_stage_builtins["vertex_id"]
             reserved_builtin_names = set(reserved_parameter_names)
-            reserved_builtin_names.update(self.metal_function_local_variable_names(func))
+            reserved_builtin_names.update(
+                self.metal_function_local_variable_names(func)
+            )
             for (
                 builtin_name,
                 name,
@@ -3637,9 +3639,7 @@ class MetalCodeGen:
             ):
                 params.append(f"{param_type} {name} [[{attribute}]]")
                 reserved_parameter_names.add(name)
-                self.current_metal_graphics_builtin_parameter_names[
-                    builtin_name
-                ] = name
+                self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
 
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
