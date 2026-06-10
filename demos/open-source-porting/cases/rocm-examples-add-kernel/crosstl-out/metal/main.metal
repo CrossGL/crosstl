@@ -7,4 +7,3 @@ kernel void AddKernel(device float* a [[buffer(0)]], const device float* b [[buf
     int global_idx = thread_position_in_threadgroup.x + threadgroup_position_in_grid.x * threads_per_threadgroup.x;
     a[global_idx] += b[global_idx];
 }
-

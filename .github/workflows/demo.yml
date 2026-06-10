@@ -90,6 +90,7 @@ jobs:
             --case directx-graphics-samples-hello-texture \
             --case directx-shader-compiler-neg1 \
             --case directx-sdk-samples-tutorial02 \
+            --case diligent-samples-vrs-cube-vertex \
             --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case nvpro-vk-mini-samples-rectangle \

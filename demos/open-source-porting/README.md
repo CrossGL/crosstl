@@ -46,6 +46,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
 | `directx-shader-compiler-neg1` | `microsoft/DirectXShaderCompiler` at `d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652` | University of Illinois/NCSA | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream negated swizzle pixel shader unchanged. |
 | `directx-sdk-samples-tutorial02` | `walbourn/directx-sdk-samples-reworked` at `1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Direct3D 11 Tutorial02 effect include unchanged. |
+| `diligent-samples-vrs-cube-vertex` | `DiligentGraphics/DiligentSamples` at `30b94f26e7d10cde0be48c75a2c252185f564b69` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream VRS cube vertex shader unchanged. The paired fragment-density stage is tracked in issue #826. |
 | `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream push-constant vertex shader unchanged. DirectX validation is tracked in issue #813. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
@@ -73,13 +74,14 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The ARM OpenGL ES SDK, DirectX, DirectX SDK Samples, DirectXShaderCompiler,
-glslang, Metal performance, NVIDIA CUDA Samples, nvpro-samples, ogl-samples,
-OpenCL-SDK, RenderDoc, Rust-GPU VulkanShaderExamples, SPIRV-Cross,
-SPIRV-Tools, Vulkan-Tools, raylib, SaschaWillems triangle, and Slang cases
-keep upstream source files unchanged apart from repository
-formatting checks. The DirectX Hello Texture shader was retested after issue
-#783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
+The ARM OpenGL ES SDK, DiligentSamples VRS vertex, DirectX, DirectX SDK
+Samples, DirectXShaderCompiler, glslang, Metal performance, NVIDIA CUDA
+Samples, nvpro-samples, ogl-samples, OpenCL-SDK, RenderDoc, Rust-GPU
+VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools, Vulkan-Tools, raylib,
+SaschaWillems triangle, and Slang cases keep upstream source files unchanged
+apart from repository formatting checks. The DirectX Hello Texture shader was
+retested after issue #783 closed and is now checked for OpenGL, Metal, DirectX,
+and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 closed
 and is now checked for Metal, DirectX, and Vulkan output. The Vulkan Samples,
 Apple, ROCm add-kernel, and Rust-GPU/rust-gpu graphics cases are reduced
@@ -121,6 +123,14 @@ currently expose invalid generated GLSL for HLSL `in`/`out` parameter shaders
 and invalid Metal stage entry points. That translator issue is tracked in issue
 #814, and the case is intentionally not checked in until generated OpenGL and
 Metal artifacts compile directly.
+
+The checked `DiligentGraphics/DiligentSamples` VRS cube vertex shader is
+included for CrossGL, OpenGL, and Vulkan output. The paired fragment shader
+uses `GL_EXT_fragment_invocation_density` and `gl_FragSizeEXT`; generated
+Metal and HLSL currently keep that GLSL built-in as an undeclared identifier,
+and generated SPIR-V loses the built-in value. That translator issue is tracked
+in issue #826, so the fragment stage is intentionally excluded until unsupported
+fragment-density semantics are diagnosed or lowered correctly.
 
 The `g-truc/ogl-samples` flat-color shader pair is checked for CrossGL,
 OpenGL, and Vulkan output. Metal output is intentionally excluded because

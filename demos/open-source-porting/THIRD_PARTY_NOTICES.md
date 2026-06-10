@@ -44,6 +44,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/walbourn/directx-sdk-samples-reworked/blob/1ad8f0f6a3e4d9be7e54ca52640ac12b6565ab0c/LICENSE
 
+## DiligentGraphics/DiligentSamples
+
+- Repository: https://github.com/DiligentGraphics/DiligentSamples
+- Commit: `30b94f26e7d10cde0be48c75a2c252185f564b69`
+- Source path: `Tutorials/Tutorial24_VRS/assets/CubeFDM_vs.glsl`
+- License: Apache-2.0
+- License URL:
+  https://github.com/DiligentGraphics/DiligentSamples/blob/30b94f26e7d10cde0be48c75a2c252185f564b69/LICENSE
+
 ## KhronosGroup/Vulkan-Samples
 
 - Repository: https://github.com/KhronosGroup/Vulkan-Samples

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/CubeFDM_vs.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 35,
+        "endOffset": 664,
+        "file": "crosstl-out/cgl/CubeFDM_vs.cgl",
+        "length": 664,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 20,
+        "endOffset": 375,
+        "file": "CubeFDM_vs.glsl",
+        "length": 375,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}
