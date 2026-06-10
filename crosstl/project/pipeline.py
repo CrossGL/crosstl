@@ -3383,18 +3383,18 @@ class ProjectConfig:
     external_corpus_manifest: str | os.PathLike[str] | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "root",
-            _filesystem_path_arg(self.root, field_name="ProjectConfig.root").resolve(),
-        )
+        root_path = _filesystem_path_arg(self.root, field_name="ProjectConfig.root")
+        object.__setattr__(self, "root", root_path.resolve())
         if self.config_path is not None:
+            config_path = _path_string_arg(
+                self.config_path, field_name="ProjectConfig.config_path"
+            )
+            if not config_path.strip():
+                raise ValueError("ProjectConfig.config_path must be non-empty")
             object.__setattr__(
                 self,
                 "config_path",
-                _filesystem_path_arg(
-                    self.config_path, field_name="ProjectConfig.config_path"
-                ).resolve(),
+                _project_config_path(root_path, config_path).resolve(),
             )
         for field_name in (
             "source_roots",

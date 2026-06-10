@@ -199,6 +199,10 @@ def test_load_project_config_rejects_invalid_root_path_values(root_path):
             "ProjectConfig.config_path must be a string or path-like object returning str",
         ),
         (
+            {"config_path": ""},
+            "ProjectConfig.config_path must be non-empty",
+        ),
+        (
             {"output_dir": object()},
             "ProjectConfig.output_dir must be a string or path-like object returning str",
         ),
@@ -233,6 +237,18 @@ def test_project_config_rejects_invalid_direct_path_values(
 
     with pytest.raises(ValueError, match=re.escape(message)):
         project_api.ProjectConfig(**project_config_kwargs)
+
+
+def test_project_config_resolves_direct_relative_config_path_from_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "custom.toml").write_text(
+        '[project]\ntargets = ["cgl"]\n', encoding="utf-8"
+    )
+
+    config = project_api.ProjectConfig(root=repo, config_path="custom.toml")
+
+    assert config.config_path == (repo / "custom.toml").resolve()
 
 
 def test_translate_project_accepts_path_like_output_dir(tmp_path):
