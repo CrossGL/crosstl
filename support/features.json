@@ -9123,6 +9123,114 @@
       }
     },
     {
+      "id": "project.runtime_loader_manifest",
+      "category": "project",
+      "name": "Runtime loader manifest",
+      "description": "Emit runtime loader manifests from runtime package manifests without rewriting host code or executing device code.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "runtime-loader-manifest builds crosstl-runtime-loader-manifest JSON, text, and SARIF output from a runtime package manifest, derives load units from runtime adapter planning, records package-relative artifact paths, adapterKind, artifactFormat, source-remap handoff paths, parser-derived hostInterface metadata when available, requiredTools, hostResponsibilities, ordered loadSteps, validation readiness, and explicit blockers such as resolve-host-interface-metadata when reflection or binding metadata is unavailable. The manifest carries package inspection diagnostics and runtime-reference review actions forward. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_build_runtime_loader_manifest_from_runtime_package",
+            "tests/test_translator/test_project_translation.py::def test_runtime_loader_manifest_reports_blocked_host_interface_metadata",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_text_outputs_load_units",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_runtime_loader_manifest_json_writes_output"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.report_inspection",
       "category": "project",
       "name": "Project report inspection",
