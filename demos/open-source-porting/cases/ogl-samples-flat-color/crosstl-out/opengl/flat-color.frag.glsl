@@ -14,4 +14,3 @@ void main() {
     fragColor = Color;
     return;
 }
-

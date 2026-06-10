@@ -13,4 +13,3 @@ void main()
 {
 	Color = Diffuse;
 }
-

@@ -13,4 +13,3 @@ void main()
 {
 	gl_Position = MVP * Position;
 }
-
