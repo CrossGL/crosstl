@@ -88,6 +88,7 @@ jobs:
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
+            --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \
@@ -123,6 +124,7 @@ jobs:
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
+            --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
@@ -150,6 +152,7 @@ jobs:
           mkdir -p "$out_dir"
           for shader in \
             demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/metal/shaders.metal \
+            demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.frag.metal \
             demos/open-source-porting/cases/lonelydevil-vulkan-tutorial-triangle/crosstl-out/metal/shader.vert.metal \
             demos/open-source-porting/cases/metal-performance-testing-matmul/crosstl-out/metal/mat_mul_simple1.metal \
@@ -180,6 +183,7 @@ jobs:
             --require-toolchain-runs \
             --case directx-graphics-samples-hello-triangle \
             --case directx-graphics-samples-hello-texture \
+            --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
@@ -187,6 +191,29 @@ jobs:
             --case slang-hello-world-compute \
             --target directx \
             --reports-dir support/generated/demo-reports/windows-directx
+        shell: bash
+
+      - name: Windows DirectX compile references
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          out_dir="${RUNNER_TEMP}/demo-directx-dxil"
+          mkdir -p "$out_dir"
+          compile_hlsl() {
+            local shader="$1"
+            local entry="$2"
+            local profile="$3"
+            local output
+            output="$(printf '%s_%s_%s' "$shader" "$entry" "$profile" | tr '/.:' '____').dxil"
+            dxc -T "$profile" -E "$entry" "$shader" -Fo "$out_dir/$output"
+          }
+          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl PSMain ps_6_0
+          compile_hlsl demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/directx/spv.pushConstant.hlsl VSMain vs_6_0
+          compile_hlsl demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl CSMain cs_6_0
+          compile_hlsl demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl CSMain cs_6_0
         shell: bash
 
       - name: Upload demo reports

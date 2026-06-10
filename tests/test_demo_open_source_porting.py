@@ -27,6 +27,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
 
     assert {path.name for path in case_dirs} == {
         "apple-modern-rendering-mesh-viewdir",
+        "glslang-push-constant-vertex",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
         "lonelydevil-vulkan-tutorial-triangle",
@@ -79,7 +80,17 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "--target metal" in workflow
     assert "--target directx" in workflow
     assert "macOS Metal compile references" in workflow
+    assert "Windows DirectX compile references" in workflow
+    assert 'dxc -T "$profile" -E "$entry"' in workflow
     assert "spirv-tools-basic-src/crosstl-out/metal/basic_src.metal" in workflow
+    assert (
+        "glslang-push-constant-vertex/crosstl-out/metal/spv.pushConstant.metal"
+        in workflow
+    )
+    assert (
+        "glslang-push-constant-vertex/crosstl-out/directx/spv.pushConstant.hlsl"
+        in workflow
+    )
     assert "demo-reports-${{ matrix.os }}" in workflow
 
 
@@ -103,6 +114,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
+        "glslang-push-constant-vertex",
         "lonelydevil-vulkan-tutorial-triangle",
         "metal-performance-testing-matmul",
         "nvidia-cuda-samples-vector-add",
@@ -122,6 +134,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
+        "glslang-push-constant-vertex",
         "lonelydevil-vulkan-tutorial-triangle",
         "metal-performance-testing-matmul",
         "nvidia-cuda-samples-vector-add",
@@ -141,11 +154,48 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "apple-modern-rendering-mesh-viewdir",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
+        "glslang-push-constant-vertex",
         "slang-hello-world-compute",
         "lonelydevil-vulkan-tutorial-triangle",
         "sascha-willems-vulkan-headless-compute",
         "vulkan-samples-dynamic-line-grid",
     }
+
+
+def test_open_source_demo_workflow_compile_reference_paths_exist():
+    workflow = (ROOT / ".github" / "workflows" / "demo.yml").read_text(encoding="utf-8")
+
+    metal_block = _workflow_step_block(workflow, "macOS Metal compile references")
+    metal_paths = set(
+        re.findall(r"(demos/open-source-porting/cases/[^\s]+?\.metal)", metal_block)
+    )
+    assert {
+        str(path.relative_to(ROOT))
+        for path in CASE_ROOT.glob("*/crosstl-out/metal/*.metal")
+        if path.parts[-4]
+        not in {
+            "apple-modern-rendering-mesh-viewdir",
+            "directx-graphics-samples-hello-triangle",
+            "sascha-willems-vulkan-conservative-triangle",
+        }
+    } == metal_paths
+    assert all((ROOT / path).is_file() for path in metal_paths)
+
+    directx_block = _workflow_step_block(workflow, "Windows DirectX compile references")
+    directx_paths = set(
+        re.findall(
+            r"compile_hlsl (demos/open-source-porting/cases/[^\s]+?\.hlsl)",
+            directx_block,
+        )
+    )
+    assert {
+        "demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl",
+        "demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl",
+        "demos/open-source-porting/cases/glslang-push-constant-vertex/crosstl-out/directx/spv.pushConstant.hlsl",
+        "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",
+        "demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/directx/hello-world.hlsl",
+    } == directx_paths
+    assert all((ROOT / path).is_file() for path in directx_paths)
 
 
 def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path):

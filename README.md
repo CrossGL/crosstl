@@ -312,6 +312,9 @@ python -m crosstl inspect-report \
 Project reports cover shader and kernel source translation, diagnostics,
 artifact provenance, optional toolchain checks, and manual migration actions
 for host/runtime integration. See the [project porting guide](docs/source/project-porting.rst).
+The repository also includes pinned open-source porting demos with checked
+artifacts and platform validator coverage in
+[`demos/open-source-porting`](demos/open-source-porting/README.md).
 
 ## Reverse Translation - Import Existing Code
 

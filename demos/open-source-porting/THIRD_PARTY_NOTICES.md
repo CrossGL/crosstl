@@ -35,6 +35,15 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/KhronosGroup/Vulkan-Samples/blob/ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a/LICENSE
 
+## KhronosGroup/glslang
+
+- Repository: https://github.com/KhronosGroup/glslang
+- Commit: `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515`
+- Source path: `Test/spv.pushConstant.vert`
+- License: BSD-style permissive license
+- License URL:
+  https://github.com/KhronosGroup/glslang/blob/98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515/LICENSE.txt
+
 ## donaldwuid/apple_metal_sample_code
 
 - Repository: https://github.com/donaldwuid/apple_metal_sample_code

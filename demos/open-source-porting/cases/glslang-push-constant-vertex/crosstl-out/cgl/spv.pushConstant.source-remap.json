@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/spv.pushConstant.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 550,
+        "file": "crosstl-out/cgl/spv.pushConstant.cgl",
+        "length": 550,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 282,
+        "file": "spv.pushConstant.vert",
+        "length": 282,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

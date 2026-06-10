@@ -44,6 +44,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | --- | --- | --- | --- | --- | --- |
 | `directx-graphics-samples-hello-triangle` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Triangle shader file without source edits. |
 | `directx-graphics-samples-hello-texture` | `microsoft/DirectX-Graphics-Samples` at `31ae3c91160d8634264004cdaf4e41a99c41243e` | MIT | DirectX/HLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream Hello Texture shader file without source edits. Host texture setup remains outside the demo scope. |
+| `glslang-push-constant-vertex` | `KhronosGroup/glslang` at `98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515` | BSD-style | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream push-constant vertex shader unchanged. |
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL validation is tracked in issue #805. |
@@ -62,17 +63,17 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The DirectX, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK, Rust-GPU
-VulkanShaderExamples, SPIRV-Tools, raylib, SaschaWillems triangle, and Slang
-cases keep upstream source files unchanged apart from repository formatting
-checks. The DirectX Hello Texture shader was retested after issue #783 closed
-and is now checked for OpenGL, Metal, DirectX, and Vulkan output. The
-SaschaWillems headless compute shader was retested after issue #756 closed and
-is now checked for Metal, DirectX, and Vulkan output. The Vulkan Samples, Apple,
-and Rust-GPU/rust-gpu graphics cases are reduced source slices copied from
-fixture-backed upstream examples so the demo remains small and deterministic.
-The reductions remove unrelated code around the shader construct being
-demonstrated; they do not patch translator output.
+The DirectX, glslang, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK,
+Rust-GPU VulkanShaderExamples, SPIRV-Tools, raylib, SaschaWillems triangle, and
+Slang cases keep upstream source files unchanged apart from repository
+formatting checks. The DirectX Hello Texture shader was retested after issue
+#783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
+The SaschaWillems headless compute shader was retested after issue #756 closed
+and is now checked for Metal, DirectX, and Vulkan output. The Vulkan Samples,
+Apple, and Rust-GPU/rust-gpu graphics cases are reduced source slices copied
+from fixture-backed upstream examples so the demo remains small and
+deterministic. The reductions remove unrelated code around the shader construct
+being demonstrated; they do not patch translator output.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses
@@ -88,6 +89,13 @@ was tested as a candidate and exposed target lowering gaps for
 That translator issue is tracked in issue #780, and the case is intentionally
 not checked in until generated target artifacts preserve the specialization
 constant semantics without placeholder output.
+
+The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
+at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate. It
+currently generates SPIR-V assembly, but Metal output still contains unresolved
+OpenCL scalar aliases and local pointer syntax, and OpenGL output drops helper
+function return values. That translator issue is tracked in issue #811, and the
+case is intentionally not checked in until target artifacts compile directly.
 
 The `shader-slang/slang` default-parameter compute shader from
 `tests/compute/default-parameter.slang` at
