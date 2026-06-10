@@ -321,6 +321,24 @@ def test_project_apis_reject_invalid_target_entries(tmp_path, operation):
             translate_project(repo, targets=["cgl", object()], output_dir="out")
 
 
+@pytest.mark.parametrize(
+    "option_name",
+    ["format_output", "validate", "run_toolchains"],
+)
+def test_translate_project_rejects_invalid_boolean_options(tmp_path, option_name):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=f"{option_name} must be a boolean"):
+        translate_project(
+            repo,
+            targets=["cgl"],
+            output_dir="out",
+            **{option_name: "false"},
+        )
+
+
 def test_project_config_accepts_single_string_sequence_fields(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -10112,6 +10130,25 @@ def test_project_report_readers_reject_invalid_path_values(reader, report_path):
         ),
     ):
         reader(report_path)
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [validate_project_report, inspect_project_report],
+)
+def test_project_report_readers_reject_invalid_run_toolchains_value(
+    tmp_path,
+    reader,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    with pytest.raises(ValueError, match="run_toolchains must be a boolean"):
+        reader(report_path, run_toolchains="false")
 
 
 def test_validate_project_report_rejects_invalid_project_metadata(tmp_path):

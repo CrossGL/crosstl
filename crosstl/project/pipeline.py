@@ -633,6 +633,12 @@ def _inspection_limit_arg(value: Any, *, field_name: str) -> int:
     return max(0, limit)
 
 
+def _bool_arg(value: Any, *, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
+
+
 def _mapping_key_path(prefix: str, key: str) -> str:
     if REPORT_PATH_BARE_KEY_RE.match(key):
         return f"{prefix}.{key}"
@@ -4965,6 +4971,9 @@ def translate_project(
     run_toolchains: bool = False,
 ) -> ProjectPortabilityReport:
     """Translate all discovered project units to one or more target backends."""
+    format_output = _bool_arg(format_output, field_name="format_output")
+    validate = _bool_arg(validate, field_name="validate")
+    run_toolchains = _bool_arg(run_toolchains, field_name="run_toolchains")
     config = (
         config_or_root
         if isinstance(config_or_root, ProjectConfig)
@@ -6053,6 +6062,7 @@ def validate_project_report(
     report_path: str | os.PathLike[str], *, run_toolchains: bool = False
 ) -> dict[str, Any]:
     """Validate artifact existence and optional toolchain availability for a report."""
+    run_toolchains = _bool_arg(run_toolchains, field_name="run_toolchains")
     path = _filesystem_path_arg(report_path, field_name="Project report path")
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
@@ -6238,6 +6248,7 @@ def inspect_project_report(
     max_external_corpus_entries: int = EXTERNAL_CORPUS_INSPECTION_SAMPLE_LIMIT,
 ) -> dict[str, Any]:
     """Build a concise inspection summary for a project portability report."""
+    run_toolchains = _bool_arg(run_toolchains, field_name="run_toolchains")
     path = _filesystem_path_arg(report_path, field_name="Project report path")
     validation_report = validate_project_report(path, run_toolchains=run_toolchains)
     diagnostic_limit = _inspection_limit_arg(
