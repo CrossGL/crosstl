@@ -39,6 +39,58 @@ def test_preprocessor_function_like_macro_expansion():
     assert "2.0" in values
 
 
+def test_preprocessor_materializes_mlx_instantiate_kernel_macros():
+    code = """
+    #define instantiate_arange(name, itype, offset) \\
+        instantiate_kernel("arange" #name, arange, itype, offset)
+
+    template <typename T, int Offset>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = T(gid + Offset);
+    }
+
+    instantiate_arange(float32, float, 7);
+    instantiate_arange(float16, half, 3);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "template <typename T" not in output
+    assert "instantiate_kernel" not in output
+    assert '[[host_name("arangefloat32")]]' in output
+    assert "void arangefloat32(" in output
+    assert "device float* out" in output
+    assert "out[gid] = float(gid + 7);" in output
+    assert '[[host_name("arangefloat16")]]' in output
+    assert "void arangefloat16(" in output
+    assert "device half* out" in output
+    assert "out[gid] = half(gid + 3);" in output
+
+
+def test_preprocessor_materializes_mlx_decltype_instantiation_entries():
+    code = """
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = T(gid);
+    }
+
+    template [[host_name("arangefloat32")]] [[kernel]]
+    decltype(arange<float>) arange<float>;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "decltype(arange<float>)" not in output
+    assert '[[host_name("arangefloat32")]]' in output
+    assert "void arangefloat32(" in output
+    assert "device float* out" in output
+    assert "out[gid] = float(gid);" in output
+
+
 def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
     code = """
     #define DECLARE_TYPED(name, type) type name;

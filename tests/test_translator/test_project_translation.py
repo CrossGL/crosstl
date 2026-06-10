@@ -6587,6 +6587,57 @@ def test_translate_project_named_variants_apply_native_metal_preprocessor(
     assert "#if" not in release_output
 
 
+def test_translate_project_materializes_mlx_metal_instantiate_kernel_entries(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define instantiate_arange(name, itype, offset) \\
+                instantiate_kernel("arange" #name, arange, itype, offset)
+
+            template <typename T, int Offset>
+            [[kernel]] void arange(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = T(gid + Offset);
+            }
+
+            instantiate_arange(float32, float, 7);
+            instantiate_arange(float16, half, 3);
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["cgl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    output = (repo / "translated" / "cgl" / "shaders" / "arange.cgl").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
+    assert "void arangefloat32(" in output
+    assert "buffer_store(out_, gid, float(gid + 7));" in output
+    assert "void arangefloat16(" in output
+    assert "buffer_store(out_, gid, float16(gid + 3));" in output
+    assert "void arange(" not in output
+
+
 def test_translate_project_named_variants_apply_native_slang_preprocessor(
     tmp_path,
 ):
