@@ -57,6 +57,35 @@ def test_hashcat_opaque_kernel_parameter_pack_macro_codegen_reparse():
     assert "GID_CNT" in crossgl
 
 
+def test_hashcat_parenthesized_array_access_shift_index_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void cast_lookup(global uint *out, global uint *x, global uint *table) {
+            out[0] = table[(uint)(uchar)(((x[0xD / 4]) >> (8 * (3 - 0xD % 4))))];
+        }
+        """)
+
+    assert "fn cast_lookup(" in crossgl
+    assert ">>" in crossgl
+    assert "table[" in crossgl
+
+
+def test_hashcat_address_space_macro_parameters_codegen_reparse():
+    crossgl = generate_crossgl("""
+        kernel void copy_macro_spaces(GLOBAL_AS const uint *in_buf,
+                                      GLOBAL_AS uint *out,
+                                      LOCAL_AS uint *scratch) {
+            uint lid = get_local_id(0);
+            scratch[lid] = in_buf[lid];
+            barrier(CLK_LOCAL_MEM_FENCE);
+            out[lid] = scratch[lid];
+        }
+        """)
+
+    assert "@binding(0) var<storage, read_write> in_buf: array<u32>" in crossgl
+    assert "@binding(1) var<storage, read_write> out: array<u32>" in crossgl
+    assert "var<workgroup> scratch: array<u32>" in crossgl
+
+
 def test_opencl_local_memory_and_barrier_codegen_reparse():
     crossgl = generate_crossgl("""
         __attribute__((reqd_work_group_size(256, 1, 1)))

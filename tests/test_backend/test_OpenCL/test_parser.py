@@ -75,6 +75,36 @@ def test_hashcat_opaque_kernel_parameter_pack_macro_parses():
     assert kernel.params == []
 
 
+def test_hashcat_parenthesized_array_access_shift_index_parses():
+    ast = parse_code("""
+        kernel void cast_lookup(global uint *out, global uint *x, global uint *table) {
+            out[0] = table[(uint)(uchar)(((x[0xD / 4]) >> (8 * (3 - 0xD % 4))))];
+        }
+        """)
+
+    kernel = ast.statements[0]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.name == "cast_lookup"
+
+
+def test_hashcat_address_space_macro_declaration_parses():
+    ast = parse_code("""
+        CONSTANT_VK uint table[2] = { 1, 2 };
+
+        kernel void compare(global uint *out, GLOBAL_AS const digest_t *digests_buf) {
+            for (int digest_pos = 0; digest_pos < DIGESTS_CNT; digest_pos++) {
+                GLOBAL_AS const digest_t *digest = digests_buf + digest_pos;
+                out[digest_pos] = digest->digest_buf[0];
+            }
+        }
+        """)
+
+    assert ast.statements[0].qualifiers == ["__constant__"]
+    kernel = ast.statements[1]
+    assert isinstance(kernel, KernelNode)
+    assert kernel.params[1]["type"] == "__global__ const digest_t *"
+
+
 def test_local_memory_and_barrier_parse_from_arrayfire_pattern():
     ast = parse_code("""
         kernel void reduce_first_kernel(global float *out, const global float *in) {

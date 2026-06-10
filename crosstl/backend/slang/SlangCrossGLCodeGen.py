@@ -1422,22 +1422,41 @@ class SlangToCrossGLConverter:
 
     def generate_global_variable(self, node):
         if isinstance(node, AssignmentNode):
-            left = self.generate_variable_declaration(node.left, has_initializer=True)
+            left = self.generate_variable_declaration(
+                node.left, has_initializer=True, initializer=node.right
+            )
             right = self.generate_expression(node.right, False)
             return f"    {left} {node.operator} {right};\n"
         return f"    {self.generate_variable_declaration(node)};\n"
 
-    def generate_variable_declaration(self, node, has_initializer=False):
+    def generate_variable_declaration(
+        self, node, has_initializer=False, initializer=None
+    ):
         qualifiers = self.format_global_variable_qualifiers(
             node, has_initializer=has_initializer
         )
         if qualifiers:
             qualifiers += " "
+        variable_type = self.resolve_variable_declaration_type(node, initializer)
         return (
-            f"{qualifiers}{self.map_type(node.vtype)} "
+            f"{qualifiers}{self.map_type(variable_type)} "
             f"{self.format_identifier(node.name)}{self.format_array_suffixes(node)}"
             f"{self.format_variable_metadata(node)}"
         )
+
+    def resolve_variable_declaration_type(self, node, initializer=None):
+        vtype = getattr(node, "vtype", None)
+        storage_modifier = getattr(node, "storage_modifier", None)
+        if vtype in {"let", "var"} and storage_modifier in {"let", "var"}:
+            inferred_type = self.infer_type_from_initializer(initializer)
+            if inferred_type is not None:
+                return inferred_type
+        return vtype
+
+    def infer_type_from_initializer(self, initializer):
+        if isinstance(initializer, VectorConstructorNode):
+            return initializer.type_name
+        return None
 
     def format_global_variable_qualifiers(self, node, has_initializer=False):
         allowed_qualifiers = {"extern", "static", "const", "constexpr"}

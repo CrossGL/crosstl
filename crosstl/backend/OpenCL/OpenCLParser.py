@@ -212,6 +212,8 @@ class OpenCLParser(HipParser):
         "OR",
         "LOGICAL_AND",
         "LOGICAL_OR",
+        "LSHIFT",
+        "RSHIFT",
         "PIPE",
         "XOR",
         "QUESTION",

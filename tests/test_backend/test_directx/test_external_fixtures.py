@@ -72,6 +72,7 @@ FIDELITYFX_SDK_COMMIT = "e236f2304dcda35f282fdddd085f41e2ff48c86a"
 WICKED_ENGINE_REPO = "https://github.com/turanszkij/WickedEngine"
 WICKED_ENGINE_COMMIT = "9df7a530aed53cc59b345f751939e513170ddf3c"
 WICKED_ENGINE_CONDITION_LOOKAHEAD_COMMIT = "448b0f1c4447f94bc328b712fbabce0e0ced8cba"
+WICKED_ENGINE_PRECISION_QUALIFIER_COMMIT = "4188226af2b13ae947f02553a61f8a82dcb05a94"
 UNITY_BUILT_IN_SHADERS_REPO = "https://github.com/TwoTailsGames/Unity-Built-in-Shaders"
 UNITY_BUILT_IN_SHADERS_COMMIT = "6a63f93bc1f20ce6cd47f981c7494e8328915621"
 
@@ -1705,6 +1706,25 @@ EXTERNAL_FIXTURES = [
             "else if (lod < minLod)",
             "for (lod = 0; lod < 4; ++lod)",
             "uvec2 write_coord = DTid.xy >> lod;",
+        ),
+    ),
+    ExternalFixture(
+        name="wickedengine_brdf_precision_qualifiers",
+        repo=WICKED_ENGINE_REPO,
+        commit=WICKED_ENGINE_PRECISION_QUALIFIER_COMMIT,
+        path="WickedEngine/shaders/brdf.hlsli",
+        code=textwrap.dedent("""
+            half D_GGX(half roughness, highp float NoH, const float3 h)
+            {
+                highp float oneMinusNoHSquared = 1.0 - NoH * NoH;
+                mediump half d = roughness;
+                return d;
+            }
+        """).strip(),
+        contains=(
+            "float16 D_GGX(float16 roughness, float NoH, const vec3 h)",
+            "float oneMinusNoHSquared = 1.0 - (NoH * NoH);",
+            "float16 d = roughness;",
         ),
     ),
     ExternalFixture(

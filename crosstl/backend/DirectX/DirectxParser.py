@@ -146,7 +146,15 @@ INTERPOLATION_QUALIFIER_TOKENS = {
     "SAMPLE",
 }
 
-CONTEXTUAL_QUALIFIER_IDENTIFIERS = {"center", "shared", "snorm", "unorm"}
+CONTEXTUAL_QUALIFIER_IDENTIFIERS = {
+    "center",
+    "highp",
+    "lowp",
+    "mediump",
+    "shared",
+    "snorm",
+    "unorm",
+}
 CONTEXTUAL_RESOURCE_IDENTIFIER_TOKENS = {
     "TEXTURE1D",
     "TEXTURE1DARRAY",

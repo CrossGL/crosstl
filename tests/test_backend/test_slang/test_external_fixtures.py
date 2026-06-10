@@ -36,6 +36,10 @@ EXTERNAL_REPOS = {
         "url": "https://github.com/shader-slang/slang",
         "commit": "0658ed79219d6e4ee526182104ce71d476f787be",
     },
+    "shader-slang/slang-master-2026-06-10": {
+        "url": "https://github.com/shader-slang/slang",
+        "commit": "29e69b0bf626f87500be73a7fb3764db25658c66",
+    },
     "shader-slang/slang-main-2026-06-09-dyn-interface": {
         "url": "https://github.com/shader-slang/slang",
         "commit": "1fc15d23f67005325103a888a175a96ba1782ac2",
@@ -348,6 +352,34 @@ EXTERNAL_FIXTURES = [
             "a = -1.#INF;",
             "outputBuffer[idx] = a;",
         ],
+    },
+    {
+        # Source: https://github.com/shader-slang/slang
+        # Commit: 29e69b0bf626f87500be73a7fb3764db25658c66
+        # Path: tests/bugs/infer-var-type-constant-folding.slang
+        "id": "slang_inferred_static_const_globals_codegen_reparse",
+        "repo": "shader-slang/slang-master-2026-06-10",
+        "path": "tests/bugs/infer-var-type-constant-folding.slang",
+        "source": (
+            """
+            RWStructuredBuffer<int> outputBuffer;
+
+            static const let C = float(3);
+            static const let D = int(4 + 4 + int(C));
+
+            void computeMain()
+            {
+                outputBuffer[0] = D;
+            }
+        """
+        ),
+        "crossgl": True,
+        "contains": [
+            "static const float C = float(3);",
+            "static const int D = int(4 + 4 + int(C));",
+            "outputBuffer[0] = D;",
+        ],
+        "not_contains": ["static const let", "static const var"],
     },
     {
         # Source: https://github.com/shader-slang/slang

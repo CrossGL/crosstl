@@ -11,10 +11,10 @@ from .preprocessor import OpenCLPreprocessor
 
 OPENCL_TOKENS = (
     ("__GLOBAL__", r"\b(?:__kernel|kernel)\b"),
-    ("__DEVICE__", r"\b(?:__global|global)\b"),
-    ("__SHARED__", r"\b(?:__local|local|LOCAL_PTR)\b"),
-    ("__CONSTANT__", r"\b(?:__constant|constant)\b"),
-    ("__MANAGED__", r"\b(?:__private|private)\b"),
+    ("__DEVICE__", r"\b(?:__global|global|GLOBAL_AS)\b"),
+    ("__SHARED__", r"\b(?:__local|local|LOCAL_AS|LOCAL_PTR)\b"),
+    ("__CONSTANT__", r"\b(?:__constant|constant|CONSTANT_AS|CONSTANT_VK)\b"),
+    ("__MANAGED__", r"\b(?:__private|private|PRIVATE_AS)\b"),
     ("__GENERIC__", r"\b(?:__generic|generic)\b"),
     ("__RESTRICT__", r"\b(?:__restrict__|__restrict|restrict)\b"),
     ("CONST", r"\b(?:__const|__const__)\b"),

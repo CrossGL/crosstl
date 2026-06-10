@@ -1047,7 +1047,7 @@ class RustParser:
 
             field_visibility = None
             if self.current_token[0] == "PUB":
-                field_visibility = self.parse_visibility()
+                field_visibility = self.parse_tuple_struct_field_visibility()
 
             field_type = self.parse_type()
             fields.append(
@@ -1067,6 +1067,19 @@ class RustParser:
 
         self.eat("RPAREN")
         return fields
+
+    def parse_tuple_struct_field_visibility(self):
+        if not self.pub_starts_restricted_visibility():
+            self.eat("PUB")
+            return "pub"
+        return self.parse_visibility()
+
+    def pub_starts_restricted_visibility(self):
+        if self.current_token[0] != "PUB" or self.peek_token_type() != "LPAREN":
+            return False
+
+        next_token = self.peek_token_type(2)
+        return next_token in {"CRATE", "SELF", "SUPER", "IN"}
 
     def parse_enum(self, attributes=None, visibility=None):
         self.eat("ENUM")
@@ -1917,7 +1930,9 @@ class RustParser:
             if depth == 0 and token_type in terminators:
                 break
 
-            if token_type in {"LESS_THAN", "LPAREN", "LBRACKET"}:
+            if token_type == "SHIFT_LEFT":
+                depth += 2
+            elif token_type in {"LESS_THAN", "LPAREN", "LBRACKET"}:
                 depth += 1
             elif token_type == "SHIFT_RIGHT":
                 if depth > 1:

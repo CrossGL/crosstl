@@ -9648,7 +9648,11 @@ class GLSLCodeGen:
             if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 return self.generate_glsl_wave_operation(original_func_name, expr.args)
 
-            self.validate_glsl_buffer_block_atomic_call(original_func_name, expr.args)
+            glsl_memory_atomic_call = self.generate_glsl_memory_atomic_call(
+                original_func_name, expr.args
+            )
+            if glsl_memory_atomic_call is not None:
+                return glsl_memory_atomic_call
 
             saturate_call = self.generate_saturate_call(original_func_name, expr.args)
             if saturate_call is not None:
@@ -10879,6 +10883,10 @@ class GLSLCodeGen:
             value_type = self.glsl_buffer_block_atomic_argument_type(value_arg)
             if value_type is None or value_type == target_type:
                 continue
+            if self.glsl_unsigned_atomic_literal_is_compatible(
+                value_arg, value_type, target_type
+            ):
+                continue
             raise ValueError(
                 f"OpenGL buffer block atomic '{func_name}' requires {target_type} "
                 f"{label} argument for {target_name}: "
@@ -10902,6 +10910,52 @@ class GLSLCodeGen:
         if result_type is None:
             return None
         return self.map_type(result_type)
+
+    def glsl_unsigned_atomic_literal_is_compatible(
+        self, value_arg, value_type, target_type
+    ):
+        if target_type != "uint" or value_type != "int":
+            return False
+        literal_value = self.literal_int_value(value_arg, self.literal_int_constants)
+        return literal_value is not None and literal_value >= 0
+
+    def generate_glsl_memory_atomic_call(self, func_name, args):
+        if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
+            return None
+
+        self.validate_glsl_buffer_block_atomic_call(func_name, args)
+
+        target_type = self.expression_result_type(args[0])
+        target_type = self.map_type(target_type) if target_type is not None else None
+        rendered_args = [self.generate_expression(args[0])]
+        value_arg_ids = {
+            id(value_arg)
+            for value_arg, _ in self.glsl_buffer_block_atomic_value_arguments(
+                func_name, args
+            )
+        }
+
+        for arg in args[1:]:
+            if id(arg) in value_arg_ids and target_type in {"int", "uint"}:
+                rendered_args.append(
+                    self.generate_glsl_memory_atomic_value_argument(arg, target_type)
+                )
+            else:
+                rendered_args.append(self.generate_expression(arg))
+
+        return f"{func_name}({', '.join(rendered_args)})"
+
+    def generate_glsl_memory_atomic_value_argument(self, arg, target_type):
+        value_type = self.glsl_buffer_block_atomic_argument_type(arg)
+        if value_type == target_type:
+            return self.generate_expression_with_expected(arg, target_type)
+        if self.glsl_unsigned_atomic_literal_is_compatible(
+            arg, value_type, target_type
+        ):
+            literal_value = self.literal_int_value(arg, self.literal_int_constants)
+            if literal_value is not None:
+                return f"{literal_value}u"
+        return self.generate_expression(arg)
 
     def generate_glsl_buffer_block_mutation_target(self, expr):
         self.glsl_buffer_block_read_validation_suppression += 1

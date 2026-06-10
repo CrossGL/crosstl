@@ -2381,6 +2381,25 @@ def test_nested_qualified_associated_type_generic_from_rust_gpu():
     )
 
 
+def test_nested_generic_qualified_associated_type_from_bevy_pipeline_specializer():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_render/src/render_resource/pipeline_specializer.rs.
+    code = """
+    type VertexLayoutCache<S> = HashMap<
+        VertexBufferLayout,
+        HashMap<<S as SpecializedMeshPipeline>::Key, CachedRenderPipelineId>,
+    >;
+    """
+
+    ast = parse_code(code)
+
+    assert ast.type_aliases[0].alias_type == (
+        "HashMap<VertexBufferLayout, "
+        "HashMap<<S as SpecializedMeshPipeline>::Key, CachedRenderPipelineId>,>"
+    )
+
+
 def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handler():
     # Reduced from https://github.com/bevyengine/bevy commit
     # 67f441da62424f83a1bb6e3f5145034e0583d495,
@@ -2396,6 +2415,21 @@ def test_higher_ranked_function_pointer_tuple_struct_field_from_bevy_error_handl
     assert ast.structs[0].members[0].vtype == (
         "for<'a> fn(&RenderError, &mut World, &mut World) -> RenderErrorPolicy"
     )
+
+
+def test_public_tuple_type_tuple_struct_field_from_bevy_skybox():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_core_pipeline/src/skybox/mod.rs.
+    code = """
+    pub struct SkyboxBindGroup(pub (BindGroup, u32));
+    """
+
+    ast = parse_code(code)
+    member = ast.structs[0].members[0]
+
+    assert member.visibility == "pub"
+    assert member.vtype == "(BindGroup, u32)"
 
 
 def test_double_reference_type_and_expression_parsing():

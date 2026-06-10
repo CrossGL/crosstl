@@ -17605,6 +17605,34 @@ def test_codegen_mixed_ssbo_invalid_glsl_atomic_argument_types_raise():
         GLSLCodeGen().generate(shader_ast)
 
 
+def test_codegen_mixed_ssbo_uint_atomics_accept_unsuffixed_integer_literals():
+    code = """
+    #version 450 core
+    layout(std430, binding = 26) buffer AtomicLiteralBlock {
+        uint counter;
+        uint bins[4];
+    } atomicLiteralBlock;
+
+    void main() {
+        uint oldCounter = atomicAdd(atomicLiteralBlock.counter, 1);
+        uint swapped = atomicCompSwap(atomicLiteralBlock.bins[0], 0, 7);
+        atomicExchange(atomicLiteralBlock.bins[1], 3);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    assert "atomicAdd(atomicLiteralBlock.counter, 1)" in crossgl
+    assert "atomicCompSwap(atomicLiteralBlock.bins[0], 0, 7)" in crossgl
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    glsl = GLSLCodeGen().generate(shader_ast)
+
+    assert "uint oldCounter = atomicAdd(atomicLiteralBlock.counter, 1u);" in glsl
+    assert "uint swapped = atomicCompSwap(atomicLiteralBlock.bins[0], 0u, 7u);" in glsl
+    assert "atomicExchange(atomicLiteralBlock.bins[1], 3u);" in glsl
+
+
 def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     code = """
     #version 300 es

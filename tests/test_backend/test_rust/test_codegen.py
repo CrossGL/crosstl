@@ -526,6 +526,46 @@ def test_bevy_higher_ranked_function_pointer_tuple_struct_field_reparse():
     CrossGLParser(CrossGLLexer(result).tokens).parse()
 
 
+def test_bevy_public_tuple_type_tuple_struct_field_reparse():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_core_pipeline/src/skybox/mod.rs.
+    code = """
+    pub struct SkyboxBindGroup(pub (BindGroup, u32));
+    """
+
+    result = parse_and_generate(code)
+
+    assert "struct SkyboxBindGroup {" in result
+    assert "Tuple<BindGroup, uint> field0;" in result
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
+def test_bevy_nested_generic_qualified_associated_type_reparse():
+    # Reduced from https://github.com/bevyengine/bevy commit
+    # fd4f66fc36ec9f8181afe85d65e22c52b14e86a9,
+    # crates/bevy_render/src/render_resource/pipeline_specializer.rs.
+    code = """
+    type VertexLayoutCache<S> = HashMap<
+        VertexBufferLayout,
+        HashMap<<S as SpecializedMeshPipeline>::Key, CachedRenderPipelineId>,
+    >;
+
+    fn get(cache: VertexLayoutCache<S>) {
+        cache;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "void get(HashMap<VertexBufferLayout, "
+        "HashMap<S_as_SpecializedMeshPipeline__Key_, CachedRenderPipelineId>> cache)"
+        in result
+    )
+    CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+
 def test_value_returning_function_uses_final_literal_expression_as_return():
     code = r"""
     fn zero() -> u32 {
