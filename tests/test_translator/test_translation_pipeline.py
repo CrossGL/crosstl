@@ -360,6 +360,42 @@ def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     assert "uint2 id : SV_DispatchThreadID" not in generated
 
 
+def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-threadgroup-scratch.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void mat_mul(
+            device float* out [[buffer(0)]],
+            uint tid [[thread_index_in_threadgroup]]
+        ) {
+            threadgroup float scratch[256];
+            scratch[tid] = 1.0;
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            out[tid] = scratch[tid];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "groupshared float mat_mul_scratch[256];" in generated
+    assert "threadgroup float" not in generated
+    assert "    groupshared float scratch[256];" not in generated
+    assert "mat_mul_scratch[tid] = 1.0;" in generated
+    assert "out_.Store(tid, mat_mul_scratch[tid]);" in generated
+    assert "GroupMemoryBarrierWithGroupSync();" in generated
+    assert generated.index(
+        "groupshared float mat_mul_scratch[256];"
+    ) < generated.index("void CSMain")
+
+
 def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
     tmp_path,
 ):
