@@ -1,0 +1,22 @@
+#version 450
+
+shader main {
+    struct VertexInput {
+    vec2 inPosition @location(0);
+    vec3 inColor @location(1);
+    };
+
+    struct VertexOutput {
+    vec3 outFragColor @location(0);
+    vec4 gl_Position @ gl_Position;
+    };
+
+    vertex {
+    VertexOutput main(VertexInput input) {
+        VertexOutput output;
+        output.gl_Position = vec4(input.inPosition, 0.0, 1.0);
+        output.outFragColor = input.inColor;
+        return output;
+    }
+    }
+}

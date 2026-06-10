@@ -90,6 +90,7 @@ jobs:
             --case directx-graphics-samples-hello-texture \
             --case glslang-push-constant-vertex \
             --case lonelydevil-vulkan-tutorial-triangle \
+            --case nvpro-vk-mini-samples-rectangle \
             --case ogl-samples-flat-color \
             --case opencl-sdk-saxpy \
             --case raylib-base-fragment \

@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/rectangle.vert.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 23,
+        "endOffset": 462,
+        "file": "crosstl-out/cgl/rectangle.vert.cgl",
+        "length": 462,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 31,
+        "endOffset": 975,
+        "file": "rectangle.vert.glsl",
+        "length": 975,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

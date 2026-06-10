@@ -95,6 +95,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/NVIDIA/cuda-samples/blob/b7c5481c556c3fe98db060207ecaa41a4b9a9abc/LICENSE
 
+## nvpro-samples/vk_mini_samples
+
+- Repository: https://github.com/nvpro-samples/vk_mini_samples
+- Commit: `994ac9f446ef44962c563b9600c8e9f117a3725d`
+- Source paths:
+  - `samples/rectangle/shaders/rectangle.vert.glsl`
+  - `samples/rectangle/shaders/rectangle.frag.glsl`
+- License: Apache-2.0
+- License URL:
+  https://github.com/nvpro-samples/vk_mini_samples/blob/994ac9f446ef44962c563b9600c8e9f117a3725d/LICENSE
+
 ## g-truc/ogl-samples
 
 - Repository: https://github.com/g-truc/ogl-samples

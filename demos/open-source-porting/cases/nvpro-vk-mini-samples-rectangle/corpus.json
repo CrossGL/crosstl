@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "nvpro vk_mini_samples rectangle shaders",
+  "description": "Pinned GLSL shader pair used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "nvpro-vk-mini-samples-rectangle-vertex",
+      "path": "rectangle.vert.glsl",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "opengl", "vulkan"],
+      "repository": "https://github.com/nvpro-samples/vk_mini_samples",
+      "commit": "994ac9f446ef44962c563b9600c8e9f117a3725d",
+      "sourceUrl": "https://github.com/nvpro-samples/vk_mini_samples/blob/994ac9f446ef44962c563b9600c8e9f117a3725d/samples/rectangle/shaders/rectangle.vert.glsl"
+    },
+    {
+      "id": "nvpro-vk-mini-samples-rectangle-fragment",
+      "path": "rectangle.frag.glsl",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "opengl", "vulkan"],
+      "repository": "https://github.com/nvpro-samples/vk_mini_samples",
+      "commit": "994ac9f446ef44962c563b9600c8e9f117a3725d",
+      "sourceUrl": "https://github.com/nvpro-samples/vk_mini_samples/blob/994ac9f446ef44962c563b9600c8e9f117a3725d/samples/rectangle/shaders/rectangle.frag.glsl"
+    }
+  ]
+}
