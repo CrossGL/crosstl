@@ -114,7 +114,7 @@ was retested after issue #776 closed and is now checked for Metal and Vulkan
 output. The `Rust-GPU/rust-gpu` graphics stage-input slice is checked for
 CrossGL, OpenGL, Metal, and Vulkan output. Rust-GPU compute examples still
 need Rust `Option<T>`, fixed-size array, and unsigned-constant lowering for
-Metal and SPIR-V targets; that translator issue is tracked in issue #775.
+Metal and SPIR-V targets; that translator issue is tracked in issue #809.
 
 The `ROCm/rocm-examples` bit-extract HIP kernel was retested after issue #778
 closed. The generated artifacts now preserve a compute entry point, but Metal
