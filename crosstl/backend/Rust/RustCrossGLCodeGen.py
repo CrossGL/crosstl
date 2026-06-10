@@ -1351,8 +1351,12 @@ class RustToCrossGLConverter:
             return expression.struct_name
         if isinstance(expression, LabeledBlockNode):
             return self.infer_block_expression_value_type(expression.body)
+        if isinstance(expression, ArrayNode):
+            return self.infer_array_value_type(expression)
         if isinstance(expression, BinaryOpNode):
             return self.infer_binary_expression_value_type(expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.infer_value_type(expression.operand)
         if isinstance(expression, FunctionCallNode):
             return self.infer_function_call_return_type(expression)
         if isinstance(expression, TernaryOpNode):
@@ -1379,6 +1383,9 @@ class RustToCrossGLConverter:
         if self.is_block_expression_node(expression):
             return self.infer_block_expression_value_type(expression)
         if isinstance(expression, str):
+            literal_type = self.infer_numeric_literal_type(expression)
+            if literal_type is not None:
+                return literal_type
             path_type = self.infer_path_value_type(expression)
             if path_type is not None:
                 return path_type
@@ -1387,6 +1394,80 @@ class RustToCrossGLConverter:
         ):
             return self.lookup_value_type(self.generate_expression(expression))
         return None
+
+    def infer_array_value_type(self, expression):
+        array_size = self.infer_array_literal_size(expression)
+        if array_size is None:
+            return None
+
+        element_types = [
+            self.infer_value_type(element)
+            for element in getattr(expression, "elements", []) or []
+        ]
+        element_type = self.common_array_element_type(element_types)
+        if element_type is None:
+            return None
+        return f"{element_type}[{array_size}]"
+
+    def infer_array_literal_size(self, expression):
+        if getattr(expression, "size", None) is not None:
+            size = self.generate_expression(expression.size)
+            if size:
+                return str(size).strip()
+            return None
+
+        elements = getattr(expression, "elements", []) or []
+        if elements:
+            return str(len(elements))
+        return None
+
+    def infer_numeric_literal_type(self, expression):
+        if not isinstance(expression, str):
+            return None
+
+        match = RUST_NUMERIC_LITERAL_RE.match(expression.strip())
+        if match is None:
+            return None
+
+        body = match.group("body") or ""
+        suffix = (match.group("suffix") or "").lstrip("_").lower()
+        if suffix in {"f32"}:
+            return "float"
+        if suffix in {"f64"}:
+            return "double"
+        if suffix.startswith("u"):
+            return "uint"
+        if suffix.startswith("i"):
+            return "int"
+        if "." in body or "e" in body.lower():
+            return "float"
+        return "int"
+
+    def common_array_element_type(self, element_types):
+        if not element_types or any(not element_type for element_type in element_types):
+            return None
+
+        mapped_types = [self.map_type(element_type) for element_type in element_types]
+        if any(element_type == "double" for element_type in mapped_types):
+            return "double"
+        if any(element_type == "float" for element_type in mapped_types):
+            return "float"
+        if all(element_type == "uint" for element_type in mapped_types):
+            return "uint"
+        if all(element_type in {"int", "uint"} for element_type in mapped_types):
+            return "int"
+        first_type = mapped_types[0]
+        if all(element_type == first_type for element_type in mapped_types):
+            return first_type
+        return None
+
+    def inferred_array_declarator(self, type_name, target_name):
+        if not type_name:
+            return None
+
+        if self.split_array_type(self.map_type(type_name)) is None:
+            return None
+        return self.format_typed_declarator(type_name, target_name)
 
     def infer_binary_expression_value_type(self, expression):
         if expression.op in {"==", "!=", "<", ">", "<=", ">=", "&&", "||"}:
@@ -2761,6 +2842,14 @@ class RustToCrossGLConverter:
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
                 self.add_value_type(target_name, inferred_type)
+                inferred_declarator = self.inferred_array_declarator(
+                    inferred_type,
+                    target_name,
+                )
+                if inferred_declarator is not None:
+                    return (
+                        prelude + f"{indent_str}{inferred_declarator} = {value_str};\n"
+                    )
             return prelude + f"{indent_str}{let_keyword} {target_name} = {value_str};\n"
 
         if isinstance(stmt.value, ClosureNode):
@@ -2792,6 +2881,12 @@ class RustToCrossGLConverter:
             inferred_type = self.infer_value_type(stmt.value)
             if inferred_type:
                 self.add_value_type(target_name, inferred_type)
+                inferred_declarator = self.inferred_array_declarator(
+                    inferred_type,
+                    target_name,
+                )
+                if inferred_declarator is not None:
+                    return f"{indent_str}{inferred_declarator} = {value_str};\n"
             return f"{indent_str}{let_keyword} {target_name} = {value_str};\n"
         else:
             target_name = self.declare_local_alias(stmt.name)
