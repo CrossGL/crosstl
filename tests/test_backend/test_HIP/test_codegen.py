@@ -17302,6 +17302,8 @@ class TestHipCodeGen:
             unsigned int oct = 0777u;
             float x = 1e-3f;
             float y = .5f;
+            float hex = 0x1.0p-14f;
+            float separated = 0x1.ffff'ffp-1f;
             return mask | bits | oct;
         }
         """
@@ -17318,7 +17320,10 @@ class TestHipCodeGen:
         assert "var oct: u32 = 0777u;" in result
         assert "var x: f32 = 1e-3f;" in result
         assert "var y: f32 = .5f;" in result
+        assert "var hex: f32 = 0x1.0p-14f;" in result
+        assert "var separated: f32 = 0x1.ffffffp-1f;" in result
         assert "return ((mask | bits) | oct);" in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_boolean_null_and_character_literal_conversion(self):
         code = r"""

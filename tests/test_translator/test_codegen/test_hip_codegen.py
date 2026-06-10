@@ -106,6 +106,30 @@ def compile_matrix_helpers_if_cxx_available(helper_code, tmp_path):
 
 
 class TestHipCodeGen:
+    def test_generic_trait_methods_are_diagnostic_for_hip_codegen(self):
+        source_code = """
+        shader GenericTraitMethodDiagnostic {
+            trait Mapper {
+                fn map<T>(value: T) -> T {
+                    return value;
+                }
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"HIP codegen does not support generic functions \(T\); "
+                r"specialize the function before HIP generation"
+            ),
+        ):
+            HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
     def test_simple_function_generation(self):
         source_code = """
         shader TestShader {

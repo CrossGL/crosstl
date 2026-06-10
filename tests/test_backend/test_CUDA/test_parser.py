@@ -4463,6 +4463,8 @@ class TestCudaParser:
             unsigned int oct = 0777u;
             float x = 1e-3f;
             float y = .5f;
+            float hex = 0x1.0p-14f;
+            float separated = 0x1.ffff'ffp-1f;
             int batch = 1'000;
             int tokens = 1'000'000;
             return mask | bits | oct;
@@ -4479,8 +4481,10 @@ class TestCudaParser:
         assert body[2].value == "0777u"
         assert body[3].value == "1e-3f"
         assert body[4].value == ".5f"
-        assert body[5].value == "1'000"
-        assert body[6].value == "1'000'000"
+        assert body[5].value == "0x1.0p-14f"
+        assert body[6].value == "0x1.ffff'ffp-1f"
+        assert body[7].value == "1'000"
+        assert body[8].value == "1'000'000"
 
     def test_character_literal_parsing(self):
         code = r"""

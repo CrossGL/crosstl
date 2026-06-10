@@ -2113,6 +2113,42 @@ def test_parse_cbuffer_preserves_buffer_and_member_bindings():
     assert cbuffer.members[1].register is None
 
 
+def test_parse_cbuffer_effect_annotation_before_body_from_fx_style_sample():
+    ast = parse_code("""
+    cbuffer FrameData : register(b0, space1)
+    <
+        string UIName = "Frame";
+        bool Visible = true;
+    >
+    {
+        row_major float4x4 viewProj : packoffset(c0);
+        precise float exposure : packoffset(c4.x);
+    };
+
+    tbuffer LookupData : register(t3, space2)
+    <
+        string UIName = "Lookup";
+    >
+    {
+        float4 values[4] : packoffset(c0);
+    };
+    """)
+
+    frame, lookup = ast.cbuffers
+
+    assert frame.name == "FrameData"
+    assert frame.register == "b0, space1"
+    assert [member.name for member in frame.members] == ["viewProj", "exposure"]
+    assert frame.members[0].packoffset == "c0"
+    assert frame.members[1].qualifiers == ["precise"]
+    assert frame.members[1].packoffset == "c4.x"
+    assert lookup.name == "LookupData"
+    assert lookup.is_tbuffer is True
+    assert lookup.register == "t3, space2"
+    assert lookup.members[0].array_sizes == [4]
+    assert lookup.members[0].packoffset == "c0"
+
+
 def test_parse_anonymous_old_style_cbuffer_uses_synthetic_name():
     code = """
     cbuffer : register(b1)

@@ -1937,6 +1937,7 @@ class HLSLParser:
         if name is None:
             name = self.synthetic_cbuffer_name(cbuffer_register)
 
+        self.skip_effect_declaration_suffixes()
         self.eat("LBRACE")
         members = []
         methods = []

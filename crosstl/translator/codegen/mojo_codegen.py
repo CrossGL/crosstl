@@ -69,6 +69,9 @@ from .enum_utils import (
     generic_type_parts,
     type_node_contains_generic_parameter,
 )
+from .generic_function_utils import (
+    reject_unsupported_generic_functions as reject_generic_functions_for_target,
+)
 from .image_access_contracts import (
     explicit_image_format,
     image_format_channel_count,
@@ -3487,27 +3490,7 @@ class MojoCodeGen:
         visit(ast)
 
     def reject_unsupported_generic_functions(self, ast):
-        functions = list(getattr(ast, "functions", []))
-        for stage in (getattr(ast, "stages", {}) or {}).values():
-            entry_point = getattr(stage, "entry_point", None)
-            if entry_point is not None:
-                functions.append(entry_point)
-            functions.extend(getattr(stage, "local_functions", []) or [])
-
-        for func in functions:
-            generic_params = getattr(func, "generic_params", []) or []
-            if not generic_params:
-                continue
-            names = [
-                getattr(param, "name", str(param))
-                for param in generic_params
-                if getattr(param, "name", str(param))
-            ]
-            suffix = f" ({', '.join(names)})" if names else ""
-            raise ValueError(
-                f"Mojo codegen does not support generic functions{suffix}; "
-                "specialize the function before Mojo generation"
-            )
+        reject_generic_functions_for_target(ast, "Mojo")
 
     def maybe_register_generic_enum_type(self, type_value, specializations):
         type_text = self.type_name(type_value)

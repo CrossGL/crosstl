@@ -58,6 +58,9 @@ from .enum_utils import (
     generic_type_parts,
     resolve_generic_enum_specialization,
 )
+from .generic_function_utils import (
+    reject_unsupported_generic_functions as reject_generic_functions_for_target,
+)
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -21663,27 +21666,7 @@ class VulkanSPIRVCodeGen:
 
     def reject_unsupported_generic_functions(self, ast_node):
         """Reject generic functions before emitting non-specialized SPIR-V."""
-        functions = list(getattr(ast_node, "functions", []) or [])
-        for stage in (getattr(ast_node, "stages", {}) or {}).values():
-            entry_point = getattr(stage, "entry_point", None)
-            if entry_point is not None:
-                functions.append(entry_point)
-            functions.extend(getattr(stage, "local_functions", []) or [])
-
-        for func in functions:
-            generic_params = getattr(func, "generic_params", []) or []
-            if not generic_params:
-                continue
-            names = [
-                getattr(param, "name", str(param))
-                for param in generic_params
-                if getattr(param, "name", str(param))
-            ]
-            suffix = f" ({', '.join(names)})" if names else ""
-            raise ValueError(
-                f"SPIR-V codegen does not support generic functions{suffix}; "
-                "specialize the function before SPIR-V generation"
-            )
+        reject_generic_functions_for_target(ast_node, "SPIR-V")
 
     def generate(self, ast):
         """Generate SPIR-V code from a CrossGL AST."""

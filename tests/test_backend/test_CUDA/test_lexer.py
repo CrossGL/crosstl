@@ -214,7 +214,10 @@ class TestCudaLexer:
         ]
 
     def test_numeric_literal_tokenization(self):
-        code = "0xffu 0XCAFEull 0b1010u 0777u 1e-3f .5f 1'000 1'000'000"
+        code = (
+            "0xffu 0XCAFEull 0b1010u 0777u 1e-3f .5f "
+            "0x1.0p-14f 0x1.ffff'ffp-1f 1'000 1'000'000"
+        )
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
 
@@ -227,6 +230,8 @@ class TestCudaLexer:
             "0777u",
             "1e-3f",
             ".5f",
+            "0x1.0p-14f",
+            "0x1.ffff'ffp-1f",
             "1'000",
             "1'000'000",
         ]
