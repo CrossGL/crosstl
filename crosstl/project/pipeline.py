@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
+import operator
 import os
 import re
 import shutil
@@ -622,6 +623,14 @@ def _path_string_arg(value: Any, *, field_name: str) -> str:
             f"{field_name} must be a string or path-like object returning str"
         )
     return path_value
+
+
+def _inspection_limit_arg(value: Any, *, field_name: str) -> int:
+    try:
+        limit = operator.index(value)
+    except TypeError as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+    return max(0, limit)
 
 
 def _mapping_key_path(prefix: str, key: str) -> str:
@@ -6231,22 +6240,48 @@ def inspect_project_report(
     """Build a concise inspection summary for a project portability report."""
     path = _filesystem_path_arg(report_path, field_name="Project report path")
     validation_report = validate_project_report(path, run_toolchains=run_toolchains)
-    diagnostic_limit = max(0, max_diagnostics)
-    failed_artifact_limit = max(0, max_failed_artifacts)
-    source_map_artifact_limit = max(0, max_source_map_artifacts)
-    artifact_matrix_artifact_limit = max(0, max_artifact_matrix_artifacts)
-    artifact_provenance_artifact_limit = max(0, max_artifact_provenance_artifacts)
-    define_processing_artifact_limit = max(0, max_define_processing_artifacts)
-    skipped_source_limit = max(0, max_skipped_sources)
-    include_path_processing_artifact_limit = max(
-        0,
-        max_include_path_processing_artifacts,
+    diagnostic_limit = _inspection_limit_arg(
+        max_diagnostics, field_name="max_diagnostics"
     )
-    include_dependency_limit = max(0, max_include_dependencies)
-    validation_artifact_limit = max(0, max_validation_artifacts)
-    toolchain_run_limit = max(0, max_toolchain_runs)
-    migration_action_limit = max(0, max_migration_actions)
-    external_corpus_entry_limit = max(0, max_external_corpus_entries)
+    failed_artifact_limit = _inspection_limit_arg(
+        max_failed_artifacts, field_name="max_failed_artifacts"
+    )
+    source_map_artifact_limit = _inspection_limit_arg(
+        max_source_map_artifacts, field_name="max_source_map_artifacts"
+    )
+    artifact_matrix_artifact_limit = _inspection_limit_arg(
+        max_artifact_matrix_artifacts, field_name="max_artifact_matrix_artifacts"
+    )
+    artifact_provenance_artifact_limit = _inspection_limit_arg(
+        max_artifact_provenance_artifacts,
+        field_name="max_artifact_provenance_artifacts",
+    )
+    define_processing_artifact_limit = _inspection_limit_arg(
+        max_define_processing_artifacts,
+        field_name="max_define_processing_artifacts",
+    )
+    skipped_source_limit = _inspection_limit_arg(
+        max_skipped_sources, field_name="max_skipped_sources"
+    )
+    include_path_processing_artifact_limit = _inspection_limit_arg(
+        max_include_path_processing_artifacts,
+        field_name="max_include_path_processing_artifacts",
+    )
+    include_dependency_limit = _inspection_limit_arg(
+        max_include_dependencies, field_name="max_include_dependencies"
+    )
+    validation_artifact_limit = _inspection_limit_arg(
+        max_validation_artifacts, field_name="max_validation_artifacts"
+    )
+    toolchain_run_limit = _inspection_limit_arg(
+        max_toolchain_runs, field_name="max_toolchain_runs"
+    )
+    migration_action_limit = _inspection_limit_arg(
+        max_migration_actions, field_name="max_migration_actions"
+    )
+    external_corpus_entry_limit = _inspection_limit_arg(
+        max_external_corpus_entries, field_name="max_external_corpus_entries"
+    )
     diagnostics = list(validation_report.get("diagnostics", []))
     validation_result = validation_report.get("validation", {})
     validation_toolchains = (

@@ -21273,6 +21273,47 @@ def test_inspect_project_report_applies_custom_sample_limits(tmp_path, monkeypat
     assert len(payload["migration"]["actions"]) == 4
 
 
+@pytest.mark.parametrize(
+    "limit_name",
+    (
+        "max_diagnostics",
+        "max_failed_artifacts",
+        "max_source_map_artifacts",
+        "max_artifact_matrix_artifacts",
+        "max_artifact_provenance_artifacts",
+        "max_define_processing_artifacts",
+        "max_skipped_sources",
+        "max_include_path_processing_artifacts",
+        "max_include_dependencies",
+        "max_validation_artifacts",
+        "max_toolchain_runs",
+        "max_migration_actions",
+        "max_external_corpus_entries",
+    ),
+)
+@pytest.mark.parametrize(
+    "limit_value",
+    [
+        pytest.param(1.5, id="float"),
+        pytest.param(object(), id="object"),
+    ],
+)
+def test_inspect_project_report_rejects_invalid_sample_limits(
+    tmp_path,
+    limit_name,
+    limit_value,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl"])
+    report_path = repo / "portability-report.json"
+    report.write_json(report_path)
+
+    with pytest.raises(ValueError, match=f"{limit_name} must be an integer"):
+        inspect_project_report(report_path, **{limit_name: limit_value})
+
+
 def test_inspect_project_report_applies_artifact_matrix_sample_limit(tmp_path):
     report_path = _write_count_balanced_artifact_gap_report(tmp_path / "repo")
 
