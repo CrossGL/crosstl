@@ -4590,6 +4590,144 @@
     },
     {
       "category": "project",
+      "description": "Inspect runtime handoff packages for stale or missing copied artifacts before host binding work consumes them.",
+      "id": "project.runtime_package_inspection",
+      "name": "Runtime package inspection",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_reports_ready_bindings",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_packaged_artifact",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_detects_missing_source_remap",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_package_rejects_failed_package",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_runtime_package_json_writes_output"
+          ],
+          "notes": "inspect-runtime-package builds crosstl-runtime-package-inspection JSON, text, and SARIF output from a runtime package manifest, verifies copied packaged artifact and source-remap sidecar presence, hash, and byte-size metadata, records ready and failed host binding records, preserves runtime-loader-plan-v1 summary linkage, and emits structured diagnostics for stale, missing, or malformed package contents. Inspection is read-only and does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Emit host binding plans from runtime package manifests without rewriting host code or executing device code.",
       "id": "project.runtime_host_binding_plan",
       "name": "Runtime host binding plan",
@@ -7396,12 +7534,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 15,
+    "feature_count": 16,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7409,7 +7547,7 @@
       "directx": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7417,7 +7555,7 @@
       "hip": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7425,7 +7563,7 @@
       "metal": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7433,7 +7571,7 @@
       "mojo": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7441,7 +7579,7 @@
       "opengl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7449,7 +7587,7 @@
       "rust": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7457,7 +7595,7 @@
       "slang": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7465,7 +7603,7 @@
       "vulkan": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -7473,7 +7611,7 @@
       "webgl": {
         "diagnostic": 1,
         "partial": 3,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

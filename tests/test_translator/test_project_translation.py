@@ -17,6 +17,7 @@ from crosstl.project import (
     build_runtime_artifact_manifest,
     build_runtime_package,
     inspect_project_report,
+    inspect_runtime_package,
     load_project_config,
     plan_runtime_host_bindings,
     plan_runtime_integration,
@@ -75,6 +76,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectTranslationUnit",
         "build_runtime_artifact_manifest",
         "build_runtime_package",
+        "inspect_runtime_package",
         "inspect_project_report",
         "load_project_config",
         "plan_runtime_host_bindings",
@@ -23018,6 +23020,258 @@ def test_project_cli_package_runtime_json_writes_output(tmp_path):
     assert payload["kind"] == project_pipeline.RUNTIME_PACKAGE_KIND
     assert payload["artifacts"][0]["packagePath"] == "artifacts/out/cgl/simple.cgl"
     assert (package_dir / "runtime-package.json").is_file()
+
+
+def _build_runtime_package_fixture(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    manifest_path = repo / "out" / "runtime-manifest.json"
+    manifest_path.write_text(
+        json.dumps(build_runtime_artifact_manifest(report_path), indent=2),
+        encoding="utf-8",
+    )
+    package_dir = repo / "runtime-package"
+    package = build_runtime_package(manifest_path, package_dir)
+    return repo, package_dir, package
+
+
+def test_inspect_runtime_package_reports_ready_bindings(tmp_path):
+    _, package_dir, package = _build_runtime_package_fixture(tmp_path)
+    package_manifest = package_dir / "runtime-package.json"
+
+    payload = inspect_runtime_package(package_manifest)
+
+    assert set(payload) == project_pipeline.RUNTIME_PACKAGE_INSPECTION_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_PACKAGE_INSPECTION_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_PACKAGE_INSPECTION_NON_GOALS
+    )
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "artifactCount": 1,
+        "verifiedArtifactCount": 1,
+        "failedArtifactCount": 0,
+        "sourceRemapCount": 1,
+        "verifiedSourceRemapCount": 1,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "bindingCount": 1,
+        "runtimeReferenceCount": 1,
+        "actionCount": 2,
+    }
+    assert set(payload["hostBindingPlan"]) == {
+        "kind",
+        "actionCount",
+        "runtimeReferenceCount",
+        "reviewRequired",
+    }
+    assert payload["hostBindingPlan"] == {
+        "kind": project_pipeline.RUNTIME_HOST_BINDING_PLAN_KIND,
+        "actionCount": 2,
+        "runtimeReferenceCount": 1,
+        "reviewRequired": True,
+    }
+    assert len(payload["targets"]) == 1
+    assert set(payload["targets"][0]) == (
+        project_pipeline.RUNTIME_PACKAGE_INSPECTION_TARGET_FIELDS
+    )
+    assert payload["targets"][0]["target"] == "cgl"
+    assert payload["targets"][0]["verifiedArtifactCount"] == 1
+    assert len(payload["bindings"]) == 1
+    binding = payload["bindings"][0]
+    assert set(binding) == project_pipeline.RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS
+    assert binding["status"] == "ready"
+    assert binding["artifactStatus"] == "ready"
+    assert binding["artifact"] == package["artifacts"][0]["id"]
+    assert binding["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert binding["sourceRemap"]["packagePath"] == (
+        "source-remaps/out/cgl/simple.source-remap.json"
+    )
+    assert binding["sourceRemap"]["status"] == "ready"
+    assert binding["diagnostics"] == []
+
+
+def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    (package_dir / "artifacts" / "out" / "cgl" / "simple.cgl").unlink()
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    assert payload["success"] is False
+    assert payload["summary"]["verifiedArtifactCount"] == 0
+    assert payload["summary"]["failedArtifactCount"] == 1
+    assert payload["summary"]["readyBindingCount"] == 0
+    assert payload["summary"]["failedBindingCount"] == 1
+    assert payload["bindings"][0]["status"] == "failed"
+    assert payload["bindings"][0]["artifactStatus"] == "failed"
+    assert payload["bindings"][0]["diagnostics"] == [
+        "project.runtime-package-inspection.artifact-missing"
+    ]
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-package-inspection.artifact-missing"
+    )
+
+
+def test_inspect_runtime_package_detects_packaged_artifact_hash_mismatch(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    artifact_path = package_dir / "artifacts" / "out" / "cgl" / "simple.cgl"
+    artifact_path.write_text("// stale package artifact\n", encoding="utf-8")
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    assert payload["success"] is False
+    assert payload["summary"]["verifiedArtifactCount"] == 0
+    assert payload["summary"]["failedArtifactCount"] == 1
+    assert payload["summary"]["readyBindingCount"] == 0
+    assert payload["summary"]["failedBindingCount"] == 1
+    assert payload["bindings"][0]["status"] == "failed"
+    assert payload["bindings"][0]["artifactStatus"] == "failed"
+    assert set(payload["bindings"][0]["diagnostics"]) == {
+        "project.runtime-package-inspection.artifact-hash-mismatch",
+        "project.runtime-package-inspection.artifact-size-mismatch",
+    }
+    assert {diagnostic["code"] for diagnostic in payload["diagnostics"]} == {
+        "project.runtime-package-inspection.artifact-hash-mismatch",
+        "project.runtime-package-inspection.artifact-size-mismatch",
+    }
+
+
+def test_inspect_runtime_package_detects_missing_source_remap(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    (
+        package_dir / "source-remaps" / "out" / "cgl" / "simple.source-remap.json"
+    ).unlink()
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    assert payload["success"] is False
+    assert payload["summary"]["verifiedArtifactCount"] == 1
+    assert payload["summary"]["failedArtifactCount"] == 0
+    assert payload["summary"]["sourceRemapCount"] == 1
+    assert payload["summary"]["verifiedSourceRemapCount"] == 0
+    assert payload["summary"]["readyBindingCount"] == 0
+    assert payload["summary"]["failedBindingCount"] == 1
+    assert payload["bindings"][0]["artifactStatus"] == "ready"
+    assert payload["bindings"][0]["sourceRemap"]["status"] == "failed"
+    assert payload["bindings"][0]["diagnostics"] == [
+        "project.runtime-package-inspection.source-remap-missing"
+    ]
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-package-inspection.source-remap-missing"
+    )
+
+
+def test_inspect_runtime_package_rejects_failed_package(tmp_path):
+    package_path = tmp_path / "runtime-package.json"
+    package_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "kind": "crosstl-runtime-package",
+                "success": False,
+                "project": {"targets": ["cgl"]},
+                "artifacts": [
+                    {
+                        "id": "artifact-1",
+                        "status": "packaged",
+                        "target": "cgl",
+                        "packagePath": "artifacts/simple.cgl",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = inspect_runtime_package(package_path)
+
+    assert payload["success"] is False
+    assert payload["summary"]["artifactCount"] == 0
+    assert payload["summary"]["bindingCount"] == 0
+    assert payload["bindings"] == []
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == (
+        "project.runtime-package-inspection.package-failed"
+    )
+
+
+def test_project_cli_inspect_runtime_package_text_outputs_readiness(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-runtime-package",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime package inspection: {package_manifest}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Inspection scope: runtime-package-readiness-inspection" in result.stdout
+    assert (
+        "Inspection non-goals: host-code-rewriting, device-execution, "
+        "runtime-framework-generation, target-sdk-installation"
+    ) in result.stdout
+    assert "Summary: 1 targets, 1 ready bindings, 0 failed bindings" in result.stdout
+    assert "- cgl: 1 ready bindings, 0 failed, 1 runtime references" in result.stdout
+    assert "Bindings:" in result.stdout
+    assert "artifacts/out/cgl/simple.cgl [status: ready;" in result.stdout
+    assert (
+        "source remap: source-remaps/out/cgl/simple.source-remap.json" in result.stdout
+    )
+    assert "Host binding readiness: manual runtime reference review required" in (
+        result.stdout
+    )
+
+
+def test_project_cli_inspect_runtime_package_json_writes_output(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path)
+    output_path = package_dir / "runtime-package-inspection.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "inspect-runtime-package",
+            str(package_dir / "runtime-package.json"),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_PACKAGE_INSPECTION_KIND
+    assert payload["summary"]["bindingCount"] == 1
+    assert payload["bindings"][0]["status"] == "ready"
 
 
 def test_plan_runtime_host_bindings_from_runtime_package(tmp_path):
