@@ -212,6 +212,10 @@ def backend_signal_paths(backend):
     return paths
 
 
+def backend_source_kind(backend):
+    return backend["source_kind"]
+
+
 def validate_backend_catalog(backends_data):
     backends = backends_data.get("backends")
     if not isinstance(backends, list) or not backends:
@@ -231,9 +235,24 @@ def validate_backend_catalog(backends_data):
             raise SupportMatrixError(f"Duplicate backend id: {backend_id}")
         ids.add(backend_id)
 
-        for key in ("name", "translator_codegen", "native_backend", "tests", "docs"):
+        for key in ("name", "source_kind", "translator_codegen", "tests", "docs"):
             if key not in backend:
                 raise SupportMatrixError(f"Backend '{backend_id}' is missing '{key}'")
+        source_kind = backend_source_kind(backend)
+        if source_kind not in {"native", "target-only"}:
+            raise SupportMatrixError(
+                f"Backend '{backend_id}' source_kind must be 'native' or 'target-only'"
+            )
+        if source_kind == "native" and "native_backend" not in backend:
+            raise SupportMatrixError(
+                f"Backend '{backend_id}' with source_kind 'native' is missing "
+                "'native_backend'"
+            )
+        if source_kind == "target-only" and "native_backend" in backend:
+            raise SupportMatrixError(
+                f"Backend '{backend_id}' with source_kind 'target-only' must not "
+                "define 'native_backend'"
+            )
 
         if not isinstance(backend["name"], str) or not backend["name"].strip():
             raise SupportMatrixError(
@@ -265,10 +284,11 @@ def validate_backend_catalog(backends_data):
                     backend_id, backend["translator_codegen"]
                 )
             )
-        if not path_exists(backend["native_backend"]):
+        native_backend = backend.get("native_backend")
+        if native_backend and not path_exists(native_backend):
             raise SupportMatrixError(
                 "Backend '{}' native backend path does not exist: {}".format(
-                    backend_id, backend["native_backend"]
+                    backend_id, native_backend
                 )
             )
         require_list(backend.get("tests", []), f"Backend '{backend_id}' tests")
@@ -472,14 +492,19 @@ def backend_inventory(backend):
         "id": backend["id"],
         "name": backend["name"],
         "aliases": backend.get("aliases", []),
+        "source_kind": backend_source_kind(backend),
         "target_extension": backend.get("target_extension"),
         "translator_codegen": {
             "path": backend["translator_codegen"],
             "exists": path_exists(backend["translator_codegen"]),
         },
         "native_backend": {
-            "path": backend["native_backend"],
-            "exists": path_exists(backend["native_backend"]),
+            "path": backend.get("native_backend"),
+            "exists": (
+                path_exists(backend["native_backend"])
+                if backend.get("native_backend")
+                else False
+            ),
         },
         "tests": {
             "paths": tests,
@@ -977,7 +1002,8 @@ def render_docs(matrix):
                 backend["name"],
                 backend.get("target_extension") or "",
                 backend["translator_codegen"]["path"],
-                backend["native_backend"]["path"],
+                backend["source_kind"],
+                backend["native_backend"]["path"] or "",
                 ", ".join(backend["tests"]["paths"]),
                 backend["tests"]["test_count"],
                 backend["signals"]["unsupported_marker_count"],
@@ -991,6 +1017,7 @@ def render_docs(matrix):
                 "Backend",
                 "Ext",
                 "Target generator",
+                "Source kind",
                 "Native frontend",
                 "Tests",
                 "Test count",

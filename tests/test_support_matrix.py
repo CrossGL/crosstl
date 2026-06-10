@@ -45,11 +45,25 @@ def _backend(backend_id, aliases, extension):
     return {
         "id": backend_id,
         "name": backend_id,
+        "source_kind": "native",
         "aliases": aliases,
         "target_extension": extension,
         "translator_codegen": codegen_path,
         "native_backend": native_backend,
         "tests": [test_path],
+        "docs": [{"name": "Docs", "url": f"https://example.com/{backend_id}"}],
+    }
+
+
+def _target_only_backend(backend_id, aliases, extension):
+    return {
+        "id": backend_id,
+        "name": backend_id,
+        "source_kind": "target-only",
+        "aliases": aliases,
+        "target_extension": extension,
+        "translator_codegen": "crosstl/translator/codegen/GLSL_codegen.py",
+        "tests": ["tests/test_translator/test_codegen/test_GLSL_codegen.py"],
         "docs": [{"name": "Docs", "url": f"https://example.com/{backend_id}"}],
     }
 
@@ -2316,6 +2330,110 @@ def test_validate_backend_catalog_rejects_duplicate_aliases():
         module.validate_backend_catalog(backends)
 
 
+def test_validate_backend_catalog_accepts_target_only_backends():
+    module = load_support_matrix_module()
+    backends = {"backends": [_target_only_backend("webgl", ["webgl2"], ".webgl.glsl")]}
+
+    backend_ids = module.validate_backend_catalog(backends)
+    matrix = module.build_matrix(
+        backends,
+        {
+            "statuses": _status_descriptions(module),
+            "features": [
+                {
+                    "id": "target.codegen",
+                    "category": "target",
+                    "name": "Code generation",
+                    "description": "Emit target code.",
+                    "support": {"webgl": {"status": "partial"}},
+                }
+            ],
+        },
+    )
+
+    assert backend_ids == {"webgl"}
+    assert matrix["backends"][0]["source_kind"] == "target-only"
+    assert matrix["backends"][0]["native_backend"] == {
+        "path": None,
+        "exists": False,
+    }
+
+
+def test_target_only_backend_missing_source_feature_support_stays_auditable():
+    module = load_support_matrix_module()
+    backends = {"backends": [_target_only_backend("webgl", ["webgl2"], ".webgl.glsl")]}
+
+    matrix = module.build_matrix(
+        backends,
+        {
+            "statuses": _status_descriptions(module),
+            "features": [
+                {
+                    "id": "target.codegen",
+                    "category": "target",
+                    "name": "Code generation",
+                    "description": "Emit target code.",
+                    "support": {"webgl": {"status": "partial"}},
+                },
+                {
+                    "id": "source.parse",
+                    "category": "source",
+                    "name": "Source parsing",
+                    "description": "Parse native source.",
+                    "support": {},
+                },
+            ],
+        },
+    )
+
+    source_feature = next(
+        feature for feature in matrix["features"] if feature["id"] == "source.parse"
+    )
+    assert source_feature["support"]["webgl"]["status"] == "unknown"
+    assert any(
+        row["feature_id"] == "source.parse"
+        and row["backend_id"] == "webgl"
+        and row["status"] == "unknown"
+        for row in matrix["backlog"]
+    )
+
+
+def test_validate_backend_catalog_requires_source_kind():
+    module = load_support_matrix_module()
+    backend = _backend("directx", ["hlsl"], ".hlsl")
+    backend.pop("source_kind")
+
+    with pytest.raises(module.SupportMatrixError, match="missing 'source_kind'"):
+        module.validate_backend_catalog({"backends": [backend]})
+
+
+def test_validate_backend_catalog_requires_native_backend_for_native_sources():
+    module = load_support_matrix_module()
+    backend = _backend("directx", ["hlsl"], ".hlsl")
+    backend.pop("native_backend")
+
+    with pytest.raises(module.SupportMatrixError, match="missing 'native_backend'"):
+        module.validate_backend_catalog({"backends": [backend]})
+
+
+def test_validate_backend_catalog_rejects_unknown_source_kind():
+    module = load_support_matrix_module()
+    backend = _target_only_backend("webgl", ["webgl2"], ".webgl.glsl")
+    backend["source_kind"] = "frontendish"
+
+    with pytest.raises(module.SupportMatrixError, match="source_kind"):
+        module.validate_backend_catalog({"backends": [backend]})
+
+
+def test_validate_backend_catalog_rejects_native_backend_for_target_only():
+    module = load_support_matrix_module()
+    backend = _target_only_backend("webgl", ["webgl2"], ".webgl.glsl")
+    backend["native_backend"] = "crosstl/backend/GLSL"
+
+    with pytest.raises(module.SupportMatrixError, match="must not define"):
+        module.validate_backend_catalog({"backends": [backend]})
+
+
 def test_validate_feature_catalog_requires_all_status_definitions():
     module = load_support_matrix_module()
     statuses = _status_descriptions(module)
@@ -2670,26 +2788,38 @@ def test_support_backend_catalog_matches_codegen_registry():
     register_default_sources()
 
     backend_ids = {backend["id"] for backend in catalog["backends"]}
+    native_source_backend_ids = {
+        backend["id"]
+        for backend in catalog["backends"]
+        if backend.get("source_kind", "native") == "native"
+    }
     assert backend_ids == set(codegen.backend_names())
-    assert backend_ids.issubset(set(SOURCE_REGISTRY.names()))
+    assert native_source_backend_ids == set(codegen.source_backend_names())
+    assert native_source_backend_ids.issubset(set(SOURCE_REGISTRY.names()))
 
     for backend in catalog["backends"]:
         backend_id = backend["id"]
         spec = codegen.get_backend(backend_id)
         assert spec is not None, f"{backend_id} is not registered"
         assert codegen.get_backend_extension(backend_id) == backend["target_extension"]
-        assert (
-            SOURCE_REGISTRY.get_by_extension(backend["target_extension"]).name
-            == backend_id
-        )
+        if backend_id in native_source_backend_ids:
+            assert spec.source_registry_name == backend_id
+            assert (
+                SOURCE_REGISTRY.get_by_extension(backend["target_extension"]).name
+                == backend_id
+            )
+        else:
+            assert spec.source_registry_name is None
 
         for alias in backend.get("aliases", []):
             assert (
                 codegen.normalize_backend_name(alias) == backend_id
             ), f"{backend_id} support alias is not accepted by codegen: {alias}"
-            assert (
-                SOURCE_REGISTRY.get(alias).name == backend_id
-            ), f"{backend_id} support alias is not accepted by source registry: {alias}"
+            if backend_id in native_source_backend_ids:
+                assert SOURCE_REGISTRY.get(alias).name == backend_id, (
+                    f"{backend_id} support alias is not accepted by source registry: "
+                    f"{alias}"
+                )
 
 
 def test_project_porting_roadmap_is_focused_on_project_category():

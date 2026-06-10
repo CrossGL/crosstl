@@ -341,6 +341,34 @@ def test_build_report_summarizes_docs_probe_load_error():
     assert report["issues"] == []
 
 
+def test_build_report_preserves_target_only_backend_inventory():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "webgl",
+                "name": "WebGL / GLSL ES",
+                "source_kind": "target-only",
+                "translator_codegen": "tools/support_signals.py",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+
+    report = module.build_report(backends, features, docs_report=None)
+
+    assert report["backends"] == [
+        {
+            "id": "webgl",
+            "name": "WebGL / GLSL ES",
+            "source_kind": "target-only",
+            "implementation_paths": ["tools/support_signals.py"],
+            "test_paths": ["tests/test_support_signals.py"],
+        }
+    ]
+
+
 def test_build_report_scans_repo_implementation_and_tests():
     module = load_signals_module()
     backends = {

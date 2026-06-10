@@ -139,8 +139,10 @@ def test_root_package_exposes_documented_registry_helpers():
 def test_registered_native_sources_have_reverse_codegen_factories():
     register_default_sources()
 
-    for backend in codegen.backend_names():
-        spec = SOURCE_REGISTRY.get(backend)
+    for backend in codegen.source_backend_names():
+        backend_spec = codegen.get_backend(backend)
+        source_name = backend_spec.source_registry_name if backend_spec else backend
+        spec = SOURCE_REGISTRY.get(source_name)
         assert spec is not None
         assert spec.reverse_codegen_factory is not None
 

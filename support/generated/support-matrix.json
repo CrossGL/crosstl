@@ -106,6 +106,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".hlsl",
       "tests": {
         "paths": [
@@ -225,6 +226,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".glsl",
       "tests": {
         "paths": [
@@ -344,6 +346,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".metal",
       "tests": {
         "paths": [
@@ -463,6 +466,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".spvasm",
       "tests": {
         "paths": [
@@ -577,6 +581,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".cu",
       "tests": {
         "paths": [
@@ -691,6 +696,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".hip",
       "tests": {
         "paths": [
@@ -805,6 +811,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".mojo",
       "tests": {
         "paths": [
@@ -919,6 +926,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".rs",
       "tests": {
         "paths": [
@@ -1033,6 +1041,7 @@
           }
         ]
       },
+      "source_kind": "native",
       "target_extension": ".slang",
       "tests": {
         "paths": [
