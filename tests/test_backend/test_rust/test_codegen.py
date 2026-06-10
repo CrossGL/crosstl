@@ -963,6 +963,66 @@ def test_rust_gpu_compute_option_lowers_for_metal(tmp_path):
     assert "None" not in result
 
 
+def test_rust_gpu_compute_option_unwrap_or_lowers_for_metal_and_spirv(tmp_path):
+    # Reduced from Rust-GPU/rust-gpu commit
+    # 36e3348cdc2f824afec64b3b5af5d369d98a4c0d,
+    # examples/shaders/compute-shader/src/lib.rs.
+    code = """
+    use glam::UVec3;
+    use spirv_std::{glam, spirv};
+
+    pub fn collatz(mut n: u32) -> Option<u32> {
+        let mut i = 0;
+        if n == 0 {
+            return None;
+        }
+        while n != 1 {
+            n = if n.is_multiple_of(2) {
+                n / 2
+            } else {
+                if n >= 0x5555_5555 {
+                    return None;
+                }
+                3 * n + 1
+            };
+            i += 1;
+        }
+        Some(i)
+    }
+
+    #[spirv(compute(threads(64)))]
+    pub fn main_cs(
+        #[spirv(global_invocation_id)] id: UVec3,
+        #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] prime_indices: &mut [u32],
+    ) {
+        let index = id.x as usize;
+        prime_indices[index] = collatz(prime_indices[index]).unwrap_or(u32::MAX);
+    }
+    """
+    rust_file = tmp_path / "collatz_unwrap_or.rs"
+    rust_file.write_text(code)
+
+    crossgl = crosstl.translate(str(rust_file), backend="cgl", format_output=False)
+    metal = crosstl.translate(str(rust_file), backend="metal", format_output=False)
+    spirv = crosstl.translate(str(rust_file), backend="vulkan", format_output=False)
+
+    assert ".unwrap_or" not in crossgl
+    assert ".unwrap_or" not in metal
+    assert "collatz_unwrap_or(prime_indices[index], 4294967295u)" in crossgl
+    assert "collatz_unwrap_or(prime_indices[index], 4294967295u)" in metal
+    assert "uint collatz_unwrap_or(uint n, uint _rust_option_fallback)" in metal
+    assert "return _rust_option_fallback;" in crossgl
+    assert "return i;" in crossgl
+
+    uint_type_match = re.search(r"(%\d+) = OpTypeInt 32 0", spirv)
+    int_type_match = re.search(r"(%\d+) = OpTypeInt 32 1", spirv)
+    assert uint_type_match is not None
+    assert int_type_match is not None
+    assert f"OpConstant {uint_type_match.group(1)} 4294967295" in spirv
+    assert f"OpConstant {int_type_match.group(1)} 4294967295" not in spirv
+    assert "cannot lower unknown function" not in spirv
+
+
 def test_rust_gpu_fixed_arrays_preserve_target_array_types(tmp_path):
     code = """
     fn conv(kernel: &[f32; 9], data: &[f32; 9], denom: f32, offset: f32) -> f32 {
@@ -2514,9 +2574,11 @@ def test_rust_gpu_compute_collatz_option_chain_codegen_from_upstream_example():
     assert "@numthreads(64, 1, 1)" in result
     assert "let index = uint(id.x);" in result
     assert (
-        "prime_indices[index] = collatz(prime_indices[index]).unwrap_or(4294967295);"
+        "prime_indices[index] = collatz_unwrap_or(prime_indices[index], 4294967295u);"
         in result
     )
+    assert "uint collatz_unwrap_or(uint n, uint _rust_option_fallback)" in result
+    assert ".unwrap_or" not in result
     assert "u32::MAX" not in result
     assert "Unhandled statement type" not in result
 
