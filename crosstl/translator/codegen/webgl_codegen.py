@@ -1,7 +1,7 @@
 """CrossGL-to-WebGL GLSL ES code generator."""
 
-from .stage_utils import normalize_stage_name
 from .GLSL_codegen import GLSLCodeGen
+from .stage_utils import normalize_stage_name
 
 
 class WebGLCodeGen(GLSLCodeGen):

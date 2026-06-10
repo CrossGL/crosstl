@@ -1,14 +1,13 @@
 from types import SimpleNamespace
 
-import crosstl
-import crosstl.translator.codegen as codegen
 import pytest
 
+import crosstl
+import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
-
 
 WEBGL_SHADER = """
 shader WebGLSmoke {
@@ -86,7 +85,9 @@ def test_translate_crossgl_to_webgl(tmp_path):
     source_path = tmp_path / "shader.cgl"
     source_path.write_text(WEBGL_SHADER, encoding="utf-8")
 
-    generated = crosstl.translate(str(source_path), backend="webgl", format_output=False)
+    generated = crosstl.translate(
+        str(source_path), backend="webgl", format_output=False
+    )
 
     assert "#version 300 es" in generated
     assert "precision highp float;" in generated
