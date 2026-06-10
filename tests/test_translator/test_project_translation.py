@@ -4411,6 +4411,60 @@ def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_pat
     assert "gl_VertexID" not in directx
 
 
+def test_translate_project_lowers_glsl_vertex_index_to_metal_vertex_id(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "shader.vert").write_text(
+        textwrap.dedent("""
+            #version 450
+
+            layout(location = 0) out vec3 fragColor;
+
+            vec2 positions[3] = vec2[](
+                vec2(0.0, -0.5),
+                vec2(0.5, 0.5),
+                vec2(-0.5, 0.5)
+            );
+
+            vec3 colors[3] = vec3[](
+                vec3(1.0, 0.0, 0.0),
+                vec3(0.0, 1.0, 0.0),
+                vec3(0.0, 0.0, 1.0)
+            );
+
+            void main() {
+                gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+                fragColor = colors[gl_VertexIndex];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["metal"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    metal = (repo / "translated" / "metal" / "gpu" / "shader.metal").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert "uint _crossglVertexID [[vertex_id]]" in metal
+    assert "positions[_crossglVertexID]" in metal
+    assert "colors[_crossglVertexID]" in metal
+    assert "gl_VertexIndex" not in metal
+
+
 def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
