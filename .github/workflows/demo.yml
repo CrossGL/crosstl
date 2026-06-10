@@ -48,18 +48,10 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
-          $release = Invoke-RestMethod `
-            -Headers @{ "User-Agent" = "crosstl-demo-ci" } `
-            -Uri "https://api.github.com/repos/microsoft/DirectXShaderCompiler/releases/latest"
-          $asset = $release.assets |
-            Where-Object { $_.name -match "^dxc_.*\.zip$" } |
-            Select-Object -First 1
-          if (-not $asset) {
-            throw "No Windows DXC release archive found."
-          }
-          $zip = Join-Path $env:RUNNER_TEMP $asset.name
+          $dxcUrl = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          $zip = Join-Path $env:RUNNER_TEMP (Split-Path $dxcUrl -Leaf)
           $dest = Join-Path $env:RUNNER_TEMP "dxc"
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
+          Invoke-WebRequest -Uri $dxcUrl -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dest
           $dxc = Get-ChildItem -Path $dest -Recurse -Filter dxc.exe |
             Where-Object { $_.FullName -match "\\bin\\x64\\" } |

@@ -61,7 +61,7 @@ def test_open_source_demo_workflow_runs_platform_toolchain_smokes():
     assert "os: [ubuntu-latest, macOS-latest, windows-latest]" in workflow
     assert "glslang-tools spirv-tools" in workflow
     assert "brew install glslang spirv-tools" in workflow
-    assert "DirectXShaderCompiler/releases/latest" in workflow
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in workflow
     assert "--run-toolchains" in workflow
     assert "--require-toolchain-runs" in workflow
     assert "--target opengl" in workflow
