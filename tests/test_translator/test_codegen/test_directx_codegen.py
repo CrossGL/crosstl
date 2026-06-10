@@ -4885,6 +4885,25 @@ def test_hlsl_struct_output_builtin_types_are_validated(
         HLSLCodeGen().generate(crosstl.translator.parse(code))
 
 
+def test_hlsl_vertex_index_identifier_adds_sv_vertex_id_parameter():
+    code = """
+    shader VertexIndexAlias {
+        vertex {
+            vec4 main() @ gl_Position {
+                return vec4(float(gl_VertexIndex), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "vertex")
+
+    assert "SV_VertexID" in generated
+    assert "uint gl_VertexIndex : SV_VertexID" in generated
+    assert "float(gl_VertexIndex)" in generated
+    assert "gl_VertexID" not in generated
+
+
 @pytest.mark.parametrize(
     ("stage", "return_type", "semantic", "value"),
     [

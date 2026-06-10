@@ -4372,9 +4372,9 @@ def test_translate_project_lowers_glsl_vertex_index_for_graphics_targets(tmp_pat
     assert "SV_VertexID" not in opengl
 
     assert "SV_VertexID" in directx
-    assert "gl_VertexID" in directx
-    assert "float(gl_VertexID)" in directx
-    assert "gl_VertexIndex" not in directx
+    assert "gl_VertexIndex" in directx
+    assert "float(gl_VertexIndex)" in directx
+    assert "gl_VertexID" not in directx
 
 
 def test_scan_project_reports_unsupported_source_overrides(tmp_path):

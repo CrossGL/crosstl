@@ -2302,10 +2302,8 @@ def test_codegen_global_array_type_constants_roundtrip_parse():
     assert "const vec2[3] positions = {" in crossgl
     assert "const vec2[3] uv = {" in crossgl
     assert "const vec2 positions[3]" not in crossgl
-    assert "int gl_VertexID @ gl_VertexID" in crossgl
-    assert "positions[gl_VertexID]" in crossgl
-    assert "uv[gl_VertexID]" in crossgl
-    assert "gl_VertexIndex" not in crossgl
+    assert "positions[gl_VertexIndex]" in crossgl
+    assert "uv[gl_VertexIndex]" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 

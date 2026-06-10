@@ -890,6 +890,7 @@ class HLSLCodeGen:
 
         self.semantic_map = {
             "gl_VertexID": "SV_VertexID",
+            "gl_VertexIndex": "SV_VertexID",
             "gl_InstanceID": "SV_InstanceID",
             "gl_IsFrontFace": "SV_IsFrontFace",
             "gl_FrontFacing": "SV_IsFrontFace",
@@ -3362,6 +3363,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 param_type,
                 semantic,
             ) in self.required_hlsl_compute_builtin_parameters(func):
+                if not name or name in param_names:
+                    continue
+                declaration = f"{param_type} {name}"
+                if semantic:
+                    declaration += f" : {semantic}"
+                params_str = self.append_hlsl_parameter_declaration(
+                    params_str, declaration
+                )
+                param_names.add(name)
+                self.local_variable_types[name] = param_type
+        elif effective_shader_type == "vertex":
+            for (
+                name,
+                param_type,
+                semantic,
+            ) in self.required_hlsl_vertex_builtin_parameters(func):
                 if not name or name in param_names:
                     continue
                 declaration = f"{param_type} {name}"
@@ -13138,6 +13155,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 params_str, self.hlsl_stage_parameter_declaration(parameter)
             )
         return params_str
+
+    def used_hlsl_vertex_builtin_names(self, body):
+        builtin_names = {"gl_VertexIndex"}
+        used_names = set()
+        for node in self.walk_ast(body):
+            class_name = node.__class__.__name__
+            if "Identifier" not in class_name and class_name != "VariableNode":
+                continue
+            name = getattr(node, "name", "")
+            base_name = name.split(".", 1)[0]
+            if base_name in builtin_names:
+                used_names.add(base_name)
+        return used_names
+
+    def required_hlsl_vertex_builtin_parameters(self, func):
+        used_names = self.used_hlsl_vertex_builtin_names(getattr(func, "body", []))
+        builtin_parameters = [
+            ("gl_VertexIndex", "uint", "SV_VertexID"),
+        ]
+        return [
+            parameter for parameter in builtin_parameters if parameter[0] in used_names
+        ]
 
     def used_hlsl_compute_builtin_names(self, body):
         builtin_names = {
