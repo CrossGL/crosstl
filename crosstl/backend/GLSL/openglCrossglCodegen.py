@@ -2326,12 +2326,20 @@ class GLSLToCrossGLConverter:
                     node, builtin_name, shader_type="vertex"
                 )
 
-        # Ensure vertex stages include gl_Position
+        # Preserve source-declared/written vertex built-ins without inventing outputs
+        # that the source never assigns. DirectX rejects an unwritten SV_Position
+        # member when this CrossGL is lowered to HLSL.
         if self.shader_type == "vertex":
             output_names = {
                 var.name for var in self.outputs if isinstance(var, VariableNode)
             }
-            if "gl_Position" not in output_names:
+            if (
+                "gl_Position" not in output_names
+                and (
+                    "gl_Position" in builtin_redeclaration_qualifiers
+                    or vertex_builtin_output_writes.get("gl_Position", False)
+                )
+            ):
                 builtin = VariableNode(
                     "vec4",
                     "gl_Position",
