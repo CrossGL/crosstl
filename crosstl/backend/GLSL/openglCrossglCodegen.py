@@ -645,6 +645,9 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
+        self.anonymous_ssbo_block_instances = {}
+        self.anonymous_ssbo_block_structs = []
+        self.anonymous_ssbo_member_instances = {}
         self.interface_block_struct_names = set()
         self.flattened_uniform_block_instances = {}
         self.flattened_uniform_block_member_renames = {}
@@ -1036,7 +1039,9 @@ class GLSLToCrossGLConverter:
         return layout.get("binding")
 
     def ssbo_block_layout_names(self, var):
-        layout = getattr(var, "layout", None) or {}
+        layout = (
+            getattr(var, "layout", None) or getattr(var, "interface_layout", None) or {}
+        )
         layout_names = []
         for name, value in layout.items():
             normalized = str(name).lower()
@@ -1112,8 +1117,12 @@ class GLSLToCrossGLConverter:
         self.structured_buffer_names = set()
         self.structured_buffer_instance_members = {}
         self.converted_ssbo_struct_names = set()
+        self.anonymous_ssbo_block_instances = {}
+        self.anonymous_ssbo_block_structs = []
+        self.anonymous_ssbo_member_instances = {}
         self.variable_type_scopes = [{}]
         self.flattened_uniform_block_instances = {}
+        self.collect_anonymous_ssbo_blocks(node)
         for var in getattr(node, "uniforms", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
@@ -1121,6 +1130,8 @@ class GLSLToCrossGLConverter:
         for var in getattr(node, "io_variables", []) or []:
             self.register_variable_type(var)
         for var in getattr(node, "global_variables", []) or []:
+            if self.is_anonymous_ssbo_member_variable(var):
+                continue
             member = self.ssbo_element_member(var)
             if member is None:
                 continue
@@ -1133,6 +1144,164 @@ class GLSLToCrossGLConverter:
                 block_name = getattr(var, "interface_block", None)
                 if block_name:
                     self.converted_ssbo_struct_names.add(block_name)
+
+    def collect_anonymous_ssbo_blocks(self, node):
+        used_names = self.declared_crossgl_names(node)
+        for struct in getattr(node, "structs", []) or []:
+            if not self.is_anonymous_ssbo_struct(struct):
+                continue
+
+            instance_name = self.unique_anonymous_ssbo_instance_name(
+                struct.name, used_names
+            )
+            used_names.add(instance_name)
+            self.anonymous_ssbo_block_instances[struct.name] = instance_name
+            self.anonymous_ssbo_block_structs.append(struct)
+            self.converted_ssbo_struct_names.add(struct.name)
+
+            for member in getattr(struct, "members", []) or getattr(
+                struct, "fields", []
+            ):
+                member_name = getattr(member, "name", None)
+                if member_name:
+                    self.anonymous_ssbo_member_instances[member_name] = instance_name
+
+    def declared_crossgl_names(self, node):
+        names = {"main"}
+        for collection_name in (
+            "constant",
+            "functions",
+            "global_variables",
+            "io_variables",
+            "uniforms",
+            "structs",
+        ):
+            for item in getattr(node, collection_name, []) or []:
+                name = getattr(item, "name", None)
+                if name:
+                    names.add(name)
+        return names
+
+    def is_anonymous_ssbo_struct(self, struct):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(struct, "interface_qualifiers", []) or []
+        }
+        if "buffer" not in qualifiers:
+            return False
+        if getattr(struct, "interface_instance_name", None):
+            return False
+        layout = getattr(struct, "interface_layout", None) or {}
+        if "buffer_reference" in {str(key).lower() for key in layout}:
+            return False
+        return any(
+            self.is_runtime_array_member(member)
+            for member in getattr(struct, "members", []) or getattr(
+                struct, "fields", []
+            )
+        )
+
+    def is_runtime_array_member(self, member):
+        array_sizes = getattr(member, "array_sizes", None)
+        if array_sizes and array_sizes[-1] is None:
+            return True
+
+        array_size = getattr(member, "array_size", None)
+        if (
+            getattr(member, "is_array", False)
+            and array_size is None
+            and not array_sizes
+        ):
+            return True
+
+        member_type = getattr(member, "member_type", None)
+        if (
+            member_type is not None
+            and hasattr(member_type, "element_type")
+            and hasattr(member_type, "size")
+            and member_type.size is None
+        ):
+            return True
+
+        return str(getattr(member, "vtype", "")).rstrip().endswith("[]")
+
+    def is_anonymous_ssbo_member_variable(self, var):
+        block_name = getattr(var, "interface_block", None)
+        if block_name not in self.anonymous_ssbo_block_instances:
+            return False
+        return getattr(var, "name", None) in self.anonymous_ssbo_member_instances
+
+    def anonymous_ssbo_member_reference(self, name):
+        if any(name in scope for scope in self.variable_type_scopes[1:]):
+            return None
+        instance_name = self.anonymous_ssbo_member_instances.get(name)
+        if instance_name is None:
+            return None
+        return f"{instance_name}.{name}"
+
+    def unique_anonymous_ssbo_instance_name(self, block_name, used_names):
+        base = self.default_anonymous_ssbo_instance_name(block_name)
+        candidate = base
+        index = 2
+        while candidate in used_names:
+            candidate = f"{base}_{index}"
+            index += 1
+        return candidate
+
+    def default_anonymous_ssbo_instance_name(self, block_name):
+        text = re.sub(r"\W+", "_", str(block_name or "bufferBlock")).strip("_")
+        text = text or "bufferBlock"
+        text = text[0].lower() + text[1:]
+        if text in CROSSGL_RESERVED_IDENTIFIERS:
+            text = f"{text}_"
+        return text
+
+    def anonymous_ssbo_block_declaration(self, struct):
+        layout = self.anonymous_ssbo_layout_prefix(struct)
+        qualifiers = [
+            str(qualifier)
+            for qualifier in getattr(struct, "interface_qualifiers", []) or []
+            if str(qualifier).lower() != "buffer"
+        ]
+        qualifier_prefix = f"{' '.join(qualifiers)} " if qualifiers else ""
+        block_name = self.crossgl_struct_name(struct)
+        instance_name = self.anonymous_ssbo_block_instances[struct.name]
+        code = f"{layout} {qualifier_prefix}buffer {block_name} {{\n"
+        self.increase_indent()
+        for member in getattr(struct, "members", []) or getattr(struct, "fields", []):
+            code += self.indent() + self.anonymous_ssbo_member_declaration(member)
+        self.decrease_indent()
+        code += self.indent_str + f"}} {instance_name};"
+        return code
+
+    def anonymous_ssbo_layout_prefix(self, struct):
+        layout = getattr(struct, "interface_layout", None) or {}
+        parts = []
+        seen = set()
+
+        for layout_name in self.ssbo_block_layout_names(struct):
+            normalized = str(layout_name).lower()
+            if normalized not in seen:
+                parts.append(layout_name)
+                seen.add(normalized)
+
+        for name, value in layout.items():
+            normalized = str(name).lower()
+            if value is None:
+                if normalized not in seen:
+                    parts.append(str(name))
+                    seen.add(normalized)
+                continue
+            parts.append(f"{name} = {self.layout_value_to_string(value)}")
+
+        return f"layout({', '.join(parts)})"
+
+    def anonymous_ssbo_member_declaration(self, member):
+        var_type = self.convert_type(getattr(member, "vtype", ""))
+        var_name = getattr(member, "name", "")
+        attributes = self.interface_member_layout_attribute_suffix(member)
+        attributes += self.vulkan_memory_model_qualifier_attribute_suffix(member)
+        return f"{var_type} {var_name}{self.array_suffix(member)}{attributes};\n"
 
     def structured_buffer_declaration(self, var):
         member = self.ssbo_element_member(var)
@@ -2380,10 +2549,19 @@ class GLSLToCrossGLConverter:
             result += "\n"
 
         # Generate global variables
+        for ssbo_struct in self.anonymous_ssbo_block_structs:
+            result += (
+                self.indent_str
+                + self.anonymous_ssbo_block_declaration(ssbo_struct)
+                + "\n"
+            )
+
         for global_var in getattr(node, "global_variables", []) or []:
             if self.is_qualifier_only_builtin_declaration(global_var):
                 continue
             if self.is_buffer_reference_forward_declaration(global_var):
+                continue
+            if self.is_anonymous_ssbo_member_variable(global_var):
                 continue
             structured_buffer_decl = self.structured_buffer_declaration(global_var)
             if structured_buffer_decl is not None:
@@ -3150,6 +3328,9 @@ class GLSLToCrossGLConverter:
                 var.name == node.name for var in self.outputs
             ):
                 return f"output.{node.name}"
+            ssbo_member = self.anonymous_ssbo_member_reference(node.name)
+            if ssbo_member is not None:
+                return ssbo_member
             return node.name
         elif isinstance(node, BinaryOpNode):
             left = self.generate_expression(node.left)

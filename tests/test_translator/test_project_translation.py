@@ -4253,6 +4253,79 @@ def test_translate_project_honors_source_backend_overrides(tmp_path):
     assert payload["artifacts"][0]["path"] == "translated/opengl/gpu/kernel.glsl"
 
 
+def test_translate_project_preserves_anonymous_glsl_ssbo_shape_for_targets(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "gpu"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "headless.comp").write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(local_size_x = 16) in;
+            layout(std430, binding = 0) buffer OutputBuffer {
+                uint values[];
+            };
+
+            void main() {
+                uint index = gl_GlobalInvocationID.x;
+                values[index] = index;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["gpu"]
+            targets = ["cgl", "opengl", "directx", "metal"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    cgl = (repo / "translated" / "cgl" / "gpu" / "headless.cgl").read_text(
+        encoding="utf-8"
+    )
+    opengl = (repo / "translated" / "opengl" / "gpu" / "headless.glsl").read_text(
+        encoding="utf-8"
+    )
+    directx = (repo / "translated" / "directx" / "gpu" / "headless.hlsl").read_text(
+        encoding="utf-8"
+    )
+    metal = (repo / "translated" / "metal" / "gpu" / "headless.metal").read_text(
+        encoding="utf-8"
+    )
+
+    assert payload["summary"]["unitCount"] == 1
+    assert payload["summary"]["translatedCount"] == 4
+    assert payload["summary"]["failedCount"] == 0
+    assert len(payload["artifacts"]) == 4
+
+    assert "layout(std430, binding = 0) buffer OutputBuffer" in cgl
+    assert "uint values[];" in cgl
+    assert "outputBuffer.values[index] = index;" in cgl
+    assert "RWStructuredBuffer<uint> values[]" not in cgl
+    assert "buffer_store(values" not in cgl
+
+    assert "layout(std430, binding = 0) buffer OutputBuffer" in opengl
+    assert "} outputBuffer;" in opengl
+    assert "outputBuffer.values[index] = index;" in opengl
+    assert "valuesBuffer" not in opengl
+    assert "values.data[index]" not in opengl
+
+    assert "RWByteAddressBuffer outputBuffer : register(u0);" in directx
+    assert "outputBuffer.Store((index * 4), index);" in directx
+    assert "RWStructuredBuffer<uint> values[]" not in directx
+    assert "values.Store" not in directx
+
+    assert "device uchar* outputBuffer [[buffer(0)]]" in metal
+    assert "reinterpret_cast<device uint*>(outputBuffer + (index * 4))" in metal
+    assert "array<device uint*, 1> values" not in metal
+    assert "values[index] = index" not in metal
+
+
 def test_scan_project_reports_unsupported_source_overrides(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "gpu"
