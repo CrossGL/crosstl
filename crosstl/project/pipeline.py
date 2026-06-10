@@ -3383,12 +3383,18 @@ class ProjectConfig:
     external_corpus_manifest: str | os.PathLike[str] | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "root", Path(os.fspath(self.root)).resolve())
+        object.__setattr__(
+            self,
+            "root",
+            _filesystem_path_arg(self.root, field_name="ProjectConfig.root").resolve(),
+        )
         if self.config_path is not None:
             object.__setattr__(
                 self,
                 "config_path",
-                Path(os.fspath(self.config_path)).resolve(),
+                _filesystem_path_arg(
+                    self.config_path, field_name="ProjectConfig.config_path"
+                ).resolve(),
             )
         for field_name in (
             "source_roots",
@@ -3416,9 +3422,9 @@ class ProjectConfig:
                     field_name=f"ProjectConfig.{field_name}",
                 ),
             )
-        output_dir = os.fspath(self.output_dir)
-        if not isinstance(output_dir, str):
-            raise ValueError("ProjectConfig.output_dir must be a string")
+        output_dir = _path_string_arg(
+            self.output_dir, field_name="ProjectConfig.output_dir"
+        )
         if not output_dir.strip():
             raise ValueError("ProjectConfig.output_dir must be a non-empty string")
         object.__setattr__(
@@ -3459,11 +3465,10 @@ class ProjectConfig:
             )
         object.__setattr__(self, "variants", variants)
         if self.external_corpus_manifest is not None:
-            external_corpus_manifest = os.fspath(self.external_corpus_manifest)
-            if not isinstance(external_corpus_manifest, str):
-                raise ValueError(
-                    "ProjectConfig.external_corpus_manifest must be a string"
-                )
+            external_corpus_manifest = _path_string_arg(
+                self.external_corpus_manifest,
+                field_name="ProjectConfig.external_corpus_manifest",
+            )
             if not external_corpus_manifest.strip():
                 raise ValueError(
                     "ProjectConfig.external_corpus_manifest must be a non-empty string"
@@ -4104,7 +4109,7 @@ def load_project_config(
     root: str | os.PathLike[str], config: str | os.PathLike[str] | None = None
 ) -> ProjectConfig:
     """Load ``crosstl.toml`` if present, otherwise return default scan settings."""
-    root_path = Path(root).resolve()
+    root_path = _filesystem_path_arg(root, field_name="Project root").resolve()
     explicit_config = config is not None
     if explicit_config:
         try:

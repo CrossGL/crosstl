@@ -163,6 +163,78 @@ def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_p
     assert (repo / "out" / "cgl" / "simple.cgl").exists()
 
 
+@pytest.mark.parametrize(
+    "root_path",
+    [
+        b"repo",
+        ProjectBytesPathLike("repo"),
+        object(),
+    ],
+)
+def test_load_project_config_rejects_invalid_root_path_values(root_path):
+    with pytest.raises(
+        ValueError,
+        match="Project root must be a string or path-like object returning str",
+    ):
+        load_project_config(root_path)
+
+
+@pytest.mark.parametrize(
+    ("project_config_kwargs", "message"),
+    [
+        (
+            {"root": object()},
+            "ProjectConfig.root must be a string or path-like object returning str",
+        ),
+        (
+            {"root": ProjectBytesPathLike("repo")},
+            "ProjectConfig.root must be a string or path-like object returning str",
+        ),
+        (
+            {"config_path": object()},
+            "ProjectConfig.config_path must be a string or path-like object returning str",
+        ),
+        (
+            {"config_path": ProjectBytesPathLike("crosstl.toml")},
+            "ProjectConfig.config_path must be a string or path-like object returning str",
+        ),
+        (
+            {"output_dir": object()},
+            "ProjectConfig.output_dir must be a string or path-like object returning str",
+        ),
+        (
+            {"output_dir": ProjectBytesPathLike("out")},
+            "ProjectConfig.output_dir must be a string or path-like object returning str",
+        ),
+        (
+            {"external_corpus_manifest": object()},
+            (
+                "ProjectConfig.external_corpus_manifest must be a string or "
+                "path-like object returning str"
+            ),
+        ),
+        (
+            {"external_corpus_manifest": ProjectBytesPathLike("corpus.json")},
+            (
+                "ProjectConfig.external_corpus_manifest must be a string or "
+                "path-like object returning str"
+            ),
+        ),
+    ],
+)
+def test_project_config_rejects_invalid_direct_path_values(
+    tmp_path,
+    project_config_kwargs,
+    message,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_config_kwargs = {"root": repo, **project_config_kwargs}
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        project_api.ProjectConfig(**project_config_kwargs)
+
+
 def test_translate_project_accepts_path_like_output_dir(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
