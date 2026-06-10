@@ -76,6 +76,7 @@ TOOLS = [
                 "--report",
                 "--validate",
                 "--run-toolchains",
+                "--no-format",
                 "--variant",
             ),
         ),

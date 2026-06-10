@@ -18103,6 +18103,72 @@ def test_project_cli_translate_project_writes_report_to_stdout_for_dash(tmp_path
     assert (repo / "out" / "cgl" / "simple.cgl").exists()
 
 
+def test_project_cli_translate_project_forwards_no_format(
+    tmp_path, monkeypatch, capsys
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    calls = []
+    payload = {
+        "kind": project_pipeline.REPORT_KIND,
+        "summary": {"failedCount": 0, "diagnosticCounts": {"error": 0}},
+    }
+
+    def fake_translate_project(
+        config,
+        *,
+        targets=None,
+        output_dir=None,
+        variants=None,
+        format_output=True,
+        validate=False,
+        run_toolchains=False,
+    ):
+        calls.append(
+            {
+                "root": config.root,
+                "targets": targets,
+                "output_dir": output_dir,
+                "variants": variants,
+                "format_output": format_output,
+                "validate": validate,
+                "run_toolchains": run_toolchains,
+            }
+        )
+        return SimpleNamespace(to_json=lambda: payload)
+
+    monkeypatch.setattr(project_api, "translate_project", fake_translate_project)
+
+    exit_code = crosstl_cli.main(
+        [
+            "translate-project",
+            str(repo),
+            "--target",
+            "opengl",
+            "--output-dir",
+            "out",
+            "--variant",
+            "debug",
+            "--validate",
+            "--no-format",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == payload
+    assert calls == [
+        {
+            "root": repo.resolve(),
+            "targets": ("opengl",),
+            "output_dir": "out",
+            "variants": ["debug"],
+            "format_output": False,
+            "validate": True,
+            "run_toolchains": False,
+        }
+    ]
+
+
 def test_project_cli_translate_project_validate_records_artifact_checks(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
