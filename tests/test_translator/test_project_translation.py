@@ -25118,6 +25118,14 @@ def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
     validate_step = loader_manifest["loadUnits"][0]["loadSteps"][-1]
     assert validate_step["kind"] == "validate-target-toolchain"
     assert validate_step["command"] == ["glslangValidator", "--stdin", "-S", "vert"]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "stdin",
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/webgl/simple.webgl.glsl",
+        },
+        "stage": "vert",
+    }
 
 
 def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
@@ -25192,6 +25200,45 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
     ] == [
         ["glslangValidator", "--stdin", "-S", "vert"],
         ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
+    load_metadata = [
+        load_unit["loadSteps"][0]["metadata"]
+        for load_unit in loader_manifest["loadUnits"]
+    ]
+    assert [metadata["shaderType"] for metadata in load_metadata] == [
+        "VERTEX_SHADER",
+        "FRAGMENT_SHADER",
+    ]
+    assert [metadata["apiCalls"] for metadata in load_metadata] == [
+        [
+            "WebGLRenderingContext.createShader",
+            "WebGLRenderingContext.shaderSource",
+            "WebGLRenderingContext.compileShader",
+        ],
+        [
+            "WebGLRenderingContext.createShader",
+            "WebGLRenderingContext.shaderSource",
+            "WebGLRenderingContext.compileShader",
+        ],
+    ]
+    vertex_group = load_metadata[0]["programGroup"]
+    fragment_group = load_metadata[1]["programGroup"]
+    assert vertex_group["id"] == fragment_group["id"]
+    assert vertex_group["apiCalls"] == [
+        "WebGLRenderingContext.attachShader",
+        "WebGLRenderingContext.linkProgram",
+    ]
+    assert vertex_group["stages"] == [
+        {
+            "stage": "vertex",
+            "packagePath": "artifacts/out/webgl/graphics.vert.webgl.glsl",
+            "shaderType": "VERTEX_SHADER",
+        },
+        {
+            "stage": "fragment",
+            "packagePath": "artifacts/out/webgl/graphics.frag.webgl.glsl",
+            "shaderType": "FRAGMENT_SHADER",
+        },
     ]
     assert loader_manifest["summary"]["loadUnitCount"] == 2
     assert loader_manifest["summary"]["readyLoadUnitCount"] == 2
@@ -25382,6 +25429,21 @@ def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
         None,
         None,
     ]
+    assert [step["metadata"] for step in load_unit["loadSteps"]] == [
+        {},
+        {
+            "source": {
+                "field": "sourceRemap.packagePath",
+                "path": "source-remaps/out/cgl/simple.source-remap.json",
+            }
+        },
+        {
+            "hostInterface": {
+                "entryPointCount": 1,
+                "resourceCount": 0,
+            }
+        },
+    ]
     for load_step in load_unit["loadSteps"]:
         assert (
             set(load_step) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS
@@ -25454,6 +25516,23 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
         "bind-host-interface",
         "validate-target-toolchain",
     ]
+    assert load_unit["loadSteps"][0]["metadata"] == {
+        "runtime": "webgpu",
+        "apiCalls": ["GPUDevice.createShaderModule"],
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/wgsl/simple.wgsl",
+        },
+        "shaderModuleDescriptor": {
+            "code": {
+                "field": "packagePath",
+                "path": "artifacts/out/wgsl/simple.wgsl",
+            }
+        },
+        "entryPoints": [
+            {"name": "main", "stage": "vertex", "executionConfig": {}},
+        ],
+    }
     assert validate_step["kind"] == "validate-target-toolchain"
     assert validate_step["tools"] == ["naga"]
     assert validate_step["command"] == [
@@ -25462,6 +25541,14 @@ def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
         "wgsl",
         "artifacts/out/wgsl/simple.wgsl",
     ]
+    assert validate_step["metadata"]["commandInput"] == {
+        "mode": "path",
+        "source": {
+            "field": "packagePath",
+            "path": "artifacts/out/wgsl/simple.wgsl",
+        },
+        "language": "wgsl",
+    }
 
 
 def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
@@ -25604,7 +25691,38 @@ def test_build_runtime_host_loader_scaffolds_from_loader_manifest(tmp_path):
     )
     assert unit_payload["kind"] == "crosstl-runtime-host-loader-unit"
     assert unit_payload["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert unit_payload["loadSteps"] == scaffold["loadSteps"]
     assert "does not rewrite host application code" in guide.read_text(encoding="utf-8")
+
+
+def test_runtime_host_loader_scaffolds_preserve_loader_step_metadata(tmp_path):
+    repo, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
+    loader_manifest_path = package_dir / "runtime-loader-manifest.json"
+    loader_manifest_path.write_text(
+        json.dumps(
+            build_runtime_loader_manifest(package_dir / "runtime-package.json"),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    scaffold_dir = repo / "host-loader-scaffolds"
+
+    payload = build_runtime_host_loader_scaffolds(
+        loader_manifest_path,
+        scaffold_dir,
+    )
+
+    scaffold = payload["scaffolds"][0]
+    unit_payload = json.loads(
+        (scaffold_dir / scaffold["outputPath"]).read_text(encoding="utf-8")
+    )
+    load_metadata = unit_payload["loadSteps"][0]["metadata"]
+    assert load_metadata["runtime"] == "webgpu"
+    assert load_metadata["apiCalls"] == ["GPUDevice.createShaderModule"]
+    assert load_metadata["shaderModuleDescriptor"]["code"] == {
+        "field": "packagePath",
+        "path": "artifacts/out/wgsl/simple.wgsl",
+    }
 
 
 def test_runtime_host_loader_scaffolds_report_blocked_units_without_unit_files(

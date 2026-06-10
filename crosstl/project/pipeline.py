@@ -561,6 +561,7 @@ RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
         "tools",
         "command",
         "hostInterfaceStatus",
+        "metadata",
     )
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_FIELDS = frozenset(
@@ -10499,10 +10500,230 @@ def plan_runtime_adapters(
     }
 
 
+def _runtime_loader_metadata_source(
+    path: Any, field: str = "packagePath"
+) -> dict[str, Any]:
+    return {"field": field, "path": path}
+
+
+def _runtime_loader_metadata_slug(value: Any, fallback: str) -> str:
+    text = value if isinstance(value, str) else ""
+    text = text.strip().lower()
+    text = re.sub(r"[^a-z0-9._-]+", "-", text)
+    text = re.sub(r"-+", "-", text).strip(".-_")
+    text = re.sub(r"-+\.", ".", text)
+    return text or fallback
+
+
+def _runtime_loader_webgl_shader_type(stage: Any) -> str | None:
+    if not _is_non_empty_string(stage):
+        return None
+    return {
+        "vertex": "VERTEX_SHADER",
+        "fragment": "FRAGMENT_SHADER",
+    }.get(str(stage).lower())
+
+
+def _runtime_loader_webgl_program_groups(
+    adapters: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    grouped: dict[
+        tuple[Any, Any, tuple[tuple[str, str], ...]], list[Mapping[str, Any]]
+    ] = {}
+    for adapter in adapters:
+        target = adapter.get("target")
+        if not _is_non_empty_string(target):
+            continue
+        normalized_target = _normalized_targets([str(target)])[0]
+        if normalized_target != "webgl":
+            continue
+        package_path = adapter.get("packagePath")
+        if not _is_non_empty_string(package_path):
+            continue
+        source_remap = adapter.get("sourceRemap")
+        binding_source_path = None
+        binding_id = adapter.get("binding")
+        if _is_non_empty_string(binding_id):
+            binding_source_path = str(binding_id).split("|", 1)[0]
+        source_group_path = (
+            source_remap.get("sourcePath")
+            if isinstance(source_remap, Mapping)
+            and _is_non_empty_string(source_remap.get("sourcePath"))
+            else binding_source_path
+            or adapter.get("sourcePath")
+            or adapter.get("packagePath")
+        )
+        defines = (
+            dict(adapter.get("defines"))
+            if isinstance(adapter.get("defines"), Mapping)
+            else {}
+        )
+        key = (
+            source_group_path,
+            adapter.get("variant"),
+            tuple(sorted((str(key), str(value)) for key, value in defines.items())),
+        )
+        grouped.setdefault(key, []).append(adapter)
+
+    groups_by_package_path: dict[str, dict[str, Any]] = {}
+    stage_order = {"vertex": 0, "fragment": 1}
+    for key, group_adapters in grouped.items():
+        source_path, variant, defines_key = key
+        group_key = json.dumps(
+            {
+                "sourcePath": source_path,
+                "variant": variant,
+                "defines": list(defines_key),
+                "packagePaths": [
+                    adapter.get("packagePath") for adapter in group_adapters
+                ],
+            },
+            sort_keys=True,
+        )
+        group_hash = hashlib.sha256(group_key.encode("utf-8")).hexdigest()[:12]
+        group_slug = _runtime_loader_metadata_slug(source_path, "program")
+        stages = []
+        for adapter in sorted(
+            group_adapters,
+            key=lambda item: (
+                stage_order.get(str(item.get("stage")).lower(), 99),
+                str(item.get("packagePath") or ""),
+            ),
+        ):
+            stage = adapter.get("stage")
+            package_path = adapter.get("packagePath")
+            if not _is_non_empty_string(package_path):
+                continue
+            stages.append(
+                {
+                    "stage": stage,
+                    "packagePath": package_path,
+                    "shaderType": _runtime_loader_webgl_shader_type(stage),
+                }
+            )
+        group_payload = {
+            "id": f"webgl-program:{group_slug}:{group_hash}",
+            "sourcePath": source_path,
+            "variant": variant,
+            "defines": dict(defines_key),
+            "stages": stages,
+            "apiCalls": [
+                "WebGLRenderingContext.attachShader",
+                "WebGLRenderingContext.linkProgram",
+            ],
+        }
+        for adapter in group_adapters:
+            package_path = adapter.get("packagePath")
+            if _is_non_empty_string(package_path):
+                groups_by_package_path[str(package_path)] = group_payload
+    return groups_by_package_path
+
+
+def _runtime_loader_host_entry_points(
+    adapter: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    host_interface = adapter.get("hostInterface")
+    if not isinstance(host_interface, Mapping):
+        return []
+    entry_points = []
+    for entry_point in _record_sequence(host_interface.get("entryPoints")):
+        if not isinstance(entry_point, Mapping):
+            continue
+        entry_points.append(
+            {
+                "name": entry_point.get("name"),
+                "stage": entry_point.get("stage"),
+                "executionConfig": (
+                    dict(entry_point.get("executionConfig"))
+                    if isinstance(entry_point.get("executionConfig"), Mapping)
+                    else {}
+                ),
+            }
+        )
+    return entry_points
+
+
+def _runtime_loader_target_load_metadata(
+    adapter: Mapping[str, Any],
+    webgl_program_groups: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    target = adapter.get("target")
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(target) or not _is_non_empty_string(package_path):
+        return {}
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target == "wgsl":
+        return {
+            "runtime": "webgpu",
+            "apiCalls": ["GPUDevice.createShaderModule"],
+            "source": _runtime_loader_metadata_source(package_path),
+            "shaderModuleDescriptor": {
+                "code": _runtime_loader_metadata_source(package_path)
+            },
+            "entryPoints": _runtime_loader_host_entry_points(adapter),
+        }
+    if normalized_target == "webgl":
+        stage = adapter.get("stage")
+        metadata: dict[str, Any] = {
+            "runtime": "webgl",
+            "apiCalls": [
+                "WebGLRenderingContext.createShader",
+                "WebGLRenderingContext.shaderSource",
+                "WebGLRenderingContext.compileShader",
+            ],
+            "source": _runtime_loader_metadata_source(package_path),
+            "stage": stage,
+            "shaderType": _runtime_loader_webgl_shader_type(stage),
+        }
+        program_group = webgl_program_groups.get(str(package_path))
+        if isinstance(program_group, Mapping):
+            metadata["programGroup"] = dict(program_group)
+        return metadata
+    return {}
+
+
+def _runtime_loader_validation_command_input_metadata(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> dict[str, Any]:
+    target = adapter.get("target")
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(target) or not _is_non_empty_string(package_path):
+        return {}
+    normalized_target = _normalized_targets([str(target)])[0]
+    if normalized_target in {"opengl", "webgl"}:
+        stage = None
+        stage_label = adapter.get("stage")
+        if _is_non_empty_string(stage_label):
+            stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(str(stage_label))
+        if stage is None:
+            artifact_path = Path(str(package_path))
+            if package_root is not None and not artifact_path.is_absolute():
+                artifact_path = package_root / artifact_path
+            stage = _glslang_stage(artifact_path, adapter)
+        return {
+            "mode": "stdin",
+            "source": _runtime_loader_metadata_source(package_path),
+            "stage": stage,
+        }
+    if normalized_target == "wgsl":
+        return {
+            "mode": "path",
+            "source": _runtime_loader_metadata_source(package_path),
+            "language": "wgsl",
+        }
+    return {
+        "mode": "path",
+        "source": _runtime_loader_metadata_source(package_path),
+    }
+
+
 def _runtime_loader_manifest_load_steps(
     adapter: Mapping[str, Any],
     *,
     package_root: Path | None = None,
+    target_metadata: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     package_path = adapter.get("packagePath")
     target = adapter.get("target")
@@ -10518,6 +10739,7 @@ def _runtime_loader_manifest_load_steps(
             "tools": [],
             "command": None,
             "hostInterfaceStatus": None,
+            "metadata": dict(target_metadata) if target_metadata else {},
         }
     ]
     source_remap = adapter.get("sourceRemap")
@@ -10537,6 +10759,12 @@ def _runtime_loader_manifest_load_steps(
                 "tools": [],
                 "command": None,
                 "hostInterfaceStatus": None,
+                "metadata": {
+                    "source": {
+                        "field": "sourceRemap.packagePath",
+                        "path": source_remap.get("packagePath"),
+                    }
+                },
             }
         )
 
@@ -10559,6 +10787,12 @@ def _runtime_loader_manifest_load_steps(
                 "tools": [],
                 "command": None,
                 "hostInterfaceStatus": interface_status,
+                "metadata": {
+                    "hostInterface": {
+                        "entryPointCount": host_interface.get("entryPointCount", 0),
+                        "resourceCount": host_interface.get("resourceCount", 0),
+                    }
+                },
             }
         )
 
@@ -10582,6 +10816,11 @@ def _runtime_loader_manifest_load_steps(
                     adapter, package_root=package_root
                 ),
                 "hostInterfaceStatus": interface_status,
+                "metadata": {
+                    "commandInput": _runtime_loader_validation_command_input_metadata(
+                        adapter, package_root=package_root
+                    )
+                },
             }
         )
     return steps
@@ -10648,6 +10887,7 @@ def _runtime_loader_manifest_load_unit(
     actions: Sequence[Mapping[str, Any]],
     *,
     package_root: Path | None = None,
+    webgl_program_groups: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     blockers = _runtime_loader_manifest_blockers(adapter, actions)
     host_interface = adapter.get("hostInterface")
@@ -10706,7 +10946,11 @@ def _runtime_loader_manifest_load_unit(
             if _is_non_empty_string(responsibility)
         ],
         "loadSteps": _runtime_loader_manifest_load_steps(
-            adapter, package_root=package_root
+            adapter,
+            package_root=package_root,
+            target_metadata=_runtime_loader_target_load_metadata(
+                adapter, webgl_program_groups or {}
+            ),
         ),
         "blockers": blockers,
         "validation": validation,
@@ -10779,8 +11023,14 @@ def build_runtime_loader_manifest(
     package_root = None
     if _is_non_empty_string(adapter_plan.get("packageRoot")):
         package_root = Path(str(adapter_plan["packageRoot"])).resolve()
+    webgl_program_groups = _runtime_loader_webgl_program_groups(adapters)
     load_units = [
-        _runtime_loader_manifest_load_unit(adapter, actions, package_root=package_root)
+        _runtime_loader_manifest_load_unit(
+            adapter,
+            actions,
+            package_root=package_root,
+            webgl_program_groups=webgl_program_groups,
+        )
         for adapter in adapters
     ]
     ready_load_unit_count = sum(
