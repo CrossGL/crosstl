@@ -604,11 +604,18 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 def _filesystem_path_arg(value: Any, *, field_name: str) -> Path:
     try:
-        return Path(value)
+        path_value = os.fspath(value)
     except TypeError as exc:
         raise ValueError(
             f"{field_name} must be a string or path-like object returning str"
         ) from exc
+    if not isinstance(path_value, str):
+        raise ValueError(
+            f"{field_name} must be a string or path-like object returning str"
+        )
+    if not path_value.strip():
+        raise ValueError(f"{field_name} must be non-empty")
+    return Path(path_value)
 
 
 def _path_string_arg(value: Any, *, field_name: str) -> str:

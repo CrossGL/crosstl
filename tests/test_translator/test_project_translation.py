@@ -128,6 +128,20 @@ def test_project_report_write_json_rejects_invalid_path_values(tmp_path, report_
         report.write_json(report_path)
 
 
+@pytest.mark.parametrize("report_path", ["", ProjectPathLike("")])
+def test_project_report_write_json_rejects_empty_path_values(tmp_path, report_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = scan_project(repo).to_report(targets=["cgl"])
+
+    with pytest.raises(
+        ValueError,
+        match="Project report path must be non-empty",
+    ):
+        report.write_json(report_path)
+
+
 def test_project_config_accepts_path_like_values_when_constructed_directly(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -179,6 +193,12 @@ def test_load_project_config_rejects_invalid_root_path_values(root_path):
         load_project_config(root_path)
 
 
+@pytest.mark.parametrize("root_path", ["", ProjectPathLike("")])
+def test_load_project_config_rejects_empty_root_path_values(root_path):
+    with pytest.raises(ValueError, match="Project root must be non-empty"):
+        load_project_config(root_path)
+
+
 @pytest.mark.parametrize(
     ("project_config_kwargs", "message"),
     [
@@ -189,6 +209,14 @@ def test_load_project_config_rejects_invalid_root_path_values(root_path):
         (
             {"root": ProjectBytesPathLike("repo")},
             "ProjectConfig.root must be a string or path-like object returning str",
+        ),
+        (
+            {"root": ""},
+            "ProjectConfig.root must be non-empty",
+        ),
+        (
+            {"root": ProjectPathLike("")},
+            "ProjectConfig.root must be non-empty",
         ),
         (
             {"config_path": object()},
@@ -10128,6 +10156,19 @@ def test_project_report_readers_reject_invalid_path_values(reader, report_path):
         match=(
             "Project report path must be a string or path-like object returning str"
         ),
+    ):
+        reader(report_path)
+
+
+@pytest.mark.parametrize(
+    "reader",
+    [validate_project_report, inspect_project_report],
+)
+@pytest.mark.parametrize("report_path", ["", ProjectPathLike("")])
+def test_project_report_readers_reject_empty_path_values(reader, report_path):
+    with pytest.raises(
+        ValueError,
+        match="Project report path must be non-empty",
     ):
         reader(report_path)
 
