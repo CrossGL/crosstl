@@ -12128,6 +12128,63 @@ def test_opengl_sampler_globals_are_uniform_resources():
     assert "VectorType(" not in generated_code
 
 
+def test_opengl_version_330_omits_explicit_resource_binding_layouts():
+    shader = """
+    #version 330
+    shader Binding330Resources {
+        sampler2D texture0 @binding(0);
+
+        cbuffer Uniforms @binding(0) {
+            vec4 colDiffuse;
+        };
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return texture(texture0, vec2(0.0)) * colDiffuse;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "#version 330" in generated_code
+    assert "uniform sampler2D texture0;" in generated_code
+    assert "layout(std140) uniform Uniforms" in generated_code
+    assert "binding =" not in generated_code
+
+
+def test_opengl_version_330_keeps_resource_bindings_with_420pack_extension():
+    shader = """
+    #version 330
+    #extension GL_ARB_shading_language_420pack : require
+    shader Binding330ResourcesWithExtension {
+        sampler2D texture0 @binding(0);
+
+        cbuffer Uniforms @binding(0) {
+            vec4 colDiffuse;
+        };
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return texture(texture0, vec2(0.0)) * colDiffuse;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "#version 330" in generated_code
+    assert "#extension GL_ARB_shading_language_420pack : require" in generated_code
+    assert "layout(binding = 0) uniform sampler2D texture0;" in generated_code
+    assert "layout(std140, binding = 0) uniform Uniforms" in generated_code
+
+
 def test_opengl_rejects_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {

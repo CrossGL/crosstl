@@ -295,6 +295,7 @@ class GLSLCodeGen:
 
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     MESH_STAGE_NAMES = {"mesh", "task", "amplification", "object"}
+    UNSIGNED_VECTOR_COMPUTE_BUILTINS = {"gl_GlobalInvocationID"}
     GLSL_STAGE_GUARD_MACROS = {
         "vertex": "GL_VERTEX_SHADER",
         "fragment": "GL_FRAGMENT_SHADER",
@@ -901,6 +902,8 @@ class GLSLCodeGen:
         self.current_mesh_output_parameters = {}
         self.current_mesh_output_topology = None
         self.current_glsl_extensions = set()
+        self.current_glsl_version_line = None
+        self.current_glsl_resource_binding_layouts_supported = True
         self.current_mesh_output_count_limits = {}
         self.task_payload_shared_variables = []
         self.current_target_stage = None
@@ -1449,6 +1452,46 @@ class GLSLCodeGen:
         ) & self.RAY_STAGE_NAMES or self.uses_ray_extension_type(ast, target_stage):
             return "#version 460 core"
         return "#version 450 core"
+
+    def glsl_version_number(self, version_line):
+        parts = str(version_line or "").strip().split()
+        if len(parts) < 2 or parts[0] != "#version":
+            return None
+        try:
+            return int(parts[1])
+        except ValueError:
+            return None
+
+    def glsl_resource_binding_layouts_supported(self, version_line):
+        if self.glsl_extension_enabled("GL_ARB_shading_language_420pack"):
+            return True
+
+        if "es" in str(version_line or "").strip().split()[2:]:
+            return True
+
+        version_number = self.glsl_version_number(version_line)
+        if version_number is None:
+            return True
+        return version_number >= 420
+
+    def should_emit_resource_binding_layouts(self):
+        return getattr(
+            self,
+            "current_glsl_resource_binding_layouts_supported",
+            True,
+        )
+
+    def glsl_resource_layout_prefix(self, *layout_parts, binding=None):
+        parts = [
+            str(part).strip()
+            for part in layout_parts
+            if part is not None and str(part).strip()
+        ]
+        if binding is not None and self.should_emit_resource_binding_layouts():
+            parts.append(f"binding = {binding}")
+        if not parts:
+            return ""
+        return f"layout({', '.join(parts)})"
 
     def glsl_preprocessor_extensions(self, ast):
         extensions = set()
@@ -2375,6 +2418,10 @@ class GLSLCodeGen:
                 extra_lines.append(line)
         if version_line is None:
             version_line = self.default_glsl_version_line(ast, target_stage)
+        self.current_glsl_version_line = version_line
+        self.current_glsl_resource_binding_layouts_supported = (
+            self.glsl_resource_binding_layouts_supported(version_line)
+        )
         code += f"{version_line}\n"
         for line in self.glsl_stage_extension_lines(ast, target_stage):
             if line not in extra_lines:
@@ -2720,10 +2767,9 @@ class GLSLCodeGen:
                     declaration = format_c_style_array_declaration(
                         f"{mapped_type}{array_suffix}", var_name
                     )
-                    code += (
-                        f"layout(binding = {resource_binding}) uniform "
-                        f"{declaration};\n"
-                    )
+                    layout = self.glsl_resource_layout_prefix(binding=resource_binding)
+                    prefix = f"{layout} " if layout else ""
+                    code += f"{prefix}uniform {declaration};\n"
                     self.advance_resource_binding(
                         resource_binding_cursors,
                         binding_namespace,
@@ -2828,12 +2874,14 @@ class GLSLCodeGen:
                 memory_qualifiers = self.resource_memory_qualifiers(node)
                 precision_qualifiers = self.resource_precision_qualifiers(node)
                 qualifier_parts = []
+                if layout:
+                    qualifier_parts.append(layout)
                 if memory_qualifiers:
                     qualifier_parts.append(memory_qualifiers)
                 qualifier_parts.append("uniform")
                 if precision_qualifiers:
                     qualifier_parts.append(precision_qualifiers)
-                code += f"{layout} {' '.join(qualifier_parts)} {declaration};\n"
+                code += f"{' '.join(qualifier_parts)} {declaration};\n"
                 self.advance_resource_binding(
                     resource_binding_cursors,
                     binding_namespace,
@@ -3837,8 +3885,11 @@ class GLSLCodeGen:
                 resource_binding,
                 1,
             )
+            layout = self.glsl_resource_layout_prefix(
+                "std140", binding=resource_binding
+            )
             if isinstance(node, StructNode):
-                code += f"layout(std140, binding = {resource_binding}) uniform {node.name} {{\n"
+                code += f"{layout} uniform {node.name} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
                     if isinstance(member, ArrayNode):
@@ -3867,7 +3918,7 @@ class GLSLCodeGen:
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # CbufferNode handling
-                code += f"layout(std140, binding = {resource_binding}) uniform {node.name} {{\n"
+                code += f"{layout} uniform {node.name} {{\n"
                 for member in node.members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -8324,6 +8375,16 @@ class GLSLCodeGen:
         finally:
             self.current_expression_expected_type = previous_expected_type
 
+    def signed_compute_builtin_member_cast(self, object_name, member_name):
+        expected_type = self.map_type(self.current_expression_expected_type)
+        if expected_type != "int":
+            return None
+        if object_name not in self.UNSIGNED_VECTOR_COMPUTE_BUILTINS:
+            return None
+        if member_name not in {"x", "y", "z"}:
+            return None
+        return f"int({object_name}.{member_name})"
+
     def is_scalar_value_type(self, vtype):
         vtype = self.type_name_string(vtype)
         if not vtype:
@@ -9772,6 +9833,9 @@ class GLSLCodeGen:
                 self.validate_glsl_buffer_block_member_access(expr, "read")
             obj = self.generate_expression_with_expected(expr.object, None)
             member_name = self.glsl_member_access_name(expr.object, str(expr.member))
+            cast_member = self.signed_compute_builtin_member_cast(obj, member_name)
+            if cast_member is not None:
+                return cast_member
             return f"{obj}.{member_name}"
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
             condition = self.generate_expression(expr.condition)
@@ -10280,11 +10344,11 @@ class GLSLCodeGen:
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
             self.validate_structured_buffer_access_argument(func_name, args)
-            index = self.generate_expression(args[1])
+            index = self.generate_expression_with_expected(args[1], None)
             return f"{self.structured_buffer_access_expression(args[0], index)}"
         if func_name == "buffer_store" and len(args) >= 3:
             self.validate_structured_buffer_access_argument(func_name, args)
-            index = self.generate_expression(args[1])
+            index = self.generate_expression_with_expected(args[1], None)
             value = self.generate_expression(args[2])
             array_access = self.structured_buffer_array_parameter_access(args[0])
             if array_access is not None:
@@ -10417,7 +10481,7 @@ class GLSLCodeGen:
             and self.is_resource_array_access(expr)
         ):
             return "0"
-        return self.generate_expression(index_expr)
+        return self.generate_expression_with_expected(index_expr, None)
 
     def is_resource_array_access(self, expr):
         array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
@@ -14492,17 +14556,18 @@ class GLSLCodeGen:
         element_type = self.structured_buffer_element_type(vtype)
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
+        layout = self.glsl_resource_layout_prefix("std430", binding=binding)
         if array_size is not None:
             instance_member = "data"
             self.structured_buffer_instance_members[name] = instance_member
             array_suffix = f"[{array_size}]" if array_size else "[]"
             return (
-                f"layout(std430, binding = {binding}) {qualifier_prefix}buffer "
+                f"{layout} {qualifier_prefix}buffer "
                 f"{name}Buffer {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
         return (
-            f"layout(std430, binding = {binding}) {qualifier_prefix}buffer "
+            f"{layout} {qualifier_prefix}buffer "
             f"{name}Buffer {{ {element_type} {name}[]; }};\n"
         )
 
@@ -14522,15 +14587,16 @@ class GLSLCodeGen:
             self.structured_buffer_counter_members[name] = counter_member
             self.structured_buffer_counter_instances[name] = counter_instance
             array_suffix = f"[{array_size}]" if array_size else "[]"
+            layout = self.glsl_resource_layout_prefix("std430", binding=binding)
             return (
-                f"layout(std430, binding = {binding}) buffer {name}CounterBuffer "
+                f"{layout} buffer {name}CounterBuffer "
                 f"{{ uint {counter_member}[]; }} {counter_instance}{array_suffix};\n"
             )
 
         self.structured_buffer_counter_members[name] = counter_member
+        layout = self.glsl_resource_layout_prefix("std430", binding=binding)
         return (
-            f"layout(std430, binding = {binding}) buffer {name}CounterBuffer "
-            f"{{ uint {counter_member}[]; }};\n"
+            f"{layout} buffer {name}CounterBuffer " f"{{ uint {counter_member}[]; }};\n"
         )
 
     def glsl_buffer_block_attribute(self, node):
@@ -14617,11 +14683,7 @@ class GLSLCodeGen:
         layout = self.glsl_buffer_block_layout(node)
         memory_qualifiers = self.resource_memory_qualifiers(node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
-        layout_prefix = (
-            f"layout({layout})"
-            if binding is None
-            else f"layout({layout}, binding = {binding})"
-        )
+        layout_prefix = self.glsl_resource_layout_prefix(layout, binding=binding)
         code = f"{layout_prefix} {qualifier_prefix}buffer " f"{block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
@@ -14747,7 +14809,8 @@ class GLSLCodeGen:
     ):
         block_name = str(self.resource_base_type(vtype))
         struct = self.structs_by_name[block_name]
-        code = f"layout(std140, binding = {binding}) uniform {block_name} {{\n"
+        layout = self.glsl_resource_layout_prefix("std140", binding=binding)
+        code = f"{layout} uniform {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
                 member,
@@ -16007,9 +16070,7 @@ class GLSLCodeGen:
 
     def opaque_resource_layout(self, vtype, binding, node=None):
         image_format = self.image_format_qualifier(vtype, node)
-        if image_format:
-            return f"layout({image_format}, binding = {binding})"
-        return f"layout(binding = {binding})"
+        return self.glsl_resource_layout_prefix(image_format, binding=binding)
 
     def resource_precision_qualifiers(self, node):
         qualifiers = [
