@@ -27,6 +27,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
 
     assert {path.name for path in case_dirs} == {
         "apple-modern-rendering-mesh-viewdir",
+        "arm-opengl-es-sdk-cube",
         "glslang-push-constant-vertex",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
@@ -146,6 +147,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
 
     assert _workflow_step_cases(workflow, "Linux OpenGL and Vulkan smoke checks") == {
         "apple-modern-rendering-mesh-viewdir",
+        "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
         "glslang-push-constant-vertex",
@@ -169,6 +171,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     }
     assert _workflow_step_cases(workflow, "macOS Metal smoke checks") == {
         "apple-modern-rendering-mesh-viewdir",
+        "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
         "glslang-push-constant-vertex",
@@ -189,6 +192,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
     }
     assert _workflow_step_cases(workflow, "Windows DirectX smoke checks") == {
         "apple-modern-rendering-mesh-viewdir",
+        "arm-opengl-es-sdk-cube",
         "directx-graphics-samples-hello-triangle",
         "directx-graphics-samples-hello-texture",
         "slang-hello-world-compute",
@@ -248,6 +252,8 @@ def test_open_source_demo_workflow_compile_reference_paths_exist():
         )
     )
     assert {
+        "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.vert.hlsl",
+        "demos/open-source-porting/cases/arm-opengl-es-sdk-cube/crosstl-out/directx/Cube_cube.frag.hlsl",
         "demos/open-source-porting/cases/directx-graphics-samples-hello-triangle/crosstl-out/directx/shaders.hlsl",
         "demos/open-source-porting/cases/directx-graphics-samples-hello-texture/crosstl-out/directx/shaders.hlsl",
         "demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/directx/headless.hlsl",

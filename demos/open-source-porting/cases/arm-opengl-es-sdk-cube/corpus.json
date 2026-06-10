@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "ARM OpenGL ES SDK cube shaders",
+  "description": "Pinned GLSL ES vertex and fragment sources used by the open-source project porting demo.",
+  "entries": [
+    {
+      "id": "arm-opengl-es-sdk-cube-vertex",
+      "path": "Cube_cube.vert",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/ARM-software/opengl-es-sdk-for-android",
+      "commit": "c3caf759bb2e71fa9a118b3e3abd996cf00e660a",
+      "sourceUrl": "https://github.com/ARM-software/opengl-es-sdk-for-android/blob/c3caf759bb2e71fa9a118b3e3abd996cf00e660a/samples/advanced_samples/Cube/assets/Cube_cube.vert"
+    },
+    {
+      "id": "arm-opengl-es-sdk-cube-fragment",
+      "path": "Cube_cube.frag",
+      "sourceBackend": "opengl",
+      "targets": ["cgl", "metal", "directx", "vulkan"],
+      "repository": "https://github.com/ARM-software/opengl-es-sdk-for-android",
+      "commit": "c3caf759bb2e71fa9a118b3e3abd996cf00e660a",
+      "sourceUrl": "https://github.com/ARM-software/opengl-es-sdk-for-android/blob/c3caf759bb2e71fa9a118b3e3abd996cf00e660a/samples/advanced_samples/Cube/assets/Cube_cube.frag"
+    }
+  ]
+}

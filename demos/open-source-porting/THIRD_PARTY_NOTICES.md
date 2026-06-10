@@ -54,6 +54,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/donaldwuid/apple_metal_sample_code/blob/0bc50e5b3670b3169855ab260e8da5ff07b53749/LICENSE
 
+## ARM-software/opengl-es-sdk-for-android
+
+- Repository: https://github.com/ARM-software/opengl-es-sdk-for-android
+- Commit: `c3caf759bb2e71fa9a118b3e3abd996cf00e660a`
+- Source paths:
+  - `samples/advanced_samples/Cube/assets/Cube_cube.vert`
+  - `samples/advanced_samples/Cube/assets/Cube_cube.frag`
+- License: MIT
+- License URL:
+  https://github.com/ARM-software/opengl-es-sdk-for-android/blob/c3caf759bb2e71fa9a118b3e3abd996cf00e660a/LICENSE
+
 ## bkvogel/metal_performance_testing
 
 - Repository: https://github.com/bkvogel/metal_performance_testing

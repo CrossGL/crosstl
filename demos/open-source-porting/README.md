@@ -49,6 +49,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `spirv-cross-round-fragment` | `KhronosGroup/SPIRV-Cross` at `146679ff8255a6068518685599d7fb8761d1b570` | Apache-2.0 | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream fragment reference shader unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL validation is tracked in issue #805. |
+| `arm-opengl-es-sdk-cube` | `ARM-software/opengl-es-sdk-for-android` at `c3caf759bb2e71fa9a118b3e3abd996cf00e660a` | MIT | GLSL ES | CrossGL, Metal, DirectX, Vulkan | Uses the upstream cube shader pair unchanged. OpenGL reserved identifier lowering is tracked in issue #820. |
 | `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX output validation is tracked in issue #807. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `ogl-samples-flat-color` | `g-truc/ogl-samples` at `38cada7a9458864265e25415ae61586d500ff5fc` | MIT | GLSL | CrossGL, OpenGL, Vulkan | Uses the upstream GLSL 330 flat-color shader pair unchanged. Metal attribute lowering is tracked in issue #817. |
@@ -66,10 +67,10 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 
 ## Source adjustments
 
-The DirectX, glslang, Metal performance, NVIDIA CUDA Samples, ogl-samples,
-OpenCL-SDK, Rust-GPU VulkanShaderExamples, SPIRV-Cross, SPIRV-Tools,
-Vulkan-Tools, raylib, SaschaWillems triangle, and Slang cases keep upstream
-source files unchanged apart from repository
+The ARM OpenGL ES SDK, DirectX, glslang, Metal performance, NVIDIA CUDA
+Samples, ogl-samples, OpenCL-SDK, Rust-GPU VulkanShaderExamples, SPIRV-Cross,
+SPIRV-Tools, Vulkan-Tools, raylib, SaschaWillems triangle, and Slang cases keep
+upstream source files unchanged apart from repository
 formatting checks. The DirectX Hello Texture shader was retested after issue
 #783 closed and is now checked for OpenGL, Metal, DirectX, and Vulkan output.
 The SaschaWillems headless compute shader was retested after issue #756 closed
@@ -119,6 +120,12 @@ GLSL identifiers that collide with HLSL reserved words are currently emitted
 unchanged. That translator issue is tracked in issue #819. Metal output is
 also left out of the checked target set until GLSL location metadata lowering
 is resolved under issue #817.
+
+The `ARM-software/opengl-es-sdk-for-android` cube shaders are checked for
+CrossGL, Metal, DirectX, and Vulkan output. OpenGL output is intentionally
+excluded because legacy `gl_FragColor` writes are lowered through a generated
+local named `gl_FragColor`, which is reserved in GLSL. That translator issue is
+tracked in issue #820.
 
 The `KhronosGroup/OpenCL-SDK` reduce kernel from `samples/core/reduce/reduce.cl`
 at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` was tested as a candidate. It
