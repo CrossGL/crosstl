@@ -261,6 +261,10 @@ def test_format_shader_code():
         assert format_shader_code("code", "dx") == "formatted_code"
         assert format_shader_code("code", "opengl") == "formatted_code"
         assert format_shader_code("code", "ogl") == "formatted_code"
+        assert format_shader_code("code", "webgl") == "formatted_code"
+        assert format_shader_code("code", "webgl2") == "formatted_code"
+        assert format_shader_code("code", "essl") == "formatted_code"
+        assert format_shader_code("code", "glsl-es") == "formatted_code"
         assert format_shader_code("code", "vulkan") == "formatted_code"
         assert format_shader_code("code", "rs") == "formatted_code"
         assert format_shader_code("code", "cu") == "formatted_code"
@@ -269,6 +273,7 @@ def test_format_shader_code():
         assert format_shader_code("code", ".hlsl") == "formatted_code"
         assert format_shader_code("code", "out.HLSL") == "formatted_code"
         assert format_shader_code("code", "shader.frag") == "formatted_code"
+        assert format_shader_code("code", "shader.webgl.glsl") == "formatted_code"
         assert format_shader_code("code", "shader.msl") == "formatted_code"
         assert format_shader_code("code", ".spvasm") == "formatted_code"
         assert format_shader_code("code", "kernel.cuda") == "formatted_code"
@@ -289,6 +294,11 @@ def test_format_shader_code():
         format_shader_code("code", "opengl", "output.glsl")
         mock_instance.format_code.assert_called_with(
             "code", ShaderLanguage.GLSL, "output.glsl"
+        )
+
+        format_shader_code("code", "webgl", "output.webgl.glsl")
+        mock_instance.format_code.assert_called_with(
+            "code", ShaderLanguage.GLSL, "output.webgl.glsl"
         )
 
         format_shader_code("code", "vulkan", "output.spvasm")

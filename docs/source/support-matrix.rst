@@ -24,6 +24,7 @@ implicitly supported.
 
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1071", "291", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "1167", "177", "GLSL 4.60 specification; OpenGL registry"
+   "WebGL / GLSL ES", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "7", "6", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "962", "492", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "972", "36", "SPIR-V unified grammar; Khronos SPIR-V headers"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "778", "194", "CUDA C++ programming guide"
@@ -37,6 +38,7 @@ implicitly supported.
 
    "DirectX / HLSL", "42", "0", "1", "0", "0", "0"
    "OpenGL / GLSL", "42", "0", "1", "0", "0", "0"
+   "WebGL / GLSL ES", "13", "0", "21", "9", "0", "0"
    "Metal", "41", "0", "2", "0", "0", "0"
    "Vulkan SPIR-V", "42", "0", "1", "0", "0", "0"
    "CUDA", "37", "0", "6", "0", "0", "0"
@@ -68,83 +70,83 @@ Feature Matrix
 Each category below uses the status codes from the legend.
 
 .. csv-table:: target
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "CrossGL to target code generation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "CrossGL to target code generation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: source
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Native source to CrossGL", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native lexer coverage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Native preprocessor handling", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Native source to CrossGL", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Native lexer coverage", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Native preprocessor handling", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: stages
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Vertex stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Fragment/pixel stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Compute stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Geometry stage", "Y", "Y", "D", "Y", "D", "D", "D", "D", "Y"
-   "Tessellation stages", "Y", "D", "D", "Y", "D", "D", "D", "D", "Y"
-   "Mesh/task/amplification stages", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "D"
-   "Ray tracing stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Vertex stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Fragment/pixel stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Compute stage", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Geometry stage", "Y", "Y", "R", "D", "Y", "D", "D", "D", "D", "Y"
+   "Tessellation stages", "Y", "D", "R", "D", "Y", "D", "D", "D", "D", "Y"
+   "Mesh/task/amplification stages", "Y", "Y", "R", "Y", "Y", "D", "D", "D", "D", "D"
+   "Ray tracing stages", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: stage I/O
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Stage parameter semantics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Direct function return semantics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Struct member semantics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Stage parameter semantics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Direct function return semantics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Struct member semantics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: resources
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Explicit and automatic resource bindings", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Constant/uniform buffers", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Structured/storage buffers", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Resource arrays", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texture and sampler object model", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "GLSL buffer block lowering", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Resource memory qualifiers", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Explicit and automatic resource bindings", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Constant/uniform buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Structured/storage buffers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Resource arrays", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture and sampler object model", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "GLSL buffer block lowering", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Resource memory qualifiers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: textures
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Texture sampling", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texture LOD, gradient, and offset operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Projected texture operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texture gather operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Shadow compare texture operations", "Y", "Y", "Y", "Y", "D", "D", "Y", "Y", "Y"
-   "Texture query operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Texel fetch operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Multisample texture operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Advanced texture operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture sampling", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture LOD, gradient, and offset operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Projected texture operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texture gather operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Shadow compare texture operations", "Y", "Y", "D", "Y", "Y", "D", "D", "Y", "Y", "Y"
+   "Texture query operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Texel fetch operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Multisample texture operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Advanced texture operations", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: images
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Storage image load/store", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Image atomics", "Y", "Y", "Y", "Y", "D", "D", "Y", "Y", "Y"
-   "Multisample storage images", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Storage image load/store", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Image atomics", "Y", "Y", "D", "Y", "Y", "D", "D", "Y", "Y", "Y"
+   "Multisample storage images", "D", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: language
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Struct declarations and construction", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Array declarations and access", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Function declarations and calls", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "D"
-   "Control flow", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Synchronization and memory barriers", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Wave/subgroup intrinsics", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Match/pattern lowering", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Vector and matrix expressions", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Bitwise operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Struct declarations and construction", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Array declarations and access", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Function declarations and calls", "Y", "Y", "Y", "Y", "D", "D", "D", "D", "Y", "D"
+   "Control flow", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Synchronization and memory barriers", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Wave/subgroup intrinsics", "Y", "Y", "R", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Match/pattern lowering", "Y", "Y", "D", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Vector and matrix expressions", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Bitwise operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: validation
-   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
+   :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "WebGL / GLSL ES", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Invalid shader shape validation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Invalid shader shape validation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 Backlog
 -------
@@ -170,6 +172,8 @@ changes must be reviewed and committed in the source catalog.
    "DirectX / HLSL", "HLSL specification project", "https://microsoft.github.io/hlsl-specs/"
    "OpenGL / GLSL", "GLSL 4.60 specification", "https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/specs/gl/GLSLangSpec.4.60.html"
    "OpenGL / GLSL", "OpenGL registry", "https://github.com/KhronosGroup/OpenGL-Registry"
+   "WebGL / GLSL ES", "WebGL 2.0 specification", "https://registry.khronos.org/webgl/specs/latest/2.0/"
+   "WebGL / GLSL ES", "OpenGL ES Shading Language 3.00 specification", "https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf"
    "Metal", "Apple Metal resources", "https://developer.apple.com/metal/resources/"
    "Metal", "Metal Shading Language specification", "https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf"
    "Vulkan SPIR-V", "SPIR-V unified grammar", "https://raw.githubusercontent.com/KhronosGroup/SPIRV-Headers/main/include/spirv/unified1/spirv.core.grammar.json"

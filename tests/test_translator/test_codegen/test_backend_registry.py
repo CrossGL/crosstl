@@ -362,6 +362,7 @@ def test_target_registry_real_world_extensions_match_source_and_formatter(
         ("mojo", (".mojo",)),
         ("rust", (".rs", ".rust")),
         ("vulkan", (".spvasm",)),
+        ("webgl", (".webgl.glsl",)),
     ),
 )
 def test_target_registry_resolves_file_extension_backend_spellings(backend, extensions):

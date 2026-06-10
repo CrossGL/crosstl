@@ -242,6 +242,66 @@
     },
     {
       "aliases": [
+        "webgl2",
+        "essl",
+        "glsl-es"
+      ],
+      "docs": [
+        {
+          "name": "WebGL 2.0 specification",
+          "url": "https://registry.khronos.org/webgl/specs/latest/2.0/"
+        },
+        {
+          "name": "OpenGL ES Shading Language 3.00 specification",
+          "url": "https://registry.khronos.org/OpenGL/specs/es/3.0/GLSL_ES_Specification_3.00.pdf"
+        }
+      ],
+      "id": "webgl",
+      "name": "WebGL / GLSL ES",
+      "native_backend": {
+        "exists": false,
+        "path": null
+      },
+      "signals": {
+        "unsupported_marker_count": 6,
+        "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "UNSUPPORTED_STAGE_NAMES = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "unsupported = sorted(stages & self.UNSUPPORTED_STAGE_NAMES)"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "if unsupported:"
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "\"WebGL target does not support shader stage(s): \""
+          },
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "+ \", \".join(unsupported)"
+          }
+        ]
+      },
+      "source_kind": "target-only",
+      "target_extension": ".webgl.glsl",
+      "tests": {
+        "paths": [
+          "tests/test_translator/test_codegen/test_webgl_codegen.py"
+        ],
+        "test_count": 7
+      },
+      "translator_codegen": {
+        "exists": true,
+        "path": "crosstl/translator/codegen/webgl_codegen.py"
+      }
+    },
+    {
+      "aliases": [
         "metal",
         "msl"
       ],
@@ -1126,6 +1186,13 @@
           ],
           "notes": "",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -1197,6 +1264,13 @@
           ],
           "notes": "",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -1268,6 +1342,13 @@
           ],
           "notes": "",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -1376,6 +1457,13 @@
           ],
           "notes": "Vulkan source imports run a GLSL-compatible preprocessor before lexing, expanding object-like and function-like defines, include files, and conditional compilation while enforcing #version placement. Remaining native directives such as #version and #extension are accepted and filtered before parsing, so preprocessed Vulkan GLSL/SPIR-V-style sources parse without leaking directive tokens into the AST.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL is registered as a target-only backend; native WebGL source parsing is intentionally not registered as a separate frontend.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -1467,6 +1555,13 @@
           ],
           "notes": "",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -1556,6 +1651,13 @@
           ],
           "notes": "",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -1628,6 +1730,13 @@
           ],
           "notes": "",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -1714,6 +1823,13 @@
           ],
           "notes": "SPIR-V geometry stages lower to Geometry entry points with OpCapability Geometry and stage execution modes for input primitive topology, output topology, OutputVertices/maxvertexcount, and invocation count. Geometry stage builtins are emitted into the entry interface, EmitVertex and EndPrimitive lower to OpEmitVertex and OpEndPrimitive, and invalid geometry metadata, wrong-stage stream calls, and stream builtin arity errors produce deterministic diagnostics.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -1803,6 +1919,13 @@
           ],
           "notes": "SPIR-V codegen lowers tessellation control and evaluation stages to TessellationControl/TessellationEvaluation entry points with deterministic execution modes from stage layouts, stage attributes, and top-level qualified FunctionNode metadata. It preserves output vertices, domain, spacing, vertex order, patch-constant data, patch builtins, and patch parameter interfaces while validating tessellation metadata and patch contexts.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -1950,6 +2073,13 @@
           ],
           "notes": "SPIR-V codegen lowers mesh and task stages with SPV_EXT_mesh_shader capability/extension metadata, MeshEXT/TaskEXT entry points, local-size execution modes, mesh output limits/topology, SetMeshOutputCounts, SetVertex/SetPrimitive, mesh output signature parameters, per-primitive and builtin outputs, helper forwarding, taskPayloadSharedEXT payload interfaces, and DispatchMesh payload operands while validating arity, scalar/non-negative counts, declared output limits, output assignment shapes, invalid members/components, ambiguous payload targets, and wrong-stage mesh helpers.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -2118,6 +2248,13 @@
           ],
           "notes": "Ray generation, intersection, any-hit, closest-hit, miss, and callable stages lower to SPIR-V KHR ray tracing entry points with validator-backed RayTracingKHR capability and SPV_KHR_ray_tracing extension coverage. Acceleration-structure resources preserve descriptor metadata and participate in entry-point interfaces, ray payload, callable data, and hit attribute values are bridged through RayPayloadKHR, CallableDataKHR, and HitAttributeKHR storage variables, launch and hit builtins lower to SPIR-V builtins, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to native KHR instructions, and RayQuery methods lower to KHR ray-query instructions including triangle position fetch coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -2210,6 +2347,13 @@
           ],
           "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -2300,6 +2444,13 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_spirv"
           ],
           "notes": "Direct entry-point return semantics lower to SPIR-V Output variables or BuiltIn Position/FragDepth outputs, fragment color returns use deterministic Location decorations, invalid builtin type/stage/input-only return semantics are rejected, and generated modules validate through spirv-as/spirv-val when available.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "status": "supported"
         }
       }
@@ -2393,6 +2544,13 @@
           ],
           "notes": "Struct member semantics lower to SPIR-V member BuiltIn decorations for Position and SV_Position aliases, mesh-output struct members receive deterministic Location decorations, duplicate input/output locations are rejected, and generated modules validate through the SPIR-V tools smoke checks when available.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -2477,6 +2635,13 @@
           ],
           "notes": "Global sampled textures, samplers, storage images, resource arrays, and cbuffers share deterministic DescriptorSet/Binding assignment with explicit @set/@group/@binding handling and duplicate binding rejection.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -2570,6 +2735,13 @@
           ],
           "notes": "CrossGL cbuffers lower to SPIR-V Uniform blocks with Block, member Offset, matrix stride, array stride, descriptor set/binding decorations, bare/member access lowering, duplicate binding rejection, and spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -2730,6 +2902,13 @@
           ],
           "notes": "StructuredBuffer, RWStructuredBuffer, AppendStructuredBuffer, ConsumeStructuredBuffer, ByteAddressBuffer, and RWByteAddressBuffer lower to Vulkan-compatible SPIR-V BufferBlock descriptors with runtime-array storage, descriptor set/binding allocation, std430-style member/array layout decorations, buffer_load/buffer_store lowering, buffer_dimensions/GetDimensions via OpArrayLength, direct indexed member access, byte-address scalar/vector loads and stores, byte-address atomics, append/consume and counter sidecar buffers, function-parameter access propagation, read/write access diagnostics, duplicate binding rejection, and spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -2871,6 +3050,13 @@
           ],
           "notes": "Covers fixed texture/sampler/image arrays, nested resource arrays, dynamic unsized resource-array parameters lowered to fixed SPIR-V pointer signatures, storage-image arrays with access diagnostics, StructuredBuffer/ByteAddressBuffer descriptor arrays, descriptor-array counter sidecars, runtime descriptor arrays for unsized storage-buffer arrays, sampled/queried/gather/fetch operations through indexed elements, binding allocation, and deterministic shape-conflict diagnostics.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -2973,6 +3159,13 @@
           ],
           "notes": "SPIR-V lowers CrossGL sampled texture types to OpTypeSampledImage UniformConstant descriptors and standalone sampler declarations to OpTypeSampler descriptors. Explicit sampler operands are accepted for source compatibility while sampling uses the combined sampled-image operand, matching the repo-owned Vulkan contract. Descriptor set/binding allocation uses Vulkan's single per-set namespace across textures, samplers, images, buffers, and cbuffers, with duplicate explicit bindings rejected.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3145,6 +3338,13 @@
           ],
           "notes": "GLSL-style layout(...) buffer blocks, explicit @glsl_buffer_block declarations, and buffer-qualified runtime-array declarations lower to SPIR-V BufferBlock Uniform descriptors with descriptor set/binding decorations, std430/std140/scalar member offsets and array/matrix strides for scalar/vector/matrix/fixed-array/runtime-array members, direct block member access, fixed block descriptor arrays across layouts, runtime block descriptor arrays with RuntimeDescriptorArray/SPV_EXT_descriptor_indexing, single-member descriptor arrays, inlined helper parameters, buffer_load/buffer_store helper lowering, layout-compatible fixed aggregate load/store/return conversion, runtime-array element aggregate copy, readonly/writeonly/coherent/volatile/restrict member decorations with direct/helper diagnostics, deterministic diagnostics for invalid whole runtime-array aggregate values and invalid atomic operands, scalar int/uint member and runtime-array atomics, and spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3255,6 +3455,13 @@
           ],
           "notes": "Storage-image readonly/writeonly/coherent/volatile/restrict qualifiers lower to validated SPIR-V variable decorations with direct and interprocedural invalid read/write/atomic diagnostics; StructuredBuffer, RWStructuredBuffer, ByteAddressBuffer, RWByteAddressBuffer, and GLSL buffer-block qualifiers lower to BufferBlock member decorations; helper parameters and descriptor arrays preserve read/write access diagnostics while avoiding invalid Uniform pointer calls; resource memory qualifier modules validate with spirv-tools.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3345,6 +3552,13 @@
           ],
           "notes": "Basic regular and shadow texture sampling lower to SPIR-V implicit-lod sampling instructions across 2D, 2D-array, 3D, cube, and cube-array resources, with explicit split samplers ignored for combined-image semantics and spirv-tools validation coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3449,6 +3663,13 @@
           ],
           "notes": "Covers explicit LOD, gradient, offset, combined LOD/gradient-offset, fragment bias operands, compute-stage bias diagnostics, shadow compare LOD/gradient-offset forms, and combined image operand ordering, with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3551,6 +3772,13 @@
           ],
           "notes": "Covers projected color sampling for 2D, 2D-array, 3D, and cube textures plus projected 2D, 2D-array, and cube shadow comparisons across offset, LOD, gradient, and fragment bias variants. Non-bias projected forms have spirv-as/spirv-val coverage; cube-array projection is rejected deterministically.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3643,6 +3871,13 @@
           ],
           "notes": "Covers gather, gather-offset, gather-offsets, dynamic component selection, resource arrays, and shadow gather-compare forms with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3735,6 +3970,13 @@
           ],
           "notes": "Covers shadow comparison sampling, LOD/gradient/offset variants, gather-compare, resource arrays, and explicit sampler arguments with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3837,6 +4079,13 @@
           ],
           "notes": "Covers textureSize, imageSize, textureQueryLevels, textureQueryLod, textureSamples, imageSamples, array/cube-array coordinate trimming, and multisample query forms with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -3941,6 +4190,13 @@
           ],
           "notes": "Covers regular, array, fetch-offset, and multisample texelFetch lowering to OpImageFetch with spirv-as/spirv-val coverage, plus deterministic diagnostics for multisample fetch-offset and cube/cube-array target-invalid forms.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4033,6 +4289,13 @@
           ],
           "notes": "Covers 2D and 2D-array multisample fetches, sample-count/size queries, sample operand ordering, and deterministic diagnostics for unsupported offset, LOD/query-LOD, gather, and compare forms.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4144,6 +4407,13 @@
           ],
           "notes": "Covers regular and shadow sampling, LOD, gradient, offset, projected sampling, fragment bias operands, gather, shadow compare, texel fetch, query, multisample fetch/query forms, target-invalid diagnostics, and spirv-as/spirv-val validation coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4244,6 +4514,13 @@
           ],
           "notes": "Covers OpImageRead/OpImageWrite for scalar, vector, explicit-format, array, and multisample storage images, with spirv-as/spirv-val coverage for resource-heavy compute shaders.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4336,6 +4613,13 @@
           ],
           "notes": "Covers integer storage-image atomic add/min/max/bitwise/exchange/compare-exchange through OpImageTexelPointer and OpAtomic instructions, with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4425,6 +4709,13 @@
           ],
           "notes": "Covers multisample storage-image load/store sample operands, sample-count queries, integer atomics where valid, deterministic malformed operand diagnostics, and spirv-as/spirv-val validation coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4499,6 +4790,13 @@
           ],
           "notes": "SPIR-V lowers struct type declarations, constructors, member access, nested member access, parameters, local copies, returns, and resource-bearing struct values to OpTypeStruct, OpCompositeConstruct, OpAccessChain/OpCompositeExtract, and layout-compatible local values with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -4572,6 +4870,13 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ],
           "notes": "SPIR-V lowers fixed arrays, array literals, local arrays, array parameters, array return values, nested array/struct member access, and dynamic indexing to OpTypeArray, OpCompositeConstruct, OpAccessChain, and local-copy helpers with spirv-as/spirv-val coverage.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "status": "supported"
         }
       }
@@ -4654,6 +4959,13 @@
           ],
           "notes": "SPIR-V lowers non-generic helper functions, entry functions, function parameters, return-value conversion, argument conversion, user calls, and structured return statements to OpFunction/OpFunctionParameter/OpFunctionCall with spirv-as/spirv-val coverage. Generic functions emit deterministic diagnostics until SPIR-V monomorphization support is implemented.",
           "status": "diagnostic"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -4727,6 +5039,13 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_spirv_language_features_compute_validates_with_spirv_tools"
           ],
           "notes": "SPIR-V lowers if/else, for, while, do-while, switch/default, break, continue, returns, and resource use inside structured control flow to structured OpSelectionMerge/OpLoopMerge regions with spirv-as/spirv-val coverage.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "status": "supported"
         }
       }
@@ -4832,6 +5151,13 @@
           ],
           "notes": "barrier/workgroupBarrier lower to OpControlBarrier; groupMemoryBarrier and memoryBarrierShared lower to workgroup-scoped OpMemoryBarrier, memoryBarrierBuffer and memoryBarrierImage lower to device-scoped buffer/image memory barriers, memoryBarrier/allMemoryBarrier lower to device-scoped all-memory barriers, user-defined functions with synchronization names are preserved, and spirv-as/spirv-val coverage exists.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -4944,6 +5270,13 @@
           ],
           "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "The initial WebGL2 target rejects this non-WebGL or unimplemented shader capability with a deterministic diagnostic instead of emitting misleading desktop GLSL.",
+          "status": "validated_rejection"
         }
       }
     },
@@ -5045,6 +5378,13 @@
           ],
           "notes": "SPIR-V lowers literal/wildcard arms, guarded arms, identifier bindings, struct field patterns, enum path and payload patterns, generic payload enum patterns, match expressions, returns, and scoped case bodies through structured selection chains with spirv-as/spirv-val coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 support for this capability has not been promoted to supported status; the target either relies on GLSL diagnostics for invalid shapes or remains gated until browser/WebGL validator coverage is added.",
+          "status": "diagnostic"
         }
       }
     },
@@ -5135,6 +5475,13 @@
           ],
           "notes": "SPIR-V codegen lowers scalar/vector/bool constructors, vector constructor flattening and arity diagnostics, matrix constructors including double and mixed-precision conversions, vector arithmetic and swizzle reads/writes/compound assignments, matrix add/subtract/scalar multiply/scalar divide/matrix multiply/matrix-vector/vector-matrix arithmetic, and vector helper intrinsics with validator-backed coverage.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     },
@@ -5211,6 +5558,13 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compound_assignments_load_apply_op_and_store_result"
           ],
           "notes": "SPIR-V codegen lowers integer bitwise &, |, ^, shifts, unary bitwise not, and bitwise compound assignments to validated SPIR-V bitwise/shift opcodes.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "status": "supported"
         }
       }
@@ -5362,6 +5716,13 @@
           ],
           "notes": "SPIR-V codegen emits deterministic diagnostics or validated fallback modules for invalid builtin operand shapes, compute/stage metadata, tessellation patch contexts, geometry stream calls, mesh output counts and member/index targets, ray-query argument shapes, interface locations/components, duplicate resource bindings, malformed buffer/image/texture/resource-query operands, and dynamic resource-array shape conflicts.",
           "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+          ],
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "status": "supported"
         }
       }
     }
@@ -5385,7 +5746,7 @@
     "validated_rejection": "The backend rejects this shape with an explicit validation error."
   },
   "summary": {
-    "backend_count": 9,
+    "backend_count": 10,
     "backlog_count": 0,
     "feature_count": 43,
     "status_counts": {
@@ -5460,6 +5821,14 @@
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
+      },
+      "webgl": {
+        "diagnostic": 21,
+        "partial": 0,
+        "supported": 13,
+        "unknown": 0,
+        "unsupported": 0,
+        "validated_rejection": 9
       }
     }
   }

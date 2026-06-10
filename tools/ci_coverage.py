@@ -710,6 +710,14 @@ def backend_test_matrix_name(backend: dict[str, Any]) -> str:
     raise CiCoverageError("Backend '{}' has no backend test path".format(backend["id"]))
 
 
+def native_source_backends(backends: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        backend
+        for backend in backends
+        if backend.get("source_kind", "native") == "native"
+    ]
+
+
 def translator_test_matrix_name(backend: dict[str, Any]) -> str:
     prefix = "tests/test_translator/test_codegen/test_"
     suffix = "_codegen.py"
@@ -1415,9 +1423,10 @@ def examples_report(workflow: str, expected_backends: list[str]) -> dict[str, An
 
 def build_report() -> dict[str, Any]:
     backends = load_backends()
+    native_backends = native_source_backends(backends)
     backend_ids = sorted(backend["id"] for backend in backends)
     expected_backend_components = [
-        backend_test_matrix_name(backend) for backend in backends
+        backend_test_matrix_name(backend) for backend in native_backends
     ]
     expected_translator_components = [
         translator_test_matrix_name(backend) for backend in backends
