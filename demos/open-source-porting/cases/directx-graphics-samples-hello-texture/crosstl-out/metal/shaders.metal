@@ -25,4 +25,3 @@ vertex PSInput VSMain(VSMain_Input _crossglInput [[stage_in]], texture2d<float> 
 fragment float4 PSMain(PSInput input [[stage_in]], texture2d<float> g_texture [[texture(0)]], sampler g_sampler [[sampler(0)]]) {
     return g_texture.sample(g_sampler, input.uv);
 }
-

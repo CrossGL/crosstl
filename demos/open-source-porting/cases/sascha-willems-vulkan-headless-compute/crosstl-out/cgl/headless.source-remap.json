@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/headless.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 36,
+        "endOffset": 743,
+        "file": "crosstl-out/cgl/headless.cgl",
+        "length": 743,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 32,
+        "endOffset": 525,
+        "file": "headless.comp",
+        "length": 525,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -123,7 +123,9 @@ should be treated with the same upstream license context when redistributed.
 
 - Repository: https://github.com/SaschaWillems/Vulkan
 - Commit: `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade`
-- Source path: `shaders/glsl/conservativeraster/triangle.vert`
+- Source paths:
+  - `shaders/glsl/conservativeraster/triangle.vert`
+  - `shaders/glsl/computeheadless/headless.comp`
 - License: MIT
 - License URL:
   https://github.com/SaschaWillems/Vulkan/blob/2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade/LICENSE.md

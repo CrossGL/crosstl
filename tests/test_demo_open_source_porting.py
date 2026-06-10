@@ -39,6 +39,7 @@ def test_open_source_demo_cases_have_pinned_manifests_and_references():
         "rust-gpu-graphics-stage-inputs",
         "rust-gpu-vulkan-examples-triangle-overlay",
         "sascha-willems-vulkan-conservative-triangle",
+        "sascha-willems-vulkan-headless-compute",
         "slang-hello-world-compute",
         "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
@@ -112,6 +113,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "rust-gpu-graphics-stage-inputs",
         "rust-gpu-vulkan-examples-triangle-overlay",
         "sascha-willems-vulkan-conservative-triangle",
+        "sascha-willems-vulkan-headless-compute",
         "slang-hello-world-compute",
         "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
@@ -130,6 +132,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "rust-gpu-graphics-stage-inputs",
         "rust-gpu-vulkan-examples-triangle-overlay",
         "sascha-willems-vulkan-conservative-triangle",
+        "sascha-willems-vulkan-headless-compute",
         "slang-hello-world-compute",
         "spirv-tools-basic-src",
         "vulkan-samples-dynamic-line-grid",
@@ -140,6 +143,7 @@ def test_open_source_demo_workflow_case_smoke_lists_match_checked_targets():
         "directx-graphics-samples-hello-texture",
         "slang-hello-world-compute",
         "lonelydevil-vulkan-tutorial-triangle",
+        "sascha-willems-vulkan-headless-compute",
         "vulkan-samples-dynamic-line-grid",
     }
 

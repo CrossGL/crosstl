@@ -47,7 +47,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `lonelydevil-vulkan-tutorial-triangle` | `lonelydevil/vulkan-tutorial-C-implementation` at `780ff146a6eccd7064a10e86363f3c2f7323825d` | MIT | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream triangle shader pair unchanged. |
 | `vulkan-samples-dynamic-line-grid` | `KhronosGroup/Vulkan-Samples` at `ab1e93d4a5dadf4c804fb6abbbe0b27dfa912b5a` | Apache-2.0 | GLSL | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the reduced fragment shader already covered by backend fixture provenance. |
 | `apple-modern-rendering-mesh-viewdir` | `donaldwuid/apple_metal_sample_code` at `0bc50e5b3670b3169855ab260e8da5ff07b53749` | MIT | Metal | CrossGL, Metal, DirectX, Vulkan | Uses a reduced shader slice that keeps the relevant vertex-stage type conversion. OpenGL validation is tracked in issue #805. |
-| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX constant-parameter lowering is tracked in issue #755. |
+| `metal-performance-testing-matmul` | `bkvogel/metal_performance_testing` at `b467b4b1dee0f7d9d43bda13856306ca3f1baea5` | BSD-style | Metal | CrossGL, Metal, Vulkan | Uses the upstream Metal kernel and its shared parameter header. DirectX output validation is tracked in issue #807. |
 | `nvidia-cuda-samples-vector-add` | `NVIDIA/cuda-samples` at `b7c5481c556c3fe98db060207ecaa41a4b9a9abc` | BSD-style with CUDA EULA reference | CUDA | CrossGL, Metal, Vulkan | Uses the upstream NVRTC vectorAdd kernel unchanged. Host launch and memory-management integration remain outside the demo scope. |
 | `opencl-sdk-saxpy` | `KhronosGroup/OpenCL-SDK` at `e26922bdf54eaa9fcc31fe1f91d21b8d2bd6970f` | Apache-2.0 | OpenCL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SAXPY compute kernel unchanged. |
 | `raylib-base-fragment` | `raysan5/raylib` at `94897c4eca842673bad16ab03ad776a0a2255b14` | zlib/libpng | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream base fragment shader unchanged. |
@@ -56,6 +56,7 @@ OpenGL and Vulkan on Linux, Metal on macOS, and DirectX on Windows.
 | `rust-gpu-graphics-stage-inputs` | `Rust-GPU/rust-gpu` at `36e3348cdc2f824afec64b3b5af5d369d98a4c0d` | Apache-2.0 OR MIT | Rust-GPU | CrossGL, OpenGL, Metal, Vulkan | Uses a reduced graphics shader slice that keeps the plain vertex input and fragment color path. |
 | `rust-gpu-vulkan-examples-triangle-overlay` | `Rust-GPU/VulkanShaderExamples` at `b29a37eb46802b5ea6882af4808d6887fc184581` | MIT | Rust-GPU | CrossGL, Metal, Vulkan | Uses the upstream conservative raster triangle-overlay shader unchanged. |
 | `sascha-willems-vulkan-conservative-triangle` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream conservative raster triangle vertex shader without semantic edits. DirectX semantic lowering remains outside this checked target subset. |
+| `sascha-willems-vulkan-headless-compute` | `SaschaWillems/Vulkan` at `2d16383d3121fb42b82d9aa3dc106a7f2a8f3ade` | MIT | GLSL | CrossGL, Metal, DirectX, Vulkan | Uses the upstream headless compute shader unchanged. OpenGL specialization-constant validation is tracked in issue #780. |
 | `slang-hello-world-compute` | `shader-slang/slang` at `29e69b0bf626f87500be73a7fb3764db25658c66` | Apache-2.0 WITH LLVM-exception | Slang | CrossGL, OpenGL, Metal, DirectX, Vulkan | Uses the upstream compute shader unchanged. |
 | `spirv-tools-basic-src` | `KhronosGroup/SPIRV-Tools` at `199cb207b911501ddd76dcddf100a6e21c15ef23` | Apache-2.0 | SPIR-V assembly | CrossGL, OpenGL, Metal, Vulkan | Uses the upstream SPIR-V assembly fixture unchanged. |
 
@@ -65,11 +66,13 @@ The DirectX, Metal performance, NVIDIA CUDA Samples, OpenCL-SDK, Rust-GPU
 VulkanShaderExamples, SPIRV-Tools, raylib, SaschaWillems triangle, and Slang
 cases keep upstream source files unchanged apart from repository formatting
 checks. The DirectX Hello Texture shader was retested after issue #783 closed
-and is now checked for OpenGL, Metal, DirectX, and Vulkan output. The Vulkan
-Samples, Apple, and Rust-GPU/rust-gpu graphics cases are reduced source slices
-copied from fixture-backed upstream examples so the demo remains small and
-deterministic. The reductions remove unrelated code around the shader construct
-being demonstrated; they do not patch translator output.
+and is now checked for OpenGL, Metal, DirectX, and Vulkan output. The
+SaschaWillems headless compute shader was retested after issue #756 closed and
+is now checked for Metal, DirectX, and Vulkan output. The Vulkan Samples, Apple,
+and Rust-GPU/rust-gpu graphics cases are reduced source slices copied from
+fixture-backed upstream examples so the demo remains small and deterministic.
+The reductions remove unrelated code around the shader construct being
+demonstrated; they do not patch translator output.
 
 The `glfw/glfw` OpenGL triangle shader strings were tested as a candidate and
 exposed a CrossGL intermediate keyword collision: the fragment shader uses
@@ -129,11 +132,10 @@ checked in until platform target artifacts can be generated and validated.
 The `KhronosGroup/OpenCL-SDK` SAXPY kernel was retested after issue #751 and
 issue #768 closed and is now checked for OpenGL, Metal, and Vulkan output.
 
-The `SaschaWillems/Vulkan` headless compute shader was tested as a candidate
-and exposed storage-buffer lowering gaps for OpenGL, DirectX, and Metal
-artifacts. That translator issue is tracked in issue #756, and the case is
-intentionally not checked in until those target artifacts preserve buffer
-resource access.
+The `SaschaWillems/Vulkan` headless compute shader still excludes OpenGL output
+because `layout(constant_id)` specialization constants are only valid when the
+validator is generating SPIR-V. That remaining target-lowering issue is tracked
+in issue #780.
 
 ## Generated artifacts
 

@@ -109,6 +109,7 @@ jobs:
             --case nvidia-cuda-samples-vector-add \
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
+            --case sascha-willems-vulkan-headless-compute \
             --target vulkan \
             --reports-dir support/generated/demo-reports/linux-vulkan
         shell: bash
@@ -134,6 +135,7 @@ jobs:
             --case rust-gpu-graphics-stage-inputs \
             --case rust-gpu-vulkan-examples-triangle-overlay \
             --case sascha-willems-vulkan-conservative-triangle \
+            --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
             --case spirv-tools-basic-src \
             --target metal \
@@ -159,6 +161,7 @@ jobs:
             demos/open-source-porting/cases/raylib-lighting-shader-pair/crosstl-out/metal/lighting.vs.metal \
             demos/open-source-porting/cases/rust-gpu-graphics-stage-inputs/crosstl-out/metal/lib.metal \
             demos/open-source-porting/cases/rust-gpu-vulkan-examples-triangle-overlay/crosstl-out/metal/lib.metal \
+            demos/open-source-porting/cases/sascha-willems-vulkan-headless-compute/crosstl-out/metal/headless.metal \
             demos/open-source-porting/cases/slang-hello-world-compute/crosstl-out/metal/hello-world.metal \
             demos/open-source-porting/cases/spirv-tools-basic-src/crosstl-out/metal/basic_src.metal \
             demos/open-source-porting/cases/vulkan-samples-dynamic-line-grid/crosstl-out/metal/grid.metal
@@ -180,6 +183,7 @@ jobs:
             --case lonelydevil-vulkan-tutorial-triangle \
             --case vulkan-samples-dynamic-line-grid \
             --case apple-modern-rendering-mesh-viewdir \
+            --case sascha-willems-vulkan-headless-compute \
             --case slang-hello-world-compute \
             --target directx \
             --reports-dir support/generated/demo-reports/windows-directx
