@@ -1,0 +1,6 @@
+[project]
+source_roots = ["."]
+include = ["SpriteEffect.fx"]
+targets = ["cgl", "directx", "vulkan"]
+output_dir = "crosstl-out"
+external_corpus_manifest = "corpus.json"

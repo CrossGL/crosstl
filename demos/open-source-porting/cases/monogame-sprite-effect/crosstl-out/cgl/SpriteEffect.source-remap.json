@@ -1,0 +1,28 @@
+{
+  "generatedFile": "crosstl-out/cgl/SpriteEffect.cgl",
+  "mappings": [
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 28,
+        "endOffset": 698,
+        "file": "crosstl-out/cgl/SpriteEffect.cgl",
+        "length": 698,
+        "line": 1,
+        "offset": 0
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 47,
+        "endOffset": 1100,
+        "file": "SpriteEffect.fx",
+        "length": 1100,
+        "line": 1,
+        "offset": 0
+      }
+    }
+  ],
+  "schemaVersion": 1
+}

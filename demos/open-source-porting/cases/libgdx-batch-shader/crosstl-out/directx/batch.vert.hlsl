@@ -21,4 +21,3 @@ VertexOutput VSMain(VertexInput input) {
     output.gl_Position = mul(u_projTrans, input.a_position);
     return output;
 }
-

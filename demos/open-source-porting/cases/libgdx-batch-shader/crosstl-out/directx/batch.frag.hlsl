@@ -11,4 +11,3 @@ float4 PSMain(FragmentInput input): SV_TARGET {
     gl_FragColor = (input.v_color * u_texture.Sample(u_textureSampler, input.v_texCoords));
     return gl_FragColor;
 }
-

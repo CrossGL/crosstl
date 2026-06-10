@@ -24,4 +24,3 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]], constant Uniform
     output.gl_Position = uniforms.u_projTrans * input.a_position;
     return output;
 }
-

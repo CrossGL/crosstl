@@ -12,4 +12,3 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], texture2d<float>
     gl_FragColor = input.v_color * u_texture.sample(sampler(mag_filter::linear, min_filter::linear), input.v_texCoords);
     return gl_FragColor;
 }
-

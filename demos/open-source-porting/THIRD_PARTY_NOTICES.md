@@ -100,6 +100,17 @@ should be treated with the same upstream license context when redistributed.
 - License URL:
   https://github.com/libgdx/libgdx/blob/846d63a746e4604a7699133f803ff844fdc8c9fe/LICENSE
 
+## MonoGame/MonoGame
+
+- Repository: https://github.com/MonoGame/MonoGame
+- Commit: `d4893ac09e06bc203792d01d6f151f1891cc1ab5`
+- Source paths:
+  - `MonoGame.Framework/Platform/Graphics/Effect/Resources/SpriteEffect.fx`
+  - `MonoGame.Framework/Platform/Graphics/Effect/Resources/Macros.fxh`
+- License: MS-PL and MIT
+- License URL:
+  https://github.com/MonoGame/MonoGame/blob/d4893ac09e06bc203792d01d6f151f1891cc1ab5/LICENSE.txt
+
 ## donaldwuid/apple_metal_sample_code
 
 - Repository: https://github.com/donaldwuid/apple_metal_sample_code
