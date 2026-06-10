@@ -97,6 +97,16 @@ OpenCL scalar aliases and local pointer syntax, and OpenGL output drops helper
 function return values. That translator issue is tracked in issue #811, and the
 case is intentionally not checked in until target artifacts compile directly.
 
+The `microsoft/DirectX-Graphics-Samples` HelloConstBuffers shader from
+`Samples/Desktop/D3D12HelloWorld/src/HelloConstBuffers/shaders.hlsl` at
+`31ae3c91160d8634264004cdaf4e41a99c41243e` was tested as a candidate. It
+currently generates OpenGL and SPIR-V artifacts that validate, but direct Metal
+compilation fails because HLSL user vertex semantics such as `COLOR` are emitted
+as raw Metal attributes instead of valid `[[attribute(n)]]` bindings. That
+translator issue is tracked in issue #812. The existing HelloTriangle Metal
+artifact has the same direct-compile limitation, so macOS compile-reference CI
+intentionally covers only the DirectX-derived Metal files that compile today.
+
 The `shader-slang/slang` default-parameter compute shader from
 `tests/compute/default-parameter.slang` at
 `adc996670ec281aa8a4ee131f30b324648cbbe60` was tested as a candidate and
