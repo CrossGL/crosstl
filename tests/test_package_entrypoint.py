@@ -16,8 +16,8 @@ def test_root_package_module_entrypoint_exposes_cli_help():
 
     assert result.returncode == 0
     assert result.stderr == ""
+    assert result.stdout.startswith("usage: crosstl ")
     for text in (
-        "usage:",
         "translate",
         "scan",
         "translate-project",

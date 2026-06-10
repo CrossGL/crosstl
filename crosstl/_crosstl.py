@@ -31,6 +31,7 @@ except ImportError:
 
 SPIRV_BINARY_MAGIC_PREFIXES = (b"\x03\x02\x23\x07", b"\x07\x23\x02\x03")
 STDOUT_OUTPUT_PATH = "-"
+CLI_PROG = "crosstl"
 
 
 def _non_negative_int(value):
@@ -230,7 +231,9 @@ def _run_single_file(args):
 
 
 def _legacy_parser():
-    parser = argparse.ArgumentParser(description="CrossGL Shader Translator")
+    parser = argparse.ArgumentParser(
+        prog=CLI_PROG, description="CrossGL Shader Translator"
+    )
 
     parser.add_argument("input", help="Input shader file path")
     supported_backends = ", ".join(backend_names() + ["cgl"])
@@ -3685,7 +3688,9 @@ def _run_inspect_report(args):
 
 
 def _build_parser():
-    parser = argparse.ArgumentParser(description="CrossGL Shader Translator")
+    parser = argparse.ArgumentParser(
+        prog=CLI_PROG, description="CrossGL Shader Translator"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     supported_backends = ", ".join(backend_names() + ["cgl"])
