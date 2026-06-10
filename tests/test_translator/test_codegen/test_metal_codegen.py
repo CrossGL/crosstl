@@ -2521,9 +2521,11 @@ def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     assert "void writeScratch(threadgroup float scratch[64]" in generated_code
     assert "float readScratch(threadgroup float scratch[64]" in generated_code
     assert "threadgroup float scratch[64];" in generated_code
-    assert (
-        "uint gl_LocalInvocationIndex [[thread_index_in_threadgroup]]" in generated_code
+    assert "uint thread_index_in_threadgroup [[thread_index_in_threadgroup]]" in (
+        generated_code
     )
+    assert "uint index = thread_index_in_threadgroup;" in generated_code
+    assert "gl_LocalInvocationIndex" not in generated_code
     assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
     assert "groupMemoryBarrier();" not in generated_code
     assert "memoryBarrierShared();" not in generated_code
@@ -13516,13 +13518,34 @@ def test_compute_direct_builtin_references_inject_metal_parameters():
     ast = crosstl.translator.parse(code)
     generated = MetalCodeGen().generate_stage(ast, "compute")
 
-    assert "uint3 gl_GlobalInvocationID [[thread_position_in_grid]]" in generated
-    assert "uint3 gl_LocalInvocationID [[thread_position_in_threadgroup]]" in generated
-    assert "uint3 gl_WorkGroupID [[threadgroup_position_in_grid]]" in generated
-    assert "uint gl_LocalInvocationIndex [[thread_index_in_threadgroup]]" in generated
-    assert "uint3 gl_WorkGroupSize [[threads_per_threadgroup]]" in generated
-    assert "uint3 gl_NumWorkGroups [[threadgroups_per_grid]]" in generated
-    assert "uint gx = gl_GlobalInvocationID.x;" in generated
+    assert "uint3 thread_position_in_grid [[thread_position_in_grid]]" in generated
+    assert (
+        "uint3 thread_position_in_threadgroup [[thread_position_in_threadgroup]]"
+        in generated
+    )
+    assert "uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]]" in (
+        generated
+    )
+    assert "uint thread_index_in_threadgroup [[thread_index_in_threadgroup]]" in (
+        generated
+    )
+    assert "uint3 threads_per_threadgroup [[threads_per_threadgroup]]" in generated
+    assert "uint3 threadgroups_per_grid [[threadgroups_per_grid]]" in generated
+    assert "uint gx = thread_position_in_grid.x;" in generated
+    assert "uint lx = thread_position_in_threadgroup.x;" in generated
+    assert "uint group = threadgroup_position_in_grid.x;" in generated
+    assert "uint index = thread_index_in_threadgroup;" in generated
+    assert "uint size = threads_per_threadgroup.x;" in generated
+    assert "uint groups = threadgroups_per_grid.x;" in generated
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationIndex",
+        "gl_WorkGroupSize",
+        "gl_NumWorkGroups",
+    ]:
+        assert gl_builtin not in generated
 
 
 def test_graphics_builtin_parameter_semantics_roundtrip():

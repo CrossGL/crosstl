@@ -2,6 +2,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -30,6 +31,33 @@ from crosstl.project import (
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def assert_spirv_asm_validates_if_available(spv_code, tmp_path):
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if not spirv_as or not spirv_val:
+        return
+
+    asm_path = tmp_path / "shader.spvasm"
+    spv_path = tmp_path / "shader.spv"
+    asm_path.write_text(spv_code, encoding="utf-8")
+
+    assemble = subprocess.run(
+        [spirv_as, str(asm_path), "-o", str(spv_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert assemble.returncode == 0, assemble.stderr
+
+    validate = subprocess.run(
+        [spirv_val, str(spv_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert validate.returncode == 0, validate.stderr
 
 
 SIMPLE_CROSSL = textwrap.dedent("""
@@ -25667,6 +25695,84 @@ def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(
     assert "int gid = int(gl_GlobalInvocationID.x);" in output
     assert "uint gid = gl_GlobalInvocationID.x;" not in output
     GLSLParser(GLSLLexer(output).tokenize(), "compute").parse()
+
+
+def test_translate_project_cuda_vector_add_lowers_compute_builtins_for_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "vector_add.cu").write_text(
+        textwrap.dedent("""
+            __global__ void vectorAdd(float* C, const float* A, const float* B, int N) {
+                int i = blockDim.x * blockIdx.x + threadIdx.x;
+                if (i < N) {
+                    C[i] = A[i] + B[i];
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "metal", "vulkan"],
+        output_dir="out",
+    ).to_json()
+
+    assert {
+        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
+    } == {
+        ("cgl", "translated"),
+        ("metal", "translated"),
+        ("vulkan", "translated"),
+    }
+
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    assert (
+        "var i: i32 = ((gl_WorkGroupSize.x * gl_WorkGroupID.x) + "
+        "gl_LocalInvocationID.x);"
+    ) in outputs["cgl"]
+
+    metal_output = outputs["metal"]
+    assert "kernel void kernel_vectorAdd(" in metal_output
+    assert "device float* C [[buffer(0)]]" in metal_output
+    assert "device float* A [[buffer(1)]]" in metal_output
+    assert "device float* B [[buffer(2)]]" in metal_output
+    assert "constant vectorAdd_Args& vectorAdd_Args [[buffer(3)]]" in metal_output
+    assert "thread_position_in_threadgroup" in metal_output
+    assert "threadgroup_position_in_grid" in metal_output
+    assert "threads_per_threadgroup" in metal_output
+    assert (
+        "int i = threads_per_threadgroup.x * threadgroup_position_in_grid.x + "
+        "thread_position_in_threadgroup.x;"
+    ) in metal_output
+    assert "if (i < vectorAdd_Args.N)" in metal_output
+    assert "[[group]]" not in metal_output
+    for gl_builtin in [
+        "gl_GlobalInvocationID",
+        "gl_WorkGroupID",
+        "gl_LocalInvocationID",
+        "gl_WorkGroupSize",
+    ]:
+        assert gl_builtin not in metal_output
+
+    spirv_output = outputs["vulkan"]
+    assert "OpEntryPoint GLCompute" in spirv_output
+    assert "OpName " in spirv_output
+    assert '"vectorAdd"' in spirv_output
+    assert "OpExecutionMode" in spirv_output
+    assert "OpDecorate" in spirv_output
+    assert "DescriptorSet 0" in spirv_output
+    for binding in ("Binding 0", "Binding 1", "Binding 2", "Binding 3"):
+        assert binding in spirv_output
+    assert "WorkgroupId" in spirv_output
+    assert "LocalInvocationId" in spirv_output
+    assert_spirv_asm_validates_if_available(spirv_output, tmp_path)
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):

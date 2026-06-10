@@ -176,6 +176,8 @@ def translate(
             cgl_ast = cgl_spec.parse(intermediate_code)
             if source_spec.name == "opencl" and normalized_backend != "webgl":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
+            if source_spec.name == "cuda" and normalized_backend in {"metal", "vulkan"}:
+                cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(normalized_backend)
             generated_code = codegen.generate(cgl_ast)
 

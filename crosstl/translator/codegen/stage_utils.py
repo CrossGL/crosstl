@@ -24,7 +24,16 @@ def should_emit_qualified_function(target_stage, qualifier):
 def function_stage_name(func):
     qualifiers = getattr(func, "qualifiers", []) or []
     qualifier = qualifiers[0] if qualifiers else getattr(func, "qualifier", None)
-    return normalize_stage_name(qualifier)
+    stage_name = normalize_stage_name(qualifier)
+    if stage_name in STAGE_QUALIFIER_NAMES:
+        return stage_name
+
+    for attr in getattr(func, "attributes", []) or []:
+        attr_name = normalize_stage_name(getattr(attr, "name", attr))
+        if attr_name in STAGE_QUALIFIER_NAMES:
+            return attr_name
+
+    return stage_name
 
 
 def collect_stage_entry_records(
