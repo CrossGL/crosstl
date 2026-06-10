@@ -563,6 +563,75 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
     ),
+    # Upstream source: KhronosGroup/glslang Test/GL_EXT_shader_integer_mix.vert.
+    # Reduced from extension-macro guards after a declared GLSL extension.
+    ExternalFixture(
+        name="glslang-extension-directive-defines-feature-macro",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/GL_EXT_shader_integer_mix.vert",
+        shader_type="vertex",
+        code=textwrap.dedent("""
+            #version 330
+            #extension GL_EXT_shader_integer_mix: require
+
+            #if !defined GL_EXT_shader_integer_mix
+            #  error GL_EXT_shader_integer_mix is not defined
+            #elif GL_EXT_shader_integer_mix != 1
+            #  error GL_EXT_shader_integer_mix is not equal to 1
+            #endif
+
+            void main(void)
+            {
+                gl_Position = vec4(0);
+            }
+        """).strip(),
+    ),
+    # Upstream source: KhronosGroup/glslang Test/spv.tensorARM.declare.comp.
+    # Reduced from companion extension-macro guards exposed with GL_ARM_tensors.
+    ExternalFixture(
+        name="glslang-arm-tensors-extension-companion-macros",
+        repo="https://github.com/KhronosGroup/glslang",
+        commit="98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515",
+        path="Test/spv.tensorARM.declare.comp",
+        shader_type="compute",
+        code=textwrap.dedent("""
+            #version 460 core
+
+            #extension GL_ARM_tensors : enable
+            #extension GL_EXT_shader_explicit_arithmetic_types : enable
+
+            #if !defined GL_ARM_tensors
+            #  error GL_ARM_tensors is not defined
+            #elif GL_ARM_tensors != 1
+            #  error GL_ARM_tensors is not equal to 1
+            #endif
+
+            #if !defined GL_ARM_tensors_bfloat16
+            #  error GL_ARM_tensors_bfloat16 is not defined
+            #elif GL_ARM_tensors_bfloat16 != 1
+            #  error GL_ARM_tensors_bfloat16 is not equal to 1
+            #endif
+
+            #if !defined GL_ARM_tensors_float_e5m2
+            #  error GL_ARM_tensors_float_e5m2 is not defined
+            #elif GL_ARM_tensors_float_e5m2 != 1
+            #  error GL_ARM_tensors_float_e5m2 is not equal to 1
+            #endif
+
+            #if !defined GL_ARM_tensors_float_e4m3
+            #  error GL_ARM_tensors_float_e4m3 is not defined
+            #elif GL_ARM_tensors_float_e4m3 != 1
+            #  error GL_ARM_tensors_float_e4m3 is not equal to 1
+            #endif
+
+            layout(local_size_x = 1) in;
+
+            void main()
+            {
+            }
+        """).strip(),
+    ),
     # Upstream source: KhronosGroup/glslang Test/spv.memoryScopeSemantics.comp.
     # Reduced from GL_KHR_memory_scope_semantics storage qualifier coverage.
     ExternalFixture(
@@ -2029,6 +2098,38 @@ def test_parse_glslang_token_paste_object_like_macro_fixture():
 
     assert argless.vtype == "float"
     assert "float argless;" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_glslang_extension_directive_feature_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-extension-directive-defines-feature-macro"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "#extension GL_EXT_shader_integer_mix : require" in ast.preprocessor
+    assert "#error" not in crossgl
+    assert "output.gl_Position = vec4(0);" in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_glslang_arm_tensors_companion_macro_fixture():
+    fixture = next(
+        item
+        for item in EXTERNAL_FIXTURES
+        if item.name == "glslang-arm-tensors-extension-companion-macros"
+    )
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = generate_crossgl(fixture.code, fixture.shader_type)
+
+    assert "#extension GL_ARM_tensors : enable" in ast.preprocessor
+    assert "#error" not in crossgl
+    assert "compute" in crossgl
     parse_crossgl(crossgl)
 
 

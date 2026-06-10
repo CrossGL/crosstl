@@ -289,7 +289,7 @@ class CudaToCrossGLConverter:
     def generic_visit(self, node):
         if isinstance(node, str):
             if self.is_cuda_numeric_literal_text(node):
-                return node.replace("'", "")
+                return self.convert_cuda_numeric_literal_to_crossgl(node)
             if self.is_cuda_char_literal_text(node):
                 return self.convert_cuda_char_literal_to_crossgl(node)
             if self.is_cuda_string_literal_text(node):
@@ -304,9 +304,30 @@ class CudaToCrossGLConverter:
 
     def is_cuda_numeric_literal_text(self, value):
         text = str(value)
+        if "'" in text and bool(text) and (text[0].isdigit() or text.startswith(".")):
+            return True
         return (
-            "'" in text and bool(text) and (text[0].isdigit() or text.startswith("."))
+            re.fullmatch(
+                r"(?i)(?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+)(?:u|l|ul|lu|ull|llu)",
+                text,
+            )
+            is not None
         )
+
+    def convert_cuda_numeric_literal_to_crossgl(self, value):
+        text = str(value).replace("'", "")
+        match = re.fullmatch(
+            r"(?i)((?:0x[0-9a-f]+|0b[01]+|0o[0-7]+|\d+))(u|l|ul|lu|ull|llu)",
+            text,
+        )
+        if match is None:
+            return text
+
+        digits, suffix = match.groups()
+        if "u" in suffix.lower():
+            unsigned_suffix = "U" if "U" in suffix else "u"
+            return f"{digits}{unsigned_suffix}"
+        return digits
 
     def is_cuda_char_literal_text(self, value):
         return re.fullmatch(r"(?:u8|u|U|L)?'(?:[^'\\\n]|\\.)+'", str(value)) is not None
@@ -4070,13 +4091,18 @@ class CudaToCrossGLConverter:
 
             if member_value is not None:
                 value = self.visit(member_value)
-                member_name = self.sanitize_identifier_name(member_name)
+                member_name = self.sanitize_enum_member_name(member_name)
                 self.emit(f"{member_name} = {value},")
             else:
-                self.emit(f"{self.sanitize_identifier_name(member_name)},")
+                self.emit(f"{self.sanitize_enum_member_name(member_name)},")
 
         self.indent_level -= 1
         self.emit("};")
+
+    def sanitize_enum_member_name(self, name):
+        if name == "object":
+            return "object_"
+        return self.sanitize_identifier_name(name)
 
     def next_anonymous_enum_name(self):
         name = f"anonymous_enum_{self.anonymous_enum_count}"
@@ -6545,6 +6571,10 @@ class CudaToCrossGLConverter:
         if span_type is not None:
             return span_type
 
+        std_array_type = self.convert_cuda_std_array_type(cuda_type)
+        if std_array_type is not None:
+            return std_array_type
+
         nested_scoped_template_type = (
             self.convert_nested_scoped_template_type_to_crossgl(cuda_type)
         )
@@ -6693,6 +6723,19 @@ class CudaToCrossGLConverter:
         if len(template_args) >= 2 and not self.is_dynamic_span_extent(
             template_args[1]
         ):
+            extent = self.format_crossgl_array_extent(template_args[1])
+            return f"array<{element_type}, {extent}>"
+        return f"array<{element_type}>"
+
+    def convert_cuda_std_array_type(self, cuda_type):
+        base_name, template_args = self.parse_cpp_template(cuda_type)
+        if base_name.startswith("::"):
+            base_name = base_name[2:]
+        if base_name != "cuda::std::array" or not template_args:
+            return None
+
+        element_type = self.convert_cuda_type_to_crossgl(template_args[0])
+        if len(template_args) >= 2 and template_args[1].strip():
             extent = self.format_crossgl_array_extent(template_args[1])
             return f"array<{element_type}, {extent}>"
         return f"array<{element_type}>"

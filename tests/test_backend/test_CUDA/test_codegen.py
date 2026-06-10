@@ -10070,7 +10070,7 @@ class TestCudaCodeGen:
             "@group(0) @binding(0) var<storage, read_write> out: array<u64>" in result
         )
         assert "i64 x" in result
-        assert "var y: u64 = 1ull;" in result
+        assert "var y: u64 = 1u;" in result
         assert "var z: i64 = i64(x);" in result
         assert "out[0] = (y + z);" in result
 

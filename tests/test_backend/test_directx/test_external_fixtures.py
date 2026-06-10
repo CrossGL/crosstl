@@ -52,6 +52,7 @@ DIRECTX_SHADER_COMPILER_WORKGRAPH_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fc
 DIRECTX_SHADER_COMPILER_CONVERSION_SELECTOR_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
+DIRECTX_SHADER_COMPILER_VARMODS_COMMIT = "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 DIRECTX_SHADER_COMPILER_UNSIGNED_SHORTHAND_COMMIT = (
     "d6e0ca4a0c25b13ed676c8ba16839c3eb9fcc652"
 )
@@ -1717,6 +1718,24 @@ EXTERNAL_FIXTURES = [
             "case 6:",
             "case 7:",
             "default:",
+        ),
+    ),
+    ExternalFixture(
+        name="directx_shader_compiler_varmods_precise_const_global",
+        repo=DIRECTX_SHADER_COMPILER_REPO,
+        commit=DIRECTX_SHADER_COMPILER_VARMODS_COMMIT,
+        path="tools/clang/test/HLSLFileCheck/hlsl/types/conversions/varmods-syntax_Mod.hlsl",
+        code=textwrap.dedent("""
+            precise uniform const float g_pre_uni_con_init = 1.0f;
+
+            float4 main() : SV_Target
+            {
+                return float4(g_pre_uni_con_init, 0.0f, 0.0f, 1.0f);
+            }
+        """).strip(),
+        contains=(
+            "precise const float g_pre_uni_con_init = 1.0;",
+            "return vec4(g_pre_uni_con_init, 0.0, 0.0, 1.0);",
         ),
     ),
     ExternalFixture(

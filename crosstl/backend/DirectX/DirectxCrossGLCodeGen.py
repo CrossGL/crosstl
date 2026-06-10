@@ -3331,7 +3331,10 @@ class HLSLToCrossGLConverter:
         initializer = ""
         if getattr(node, "value", None) is not None:
             initializer = f" = {self.generate_expression(node.value)}"
-        declaration_prefix = f"{storage_prefix}{precise_prefix}"
+        if storage_prefix == "const " and precise_prefix:
+            declaration_prefix = f"{precise_prefix}{storage_prefix}"
+        else:
+            declaration_prefix = f"{storage_prefix}{precise_prefix}"
         if (
             getattr(node, "attributes", None)
             and not declaration_prefix

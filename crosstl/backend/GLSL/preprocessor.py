@@ -7,6 +7,14 @@ from typing import Dict, List, Optional, Tuple
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
 HASH_BRACKETED_MARKER_RE = re.compile(r"#\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*\]")
+EXTENSION_DIRECTIVE_RE = re.compile(r"^\s*#\s*extension\s+([A-Za-z_][A-Za-z0-9_]*)\s*:")
+EXTENSION_COMPANION_MACROS = {
+    "GL_ARM_tensors": (
+        "GL_ARM_tensors_bfloat16",
+        "GL_ARM_tensors_float_e5m2",
+        "GL_ARM_tensors_float_e4m3",
+    ),
+}
 
 
 class _GLSLDirectivePreprocessor(HLSLPreprocessor):
@@ -128,6 +136,7 @@ class GLSLPreprocessor:
         include_paths = self._preprocessor.include_paths
         macros = dict(self._preprocessor.macros)
         self._apply_version_macros(code)
+        self._apply_declared_extension_macros(code)
         implicit_paths = self._implicit_include_paths(file_path)
         if implicit_paths:
             self._preprocessor.include_paths = [
@@ -160,6 +169,16 @@ class GLSLPreprocessor:
             self._define_macro("GL_compatibility_profile", "1")
             return
         self._define_macro("GL_core_profile", "1")
+
+    def _apply_declared_extension_macros(self, code: str):
+        for line in self._preprocessor._split_logical_lines(code):
+            match = EXTENSION_DIRECTIVE_RE.match(line)
+            if match:
+                extension_name = match.group(1)
+                if extension_name != "all":
+                    self._define_macro(extension_name, "1")
+                    for companion in EXTENSION_COMPANION_MACROS.get(extension_name, ()):
+                        self._define_macro(companion, "1")
 
     def _define_macro(self, name: str, value: str):
         self._preprocessor.macros.setdefault(

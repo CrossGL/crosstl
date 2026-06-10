@@ -5889,6 +5889,75 @@ def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():
     assert downstream_code.count("OpFunction ") == 2
 
 
+def test_spirv_cross_extra_entrypoint_interfaces_are_pruned_for_reparse():
+    assembly = """
+    ; Reduced from:
+    ; Repo: https://github.com/KhronosGroup/SPIRV-Cross
+    ; Commit: 146679ff8255a6068518685599d7fb8761d1b570
+    ; Path: shaders-msl/asm/vert/fake-builtin-input.asm.vert
+    OpCapability Shader
+    OpCapability Float16
+    OpCapability StorageInputOutput16
+    OpMemoryModel Logical GLSL450
+    OpEntryPoint Vertex %vertexShader "main" %in_var_POSITION %gl_Position %out_var_SV_Target
+    OpEntryPoint Fragment %fragmentShader "fragmentShader" %in_var_POSITION %gl_Position %out_var_SV_Target
+    OpExecutionMode %fragmentShader OriginUpperLeft
+    OpName %in_var_POSITION "in.var.POSITION"
+    OpName %out_var_SV_Target "out.var.SV_Target"
+    OpName %vertexShader "vertexShader"
+    OpName %fragmentShader "fragmentShader"
+    OpDecorate %gl_Position BuiltIn Position
+    OpDecorate %in_var_POSITION Location 0
+    OpDecorate %out_var_SV_Target Location 0
+    %float = OpTypeFloat 32
+    %float_0 = OpConstant %float 0
+    %float_1 = OpConstant %float 1
+    %half = OpTypeFloat 16
+    %half_0x1p_0 = OpConstant %half 0x1p+0
+    %half_0x0p_0 = OpConstant %half 0x0p+0
+    %v4half = OpTypeVector %half 4
+    %out_color = OpConstantComposite %v4half %half_0x1p_0 %half_0x0p_0 %half_0x1p_0 %half_0x1p_0
+    %v2float = OpTypeVector %float 2
+    %_ptr_Input_v2float = OpTypePointer Input %v2float
+    %v4float = OpTypeVector %float 4
+    %_ptr_Output_v4float = OpTypePointer Output %v4float
+    %_ptr_Output_v4half = OpTypePointer Output %v4half
+    %void = OpTypeVoid
+    %fn = OpTypeFunction %void
+    %in_var_POSITION = OpVariable %_ptr_Input_v2float Input
+    %gl_Position = OpVariable %_ptr_Output_v4float Output
+    %out_var_SV_Target = OpVariable %_ptr_Output_v4half Output
+    %vertexShader = OpFunction %void None %fn
+    %vs_label = OpLabel
+    %loaded_position = OpLoad %v2float %in_var_POSITION
+    %x = OpCompositeExtract %float %loaded_position 0
+    %y = OpCompositeExtract %float %loaded_position 1
+    %position = OpCompositeConstruct %v4float %x %y %float_0 %float_1
+    OpStore %gl_Position %position
+    OpReturn
+    OpFunctionEnd
+    %fragmentShader = OpFunction %void None %fn
+    %fs_label = OpLabel
+    OpStore %out_var_SV_Target %out_color
+    OpReturn
+    OpFunctionEnd
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(assembly)))
+
+    parse_crossgl(generated_code)
+    vertex_section = generated_code.split("// Vertex Shader", 1)[1].split(
+        "// Fragment Shader", 1
+    )[0]
+    fragment_section = generated_code.split("// Fragment Shader", 1)[1]
+
+    assert "float2 in_var_POSITION @input @location(0);" in vertex_section
+    assert "float4 gl_Position @output @gl_Position;" in vertex_section
+    assert "out_var_SV_Target @output @location(0);" not in vertex_section
+    assert "half4 out_var_SV_Target @output @location(0);" in fragment_section
+    assert "in_var_POSITION @input @location(0);" not in fragment_section
+
+
 def test_glslang_location_decorated_interface_block_codegen_reparse():
     tokens = tokenize_code(SPIRV_GLSLANG_LOCATION_BLOCK_TO_FLAT_INTERFACE_ASSEMBLY)
     ast = parse_code(tokens)

@@ -340,6 +340,12 @@ class VulkanToCrossGLConverter:
                 self.spirv_interface_layout_id(layout), []
             ).append(layout)
 
+        functions_by_spirv_id = {
+            getattr(function, "spirv_id", None): function
+            for function in getattr(ast, "functions", []) or []
+            if getattr(function, "spirv_id", None)
+        }
+        duplicated_interface_ids = self.spirv_duplicated_entry_point_interface_ids(ast)
         stage_layouts = {}
         for function in getattr(ast, "functions", []) or []:
             interface_ids = []
@@ -351,6 +357,23 @@ class VulkanToCrossGLConverter:
             if not interface_ids:
                 continue
 
+            referenced_ids = self.spirv_function_reachable_referenced_ids(
+                function, functions_by_spirv_id
+            )
+            referenced_duplicate_interface_ids = {
+                interface_id
+                for interface_id in interface_ids
+                if interface_id in duplicated_interface_ids
+                if self.spirv_interface_id_is_referenced(interface_id, referenced_ids)
+            }
+            if referenced_duplicate_interface_ids:
+                interface_ids = [
+                    interface_id
+                    for interface_id in interface_ids
+                    if interface_id not in duplicated_interface_ids
+                    or interface_id in referenced_duplicate_interface_ids
+                ]
+
             seen = set()
             for interface_id in interface_ids:
                 for layout in by_interface_id.get(interface_id, []):
@@ -361,6 +384,54 @@ class VulkanToCrossGLConverter:
                     stage_layouts.setdefault(id(function), []).append(layout)
 
         return stage_layouts
+
+    def spirv_duplicated_entry_point_interface_ids(self, ast):
+        interface_id_counts = {}
+        for function in getattr(ast, "functions", []) or []:
+            for entry_point in getattr(function, "spirv_entry_points", []) or []:
+                for interface_id in set(entry_point.get("interface_ids", []) or []):
+                    interface_id_counts[interface_id] = (
+                        interface_id_counts.get(interface_id, 0) + 1
+                    )
+        return {
+            interface_id
+            for interface_id, count in interface_id_counts.items()
+            if count > 1
+        }
+
+    def spirv_function_reachable_referenced_ids(
+        self, function, functions_by_spirv_id, visited=None
+    ):
+        visited = visited or set()
+        function_id = getattr(function, "spirv_id", None) or id(function)
+        if function_id in visited:
+            return set()
+        visited.add(function_id)
+
+        referenced_ids = set()
+        called_function_ids = set()
+        for instruction in getattr(function, "spirv_raw_instructions", []) or []:
+            operands = instruction.get("operands", []) or []
+            for operand in operands:
+                if isinstance(operand, str) and operand.startswith("%"):
+                    referenced_ids.add(operand)
+            if instruction.get("opcode") == "OpFunctionCall" and len(operands) >= 2:
+                called_function_ids.add(operands[1])
+
+        for called_function_id in called_function_ids:
+            called_function = functions_by_spirv_id.get(called_function_id)
+            if called_function is None:
+                continue
+            referenced_ids.update(
+                self.spirv_function_reachable_referenced_ids(
+                    called_function, functions_by_spirv_id, visited
+                )
+            )
+        return referenced_ids
+
+    def spirv_interface_id_is_referenced(self, interface_id, referenced_ids):
+        interface_base_id = str(interface_id).split(".", 1)[0]
+        return interface_base_id in referenced_ids
 
     def is_spirv_stage_interface_layout(self, node):
         if not isinstance(node, LayoutNode):

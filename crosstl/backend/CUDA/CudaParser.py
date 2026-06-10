@@ -233,6 +233,7 @@ class CudaParser:
         "MANAGED",
     }
     CUDA_DECLARATION_ATTRIBUTE_IDENTIFIERS = {
+        "_CCCL_NO_UNIQUE_ADDRESS",
         "_CCCL_TYPE_VISIBILITY_DEFAULT",
         "_CCCL_NODEBUG_ALIAS",
         "__device_builtin__",
@@ -271,6 +272,7 @@ class CudaParser:
         "TILE",
         "DEVICE",
         "HOST",
+        "CONSTEXPR",
         "INLINE",
         "FORCEINLINE",
         "NOINLINE",
@@ -682,6 +684,11 @@ class CudaParser:
 
     def skip_declaration_prefixes_at_index(self, index):
         while index < len(self.tokens):
+            next_index = self.skip_cuda_declaration_attributes_at_index(index)
+            if next_index != index:
+                index = next_index
+                continue
+
             token_type = self.tokens[index][0]
             if token_type in self.DECLARATION_PREFIX_TOKENS:
                 index += 1
@@ -1304,7 +1311,7 @@ class CudaParser:
     def parse_typedef_alias(self):
         self.eat("TYPEDEF")
         self.parse_cuda_declaration_attributes()
-        if self.current_token[0] == "STRUCT":
+        if self.current_token[0] in {"CLASS", "STRUCT", "UNION"}:
             return self.parse_typedef_struct_alias()
         if self.current_token[0] == "ENUM":
             return self.parse_typedef_enum_alias()
@@ -1348,7 +1355,10 @@ class CudaParser:
 
     def parse_function_pointer_type_alias_declarator(self, return_type):
         self.eat("LPAREN")
+        member_pointer_scope = self.parse_member_pointer_scope_prefix()
         pointer_prefix = self.parse_declarator_prefix("")
+        if member_pointer_scope:
+            pointer_prefix = f"{member_pointer_scope}{pointer_prefix}"
         name = self.eat("IDENTIFIER")[1]
         self.eat("RPAREN")
         params = self.parse_parameters()
@@ -1359,8 +1369,36 @@ class CudaParser:
         self.type_aliases.add(name)
         return alias
 
+    def parse_member_pointer_scope_prefix(self):
+        parts = []
+        while self.is_member_pointer_scope_component_start(self.current_index):
+            part = self.parse_name_component()
+            if self.current_token[0] == "LESS_THAN":
+                part += self.parse_template_suffix()
+            parts.append(part)
+            self.eat("SCOPE")
+            if self.current_token[0] in {"MULTIPLY", *self.TYPE_REFERENCE_TOKENS}:
+                break
+
+        return f"{'::'.join(parts)}::" if parts else ""
+
+    def is_member_pointer_scope_component_start(self, index):
+        if (
+            index >= len(self.tokens)
+            or self.tokens[index][0] not in self.NAME_COMPONENT_TOKENS
+        ):
+            return False
+
+        index += 1
+        if index < len(self.tokens) and self.tokens[index][0] == "LESS_THAN":
+            index = self.skip_template_at_index(index)
+            if index is None:
+                return False
+
+        return index < len(self.tokens) and self.tokens[index][0] == "SCOPE"
+
     def parse_typedef_struct_alias(self):
-        self.eat("STRUCT")
+        aggregate_type = self.eat(self.current_token[0])[1]
         attributes = self.parse_cuda_struct_attribute_prefix()
 
         tag_name = None
@@ -1369,7 +1407,7 @@ class CudaParser:
 
         if self.current_token[0] != "LBRACE":
             alias = self.parse_type_alias_declarator(
-                f"struct {tag_name}", allow_prefix=True
+                f"{aggregate_type} {tag_name}", allow_prefix=True
             )
             self.eat("SEMICOLON")
             return alias
@@ -1630,6 +1668,7 @@ class CudaParser:
 
         self.parse_cuda_declaration_attributes()
         self.eat("ASSIGN")
+        self.skip_alias_type_annotations()
         if (
             self.is_decltype_alias_type_start()
             or self.is_dependent_decltype_alias_type_start()
@@ -1646,6 +1685,31 @@ class CudaParser:
         self.eat("SEMICOLON")
         self.type_aliases.add(name)
         return TypeAliasNode(alias_type, name)
+
+    def skip_alias_type_annotations(self):
+        while self.is_alias_type_annotation_start():
+            self.eat("IDENTIFIER")
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_parentheses()
+
+    def is_alias_type_annotation_start(self):
+        if self.current_token[0] != "IDENTIFIER":
+            return False
+
+        if not self.is_macro_like_identifier(self.current_token[1]):
+            return False
+
+        if self.current_index + 1 >= len(self.tokens):
+            return False
+
+        next_type = self.tokens[self.current_index + 1][0]
+        return next_type in {
+            *self.TYPE_QUALIFIER_TOKENS,
+            *self.TYPE_TOKENS,
+            *self.ELABORATED_TYPE_TOKENS,
+            *self.NAME_COMPONENT_TOKENS,
+            "SCOPE",
+        }
 
     def is_decltype_alias_type_start(self):
         return (
@@ -2627,6 +2691,8 @@ class CudaParser:
             body = self.parse_try_statement()
         elif self.current_token[0] == "LBRACE":
             body = self.parse_block()
+        elif self.current_token[0] == "ASSIGN":
+            self.skip_function_declaration_assignment_suffix()
         elif self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
         else:
@@ -2673,6 +2739,22 @@ class CudaParser:
                 self.skip_requires_clause()
                 continue
             break
+
+    def skip_function_declaration_assignment_suffix(self):
+        self.eat("ASSIGN")
+
+        while self.current_token[0] not in {"SEMICOLON", "EOF"}:
+            if self.current_token[0] == "LPAREN":
+                self.skip_balanced_parentheses()
+            elif self.current_token[0] == "LBRACKET":
+                self.skip_balanced_brackets()
+            elif self.current_token[0] == "LBRACE":
+                self.skip_balanced_brace_block()
+            else:
+                self.eat(self.current_token[0])
+
+        if self.current_token[0] == "SEMICOLON":
+            self.eat("SEMICOLON")
 
     def skip_requires_clause(self):
         self.eat("IDENTIFIER")
@@ -3107,6 +3189,10 @@ class CudaParser:
     def parse_declaration_prefixes(self):
         qualifiers = []
         while self.current_token[0] != "EOF":
+            if self.is_cuda_declaration_attribute_identifier():
+                self.parse_cuda_declaration_attributes()
+                continue
+
             token_type = self.current_token[0]
             if token_type in self.DECLARATION_PREFIX_TOKENS:
                 qualifiers.append(self.current_token[1])

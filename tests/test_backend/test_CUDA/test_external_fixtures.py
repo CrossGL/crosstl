@@ -1592,7 +1592,7 @@ def test_current_cccl_multiword_integer_spellings_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert "u64 triangle_count(i64 clock_cnt, i8 lane)" in crossgl
-    assert "var count: u64 = 1ull;" in crossgl
+    assert "var count: u64 = 1u;" in crossgl
     assert "var delta: i64 = i64(clock_cnt);" in crossgl
     assert "u64(delta)" in crossgl
     assert_crossgl_reparse(crossgl)
@@ -3608,6 +3608,195 @@ def test_current_cccl_forceinline_function_annotation_codegen_reparse():
     ]
     assert "u32 bit_reverse(u32 value)" in crossgl
     assert "_CCCL_FORCEINLINE" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_unique_ptr_deleted_template_alias_annotations_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: libcudacxx/include/cuda/std/__memory/unique_ptr.h
+    source = """
+    template <class _Tp, class... _Args>
+    _CCCL_API inline typename __unique_if<_Tp>::__unique_array_known_bound
+    make_unique(_Args&&...) = delete;
+
+    template <class _Tp, class _Dp>
+    struct hash<unique_ptr<_Tp, _Dp>>
+    {
+      using argument_type = CCCL_DEPRECATED unique_ptr<_Tp, _Dp>;
+      using result_type = CCCL_DEPRECATED size_t;
+
+      _CCCL_API inline size_t operator()(const unique_ptr<_Tp, _Dp>& __ptr) const
+      {
+        using pointer = typename unique_ptr<_Tp, _Dp>::pointer;
+        return hash<pointer>()(__ptr.get());
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].name == "make_unique"
+    assert ast.functions[0].body is None
+    assert ast.structs[0].name == "hash<unique_ptr<_Tp, _Dp>>"
+    assert "make_unique" not in crossgl
+    assert "CCCL_DEPRECATED" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_no_unique_address_member_attribute_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: libcudacxx/include/cuda/std/__algorithm/in_fun_result.h
+    source = """
+    template <class _InIter1, class _Func1>
+    struct in_fun_result
+    {
+      _CCCL_NO_UNIQUE_ADDRESS _InIter1 in;
+      _CCCL_NO_UNIQUE_ADDRESS _Func1 fun;
+
+      _CCCL_TEMPLATE(class _InIter2, class _Func2)
+      _CCCL_REQUIRES(convertible_to<const _InIter1&, _InIter2> _CCCL_AND convertible_to<const _Func1&, _Func2>)
+      _CCCL_API constexpr operator in_fun_result<_InIter2, _Func2>() const&
+      {
+        return {in, fun};
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert [(member.vtype, member.name) for member in ast.structs[0].members] == [
+        ("_InIter1", "in"),
+        ("_Func1", "fun"),
+    ]
+    assert "_InIter1 in_;" in crossgl
+    assert "_CCCL_NO_UNIQUE_ADDRESS" not in crossgl
+    assert "operator" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_void_constexpr_method_qualifier_order_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: cub/cub/detail/warpspeed/sync_handler.cuh
+    source = """
+    struct SyncHandler
+    {
+      _CCCL_HOST_DEVICE_API void constexpr registerPhase(
+          int resourceHandle,
+          int numOwningThreads,
+          uint64_t* ptrBar)
+      {
+        int curPhase = mNumPhases[resourceHandle];
+        mNumOwningThreads[resourceHandle][curPhase] = numOwningThreads;
+        mPtrBar[resourceHandle][curPhase] = ptrBar;
+      }
+    };
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[0].name == "SyncHandler"
+    assert ast.structs[0].members == []
+    assert "registerPhase" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_cccl_global_cuda_std_array_parameter_codegen_reparse():
+    # Upstream source:
+    # repo: https://github.com/NVIDIA/cccl
+    # commit: 087c594872d4d08b62ea51f3b87c1e36bfdb8f8c
+    # path: cub/cub/detail/warpspeed/squad/squad.cuh
+    source = """
+    template <int numSquads, class F>
+    _CCCL_DEVICE_API void squadDispatch(
+        SpecialRegisters sr,
+        ::cuda::std::array<SquadDesc, numSquads> squads,
+        F f,
+        int warpIdxStart) {
+      squadDispatch<numSquads>(sr, squads.__elems_, f, warpIdxStart);
+    }
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.functions[0].params[1].vtype == (
+        "::cuda::std::array<SquadDesc, numSquads>"
+    )
+    assert "array<SquadDesc, numSquads> squads" in crossgl
+    assert "::cuda::std" not in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_hip_tests_member_function_pointer_typedef_and_ull_reparse():
+    # Upstream source:
+    # repo: https://github.com/ROCm/hip-tests
+    # commit: a618b48f0a29cfbd8c990fa72ab772483f61d381
+    # path: catch/perftests/compute/hipPerfMandelbrot.cc
+    source = """
+    struct coordRec {
+      double x;
+      double y;
+      double width;
+    };
+
+    class hipPerfMandelBrot {
+     public:
+      typedef void (hipPerfMandelBrot::*funPtr)(uint* out, uint width);
+    };
+
+    coordRec coords[] = {{0.0, 0.0, 4.0}};
+    unsigned long long expectedIters[] = {203277748ull, 2147483648ull};
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert ast.structs[1].name == "hipPerfMandelBrot"
+    assert ast.structs[1].members == []
+    assert "funPtr" not in crossgl
+    assert "203277748ull" not in crossgl
+    assert "var expectedIters: array<u64> = {203277748u, 2147483648u};" in crossgl
+    assert_crossgl_reparse(crossgl)
+
+
+def test_current_hip_tests_typedef_class_and_reserved_enum_value_reparse():
+    # Upstream sources:
+    # repo: https://github.com/ROCm/hip-tests
+    # commit: a618b48f0a29cfbd8c990fa72ab772483f61d381
+    # paths:
+    #   catch/unit/graph/hipGraphAddChildGraphNode.cc
+    #   catch/unit/graph/hipGraphAddKernelNode.cc
+    source = """
+    enum fnType { normal, object };
+
+    typedef class nestedGraph {
+      const int N = 1024;
+      hipGraph_t graph[4];
+    } nestedGraph;
+    """
+
+    ast = parse_cuda(source)
+    crossgl = cuda_to_crossgl(source)
+
+    assert isinstance(ast.structs[0], EnumNode)
+    assert ast.structs[0].members == [("normal", None), ("object", None)]
+    assert ast.structs[1].name == "nestedGraph"
+    assert [(member.vtype, member.name) for member in ast.structs[1].members] == [
+        ("const int", "N"),
+        ("hipGraph_t[4]", "graph"),
+    ]
+    assert "object_," in crossgl
+    assert "object," not in crossgl
+    assert "struct nestedGraph" in crossgl
     assert_crossgl_reparse(crossgl)
 
 
