@@ -3176,6 +3176,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         params = []
+        parameter_prologue_statements = []
         sampler_parameters = set()
         texture_parameters = {}
         image_access_parameters = {}
@@ -3192,6 +3193,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if data["comparison"] and not data["synthetic"]
         }
         param_names = {getattr(param, "name", None) for param in param_list}
+        emitted_param_names = set(param_names)
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
         previous_identifier_aliases = self.current_identifier_aliases
@@ -3274,6 +3276,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
 
             semantic = self.semantic_from_node(p)
+            dispatch_thread_id_bridge = None
+            if effective_shader_type == "compute":
+                dispatch_thread_id_bridge = (
+                    self.hlsl_compute_dispatch_thread_id_parameter_bridge(
+                        p, param_type, semantic, emitted_param_names
+                    )
+                )
+            if dispatch_thread_id_bridge is not None:
+                declaration, local_alias = dispatch_thread_id_bridge
+                semantic_attr = self.map_semantic(semantic)
+                params.append(
+                    f"{declaration} {semantic_attr}" if semantic_attr else declaration
+                )
+                parameter_prologue_statements.append(local_alias)
+                continue
 
             ray_role = None
             if effective_shader_type in self.hlsl_ray_stage_types():
@@ -3545,6 +3562,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return_type != "void" and not self.statement_body_terminates(body)
         )
         try:
+            for statement in parameter_prologue_statements:
+                code += f"{'    ' * (indent + 1)}{statement}\n"
             if hasattr(body, "statements"):
                 for stmt in body.statements:
                     code += self.generate_statement(stmt, indent + 1)
@@ -5520,6 +5539,47 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             alias += "_"
         self.current_identifier_aliases[name] = alias
         return alias
+
+    def hlsl_unique_local_identifier(self, base_name, used_names):
+        candidate = base_name
+        while (
+            candidate in used_names
+            or candidate in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+        ):
+            candidate += "_"
+        return candidate
+
+    def hlsl_compute_dispatch_thread_id_parameter_bridge(
+        self, parameter, param_type, semantic, emitted_param_names
+    ):
+        if self.hlsl_canonical_semantic(semantic) != "SV_DispatchThreadID":
+            return None
+
+        base_type, array_suffix = split_array_type_suffix(str(param_type))
+        if array_suffix or base_type not in {"uint", "uint2"}:
+            return None
+
+        parameter_name = getattr(parameter, "name", None)
+        if not isinstance(parameter_name, str) or not parameter_name:
+            return None
+
+        local_name = self.hlsl_declaration_identifier_name(parameter_name)
+        used_names = set(emitted_param_names)
+        used_names.update(self.local_variable_types)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.current_identifier_aliases.values())
+        hlsl_param_name = self.hlsl_unique_local_identifier(
+            f"{local_name}_dispatchThreadID", used_names
+        )
+        emitted_param_names.add(hlsl_param_name)
+        self.local_variable_types[hlsl_param_name] = "uint3"
+
+        declaration = format_c_style_array_declaration("uint3", hlsl_param_name)
+        if base_type == "uint":
+            local_alias = f"uint {local_name} = {hlsl_param_name}.x;"
+        else:
+            local_alias = f"uint2 {local_name} = {hlsl_param_name}.xy;"
+        return declaration, local_alias
 
     def hlsl_bitcast_result_type(self, func_name, args):
         if (
@@ -8688,8 +8748,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 {"uint2", "uint3"},
                 "uint2 or uint3",
             )
-        self.validate_hlsl_exact_semantic_type(
-            parameters, "compute", "SV_DispatchThreadID", "uint3", "uint3"
+        self.validate_hlsl_semantic_type_one_of(
+            parameters,
+            "compute",
+            "SV_DispatchThreadID",
+            {"uint", "uint2", "uint3"},
+            "scalar uint, uint2, or uint3",
         )
 
     def hlsl_ray_stage_types(self):
