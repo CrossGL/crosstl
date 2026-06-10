@@ -18269,14 +18269,15 @@ def _run_toolchain_smoke(
             if not command or not shutil.which(command[0]):
                 continue
             try:
+                stdin = (
+                    _toolchain_smoke_stdin(target, command, artifact_path)
+                    if "--stdin" in command
+                    else None
+                )
                 completed = subprocess.run(
                     command,
                     cwd=str(root),
-                    input=(
-                        artifact_path.read_text(encoding="utf-8", errors="replace")
-                        if "--stdin" in command
-                        else None
-                    ),
+                    input=stdin,
                     capture_output=True,
                     text=True,
                     check=False,
@@ -18325,6 +18326,15 @@ def _toolchain_smoke_commands(
             (command, "artifact")
             for command in _directx_dxc_smoke_commands(tools[0], artifact_path)
         ]
+    if target in {"opengl", "webgl"}:
+        source_stage = _glslang_source_stage(artifact)
+        stages = (
+            (source_stage,) if source_stage else _glslang_guarded_stages(artifact_path)
+        )
+        if stages:
+            return [
+                ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
+            ]
     smoke_command = _toolchain_smoke_command(
         target,
         tools,
@@ -18358,6 +18368,50 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _toolchain_smoke_stdin(target: str, command: Sequence[str], artifact_path: Path):
+    source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    if target not in {"opengl", "webgl"}:
+        return source
+    macro = _glslang_guard_macro_for_command(command)
+    if macro is None or not _glslang_source_uses_guard(source, macro):
+        return source
+    return _filter_glslang_guarded_stage_source(source, macro)
+
+
+def _glslang_guard_macro_for_command(command: Sequence[str]) -> str | None:
+    try:
+        stage = command[command.index("-S") + 1]
+    except (ValueError, IndexError):
+        return None
+    return GLSLANG_GUARD_MACRO_BY_STAGE.get(stage)
+
+
+def _glslang_source_uses_guard(source: str, macro: str) -> bool:
+    return any(
+        match.group(1).upper() == macro
+        for match in GLSLANG_STAGE_GUARD_RE.finditer(source)
+    )
+
+
+def _filter_glslang_guarded_stage_source(source: str, macro: str) -> str:
+    output = []
+    stage_guard_stack = []
+    for line in source.splitlines(keepends=True):
+        guard_match = GLSLANG_STAGE_GUARD_LINE_RE.match(line)
+        if guard_match:
+            stage_guard_stack.append(guard_match.group(1).upper() == macro)
+            continue
+        if stage_guard_stack and GLSLANG_PREPROCESSOR_ELSE_RE.match(line):
+            stage_guard_stack[-1] = not stage_guard_stack[-1]
+            continue
+        if stage_guard_stack and GLSLANG_PREPROCESSOR_ENDIF_RE.match(line):
+            stage_guard_stack.pop()
+            continue
+        if all(stage_guard_stack):
+            output.append(line)
+    return "".join(output)
 
 
 def _directx_dxc_smoke_command(tool: str, artifact_path: Path) -> list[str]:
@@ -18488,6 +18542,9 @@ GLSLANG_STAGE_BY_GUARD_MACRO = {
     "GL_MISS_SHADER_EXT": "rmiss",
     "GL_CALLABLE_SHADER_EXT": "rcall",
 }
+GLSLANG_GUARD_MACRO_BY_STAGE = {
+    stage: macro for macro, stage in GLSLANG_STAGE_BY_GUARD_MACRO.items()
+}
 GLSLANG_GENERATED_STAGE_COMMENT_RE = re.compile(
     r"^\s*//\s*([A-Za-z_ -]+)\s+Shader\b",
     re.IGNORECASE | re.MULTILINE,
@@ -18496,6 +18553,12 @@ GLSLANG_STAGE_GUARD_RE = re.compile(
     r"^\s*#\s*(?:if|ifdef)\s+" r"(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
     re.IGNORECASE | re.MULTILINE,
 )
+GLSLANG_STAGE_GUARD_LINE_RE = re.compile(
+    r"^\s*#\s*(?:if|ifdef)\s+(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
+    re.IGNORECASE,
+)
+GLSLANG_PREPROCESSOR_ELSE_RE = re.compile(r"^\s*#\s*else\b", re.IGNORECASE)
+GLSLANG_PREPROCESSOR_ENDIF_RE = re.compile(r"^\s*#\s*endif\b", re.IGNORECASE)
 GLSLANG_GLOBAL_STAGE_IO_RE = re.compile(
     r"^\s*"
     r"(?:layout\s*\([^;\n]*\)\s*)?"
@@ -18556,6 +18619,22 @@ def _glslang_stage_from_generated_source(source: str) -> str | None:
             return stage
 
     return None
+
+
+def _glslang_guarded_stages(artifact_path: Path) -> tuple[str, ...]:
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ()
+
+    stages = []
+    seen = set()
+    for match in GLSLANG_STAGE_GUARD_RE.finditer(source):
+        stage = GLSLANG_STAGE_BY_GUARD_MACRO.get(match.group(1).upper())
+        if stage is not None and stage not in seen:
+            stages.append(stage)
+            seen.add(stage)
+    return tuple(stages)
 
 
 def _glslang_global_stage_io_directions(source: str) -> set[str]:

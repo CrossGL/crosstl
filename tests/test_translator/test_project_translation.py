@@ -10655,6 +10655,94 @@ def test_webgl_toolchain_smoke_command_selects_glslang_stage_from_generated_mark
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
 
 
+def test_webgl_toolchain_smoke_commands_validate_guarded_stages(tmp_path):
+    guarded_shader = tmp_path / "guarded.webgl.glsl"
+    guarded_shader.write_text(
+        "\n".join(
+            [
+                "#version 300 es",
+                "#ifdef GL_VERTEX_SHADER",
+                "void main() { gl_Position = vec4(0.0); }",
+                "#endif",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() { fragColor = vec4(1.0); }",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "webgl", ["glslangValidator"], guarded_shader
+    ) == [
+        (["glslangValidator", "--stdin", "-S", "vert"], "artifact"),
+        (["glslangValidator", "--stdin", "-S", "frag"], "artifact"),
+    ]
+
+
+def test_run_toolchain_smoke_filters_guarded_glsl_stage_sources(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    artifact_path = repo / "out" / "webgl" / "guarded.webgl.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "\n".join(
+            [
+                "#version 300 es",
+                "#ifdef GL_VERTEX_SHADER",
+                "void main() { gl_Position = vec4(0.0); }",
+                "#endif",
+                "#ifdef GL_FRAGMENT_SHADER",
+                "out vec4 fragColor;",
+                "void main() { fragColor = vec4(1.0); }",
+                "#endif",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        project_pipeline.shutil,
+        "which",
+        lambda tool: (
+            "/usr/bin/glslangValidator" if tool == "glslangValidator" else None
+        ),
+    )
+
+    def run_toolchain(command, **kwargs):
+        calls.append((command, kwargs["input"]))
+        return SimpleNamespace(returncode=0, stdout="validation ok", stderr="")
+
+    monkeypatch.setattr(project_pipeline.subprocess, "run", run_toolchain)
+
+    runs = project_pipeline._run_toolchain_smoke(
+        [
+            {
+                "source": "guarded.cgl",
+                "target": "webgl",
+                "path": "out/webgl/guarded.webgl.glsl",
+                "status": "translated",
+            }
+        ],
+        repo,
+    )
+
+    assert [call[0] for call in calls] == [
+        ["glslangValidator", "--stdin", "-S", "vert"],
+        ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
+    assert "GL_VERTEX_SHADER" not in calls[0][1]
+    assert "GL_FRAGMENT_SHADER" not in calls[0][1]
+    assert "gl_Position = vec4(0.0);" in calls[0][1]
+    assert "fragColor = vec4(1.0);" not in calls[0][1]
+    assert "GL_VERTEX_SHADER" not in calls[1][1]
+    assert "GL_FRAGMENT_SHADER" not in calls[1][1]
+    assert "fragColor = vec4(1.0);" in calls[1][1]
+    assert "gl_Position = vec4(0.0);" not in calls[1][1]
+    assert [run["status"] for run in runs] == ["ok", "ok"]
+
+
 def test_vulkan_toolchain_smoke_command_selects_spirv_tool(tmp_path):
     assembly_shader = tmp_path / "shader.spvasm"
     assembly_shader.write_text("; SPIR-V\n", encoding="utf-8")
