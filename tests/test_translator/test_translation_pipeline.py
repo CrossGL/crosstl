@@ -368,7 +368,14 @@ def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
     )
 
     _assert_generated_output_is_usable(generated)
-    assert "ConstantBuffer<MatMulParams> params" in generated
+    assert "#include <metal_stdlib>" not in generated
+    assert "RWStructuredBuffer<float> A : register(u0);" in generated
+    assert "RWStructuredBuffer<float> B : register(u1);" in generated
+    assert "RWStructuredBuffer<float> X : register(u2);" in generated
+    assert "ConstantBuffer<MatMulParams> params : register(b3);" in generated
+    assert "void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID)" in generated
+    assert "void CSMain(float* A" not in generated
+    assert "RWStructuredBuffer<float> A," not in generated
     assert "uint3 id_dispatchThreadID : SV_DispatchThreadID" in generated
     assert "uint2 id = id_dispatchThreadID.xy;" in generated
     assert "const uint row_dim_x = params.row_dim_x;" in generated
