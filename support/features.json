@@ -10134,6 +10134,146 @@
       }
     },
     {
+      "id": "project.runtime_host_loader_scaffold_inspection",
+      "category": "project",
+      "name": "Runtime host loader scaffold inspection",
+      "description": "Inspect generated host loader scaffold bundles before runtime tooling consumes them.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        },
+        "wgsl": {
+          "status": "supported",
+          "notes": "inspect-host-loader-scaffolds builds crosstl-runtime-host-loader-scaffolds-inspection JSON, text, and SARIF output from a host loader scaffold manifest, verifies host-loader-scaffolds.json, HOST_LOADERS.md, and target-scoped loader metadata files, parses ready host loader unit JSON files, checks scaffold identity, target, adapterKind, packagePath, and status consistency, reports blocked load units without requiring target loader files, emits structured diagnostics for missing, malformed, wrong-kind, or mismatched scaffold files, and keeps inspection read-only. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_ready_files",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_detects_missing_unit_file",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_reports_blocked_units",
+            "tests/test_translator/test_project_translation.py::def test_inspect_runtime_host_loader_scaffolds_rejects_wrong_manifest_kind",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_text_outputs_readiness",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_host_loader_scaffolds_json_writes_output"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.report_inspection",
       "category": "project",
       "name": "Project report inspection",
