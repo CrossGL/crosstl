@@ -158,6 +158,35 @@ def test_hlsl_stencil_ref_return_semantic_codegen():
     assert "gl_FragStencilRefEXT" not in generated_code
 
 
+def test_glsl_fragment_fragcoord_lowers_to_hlsl_position_input(tmp_path):
+    shader = """
+    #version 330 core
+    out vec4 fragColor;
+
+    void main() {
+        if (mod(gl_FragCoord.x, 2.0) < 1.0 ||
+            mod(gl_FragCoord.y, 2.0) < 1.0) {
+            discard;
+        }
+        fragColor = vec4(1.0);
+    }
+    """
+    shader_path = tmp_path / "noise.frag"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="opengl",
+    )
+
+    assert "gl_FragCoord" not in generated_code
+    assert "float4 _crossglFragCoord : SV_Position" in generated_code
+    assert "_crossglFragCoord.x" in generated_code
+    assert "_crossglFragCoord.y" in generated_code
+
+
 def test_directx_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {
