@@ -31,4 +31,3 @@ vertex VertexOutput vertex_main(VertexInput input [[stage_in]], constant Uniform
     output.gl_Position = uniforms.mvp * float4(input.vertexPosition, 1.0);
     return output;
 }
-

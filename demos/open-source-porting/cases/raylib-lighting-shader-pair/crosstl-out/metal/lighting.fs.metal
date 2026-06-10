@@ -54,4 +54,3 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
     finalColor = pow(finalColor, float4(1.0 / 2.2));
     return finalColor;
 }
-

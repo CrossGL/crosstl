@@ -54,4 +54,3 @@ void main() {
     out_fragColor = finalColor;
     return;
 }
-
