@@ -16,6 +16,8 @@ import crosstl.project as project_api
 import crosstl.project.pipeline as project_pipeline
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
+from crosstl.backend.Metal.MetalLexer import MetalLexer
+from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.project import (
     build_runtime_artifact_manifest,
     build_runtime_package,
@@ -23101,15 +23103,20 @@ def test_project_cli_package_runtime_json_writes_output(tmp_path):
     assert (package_dir / "runtime-package.json").is_file()
 
 
-def _build_runtime_package_fixture(tmp_path):
+def _build_runtime_package_fixture(
+    tmp_path,
+    source=SIMPLE_CROSSL,
+    source_name="simple.cgl",
+    targets=("cgl",),
+):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / source_name).write_text(source, encoding="utf-8")
     (repo / "host.cpp").write_text(
         "void run() { cudaLaunchKernel(nullptr); }\n",
         encoding="utf-8",
     )
-    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report = translate_project(repo, targets=list(targets), output_dir="out")
     report_path = repo / "out" / "portability-report.json"
     report.write_json(report_path)
     manifest_path = repo / "out" / "runtime-manifest.json"
@@ -23177,7 +23184,80 @@ def test_inspect_runtime_package_reports_ready_bindings(tmp_path):
         "source-remaps/out/cgl/simple.source-remap.json"
     )
     assert binding["sourceRemap"]["status"] == "ready"
+    host_interface = binding["hostInterface"]
+    assert set(host_interface) == project_pipeline.RUNTIME_HOST_INTERFACE_FIELDS
+    assert host_interface["status"] == "ready"
+    assert host_interface["source"] == "package-artifact"
+    assert host_interface["parser"] == "cgl"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["resourceCount"] == 0
+    assert len(host_interface["entryPoints"]) == 1
+    entry_point = host_interface["entryPoints"][0]
+    assert (
+        set(entry_point) == project_pipeline.RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS
+    )
+    assert entry_point == {
+        "name": "main",
+        "stage": "vertex",
+        "executionConfig": {},
+    }
+    assert host_interface["resources"] == []
+    assert host_interface["diagnostics"] == []
     assert binding["diagnostics"] == []
+
+
+def test_inspect_runtime_package_reports_host_interface_resources(tmp_path):
+    source = textwrap.dedent("""
+        shader ResourceShader {
+            layout(set = 1, binding = 2) uniform sampler2D sourceTexture;
+
+            cbuffer Camera {
+                mat4 viewProj;
+            }
+
+            fragment {
+                vec4 main() {
+                    return vec4(1.0);
+                }
+            }
+        }
+        """).strip()
+    _, package_dir, _ = _build_runtime_package_fixture(
+        tmp_path, source=source, source_name="resource.cgl"
+    )
+
+    payload = inspect_runtime_package(package_dir / "runtime-package.json")
+
+    host_interface = payload["bindings"][0]["hostInterface"]
+    assert host_interface["status"] == "ready"
+    assert host_interface["entryPointCount"] == 1
+    assert host_interface["entryPoints"][0] == {
+        "name": "main",
+        "stage": "fragment",
+        "executionConfig": {},
+    }
+    assert host_interface["resourceCount"] == 2
+    for resource in host_interface["resources"]:
+        assert set(resource) == project_pipeline.RUNTIME_HOST_INTERFACE_RESOURCE_FIELDS
+    assert host_interface["resources"] == [
+        {
+            "name": "Camera",
+            "kind": "constant-buffer",
+            "type": "Camera",
+            "set": None,
+            "binding": None,
+            "access": "read",
+        },
+        {
+            "name": "sourceTexture",
+            "kind": "texture",
+            "type": "sampler2D",
+            "set": 1,
+            "binding": 2,
+            "access": None,
+        },
+    ]
+    assert host_interface["diagnostics"] == []
 
 
 def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
@@ -23193,6 +23273,10 @@ def test_inspect_runtime_package_detects_missing_packaged_artifact(tmp_path):
     assert payload["summary"]["failedBindingCount"] == 1
     assert payload["bindings"][0]["status"] == "failed"
     assert payload["bindings"][0]["artifactStatus"] == "failed"
+    assert payload["bindings"][0]["hostInterface"]["status"] == "not-inspected"
+    assert payload["bindings"][0]["hostInterface"]["diagnostics"] == [
+        "project.runtime-package-inspection.host-interface-artifact-not-ready"
+    ]
     assert payload["bindings"][0]["diagnostics"] == [
         "project.runtime-package-inspection.artifact-missing"
     ]
@@ -23681,6 +23765,14 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
     assert adapter["adapterKind"] == "crossgl-source-adapter"
     assert adapter["artifactFormat"] == "CrossGL source"
     assert adapter["packagePath"] == "artifacts/out/cgl/simple.cgl"
+    assert adapter["hostInterface"]["status"] == "ready"
+    assert adapter["hostInterface"]["entryPointCount"] == 1
+    assert adapter["hostInterface"]["resourceCount"] == 0
+    assert adapter["hostInterface"]["entryPoints"][0] == {
+        "name": "main",
+        "stage": "vertex",
+        "executionConfig": {},
+    }
     assert adapter["validation"] == {
         "packageInspection": "ready",
         "artifact": "ready",
@@ -23690,6 +23782,10 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
         "source-remaps/out/cgl/simple.source-remap.json"
     )
     assert len(payload["actions"]) == 2
+    assert {action["kind"] for action in payload["actions"]} == {
+        "wire-runtime-adapter",
+        "review-runtime-references",
+    }
     assert set(payload["actions"][0]) == (
         project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
     )
@@ -23701,6 +23797,59 @@ def test_plan_runtime_adapters_from_runtime_package(tmp_path):
         "readyBindingCount": 1,
         "failedBindingCount": 0,
     }
+
+
+def test_plan_runtime_adapters_reports_unavailable_host_interface_for_non_cgl_target(
+    tmp_path,
+):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+
+    payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+
+    assert payload["success"] is True
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "bindingCount": 1,
+        "readyBindingCount": 1,
+        "failedBindingCount": 0,
+        "adapterCount": 1,
+        "actionCount": 3,
+        "runtimeReferenceCount": 1,
+    }
+    assert payload["targets"][0]["target"] == "opengl"
+    assert payload["targets"][0]["adapterKind"] == "opengl-glsl-adapter"
+    assert len(payload["adapters"]) == 1
+    adapter = payload["adapters"][0]
+    assert adapter["target"] == "opengl"
+    assert adapter["adapterKind"] == "opengl-glsl-adapter"
+    assert adapter["hostInterface"] == {
+        "status": "unavailable",
+        "source": "package-artifact",
+        "parser": None,
+        "entryPointCount": 0,
+        "resourceCount": 0,
+        "entryPoints": [],
+        "resources": [],
+        "diagnostics": [
+            "project.runtime-package-inspection.host-interface-parser-unavailable"
+        ],
+    }
+    assert [action["kind"] for action in payload["actions"]] == [
+        "wire-runtime-adapter",
+        "resolve-host-interface-metadata",
+        "review-runtime-references",
+    ]
+    host_interface_action = payload["actions"][1]
+    assert set(host_interface_action) == (
+        project_pipeline.RUNTIME_ADAPTER_PLAN_ACTION_FIELDS
+    )
+    assert host_interface_action["severity"] == "warning"
+    assert host_interface_action["target"] == "opengl"
+    assert host_interface_action["adapter"] == adapter["id"]
+    assert host_interface_action["binding"] == adapter["binding"]
+    assert host_interface_action["packagePath"] == adapter["packagePath"]
+    assert "status is unavailable" in host_interface_action["message"]
+    assert "host-interface-parser-unavailable" in host_interface_action["message"]
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
@@ -23772,9 +23921,40 @@ def test_project_cli_plan_runtime_adapters_text_outputs_adapters(tmp_path):
         "- cgl: artifacts/out/cgl/simple.cgl via crossgl-source-adapter "
         "[format: CrossGL source;"
     ) in result.stdout
+    assert "interface: ready, 1 entry points, 0 resources" in result.stdout
     assert "Runtime adapter actions:" in result.stdout
     assert "wire-runtime-adapter" in result.stdout
     assert "review-runtime-references" in result.stdout
+
+
+def test_project_cli_plan_runtime_adapters_text_reports_host_interface_status(
+    tmp_path,
+):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("opengl",))
+    package_manifest = package_dir / "runtime-package.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime-adapters",
+            str(package_manifest),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "Runtime adapters:" in result.stdout
+    assert "interface: unavailable" in result.stdout
+    assert "host-interface-parser-unavailable" in result.stdout
+    assert "Runtime adapter actions:" in result.stdout
+    assert "resolve-host-interface-metadata" in result.stdout
 
 
 def test_project_cli_plan_runtime_adapters_json_writes_output(tmp_path):
@@ -26126,6 +26306,65 @@ def test_translate_project_rust_gpu_graphics_entry_io_lowers_for_targets(
     assert re.search(rf"%\d+ = OpLoad %\d+ {vertex_index_id}", spirv)
     assert re.search(rf"OpStore {fragment_output_id} %\d+", spirv)
     assert re.search(r'OpName %\d+ "output"', spirv) is None
+
+
+def test_translate_project_rust_gpu_plain_vertex_input_lowers_to_metal_attribute(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "lib.rs").write_text(
+        textwrap.dedent("""
+            use spirv_std::glam::{vec3, Vec2, Vec3, Vec4};
+            use spirv_std::spirv;
+
+            fn tonemap(color: Vec3) -> Vec3 { color }
+
+            #[spirv(fragment)]
+            pub fn main_fs(output: &mut Vec4) {
+                let color = vec3(1.0, 0.5, 0.25);
+                *output = tonemap(color).extend(1.0);
+            }
+
+            #[spirv(vertex)]
+            pub fn main_vs(pos: Vec2, #[spirv(position)] builtin_pos: &mut Vec4) {
+                *builtin_pos = pos.extend(0.0).extend(1.0);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["cgl", "metal"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+
+    metal = outputs["metal"]
+    MetalParser(MetalLexer(metal).tokenize()).parse()
+    assert "struct vertex_main_vs_Input {" in metal
+    assert "float2 pos [[attribute(0)]];" in metal
+    assert (
+        "vertex vertex_main_vs_Return vertex_main_vs("
+        "vertex_main_vs_Input _crossglInput [[stage_in]])" in metal
+    )
+    assert "float2 pos = _crossglInput.pos;" in metal
+    assert "float4 builtin_pos [[position]];" in metal
+    assert "float2 pos [[stage_in]]" not in metal
+    assert (
+        re.search(
+            r"\b(?:half|float|double|bool|char|uchar|short|ushort|int|uint|long|"
+            r"ulong)(?:[234])?\s+\w+\s+\[\[stage_in\]\]",
+            metal,
+        )
+        is None
+    )
 
 
 def test_legacy_single_file_cli_still_works(tmp_path):
