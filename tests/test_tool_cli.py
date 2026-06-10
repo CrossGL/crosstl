@@ -96,6 +96,15 @@ TOOLS = [
                 "--run-toolchains",
             ),
         ),
+        (
+            ("plan-runtime",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+                "--max-runtime-references",
+            ),
+        ),
     ],
 )
 def test_crosstl_module_cli_help_surface(args, expected_stdout):

@@ -467,6 +467,150 @@ def _run_validate_project(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_integration_plan(payload):
+    lines = [f"Runtime integration plan: {payload.get('sourceReport')}"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Plan schema version"),
+        _format_payload_kind(payload, "Plan kind"),
+        _format_payload_generated_at(payload, "Plan generated at"),
+        _format_payload_hash(payload, "sourceReportHash", "Source report hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {'ok' if payload.get('success') else 'failed'}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Plan scope: {scope}")
+    non_goals = payload.get("nonGoals")
+    if isinstance(non_goals, list):
+        non_goal_labels = [
+            non_goal for non_goal in non_goals if isinstance(non_goal, str) and non_goal
+        ]
+        if non_goal_labels:
+            lines.append(f"Plan non-goals: {', '.join(non_goal_labels)}")
+
+    compiler_contract = payload.get("compilerContract")
+    if isinstance(compiler_contract, Mapping):
+        contract_name = compiler_contract.get("name")
+        contract_status = compiler_contract.get("status")
+        if isinstance(contract_name, str) and contract_name:
+            suffix = (
+                f" ({contract_status})"
+                if isinstance(contract_status, str) and contract_status
+                else ""
+            )
+            lines.append(f"Compiler contract: {contract_name}{suffix}")
+        issue = compiler_contract.get("issue")
+        if isinstance(issue, str) and issue:
+            lines.append(f"Compiler contract issue: {issue}")
+
+    project = payload.get("project")
+    for project_line in (
+        _format_project_root_path(project),
+        _format_project_output_dir(project),
+        _format_project_string_list(project, "Project targets", "targets"),
+    ):
+        if project_line:
+            lines.append(project_line)
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('translatedArtifactCount', 0)} translated artifacts, "
+            f"{summary.get('failedArtifactCount', 0)} failed artifacts, "
+            f"{summary.get('runtimeReferenceCount', 0)} runtime references"
+        )
+
+    for line in (
+        _format_count_rollup(
+            "Runtime references by backend",
+            payload.get("runtimeReferencesByBackend"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Runtime references by kind",
+            payload.get("runtimeReferencesByKind"),
+            include_zero=False,
+        ),
+        _format_count_rollup(
+            "Runtime references by path",
+            payload.get("runtimeReferencesByPath"),
+            include_zero=False,
+        ),
+    ):
+        if line:
+            lines.append(line)
+
+    compiler_requests = payload.get("compilerRequests", [])
+    if compiler_requests:
+        lines.append("Compiler runtime plan requests:")
+        for request in compiler_requests:
+            if not isinstance(request, Mapping):
+                continue
+            command = request.get("command")
+            command_text = (
+                " ".join(str(part) for part in command)
+                if isinstance(command, list)
+                else ""
+            )
+            target = request.get("target", "unknown")
+            status = request.get("status", "unknown")
+            lines.append(f"- {target} [{status}]: {command_text}")
+
+    actions = payload.get("actions", [])
+    if actions:
+        lines.append("Runtime integration actions:")
+        for action in actions:
+            if not isinstance(action, Mapping):
+                continue
+            details = []
+            severity = action.get("severity")
+            if isinstance(severity, str) and severity:
+                details.append(f"severity: {severity}")
+            targets = action.get("targets")
+            if isinstance(targets, list):
+                target_names = [target for target in targets if isinstance(target, str)]
+                if target_names:
+                    details.append(f"targets: {', '.join(target_names)}")
+            detail_suffix = f" [{'; '.join(details)}]" if details else ""
+            lines.append(
+                "- "
+                f"{action.get('kind', 'unknown')}{detail_suffix}: "
+                f"{action.get('message', '')}"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_plan_runtime(args):
+    from .project import plan_runtime_integration
+
+    payload = plan_runtime_integration(
+        args.report,
+        max_runtime_references=args.max_runtime_references,
+    )
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime integration planning"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_integration_plan(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_count_rollup(label, counts, *, include_zero=True):
     if not isinstance(counts, Mapping):
         return None
@@ -3975,6 +4119,28 @@ def _build_parser():
     )
     inspect_parser.set_defaults(func=_run_inspect_report)
 
+    plan_runtime_parser = subparsers.add_parser(
+        "plan-runtime",
+        help="Build a metadata-only runtime integration plan from a project report",
+    )
+    plan_runtime_parser.add_argument("report", help="Project portability report JSON")
+    plan_runtime_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Plan output format",
+    )
+    plan_runtime_parser.add_argument(
+        "--output", "-o", help="Write runtime plan output; use '-' for stdout"
+    )
+    plan_runtime_parser.add_argument(
+        "--max-runtime-references",
+        type=_non_negative_int,
+        default=20,
+        help="Maximum runtime reference samples to include in the runtime plan",
+    )
+    plan_runtime_parser.set_defaults(func=_run_plan_runtime)
+
     report_parser = subparsers.add_parser(
         "report", help="Emit a scan-only project portability report"
     )
@@ -4001,6 +4167,7 @@ def _use_legacy_cli(argv):
         "translate-project",
         "validate-project",
         "inspect-report",
+        "plan-runtime",
         "report",
     }
     if not argv or argv[0] in {"-h", "--help"}:

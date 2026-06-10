@@ -28,8 +28,17 @@ from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default
 
 REPORT_KIND = "crosstl-project-portability-report"
 REPORT_INSPECTION_KIND = "crosstl-project-report-inspection"
+RUNTIME_INTEGRATION_PLAN_KIND = "crosstl-runtime-integration-plan"
 REPORT_SCHEMA_VERSION = 1
 SOURCE_REMAP_SCHEMA_VERSION = 1
+RUNTIME_LOADER_PLAN_CONTRACT = "runtime-loader-plan-v1"
+RUNTIME_LOADER_PLAN_CONTRACT_ISSUE = "https://github.com/CrossGL/compiler/issues/29"
+RUNTIME_INTEGRATION_PLAN_SCOPE = "metadata-only-runtime-integration-planning"
+RUNTIME_INTEGRATION_PLAN_NON_GOALS = (
+    "host-code-rewriting",
+    "device-execution",
+    "compiler-internal-python-dependency",
+)
 REPORT_FIELDS = frozenset(
     (
         "schemaVersion",
@@ -75,6 +84,67 @@ REPORT_INSPECTION_FIELDS = frozenset(
         "migration",
         "externalCorpus",
     )
+)
+RUNTIME_INTEGRATION_PLAN_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "sourceReport",
+        "sourceReportHash",
+        "generatedAt",
+        "success",
+        "scope",
+        "nonGoals",
+        "compilerContract",
+        "project",
+        "summary",
+        "runtimeReferencesByBackend",
+        "runtimeReferencesByKind",
+        "runtimeReferencesByPath",
+        "truncatedRuntimeReferenceCount",
+        "runtimeReferences",
+        "targetPlans",
+        "compilerRequests",
+        "actions",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_INTEGRATION_COMPILER_CONTRACT_FIELDS = frozenset(
+    (
+        "name",
+        "status",
+        "issue",
+        "metadataOnly",
+        "deviceExecutionRequired",
+        "compilerInvocationRequired",
+        "translatorDependency",
+    )
+)
+RUNTIME_INTEGRATION_PLAN_TARGET_FIELDS = frozenset(
+    (
+        "target",
+        "artifactCount",
+        "translatedArtifactCount",
+        "failedArtifactCount",
+        "runtimeReferenceCount",
+        "compilerRequestStatus",
+        "compilerContract",
+    )
+)
+RUNTIME_INTEGRATION_COMPILER_REQUEST_FIELDS = frozenset(
+    (
+        "target",
+        "status",
+        "contract",
+        "metadataOnly",
+        "deviceExecutionRequired",
+        "packageMode",
+        "command",
+    )
+)
+RUNTIME_INTEGRATION_ACTION_FIELDS = frozenset(
+    ("kind", "severity", "message", "targets", "runtimeReference")
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -7078,6 +7148,217 @@ def inspect_project_report(
                 external_corpus_payload[field_name] = value
         payload["externalCorpus"] = external_corpus_payload
     return payload
+
+
+def _runtime_plan_project(project: Any) -> dict[str, Any]:
+    project = project if isinstance(project, Mapping) else {}
+    targets = project.get("targets", [])
+    return {
+        "root": project.get("root"),
+        "targets": (
+            [target for target in targets if isinstance(target, str)]
+            if isinstance(targets, list)
+            else []
+        ),
+        "outputDir": project.get("outputDir"),
+    }
+
+
+def _runtime_plan_artifact_counts(
+    artifacts: Sequence[Any], target: str
+) -> tuple[int, int, int]:
+    artifact_count = 0
+    translated_count = 0
+    failed_count = 0
+    for artifact in artifacts:
+        if not isinstance(artifact, Mapping) or artifact.get("target") != target:
+            continue
+        artifact_count += 1
+        if artifact.get("status") == "translated":
+            translated_count += 1
+        elif artifact.get("status") == "failed":
+            failed_count += 1
+    return artifact_count, translated_count, failed_count
+
+
+def _runtime_plan_compiler_contract() -> dict[str, Any]:
+    return {
+        "name": RUNTIME_LOADER_PLAN_CONTRACT,
+        "status": "requested",
+        "issue": RUNTIME_LOADER_PLAN_CONTRACT_ISSUE,
+        "metadataOnly": True,
+        "deviceExecutionRequired": False,
+        "compilerInvocationRequired": False,
+        "translatorDependency": "external-json-contract",
+    }
+
+
+def _runtime_plan_compiler_request(target: str) -> dict[str, Any]:
+    return {
+        "target": target,
+        "status": "blocked-until-contract-available",
+        "contract": RUNTIME_LOADER_PLAN_CONTRACT,
+        "metadataOnly": True,
+        "deviceExecutionRequired": False,
+        "packageMode": "auto",
+        "command": [
+            "cglc",
+            "package",
+            "plan-runtime",
+            "<package.cglb>",
+            "--target",
+            target,
+            "--package-mode",
+            "auto",
+            "--json",
+        ],
+    }
+
+
+def _runtime_plan_target(
+    target: str, artifacts: Sequence[Any], runtime_reference_count: int
+) -> dict[str, Any]:
+    artifact_count, translated_count, failed_count = _runtime_plan_artifact_counts(
+        artifacts, target
+    )
+    return {
+        "target": target,
+        "artifactCount": artifact_count,
+        "translatedArtifactCount": translated_count,
+        "failedArtifactCount": failed_count,
+        "runtimeReferenceCount": runtime_reference_count,
+        "compilerRequestStatus": "blocked-until-contract-available",
+        "compilerContract": RUNTIME_LOADER_PLAN_CONTRACT,
+    }
+
+
+def _runtime_plan_action_for_reference(
+    reference: Mapping[str, Any], targets: Sequence[str]
+) -> dict[str, Any]:
+    backend = reference.get("backend")
+    kind = reference.get("kind")
+    symbol = reference.get("symbol")
+    target_label = ", ".join(targets) if targets else "requested targets"
+    message = (
+        f"Review {backend or 'unknown'} {kind or 'runtime'} reference "
+        f"{symbol or '<unknown>'} before integrating {target_label} runtime setup."
+    )
+    return {
+        "kind": "review-runtime-reference",
+        "severity": "note",
+        "message": message,
+        "targets": list(targets),
+        "runtimeReference": {
+            "path": reference.get("path"),
+            "line": reference.get("line"),
+            "column": reference.get("column"),
+            "backend": backend,
+            "kind": kind,
+            "symbol": symbol,
+        },
+    }
+
+
+def _runtime_plan_compiler_request_action(target: str) -> dict[str, Any]:
+    return {
+        "kind": "request-compiler-loader-plan",
+        "severity": "note",
+        "message": (
+            "Generate or attach a metadata-only compiler runtime loader plan "
+            f"for {target} once the stable compiler contract is available."
+        ),
+        "targets": [target],
+    }
+
+
+def plan_runtime_integration(
+    report_path: str | os.PathLike[str],
+    *,
+    max_runtime_references: int = RUNTIME_REFERENCE_INSPECTION_SAMPLE_LIMIT,
+) -> dict[str, Any]:
+    """Build a metadata-only runtime integration plan from a project report."""
+
+    runtime_reference_limit = _inspection_limit_arg(
+        max_runtime_references, field_name="max_runtime_references"
+    )
+    path = _filesystem_path_arg(report_path, field_name="Project report path")
+    validation_report = validate_project_report(path)
+    validation_success = bool(validation_report.get("success"))
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        report = {}
+
+    report_mapping = (
+        report if validation_success and isinstance(report, Mapping) else {}
+    )
+    project_payload = _runtime_plan_project(report_mapping.get("project"))
+    targets = project_payload["targets"]
+    artifacts = _record_sequence(report_mapping.get("artifacts"))
+    migration = report_mapping.get("migration")
+    actions = (
+        _record_sequence(migration.get("actions"))
+        if isinstance(migration, Mapping)
+        else ()
+    )
+    runtime_reference_rollups = _migration_runtime_reference_rollups(actions)
+    runtime_references = [
+        dict(reference) for reference in _migration_runtime_references(actions)
+    ]
+    runtime_reference_count = runtime_reference_rollups["runtimeReferenceCount"]
+    target_plans = [
+        _runtime_plan_target(target, artifacts, runtime_reference_count)
+        for target in targets
+    ]
+    compiler_requests = [_runtime_plan_compiler_request(target) for target in targets]
+    plan_actions = [_runtime_plan_compiler_request_action(target) for target in targets]
+    plan_actions.extend(
+        _runtime_plan_action_for_reference(reference, targets)
+        for reference in runtime_references
+    )
+    artifact_records = [
+        artifact for artifact in artifacts if isinstance(artifact, Mapping)
+    ]
+    summary = {
+        "targetCount": len(targets),
+        "artifactCount": len(artifact_records),
+        "translatedArtifactCount": sum(
+            1 for artifact in artifact_records if artifact.get("status") == "translated"
+        ),
+        "failedArtifactCount": sum(
+            1 for artifact in artifact_records if artifact.get("status") == "failed"
+        ),
+        "runtimeReferenceCount": runtime_reference_count,
+        "actionCount": len(plan_actions),
+        "compilerRequestCount": len(compiler_requests),
+    }
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_INTEGRATION_PLAN_KIND,
+        "sourceReport": str(path),
+        "sourceReportHash": _optional_source_hash(path),
+        "generatedAt": int(time.time()),
+        "success": validation_success,
+        "scope": RUNTIME_INTEGRATION_PLAN_SCOPE,
+        "nonGoals": list(RUNTIME_INTEGRATION_PLAN_NON_GOALS),
+        "compilerContract": _runtime_plan_compiler_contract(),
+        "project": project_payload,
+        "summary": summary,
+        "runtimeReferencesByBackend": runtime_reference_rollups[
+            "runtimeReferencesByBackend"
+        ],
+        "runtimeReferencesByKind": runtime_reference_rollups["runtimeReferencesByKind"],
+        "runtimeReferencesByPath": runtime_reference_rollups["runtimeReferencesByPath"],
+        "truncatedRuntimeReferenceCount": max(
+            0, len(runtime_references) - runtime_reference_limit
+        ),
+        "runtimeReferences": runtime_references[:runtime_reference_limit],
+        "targetPlans": target_plans,
+        "compilerRequests": compiler_requests,
+        "actions": plan_actions,
+        "diagnosticCounts": validation_report.get("diagnosticCounts", {}),
+        "diagnostics": validation_report.get("diagnostics", []),
+    }
 
 
 def _inspection_artifact_matrix_summary(

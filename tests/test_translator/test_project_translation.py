@@ -16,6 +16,7 @@ import crosstl.project.pipeline as project_pipeline
 from crosstl.project import (
     inspect_project_report,
     load_project_config,
+    plan_runtime_integration,
     scan_project,
     translate_project,
     validate_project_report,
@@ -71,6 +72,7 @@ def test_project_package_exposes_public_api_surface():
         "ProjectTranslationUnit",
         "inspect_project_report",
         "load_project_config",
+        "plan_runtime_integration",
         "scan_project",
         "translate_project",
         "validate_project_report",
@@ -22100,6 +22102,286 @@ def test_project_cli_inspect_report_text_includes_migration_actions(tmp_path):
         "review host runtime API calls, resource binding setup, build scripts, "
         "and backend framework integration separately"
     ) in result.stdout
+
+
+def test_plan_runtime_integration_builds_metadata_plan(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    payload = plan_runtime_integration(report_path)
+
+    assert set(payload) == project_pipeline.RUNTIME_INTEGRATION_PLAN_FIELDS
+    assert payload["kind"] == project_pipeline.RUNTIME_INTEGRATION_PLAN_KIND
+    assert payload["success"] is True
+    assert payload["scope"] == project_pipeline.RUNTIME_INTEGRATION_PLAN_SCOPE
+    assert payload["nonGoals"] == list(
+        project_pipeline.RUNTIME_INTEGRATION_PLAN_NON_GOALS
+    )
+    assert set(payload["compilerContract"]) == (
+        project_pipeline.RUNTIME_INTEGRATION_COMPILER_CONTRACT_FIELDS
+    )
+    assert payload["compilerContract"] == {
+        "name": "runtime-loader-plan-v1",
+        "status": "requested",
+        "issue": "https://github.com/CrossGL/compiler/issues/29",
+        "metadataOnly": True,
+        "deviceExecutionRequired": False,
+        "compilerInvocationRequired": False,
+        "translatorDependency": "external-json-contract",
+    }
+    assert payload["project"]["targets"] == ["cgl"]
+    assert payload["summary"] == {
+        "targetCount": 1,
+        "artifactCount": 1,
+        "translatedArtifactCount": 1,
+        "failedArtifactCount": 0,
+        "runtimeReferenceCount": 1,
+        "actionCount": 2,
+        "compilerRequestCount": 1,
+    }
+    assert payload["runtimeReferencesByBackend"] == {"cuda": 1}
+    assert payload["runtimeReferencesByKind"] == {"runtime-api": 1}
+    assert payload["runtimeReferencesByPath"] == {"host.cpp": 1}
+    assert payload["truncatedRuntimeReferenceCount"] == 0
+    assert payload["runtimeReferences"] == [
+        {
+            "path": "host.cpp",
+            "line": 1,
+            "column": 14,
+            "backend": "cuda",
+            "kind": "runtime-api",
+            "symbol": "cudaLaunchKernel",
+        }
+    ]
+    assert len(payload["targetPlans"]) == 1
+    assert set(payload["targetPlans"][0]) == (
+        project_pipeline.RUNTIME_INTEGRATION_PLAN_TARGET_FIELDS
+    )
+    assert payload["targetPlans"][0] == {
+        "target": "cgl",
+        "artifactCount": 1,
+        "translatedArtifactCount": 1,
+        "failedArtifactCount": 0,
+        "runtimeReferenceCount": 1,
+        "compilerRequestStatus": "blocked-until-contract-available",
+        "compilerContract": "runtime-loader-plan-v1",
+    }
+    assert len(payload["compilerRequests"]) == 1
+    assert set(payload["compilerRequests"][0]) == (
+        project_pipeline.RUNTIME_INTEGRATION_COMPILER_REQUEST_FIELDS
+    )
+    assert payload["compilerRequests"][0]["command"] == [
+        "cglc",
+        "package",
+        "plan-runtime",
+        "<package.cglb>",
+        "--target",
+        "cgl",
+        "--package-mode",
+        "auto",
+        "--json",
+    ]
+    assert len(payload["actions"]) == 2
+    assert set(payload["actions"][0]) <= (
+        project_pipeline.RUNTIME_INTEGRATION_ACTION_FIELDS
+    )
+    assert payload["actions"][0]["kind"] == "request-compiler-loader-plan"
+    assert payload["actions"][1]["kind"] == "review-runtime-reference"
+    assert payload["actions"][1]["runtimeReference"]["symbol"] == "cudaLaunchKernel"
+
+
+def test_plan_runtime_integration_applies_runtime_reference_sample_limit(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for index in range(3):
+        (repo / f"shader-{index}.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    payload = translate_project(repo, targets=["cgl"], output_dir="out").to_json()
+    actions = [
+        {
+            "kind": "manual-runtime-integration",
+            "severity": "note",
+            "message": f"Review host integration task {index}.",
+            "targets": ["cgl"],
+            "runtimeReferences": [
+                {
+                    "path": f"host-{index}.cpp",
+                    "line": index + 1,
+                    "column": 1,
+                    "backend": "cuda",
+                    "kind": "runtime-api",
+                    "symbol": "cudaMalloc",
+                }
+            ],
+        }
+        for index in range(3)
+    ]
+    payload["migration"].update(project_pipeline._migration_action_rollups(actions))
+    payload["migration"]["actions"] = actions
+    report_path = repo / "out" / "runtime-plan-limit-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = plan_runtime_integration(report_path, max_runtime_references=2)
+
+    assert plan["summary"]["runtimeReferenceCount"] == 3
+    assert plan["runtimeReferencesByBackend"] == {"cuda": 3}
+    assert plan["truncatedRuntimeReferenceCount"] == 1
+    assert len(plan["runtimeReferences"]) == 2
+    assert plan["summary"]["actionCount"] == 4
+
+
+def test_plan_runtime_integration_invalid_report_is_diagnostic_only(tmp_path):
+    report_path = tmp_path / "invalid-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "kind": "not-a-report",
+                "project": {"targets": ["cgl"]},
+                "migration": {
+                    "actions": [
+                        {
+                            "kind": "manual-runtime-integration",
+                            "runtimeReferences": [
+                                {
+                                    "path": "host.cpp",
+                                    "line": "bad",
+                                    "backend": "cuda",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = plan_runtime_integration(report_path)
+
+    assert payload["success"] is False
+    assert payload["project"]["targets"] == []
+    assert payload["summary"]["targetCount"] == 0
+    assert payload["summary"]["runtimeReferenceCount"] == 0
+    assert payload["targetPlans"] == []
+    assert payload["compilerRequests"] == []
+    assert payload["runtimeReferences"] == []
+    assert payload["actions"] == []
+    assert payload["diagnosticCounts"]["error"] == 1
+    assert payload["diagnostics"][0]["code"] == "project.validate.invalid-report"
+
+
+def test_project_cli_plan_runtime_text_outputs_requests_and_actions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    (repo / "host.cpp").write_text(
+        "void run() { cudaLaunchKernel(nullptr); }\n",
+        encoding="utf-8",
+    )
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime",
+            str(report_path),
+            "--format",
+            "text",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert f"Runtime integration plan: {report_path}" in result.stdout
+    assert "Status: ok" in result.stdout
+    assert "Plan scope: metadata-only-runtime-integration-planning" in result.stdout
+    assert (
+        "Plan non-goals: host-code-rewriting, device-execution, "
+        "compiler-internal-python-dependency"
+    ) in result.stdout
+    assert "Compiler contract: runtime-loader-plan-v1 (requested)" in result.stdout
+    assert "https://github.com/CrossGL/compiler/issues/29" in result.stdout
+    assert "Runtime references by backend: cuda=1" in result.stdout
+    assert "Runtime references by kind: runtime-api=1" in result.stdout
+    assert "Compiler runtime plan requests:" in result.stdout
+    assert (
+        "- cgl [blocked-until-contract-available]: cglc package plan-runtime "
+        "<package.cglb> --target cgl --package-mode auto --json"
+    ) in result.stdout
+    assert "Runtime integration actions:" in result.stdout
+    assert "request-compiler-loader-plan" in result.stdout
+    assert "review-runtime-reference" in result.stdout
+    assert "cuda runtime-api reference cudaLaunchKernel" in result.stdout
+
+
+def test_project_cli_plan_runtime_json_writes_output(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "simple.cgl").write_text(SIMPLE_CROSSL, encoding="utf-8")
+    report = translate_project(repo, targets=["cgl"], output_dir="out")
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    output_path = repo / "out" / "runtime-plan.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime",
+            str(report_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == f"Wrote {output_path}\n"
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["kind"] == project_pipeline.RUNTIME_INTEGRATION_PLAN_KIND
+    assert payload["compilerRequests"][0]["target"] == "cgl"
+
+
+def test_project_cli_plan_runtime_rejects_negative_sample_limit(tmp_path):
+    report_path = tmp_path / "portability-report.json"
+    report_path.write_text(json.dumps({"kind": "not-a-report"}), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "plan-runtime",
+            str(report_path),
+            "--max-runtime-references",
+            "-1",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "must be a non-negative integer" in result.stderr
 
 
 def test_project_cli_inspect_report_text_reports_truncated_migration_actions(tmp_path):

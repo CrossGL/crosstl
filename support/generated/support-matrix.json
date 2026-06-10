@@ -9981,6 +9981,124 @@
     },
     {
       "category": "project",
+      "description": "Emit metadata-only runtime integration plans from project portability reports without rewriting host code or executing device code.",
+      "id": "project.runtime_integration_plan",
+      "name": "Runtime integration planning",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_builds_metadata_plan",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_applies_runtime_reference_sample_limit",
+            "tests/test_translator/test_project_translation.py::def test_plan_runtime_integration_invalid_report_is_diagnostic_only",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_text_outputs_requests_and_actions",
+            "tests/test_translator/test_project_translation.py::def test_project_cli_plan_runtime_rejects_negative_sample_limit"
+          ],
+          "notes": "plan-runtime builds metadata-only crosstl-runtime-integration-plan JSON, text, and SARIF output from validated portability reports, records source report hash, explicit scope and non-goals, runtime-reference backend, kind, and path rollups, bounded runtime-reference samples, per-target compiler runtime-plan request placeholders for runtime-loader-plan-v1, and manual runtime-reference review actions. Invalid source reports produce diagnostic-only failed plans. The plan does not import compiler internals, execute device code, or rewrite host application code.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Inspect existing project portability reports as concise JSON, text, or SARIF summaries for triage and migration planning.",
       "id": "project.report_inspection",
       "name": "Project report inspection",
@@ -12670,12 +12788,12 @@
   "summary": {
     "backend_count": 10,
     "backlog_count": 30,
-    "feature_count": 54,
+    "feature_count": 55,
     "status_counts": {
       "cuda": {
         "diagnostic": 7,
         "partial": 3,
-        "supported": 44,
+        "supported": 45,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12683,7 +12801,7 @@
       "directx": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 49,
+        "supported": 50,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12691,7 +12809,7 @@
       "hip": {
         "diagnostic": 7,
         "partial": 3,
-        "supported": 44,
+        "supported": 45,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12699,7 +12817,7 @@
       "metal": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 48,
+        "supported": 49,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12707,7 +12825,7 @@
       "mojo": {
         "diagnostic": 5,
         "partial": 3,
-        "supported": 46,
+        "supported": 47,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12715,7 +12833,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 49,
+        "supported": 50,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12723,7 +12841,7 @@
       "rust": {
         "diagnostic": 4,
         "partial": 3,
-        "supported": 47,
+        "supported": 48,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12731,7 +12849,7 @@
       "slang": {
         "diagnostic": 3,
         "partial": 3,
-        "supported": 48,
+        "supported": 49,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12739,7 +12857,7 @@
       "vulkan": {
         "diagnostic": 2,
         "partial": 3,
-        "supported": 49,
+        "supported": 50,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -12747,7 +12865,7 @@
       "webgl": {
         "diagnostic": 22,
         "partial": 3,
-        "supported": 20,
+        "supported": 21,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 9
