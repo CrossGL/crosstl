@@ -39,6 +39,7 @@ TOOLS = [
                 "scaffold-host-loaders",
                 "inspect-host-loader-scaffolds",
                 "plan-host-loader-consumption",
+                "host-integration-handoff",
                 "report",
             ),
         ),
@@ -185,6 +186,15 @@ TOOLS = [
             ("plan-host-loader-consumption",),
             (
                 "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("host-integration-handoff",),
+            (
+                "usage:",
+                "--handoff-dir",
                 "--format",
                 "--output",
             ),
