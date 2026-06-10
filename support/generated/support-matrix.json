@@ -533,7 +533,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 976
+        "test_count": 977
       },
       "translator_codegen": {
         "exists": true,

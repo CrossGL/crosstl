@@ -6138,7 +6138,11 @@ class GLSLCodeGen:
     def is_stage_local_interface_variable(self, node):
         if self.is_stage_local_resource_variable(node):
             return False
-        return bool(self.glsl_variable_qualifier_prefix(node))
+        return bool(
+            self.stage_local_interface_direction(node)
+            or self.glsl_variable_layout_prefix(node)
+            or self.glsl_variable_qualifier_prefix(node)
+        )
 
     def canonical_glsl_compile_time_type_text(self, type_text):
         type_text = str(type_text)
@@ -8256,14 +8260,76 @@ class GLSLCodeGen:
         return f"{layout}{qualifier}{declaration}{initializer};\n"
 
     def generate_stage_local_interface_variable_declaration(self, node):
+        builtin_name = self.glsl_builtin_stage_interface_name(node)
+        if builtin_name is not None:
+            source_name = self.resource_node_name(node, "")
+            if source_name and source_name != builtin_name:
+                self.current_identifier_aliases[source_name] = builtin_name
+            return ""
+
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
         mapped_type = f"{self.map_type(vtype)}{array_suffix}"
         declaration = format_c_style_array_declaration(
             mapped_type, self.resource_node_name(node, "")
         )
+        direction = self.stage_local_interface_direction(node)
+        if direction is not None:
+            prefix = self.stage_io_declaration_prefix(node, direction)
+            stage_name = getattr(
+                self, "current_global_stage_io_stage", self.current_target_stage
+            )
+            if direction == "in" and self.requires_flat_stage_input(
+                stage_name, mapped_type
+            ):
+                prefix = self.with_flat_stage_io_declaration_prefix(prefix)
+            layout = self.glsl_variable_layout_prefix(node)
+            self.reserve_global_stage_io_layout(node, f"{prefix} ", layout, mapped_type)
+            return f"{prefix} {declaration};\n"
+
         return self.generate_global_variable_declaration(
             node, declaration, vtype, mapped_type_for_layout=mapped_type
         )
+
+    def stage_local_interface_direction(self, node):
+        names = {
+            str(qualifier).lower().replace("-", "_")
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name:
+                names.add(str(attr_name).lower().replace("-", "_"))
+
+        if names & {"input", "in"}:
+            return "in"
+        if names & {"output", "out"}:
+            return "out"
+        if "inout" in names:
+            return "inout"
+        return None
+
+    def with_flat_stage_io_declaration_prefix(self, prefix):
+        parts = prefix.split()
+        if "flat" in parts:
+            return prefix
+        for direction in ("in", "out", "inout"):
+            marker = f" {direction}"
+            if prefix.endswith(marker):
+                return f"{prefix[: -len(marker)]} flat{marker}"
+            marker = f" {direction} "
+            if marker in prefix:
+                return prefix.replace(marker, f" flat{marker}", 1)
+        return f"flat {prefix}" if prefix else "flat"
+
+    def glsl_builtin_stage_interface_name(self, node):
+        mapped_semantic = self.map_semantic(self.semantic_from_node(node))
+        if not mapped_semantic or mapped_semantic.startswith("layout("):
+            return None
+        if not mapped_semantic.startswith("gl_"):
+            return None
+        if self.glsl_variable_layout_prefix(node).strip():
+            return None
+        return mapped_semantic
 
     def fragment_output_variable_builtin_target(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
@@ -8433,7 +8499,13 @@ class GLSLCodeGen:
             or normalized in self.GLSL_VARIABLE_QUALIFIER_ATTRIBUTE_NAMES
             or normalized in self.GLSL_STORAGE_QUALIFIER_ATTRIBUTE_NAMES
             or normalized
-            in {"interface_block", "interface_instance", "interface_array"}
+            in {
+                "input",
+                "output",
+                "interface_block",
+                "interface_instance",
+                "interface_array",
+            }
         )
 
     def stage_io_layout_for_node(self, node):
