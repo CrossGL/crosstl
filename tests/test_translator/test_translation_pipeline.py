@@ -271,6 +271,36 @@ def test_native_source_extension_aliases_translate_to_parseable_crossgl(
     crosstl.translator.parse(generated)
 
 
+def test_metal_xhalf_vectors_do_not_leak_to_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "xhalf-view-dir.metal",
+        """
+        struct Camera { float4x4 invViewMatrix; };
+        struct Input { float3 position; };
+        struct Output { xhalf3 viewDir; };
+
+        vertex Output main_vertex(Input in [[stage_in]],
+                                  constant Camera& camera [[buffer(0)]]) {
+            Output out;
+            out.viewDir = (xhalf3)normalize(
+                camera.invViewMatrix[3].xyz - in.position
+            );
+            return out;
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "out vec3 viewDir;" in generated
+    assert "xhalf" not in generated
+    assert "f16vec3" not in generated
+
+
 def test_glsl_frag_source_path_translates_to_fragment_crossgl(tmp_path):
     source_path = _write_source(
         tmp_path,
