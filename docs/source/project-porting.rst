@@ -380,6 +380,22 @@ artifact for host or build-system tooling; it does not rewrite host application
 code, execute device code, generate runtime framework code, or install target
 SDKs.
 
+Build a host binding plan from a runtime package manifest:
+
+.. code-block:: bash
+
+   python -m crosstl plan-host-bindings \
+     crosstl-runtime-package/runtime-package.json \
+     --format text
+
+Host binding plans emit a ``crosstl-runtime-host-binding-plan`` JSON document
+with per-target packaged artifact paths, ``bind-runtime-artifact`` actions for
+host loader or build-system tooling, and ``review-runtime-references`` actions
+when the source repository contained runtime API references. The plan preserves
+the ``runtime-loader-plan-v1`` summary linkage from earlier reports. It is an
+action plan only; it does not rewrite host application code, execute device
+code, generate runtime framework code, or install target SDKs.
+
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
 related location. Remapped diagnostics also expose sanitized
