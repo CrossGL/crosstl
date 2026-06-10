@@ -543,7 +543,15 @@ RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
     )
 )
 RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
-    ("kind", "message", "target", "packagePath", "tools", "hostInterfaceStatus")
+    (
+        "kind",
+        "message",
+        "target",
+        "packagePath",
+        "tools",
+        "command",
+        "hostInterfaceStatus",
+    )
 )
 REPORT_GENERATOR_FIELDS = frozenset(("name", "pipeline", "packageVersion"))
 REPORT_PROJECT_FIELDS = frozenset(
@@ -1292,7 +1300,7 @@ RUNTIME_ADAPTER_CATALOG = {
     "vulkan": {
         "adapterKind": "vulkan-shader-adapter",
         "artifactFormat": "Vulkan-targeted shader source",
-        "requiredTools": ["glslangValidator", "spirv-val"],
+        "requiredTools": ["spirv-val", "spirv-as"],
         "loaderResponsibilities": [
             "Compile the packaged artifact to SPIR-V for the target environment.",
             "Create shader modules and bind descriptor layouts in the existing Vulkan code.",
@@ -9714,6 +9722,14 @@ def _runtime_host_interface_from_ast(ast: Any, parser: str) -> dict[str, Any]:
     }
 
 
+def _runtime_package_inspection_parser_name(target_name: str) -> str | None:
+    if not target_name:
+        return None
+    if target_name == "webgl":
+        return "opengl"
+    return SOURCE_REGISTRY.resolve_name(target_name)
+
+
 def _runtime_package_inspection_host_interface(
     *,
     package_root: Path,
@@ -9726,7 +9742,7 @@ def _runtime_package_inspection_host_interface(
     source_spec = None
     try:
         register_default_sources()
-        parser_name = SOURCE_REGISTRY.resolve_name(target_name) if target_name else None
+        parser_name = _runtime_package_inspection_parser_name(target_name)
         source_spec = SOURCE_REGISTRY.get(parser_name) if parser_name else None
     except Exception:
         parser_name = None
@@ -10312,6 +10328,8 @@ def plan_runtime_adapters(
 
 def _runtime_loader_manifest_load_steps(
     adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     package_path = adapter.get("packagePath")
     target = adapter.get("target")
@@ -10325,6 +10343,7 @@ def _runtime_loader_manifest_load_steps(
             "target": target,
             "packagePath": package_path,
             "tools": [],
+            "command": None,
             "hostInterfaceStatus": None,
         }
     ]
@@ -10343,6 +10362,7 @@ def _runtime_loader_manifest_load_steps(
                 "target": target,
                 "packagePath": source_remap.get("packagePath"),
                 "tools": [],
+                "command": None,
                 "hostInterfaceStatus": None,
             }
         )
@@ -10364,6 +10384,7 @@ def _runtime_loader_manifest_load_steps(
                 "target": target,
                 "packagePath": package_path,
                 "tools": [],
+                "command": None,
                 "hostInterfaceStatus": interface_status,
             }
         )
@@ -10384,10 +10405,57 @@ def _runtime_loader_manifest_load_steps(
                 "target": target,
                 "packagePath": package_path,
                 "tools": required_tools,
+                "command": _runtime_loader_validation_command(
+                    adapter, package_root=package_root
+                ),
                 "hostInterfaceStatus": interface_status,
             }
         )
     return steps
+
+
+def _runtime_loader_validation_command(
+    adapter: Mapping[str, Any],
+    *,
+    package_root: Path | None = None,
+) -> list[str] | None:
+    target = adapter.get("target")
+    package_path = adapter.get("packagePath")
+    if not _is_non_empty_string(target) or not _is_non_empty_string(package_path):
+        return None
+
+    normalized_target = _normalized_targets([str(target)])[0]
+    tools = TOOLCHAIN_BY_BACKEND.get(normalized_target)
+    if not tools:
+        availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(normalized_target)
+        return list(availability_command) if availability_command is not None else None
+
+    if normalized_target in {"opengl", "webgl"}:
+        stage = None
+        stage_label = adapter.get("stage")
+        if _is_non_empty_string(stage_label):
+            stage = WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL.get(str(stage_label))
+        if stage is None:
+            artifact_path = Path(str(package_path))
+            if package_root is not None and not artifact_path.is_absolute():
+                artifact_path = package_root / artifact_path
+            stage = _glslang_stage(artifact_path, adapter)
+        return [tools[0], "--stdin", "-S", stage]
+
+    if normalized_target == "wgsl":
+        return [tools[0], "--input-kind", "wgsl", str(package_path)]
+
+    smoke_command = _toolchain_smoke_command(
+        normalized_target,
+        tools,
+        Path(str(package_path)),
+        artifact=adapter,
+    )
+    if smoke_command is not None:
+        return smoke_command[0]
+
+    availability_command = TOOLCHAIN_AVAILABILITY_COMMANDS.get(normalized_target)
+    return list(availability_command) if availability_command is not None else None
 
 
 def _runtime_loader_manifest_blockers(
@@ -10403,7 +10471,10 @@ def _runtime_loader_manifest_blockers(
 
 
 def _runtime_loader_manifest_load_unit(
-    adapter: Mapping[str, Any], actions: Sequence[Mapping[str, Any]]
+    adapter: Mapping[str, Any],
+    actions: Sequence[Mapping[str, Any]],
+    *,
+    package_root: Path | None = None,
 ) -> dict[str, Any]:
     blockers = _runtime_loader_manifest_blockers(adapter, actions)
     host_interface = adapter.get("hostInterface")
@@ -10461,7 +10532,9 @@ def _runtime_loader_manifest_load_unit(
             for responsibility in _record_sequence(adapter.get("hostResponsibilities"))
             if _is_non_empty_string(responsibility)
         ],
-        "loadSteps": _runtime_loader_manifest_load_steps(adapter),
+        "loadSteps": _runtime_loader_manifest_load_steps(
+            adapter, package_root=package_root
+        ),
         "blockers": blockers,
         "validation": validation,
     }
@@ -10530,8 +10603,12 @@ def build_runtime_loader_manifest(
         for target in _record_sequence(adapter_plan.get("targets"))
         if isinstance(target, Mapping)
     ]
+    package_root = None
+    if _is_non_empty_string(adapter_plan.get("packageRoot")):
+        package_root = Path(str(adapter_plan["packageRoot"])).resolve()
     load_units = [
-        _runtime_loader_manifest_load_unit(adapter, actions) for adapter in adapters
+        _runtime_loader_manifest_load_unit(adapter, actions, package_root=package_root)
+        for adapter in adapters
     ]
     ready_load_unit_count = sum(
         1 for load_unit in load_units if not load_unit.get("blockers")

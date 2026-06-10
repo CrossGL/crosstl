@@ -25070,6 +25070,9 @@ def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
     _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("webgl",))
 
     payload = plan_runtime_adapters(package_dir / "runtime-package.json")
+    loader_manifest = build_runtime_loader_manifest(
+        package_dir / "runtime-package.json"
+    )
 
     assert payload["success"] is True
     assert payload["targets"][0]["target"] == "webgl"
@@ -25081,6 +25084,9 @@ def test_plan_runtime_adapters_reports_webgl_adapter_validation_tool(tmp_path):
     assert adapter["artifactFormat"] == "GLSL ES source"
     assert adapter["requiredTools"] == ["glslangValidator"]
     assert adapter["packagePath"] == "artifacts/out/webgl/simple.webgl.glsl"
+    validate_step = loader_manifest["loadUnits"][0]["loadSteps"][-1]
+    assert validate_step["kind"] == "validate-target-toolchain"
+    assert validate_step["command"] == ["glslangValidator", "--stdin", "-S", "vert"]
 
 
 def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
@@ -25099,11 +25105,34 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
         ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
     ]
 
+    inspection = inspect_runtime_package(package_dir / "runtime-package.json")
     adapter_plan = plan_runtime_adapters(package_dir / "runtime-package.json")
     loader_manifest = build_runtime_loader_manifest(
         package_dir / "runtime-package.json"
     )
 
+    assert [
+        (
+            binding["stage"],
+            binding["hostInterface"]["status"],
+            binding["hostInterface"]["parser"],
+            binding["hostInterface"]["entryPoints"],
+        )
+        for binding in inspection["bindings"]
+    ] == [
+        (
+            "vertex",
+            "ready",
+            "opengl",
+            [{"name": "main", "stage": "vertex", "executionConfig": {}}],
+        ),
+        (
+            "fragment",
+            "ready",
+            "opengl",
+            [{"name": "main", "stage": "fragment", "executionConfig": {}}],
+        ),
+    ]
     assert [
         (adapter["stage"], adapter["packagePath"])
         for adapter in adapter_plan["adapters"]
@@ -25116,6 +25145,9 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
         "artifacts/out/webgl/graphics.vert.webgl.glsl",
         "artifacts/out/webgl/graphics.frag.webgl.glsl",
     ]
+    assert "resolve-host-interface-metadata" not in {
+        action["kind"] for action in adapter_plan["actions"]
+    }
     assert [
         (load_unit["stage"], load_unit["packagePath"])
         for load_unit in loader_manifest["loadUnits"]
@@ -25123,7 +25155,16 @@ def test_webgl_runtime_package_preserves_graphics_stage_artifacts(tmp_path):
         ("vertex", "artifacts/out/webgl/graphics.vert.webgl.glsl"),
         ("fragment", "artifacts/out/webgl/graphics.frag.webgl.glsl"),
     ]
+    assert [
+        load_unit["loadSteps"][-1]["command"]
+        for load_unit in loader_manifest["loadUnits"]
+    ] == [
+        ["glslangValidator", "--stdin", "-S", "vert"],
+        ["glslangValidator", "--stdin", "-S", "frag"],
+    ]
     assert loader_manifest["summary"]["loadUnitCount"] == 2
+    assert loader_manifest["summary"]["readyLoadUnitCount"] == 2
+    assert loader_manifest["summary"]["blockedLoadUnitCount"] == 0
 
 
 def test_plan_runtime_adapters_rejects_failed_package(tmp_path):
@@ -25305,6 +25346,11 @@ def test_build_runtime_loader_manifest_from_runtime_package(tmp_path):
         "load-source-remap",
         "bind-host-interface",
     ]
+    assert [step["command"] for step in load_unit["loadSteps"]] == [
+        None,
+        None,
+        None,
+    ]
     for load_step in load_unit["loadSteps"]:
         assert (
             set(load_step) == project_pipeline.RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS
@@ -25351,10 +25397,34 @@ def test_runtime_loader_manifest_reports_blocked_host_interface_metadata(tmp_pat
         "load-package-artifact",
         "validate-target-toolchain",
     ]
+    assert load_unit["loadSteps"][1]["command"] == [
+        "spirv-as",
+        "artifacts/out/vulkan/simple.spvasm",
+        "-o",
+        project_pipeline.os.devnull,
+    ]
     assert len(load_unit["blockers"]) == 1
     assert load_unit["blockers"][0]["kind"] == "resolve-host-interface-metadata"
     assert load_unit["blockers"][0]["severity"] == "warning"
     assert "host-interface-empty" in load_unit["blockers"][0]["message"]
+
+
+def test_runtime_loader_manifest_reports_wgsl_validation_command(tmp_path):
+    _, package_dir, _ = _build_runtime_package_fixture(tmp_path, targets=("wgsl",))
+
+    payload = build_runtime_loader_manifest(package_dir / "runtime-package.json")
+
+    load_unit = payload["loadUnits"][0]
+    validate_step = load_unit["loadSteps"][-1]
+    assert load_unit["target"] == "wgsl"
+    assert validate_step["kind"] == "validate-target-toolchain"
+    assert validate_step["tools"] == ["naga"]
+    assert validate_step["command"] == [
+        "naga",
+        "--input-kind",
+        "wgsl",
+        "artifacts/out/wgsl/simple.wgsl",
+    ]
 
 
 def test_project_cli_runtime_loader_manifest_text_outputs_load_units(tmp_path):
